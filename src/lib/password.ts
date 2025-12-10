@@ -1,13 +1,13 @@
-// Using Bun's built-in password hashing (based on bcrypt)
+// Using bcryptjs for Node.js compatibility (Vercel deployment)
+import bcrypt from 'bcryptjs';
+
 export async function hashPassword(password: string): Promise<string> {
-  return Bun.password.hash(password, {
-    algorithm: 'bcrypt',
-    cost: 10,
-  });
+  const saltRounds = 10;
+  return bcrypt.hash(password, saltRounds);
 }
 
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return Bun.password.verify(password, hash);
+  return bcrypt.compare(password, hash);
 }
 
 export function validatePassword(password: string): { valid: boolean; error?: string } {
