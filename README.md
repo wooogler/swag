@@ -26,33 +26,37 @@ PRELUDE captures character-level writing interactions to help educators understa
 
 ## Tech Stack
 
-- **Runtime**: Bun 1.x (10-25x faster than npm)
 - **Framework**: Next.js 15 + React 19
 - **Editor**: BlockNote 0.42 (Notion-like UX)
 - **Chat**: Assistant UI + OpenAI API
-- **Database**: SQLite with WAL mode (Bun native)
+- **Database**: PostgreSQL (Vercel Postgres)
 - **ORM**: Drizzle ORM
-- **Deployment**: Docker Compose + Nginx
+- **Email**: Resend API
+- **Deployment**: Vercel (free tier)
 
 ## Getting Started
 
 ### Prerequisites
-- Bun 1.x or later
+- Node.js 18+ or Bun 1.x
 - OpenAI API key
+- PostgreSQL database (Vercel Postgres for production, local Postgres for dev)
 
 ### Installation
 
 ```bash
 # Install dependencies
-bun install
+npm install
 
-# Setup database
-bun run db:generate
-bun run db:migrate
-bun run db:seed
+# Setup environment variables
+cp .env.example .env
+# Edit .env with your configuration
+
+# Setup database (requires POSTGRES_URL in .env)
+npm run db:generate
+npm run db:migrate
 
 # Start development server
-bun run dev
+npm run dev
 ```
 
 ### Environment Variables
@@ -64,17 +68,21 @@ cp .env.example .env
 ```
 
 Required variables:
-- `DATABASE_URL` - SQLite file path (dev) or PostgreSQL URL (prod)
+- `POSTGRES_URL` - PostgreSQL connection string (Vercel Postgres or local)
 - `OPENAI_API_KEY` - Your OpenAI API key
 - `NEXT_PUBLIC_APP_URL` - Application URL
 - `JWT_SECRET` - Random secret for authentication (generate with `openssl rand -base64 32`)
+- `RESEND_API_KEY` - Resend API key for email verification
+- `EMAIL_FROM` - Sender email address (e.g., "PRELUDE <onboarding@resend.dev>")
+- `ALLOWED_EMAIL_DOMAINS` - Comma-separated allowed domains (e.g., "vt.edu")
 
-Email configuration (for email verification):
-- **Development**: Email not required - verification links are logged to console
-- **Production**: Using Resend (https://resend.com)
-  - Sign up and get API key
-  - Set `RESEND_API_KEY` and `EMAIL_FROM` in `.env`
-  - Free tier: 100 emails/day (sufficient for instructor registration)
+**Email Configuration:**
+Using Resend (https://resend.com) for email verification:
+- **Development**: Verification links logged to console (no email sent)
+- **Production**:
+  - Sign up at Resend and get API key
+  - Use `onboarding@resend.dev` for testing (100 emails/day free)
+  - Verify your own domain for production use
 
 ### Accessing the Application
 
@@ -152,71 +160,110 @@ Uses ProseMirror's transaction system to capture exact editing operations:
 
 ## Production Deployment
 
-### Build and Test
+### Deploy to Vercel (Recommended)
 
+**Step 1: Prepare GitHub Repository**
 ```bash
-# Type check
-bun run type-check
-
-# Build for production
-bun run build
-
-# Test production build locally
-bun run start
+# Ensure all changes are committed
+git add -A
+git commit -m "Prepare for Vercel deployment"
+git push origin main
 ```
 
-### Deployment Options
+**Step 2: Create Vercel Project**
+1. Go to [vercel.com](https://vercel.com) and sign in with GitHub
+2. Click "Add New" → "Project"
+3. Import your GitHub repository
+4. Framework Preset: Next.js (auto-detected)
+5. Click "Deploy" (initial deployment will fail - database not configured yet)
 
-**Option 1: Vercel (Recommended)**
-1. Push to GitHub
-2. Import project to Vercel
-3. Set environment variables in Vercel dashboard
-4. Deploy
+**Step 3: Create Vercel Postgres Database**
+1. In your Vercel project, go to "Storage" tab
+2. Click "Create Database" → "Postgres"
+3. Name: `prelude-db` (or any name)
+4. Region: `iad1` (Washington D.C. - closest to VT)
+5. Click "Create"
 
-**Option 2: Docker**
+**Step 4: Configure Environment Variables**
+1. Go to "Settings" → "Environment Variables"
+2. Add the following variables:
+
 ```bash
-# Build image
-docker build -t prelude .
+# Database (automatically added by Vercel Postgres)
+POSTGRES_URL=<automatically populated>
 
-# Run container
-docker run -p 3000:3000 --env-file .env prelude
+# OpenAI
+OPENAI_API_KEY=sk-...
+
+# Authentication
+JWT_SECRET=<generate with: openssl rand -base64 32>
+
+# Email (Resend)
+RESEND_API_KEY=re_...
+EMAIL_FROM=PRELUDE <onboarding@resend.dev>
+ALLOWED_EMAIL_DOMAINS=vt.edu
+
+# Application
+NEXT_PUBLIC_APP_URL=https://your-app.vercel.app
+NODE_ENV=production
 ```
 
-**Option 3: Self-hosted**
+**Step 5: Run Database Migrations**
 ```bash
-# Build
-bun run build
+# Connect to Vercel Postgres from local machine
+# Get POSTGRES_URL from Vercel dashboard → Storage → your database → .env.local tab
+export POSTGRES_URL="postgres://..."
 
-# Start with PM2
-pm2 start "bun run start" --name prelude
-
-# Or with systemd
-sudo systemctl start prelude
+# Run migrations
+npm run db:migrate
 ```
+
+**Step 6: Redeploy**
+1. Go to "Deployments" tab
+2. Click "Redeploy" on the latest deployment
+3. Check "Use existing Build Cache" is off
+4. Click "Redeploy"
+
+**Step 7: Verify Deployment**
+1. Visit your Vercel URL (e.g., `https://prelude.vercel.app`)
+2. Go to `/instructor/login`
+3. Test signup and login flow
+
+### Vercel Free Tier Limits
+- **Compute**: 60 hours/month (sufficient for research projects)
+- **Database**: 256MB PostgreSQL (thousands of assignments)
+- **Bandwidth**: 100GB/month
+- **Deployments**: Unlimited
 
 ### Production Checklist
 
-- [ ] Set `NODE_ENV=production`
-- [ ] Generate secure `JWT_SECRET` (`openssl rand -base64 32`)
-- [ ] Configure SMTP for production email
-- [ ] Update `NEXT_PUBLIC_APP_URL` to production domain
-- [ ] Set up PostgreSQL (optional, for scale)
-- [ ] Enable HTTPS/SSL
-- [ ] Configure rate limiting for API routes
-- [ ] Set up monitoring/logging
-- [ ] Regular database backups
+- [ ] ✅ Push code to GitHub
+- [ ] ✅ Create Vercel project
+- [ ] ✅ Create Vercel Postgres database
+- [ ] ✅ Set environment variables
+- [ ] ✅ Run database migrations
+- [ ] ✅ Redeploy application
+- [ ] 🔲 Test instructor signup/login
+- [ ] 🔲 Create test assignment
+- [ ] 🔲 Test student portal
+- [ ] 🔲 Verify Resend email delivery
+- [ ] 🔲 Set up custom domain (optional)
+- [ ] 🔲 Configure database backups (Vercel auto-backups included)
 
 ## Database Management
 
 ```bash
-# Generate new migration
-bun run db:generate
+# Generate new migration after schema changes
+npm run db:generate
 
-# Apply migrations
-bun run db:migrate
+# Apply migrations to database
+npm run db:migrate
 
-# View database (SQLite)
-sqlite3 data/prelude.db
+# View database in Vercel dashboard
+# Go to Storage → your database → Data tab
+
+# Or connect with psql locally
+psql $POSTGRES_URL
 ```
 
 ## License
