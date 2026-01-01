@@ -384,11 +384,13 @@ export default function ReplayPlayer({
               content: msg.content,
               conversationTitle: msg.conversationTitle,
               timestamp: msg.timestamp,
+              metadata: msg.metadata as { webSearchEnabled?: boolean; [key: string]: any } | undefined,
             }))}
             isLoading={false}
             showConversationBadge={selectedConversationId === 'all'}
             showTimestamp={true}
             enableCopy={false}
+            showWebSearchIndicator={true}
           />
         </div>
       </div>

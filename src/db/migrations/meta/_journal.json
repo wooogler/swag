@@ -8,6 +8,13 @@
       "when": 1765394944504,
       "tag": "0000_absurd_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1767283849605,
+      "tag": "0001_rainy_strong_guy",
+      "breakpoints": true
     }
   ]
 }

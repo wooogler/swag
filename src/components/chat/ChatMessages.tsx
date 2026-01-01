@@ -11,6 +11,11 @@ interface Message {
   content: string;
   conversationTitle?: string;
   timestamp?: number;
+  metadata?: {
+    webSearchEnabled?: boolean;
+    webSearchUsed?: boolean;
+    [key: string]: any;
+  };
 }
 
 interface ChatMessagesProps {
@@ -19,6 +24,7 @@ interface ChatMessagesProps {
   showConversationBadge?: boolean;
   showTimestamp?: boolean;
   enableCopy?: boolean;
+  showWebSearchIndicator?: boolean;
 }
 
 export default function ChatMessages({
@@ -26,18 +32,17 @@ export default function ChatMessages({
   isLoading = false,
   showConversationBadge = false,
   showTimestamp = false,
-  enableCopy = true
+  enableCopy = true,
+  showWebSearchIndicator = false
 }: ChatMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [copiedId, setCopiedId] = useState<string | number | null>(null);
   const validator = getGlobalValidator();
 
-  // Register all assistant messages with validator
+  // Register all messages with validator (both user and assistant)
   useEffect(() => {
     messages.forEach((message) => {
-      if (message.role === 'assistant') {
-        validator.registerChatMessage(message.content);
-      }
+      validator.registerChatMessage(message.content);
     });
   }, [messages, validator]);
 
@@ -89,7 +94,7 @@ export default function ChatMessages({
                 <div className="flex justify-end">
                   <div className="bg-gray-200 text-gray-900 rounded-2xl px-4 py-2.5 max-w-[80%]">
                     {/* Conversation badge and timestamp for user messages */}
-                    {(showConversationBadge || showTimestamp) && (
+                    {(showConversationBadge || showTimestamp || (showWebSearchIndicator && message.metadata?.webSearchEnabled)) && (
                       <div className="flex items-center gap-2 mb-1 text-xs text-gray-600">
                         {showConversationBadge && message.conversationTitle && (
                           <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">
@@ -99,9 +104,17 @@ export default function ChatMessages({
                         {showTimestamp && message.timestamp && (
                           <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
                         )}
+                        {showWebSearchIndicator && message.metadata?.webSearchEnabled && (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-medium flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                            </svg>
+                            Web Search
+                          </span>
+                        )}
                       </div>
                     )}
-                    <p className="text-sm whitespace-pre-wrap wrap-break-word">
+                    <p className="text-base whitespace-pre-wrap wrap-break-word">
                       {message.content}
                     </p>
                   </div>
@@ -110,7 +123,7 @@ export default function ChatMessages({
                 // Assistant message - full width, markdown, no bubble
                 <div>
                   {/* Conversation badge and timestamp for AI messages */}
-                  {(showConversationBadge || showTimestamp) && (
+                  {(showConversationBadge || showTimestamp || (showWebSearchIndicator && message.metadata?.webSearchEnabled)) && (
                     <div className="flex items-center gap-2 mb-2 text-xs text-gray-600">
                       {showConversationBadge && message.conversationTitle && (
                         <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">
@@ -120,11 +133,26 @@ export default function ChatMessages({
                       {showTimestamp && message.timestamp && (
                         <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
                       )}
+                      {showWebSearchIndicator && message.metadata?.webSearchEnabled && (
+                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-medium flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                          </svg>
+                          Web Search
+                        </span>
+                      )}
                     </div>
                   )}
 
-                  <div className="prose prose-sm max-w-none prose-pre:bg-gray-800 prose-pre:text-gray-100 prose-code:text-pink-600 prose-code:bg-pink-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  <div className="prose prose-base max-w-none prose-pre:bg-gray-800 prose-pre:text-gray-100 prose-code:text-pink-600 prose-code:bg-pink-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        a: ({ node, ...props }) => (
+                          <a {...props} target="_blank" rel="noopener noreferrer" />
+                        ),
+                      }}
+                    >
                       {message.content}
                     </ReactMarkdown>
                   </div>

@@ -40,15 +40,8 @@ export default function AccessForm({ assignmentId, shareToken }: AccessFormProps
 
       const { sessionId } = await response.json();
 
-      // Store session ID in localStorage
-      localStorage.setItem('prelude_session_id', sessionId);
-      console.log('AccessForm: Session created and stored:', sessionId);
-
-      // Small delay to ensure localStorage is written
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // Redirect to editor
-      router.push(`/s/${shareToken}/editor`);
+      // Redirect to editor with sessionId in URL
+      router.push(`/s/${shareToken}/editor/${sessionId}`);
     } catch (err) {
       setError('Failed to start session. Please try again.');
       console.error(err);

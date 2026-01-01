@@ -32,7 +32,8 @@ export default function ChatPanel({ sessionId, assignmentId, isOpen, onToggle }:
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const validator = getGlobalValidator();
 
   // Load existing conversations on mount
@@ -265,6 +266,7 @@ export default function ChatPanel({ sessionId, assignmentId, isOpen, onToggle }:
           conversationId: activeConversationId,
           sessionId,
           assignmentId,
+          webSearchEnabled,
         }),
       });
 
@@ -375,24 +377,73 @@ export default function ChatPanel({ sessionId, assignmentId, isOpen, onToggle }:
         />
 
         {/* Input */}
-        <div className="border-t border-gray-200 p-4">
-          <form onSubmit={handleSubmit} className="flex gap-2">
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask for help with your essay..."
-              disabled={!activeConversationId || isLoading}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 text-sm"
-            />
-            <button
-              type="submit"
-              disabled={!input.trim() || isLoading || !activeConversationId}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 text-sm font-medium"
-            >
-              Send
-            </button>
+        <div className="p-4 bg-gray-50">
+          <form onSubmit={handleSubmit}>
+            {/* ChatGPT-style input container */}
+            <div className="bg-gray-200 border border-gray-300 rounded-2xl p-3 flex flex-col gap-2">
+              {/* Textarea */}
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (input.trim() && activeConversationId && !isLoading) {
+                      handleSubmit(e as any);
+                    }
+                  }
+                }}
+                placeholder="Ask for help with your essay..."
+                disabled={!activeConversationId || isLoading}
+                rows={1}
+                className="w-full bg-transparent resize-none outline-none text-base placeholder-gray-500 disabled:text-gray-400"
+                style={{
+                  minHeight: '28px',
+                  maxHeight: '200px',
+                  height: 'auto',
+                }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                  target.style.height = target.scrollHeight + 'px';
+                }}
+              />
+
+              {/* Web Search Toggle and Send Button Row */}
+              <div className="flex items-center justify-between">
+                {/* Web Search Toggle - Ghost style */}
+                <button
+                  type="button"
+                  onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-semibold transition-colors ${
+                    webSearchEnabled
+                      ? 'text-sky-500 bg-gray-300 hover:bg-gray-400'
+                      : 'text-gray-500 hover:bg-gray-300'
+                  }`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 919-9" />
+                  </svg>
+                  <span>Web search</span>
+                </button>
+
+                {/* Send Button - Circular */}
+                <button
+                  type="submit"
+                  disabled={!input.trim() || isLoading || !activeConversationId}
+                  className={`p-2 rounded-full transition-colors ${
+                    input.trim() && activeConversationId && !isLoading
+                      ? 'bg-gray-700 hover:bg-gray-800 text-white'
+                      : 'bg-gray-300 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                  </svg>
+                </button>
+              </div>
+            </div>
           </form>
         </div>
       </div>

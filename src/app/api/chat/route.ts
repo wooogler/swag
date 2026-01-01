@@ -9,9 +9,9 @@ const openai = new OpenAI({
 
 export async function POST(req: Request) {
   try {
-    const { messages, conversationId, sessionId, assignmentId } = await req.json();
+    const { messages, conversationId, sessionId, assignmentId, webSearchEnabled } = await req.json();
 
-    console.log('Chat API received:', { conversationId, sessionId, assignmentId, messagesCount: messages?.length });
+    console.log('Chat API received:', { conversationId, sessionId, assignmentId, messagesCount: messages?.length, webSearchEnabled });
 
     // Validate conversationId
     if (!conversationId) {
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
       conversationId,
       role: 'user',
       content: userMessageContent,
-      metadata: {},
+      metadata: { webSearchEnabled: webSearchEnabled || false },
       timestamp: userMessageTimestamp,
       sequenceNumber: existingMessages.length,
     });
@@ -68,17 +68,27 @@ export async function POST(req: Request) {
         { id: 'msg_system', role: 'system', content: systemPrompt },
         ...formattedMessages,
       ],
+      tools: webSearchEnabled ? [{ type: 'web_search' }] : undefined,
       stream: true,
     });
 
     // Convert OpenAI stream to Response stream
     const encoder = new TextEncoder();
     let fullResponse = '';
+    let webSearchUsed = false;
 
     const readableStream = new ReadableStream({
       async start(controller) {
         try {
           for await (const event of stream) {
+            // Detect web search usage
+            if (event.type === 'response.output_item.added') {
+              const item = (event as any).item;
+              if (item?.type === 'web_search_call') {
+                webSearchUsed = true;
+              }
+            }
+
             // Handle different event types from Responses API
             if (event.type === 'response.output_text.delta') {
               const delta = event.delta || '';
@@ -98,7 +108,11 @@ export async function POST(req: Request) {
             conversationId,
             role: 'assistant',
             content: fullResponse,
-            metadata: { model: 'gpt-4-turbo' },
+            metadata: {
+              model: 'gpt-4o',
+              webSearchEnabled: webSearchEnabled || false,
+              webSearchUsed,
+            },
             timestamp: new Date(),
             sequenceNumber: updatedMessages.length,
           });

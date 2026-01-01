@@ -1,15 +1,15 @@
 import { db } from '@/db/db';
 import { assignments, studentSessions } from '@/db/schema';
-import { eq, desc } from 'drizzle-orm';
-import { notFound, redirect } from 'next/navigation';
+import { eq, and } from 'drizzle-orm';
+import { notFound } from 'next/navigation';
 import EditorClient from '@/components/editor/EditorClient';
 
 interface EditorPageProps {
-  params: Promise<{ shareToken: string }>;
+  params: Promise<{ shareToken: string; sessionId: string }>;
 }
 
 export default async function EditorPage({ params }: EditorPageProps) {
-  const { shareToken } = await params;
+  const { shareToken, sessionId } = await params;
 
   // Fetch assignment
   const assignment = await db.query.assignments.findFirst({
@@ -20,15 +20,17 @@ export default async function EditorPage({ params }: EditorPageProps) {
     notFound();
   }
 
-  // Find the most recent student session for this assignment
+  // Fetch the specific student session
   const session = await db.query.studentSessions.findFirst({
-    where: eq(studentSessions.assignmentId, assignment.id),
-    orderBy: [desc(studentSessions.startedAt)],
+    where: and(
+      eq(studentSessions.id, sessionId),
+      eq(studentSessions.assignmentId, assignment.id)
+    ),
   });
 
-  // If no session exists, redirect to the access page
+  // If session doesn't exist or doesn't belong to this assignment, show 404
   if (!session) {
-    redirect(`/s/${shareToken}`);
+    notFound();
   }
 
   return (
