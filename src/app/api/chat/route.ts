@@ -1,12 +1,23 @@
-import { openai } from '@ai-sdk/openai';
-import { streamText } from 'ai';
+import OpenAI from 'openai';
 import { db } from '@/db/db';
 import { assignments, chatMessages } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 export async function POST(req: Request) {
   try {
     const { messages, conversationId, sessionId, assignmentId } = await req.json();
+
+    console.log('Chat API received:', { conversationId, sessionId, assignmentId, messagesCount: messages?.length });
+
+    // Validate conversationId
+    if (!conversationId) {
+      console.error('Missing conversationId');
+      return new Response('Conversation ID is required', { status: 400 });
+    }
 
     // Fetch assignment to get custom system prompt
     const assignment = await db.query.assignments.findFirst({
@@ -26,8 +37,9 @@ export async function POST(req: Request) {
       systemPrompt += `\n\nAssignment Instructions:\n${assignment.instructions}`;
     }
 
-    // Save user message immediately with current timestamp
+    // Save user message immediately
     const lastMessage = messages[messages.length - 1];
+    const userMessageContent = lastMessage.content;
     const userMessageTimestamp = new Date();
     const existingMessages = await db.query.chatMessages.findMany({
       where: eq(chatMessages.conversationId, conversationId),
@@ -36,40 +48,75 @@ export async function POST(req: Request) {
     await db.insert(chatMessages).values({
       conversationId,
       role: 'user',
-      content: lastMessage.content,
+      content: userMessageContent,
       metadata: {},
       timestamp: userMessageTimestamp,
       sequenceNumber: existingMessages.length,
     });
 
-    // Stream response from OpenAI
-    const result = streamText({
-      model: openai('gpt-4-turbo') as any,
-      messages: messages,
-      system: systemPrompt,
-      async onFinish({ text, usage }) {
-        // Save assistant message to database
+    // Format messages for OpenAI Responses API (requires 'msg' prefix for IDs)
+    const formattedMessages = messages.map((msg: any, idx: number) => ({
+      id: msg.id?.startsWith('msg') ? msg.id : `msg_${Date.now()}_${idx}`,
+      role: msg.role,
+      content: msg.content,
+    }));
+
+    // Create streaming response using OpenAI Responses API
+    const stream = await openai.responses.create({
+      model: 'gpt-4o',
+      input: [
+        { id: 'msg_system', role: 'system', content: systemPrompt },
+        ...formattedMessages,
+      ],
+      stream: true,
+    });
+
+    // Convert OpenAI stream to Response stream
+    const encoder = new TextEncoder();
+    let fullResponse = '';
+
+    const readableStream = new ReadableStream({
+      async start(controller) {
         try {
+          for await (const event of stream) {
+            // Handle different event types from Responses API
+            if (event.type === 'response.output_text.delta') {
+              const delta = event.delta || '';
+              if (delta) {
+                fullResponse += delta;
+                controller.enqueue(encoder.encode(delta));
+              }
+            }
+          }
+
+          // Save assistant message to database after streaming completes
           const updatedMessages = await db.query.chatMessages.findMany({
             where: eq(chatMessages.conversationId, conversationId),
           });
 
-          // Save assistant message
           await db.insert(chatMessages).values({
             conversationId,
             role: 'assistant',
-            content: text,
-            metadata: { tokens: usage, model: 'gpt-4-turbo' },
+            content: fullResponse,
+            metadata: { model: 'gpt-4-turbo' },
             timestamp: new Date(),
             sequenceNumber: updatedMessages.length,
           });
+
+          controller.close();
         } catch (error) {
-          console.error('Failed to save assistant message:', error);
+          console.error('Streaming error:', error);
+          controller.error(error);
         }
       },
     });
 
-    return result.toTextStreamResponse();
+    return new Response(readableStream, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Transfer-Encoding': 'chunked',
+      },
+    });
   } catch (error) {
     console.error('Chat API error:', error);
     return new Response('Internal server error', { status: 500 });

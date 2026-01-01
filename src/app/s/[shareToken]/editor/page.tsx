@@ -1,7 +1,7 @@
 import { db } from '@/db/db';
-import { assignments } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { notFound } from 'next/navigation';
+import { assignments, studentSessions } from '@/db/schema';
+import { eq, desc } from 'drizzle-orm';
+import { notFound, redirect } from 'next/navigation';
 import EditorClient from '@/components/editor/EditorClient';
 
 interface EditorPageProps {
@@ -20,8 +20,20 @@ export default async function EditorPage({ params }: EditorPageProps) {
     notFound();
   }
 
+  // Find the most recent student session for this assignment
+  const session = await db.query.studentSessions.findFirst({
+    where: eq(studentSessions.assignmentId, assignment.id),
+    orderBy: [desc(studentSessions.startedAt)],
+  });
+
+  // If no session exists, redirect to the access page
+  if (!session) {
+    redirect(`/s/${shareToken}`);
+  }
+
   return (
     <EditorClient
+      sessionId={session.id}
       assignmentId={assignment.id}
       assignmentTitle={assignment.title}
       assignmentInstructions={assignment.instructions}

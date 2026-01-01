@@ -56,6 +56,7 @@ export default function ReplayPlayer({
   const [editorDocument, setEditorDocument] = useState<any[]>([]);
   const [visibleMessages, setVisibleMessages] = useState<ChatMessage[]>([]);
   const [lastPasteEvent, setLastPasteEvent] = useState<{ type: string; timestamp: number } | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | 'all'>('all');
 
   const animationRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(0);
@@ -93,11 +94,17 @@ export default function ReplayPlayer({
     return [{ type: 'paragraph', content: [] }];
   }, [findNearestSnapshot]);
 
-  // Update visible messages based on current time
+  // Update visible messages based on current time and selected conversation
   const updateVisibleMessages = useCallback((time: number) => {
-    const visible = chatMessages.filter(m => m.timestamp <= time);
+    let visible = chatMessages.filter(m => m.timestamp <= time);
+
+    // Filter by selected conversation if not 'all'
+    if (selectedConversationId !== 'all') {
+      visible = visible.filter(m => m.conversationId === selectedConversationId);
+    }
+
     setVisibleMessages(visible);
-  }, [chatMessages]);
+  }, [chatMessages, selectedConversationId]);
 
   // Check for paste events at current time
   const checkPasteEvents = useCallback((time: number) => {
@@ -350,14 +357,23 @@ export default function ReplayPlayer({
         {/* Chat View (Right) */}
         <div className="w-96 flex flex-col bg-gray-50">
           <div className="px-4 py-2 bg-gray-100 border-b border-gray-200">
-            <h2 className="font-semibold text-gray-900">
-              AI Assistant
-              {conversations.length > 0 && (
-                <span className="ml-2 text-sm font-normal text-gray-500">
-                  ({conversations.length} conversation{conversations.length !== 1 ? 's' : ''})
-                </span>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="font-semibold text-gray-900">AI Assistant</h2>
+              {conversations.length > 1 && (
+                <select
+                  value={selectedConversationId}
+                  onChange={(e) => setSelectedConversationId(e.target.value as string | 'all')}
+                  className="text-xs px-2 py-1 border border-gray-300 rounded bg-white"
+                >
+                  <option value="all">All Conversations ({conversations.length})</option>
+                  {conversations.map((conv) => (
+                    <option key={conv.id} value={conv.id}>
+                      {conv.title}
+                    </option>
+                  ))}
+                </select>
               )}
-            </h2>
+            </div>
           </div>
           <div className="flex-1 overflow-auto p-4">
             {visibleMessages.length === 0 ? (
@@ -375,9 +391,14 @@ export default function ReplayPlayer({
                         : 'bg-white border border-gray-200 mr-8'
                     }`}
                   >
-                    <div className="text-xs text-gray-500 mb-1">
-                      {msg.role === 'user' ? 'Student' : 'AI Assistant'}
-                      <span className="ml-2">
+                    <div className="text-xs text-gray-500 mb-1 flex items-center gap-2">
+                      <span>{msg.role === 'user' ? 'Student' : 'AI Assistant'}</span>
+                      {selectedConversationId === 'all' && (
+                        <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">
+                          {msg.conversationTitle}
+                        </span>
+                      )}
+                      <span className="ml-auto">
                         {new Date(msg.timestamp).toLocaleTimeString()}
                       </span>
                     </div>

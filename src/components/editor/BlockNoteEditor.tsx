@@ -98,6 +98,8 @@ export default function BlockNoteEditor({ sessionId }: BlockNoteEditorProps) {
 
   // Paste validation
   useEffect(() => {
+    if (!editor) return;
+
     const handlePaste = (e: ClipboardEvent) => {
       const pastedContent = e.clipboardData?.getData("text/plain");
 
@@ -114,7 +116,7 @@ export default function BlockNoteEditor({ sessionId }: BlockNoteEditorProps) {
       if (!isInternal) {
         // Block external paste
         e.preventDefault();
-        toast.error("You can only paste content from the AI assistant chatbot.", {
+        toast.error("External paste is blocked. You can only paste content from within this system.", {
           duration: 4000,
           position: "top-center",
           style: {
@@ -128,17 +130,32 @@ export default function BlockNoteEditor({ sessionId }: BlockNoteEditorProps) {
       }
     };
 
-    // Add paste listener to document
-    document.addEventListener("paste", handlePaste);
+    // Get the BlockNote editor DOM element
+    const editorElement = document.querySelector(".blocknote-wrapper");
+
+    if (!editorElement) {
+      console.warn("BlockNote editor element not found");
+      return;
+    }
+
+    // Add paste listener only to the editor element
+    editorElement.addEventListener("paste", handlePaste as EventListener);
 
     return () => {
-      document.removeEventListener("paste", handlePaste);
+      editorElement.removeEventListener("paste", handlePaste as EventListener);
     };
-  }, [validator]);
+  }, [validator, editor]);
 
   return (
     <div className="blocknote-wrapper">
-      <Toaster />
+      <Toaster
+        toastOptions={{
+          className: '',
+          style: {
+            cursor: 'pointer',
+          },
+        }}
+      />
       <BlockNoteView
         editor={editor}
         theme="light"

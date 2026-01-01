@@ -5,27 +5,18 @@ import TrackedEditor from './TrackedEditor';
 import ChatPanel from '../chat/ChatPanel';
 
 interface EditorClientProps {
+  sessionId: string;
   assignmentId: string;
   assignmentTitle: string;
   assignmentInstructions: string;
   deadline: Date;
 }
 
-export default function EditorClient({ assignmentId, assignmentTitle, assignmentInstructions, deadline }: EditorClientProps) {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+export default function EditorClient({ sessionId, assignmentId, assignmentTitle, assignmentInstructions, deadline }: EditorClientProps) {
   const [saveStatus, setSaveStatus] = useState<'ready' | 'saved'>('ready');
   const [chatWidth, setChatWidth] = useState(480); // Default 480px (larger chat width)
   const [isResizing, setIsResizing] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
-
-  useEffect(() => {
-    // Get session ID from localStorage
-    const storedSessionId = localStorage.getItem('prelude_session_id');
-    console.log('EditorClient: Retrieved session ID:', storedSessionId);
-    if (storedSessionId) {
-      setSessionId(storedSessionId);
-    }
-  }, []);
 
   // Listen for save events
   useEffect(() => {
@@ -67,14 +58,6 @@ export default function EditorClient({ assignmentId, assignmentTitle, assignment
       document.body.style.userSelect = '';
     };
   }, [isResizing]);
-
-  if (!sessionId) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-gray-600">Loading...</div>
-      </div>
-    );
-  }
 
   return (
     <div className="h-screen flex flex-col">
