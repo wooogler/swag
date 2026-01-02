@@ -5,6 +5,7 @@ import { cookies } from 'next/headers';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import DeleteAssignmentButton from './DeleteAssignmentButton';
+import DeleteStudentSessionButton from './DeleteStudentSessionButton';
 import CopyLinkButton from '@/components/instructor/CopyLinkButton';
 
 async function getInstructor() {
@@ -235,6 +236,11 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
                         >
                           Replay
                         </Link>
+                        <DeleteStudentSessionButton
+                          sessionId={student.id}
+                          studentName={student.studentName}
+                          assignmentId={id}
+                        />
                       </div>
                     </td>
                   </tr>

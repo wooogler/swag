@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 
 const eventSchema = z.object({
-  type: z.enum(['transaction_step', 'paste_internal', 'paste_external', 'snapshot']),
+  type: z.enum(['paste_internal', 'paste_external', 'snapshot']),
   timestamp: z.number(),
   sequenceNumber: z.number(),
   data: z.any().optional(),
@@ -18,7 +18,17 @@ const saveEventsSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    // Check if body is empty (happens on beforeunload sometimes)
+    const text = await request.text();
+    if (!text || text.trim() === '') {
+      return NextResponse.json({
+        success: true,
+        savedCount: 0,
+        message: 'Empty request, skipped',
+      });
+    }
+
+    const body = JSON.parse(text);
     const validated = saveEventsSchema.parse(body);
 
     // Verify session exists

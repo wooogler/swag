@@ -73,18 +73,46 @@ export default function BlockNoteEditor({ sessionId }: BlockNoteEditorProps) {
   useEffect(() => {
     trackerRef.current = new EventTracker(sessionId);
 
+    // Snapshot 콜백 등록 (타이핑 멈춤 감지용)
+    if (trackerRef.current) {
+      trackerRef.current.setSnapshotCallback(() => {
+        if (editor) {
+          try {
+            const documentState = editor.document;
+            trackerRef.current?.trackSnapshot(documentState);
+          } catch (error) {
+            console.error("Failed to create snapshot:", error);
+          }
+        }
+      });
+    }
+
     // Force save on page unload
     const handleBeforeUnload = () => {
       trackerRef.current?.forceSave();
     };
 
+    // 주기적으로 snapshot 체크 (1초마다) - 연속 타이핑 중 3초마다 저장용
+    const snapshotCheckInterval = setInterval(() => {
+      const tracker = trackerRef.current;
+      if (tracker && tracker.shouldTakeSnapshot() && editor) {
+        try {
+          const documentState = editor.document;
+          tracker.trackSnapshot(documentState);
+        } catch (error) {
+          console.error("Failed to create snapshot:", error);
+        }
+      }
+    }, 1000);
+
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
+      clearInterval(snapshotCheckInterval);
       window.removeEventListener("beforeunload", handleBeforeUnload);
       trackerRef.current?.forceSave();
     };
-  }, [sessionId]);
+  }, [sessionId, editor]);
 
   // Track changes
   useEffect(() => {
@@ -98,29 +126,17 @@ export default function BlockNoteEditor({ sessionId }: BlockNoteEditorProps) {
       return;
     }
 
-    // Track transactions
+    // Track user activity
     const handleUpdate = ({ transaction }: any) => {
       if (!transaction.docChanged) return;
 
       const tracker = trackerRef.current;
       if (!tracker) return;
 
-      // Track each step in the transaction
-      transaction.steps.forEach((step: any) => {
-        try {
-          const stepJSON = step.toJSON();
-          tracker.trackTransactionStep({
-            stepType: stepJSON.stepType,
-            from: stepJSON.from,
-            to: stepJSON.to,
-            slice: stepJSON.slice,
-          });
-        } catch (error) {
-          console.error("Failed to serialize step:", error);
-        }
-      });
+      // Track activity (throttled to 1 per second)
+      tracker.trackActivity();
 
-      // Take snapshot if needed
+      // Take snapshot if needed (activity-based, every 5 seconds)
       if (tracker.shouldTakeSnapshot()) {
         try {
           const documentState = editor.document;

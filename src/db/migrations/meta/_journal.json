@@ -15,6 +15,13 @@
       "when": 1767283849605,
       "tag": "0001_rainy_strong_guy",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1767306843298,
+      "tag": "0002_slimy_quentin_quire",
+      "breakpoints": true
     }
   ]
 }

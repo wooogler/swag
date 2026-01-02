@@ -43,18 +43,21 @@ export const studentSessions = pgTable('student_sessions', {
   assignmentId: text('assignment_id').notNull().references(() => assignments.id),
   studentName: text('student_name').notNull(),
   studentEmail: text('student_email').notNull(),
+  password: text('password'), // Hashed password (null if not verified yet)
+  isVerified: boolean('is_verified').default(false).notNull(),
   startedAt: timestamp('started_at').notNull(),
   lastSavedAt: timestamp('last_saved_at'),
+  lastLoginAt: timestamp('last_login_at'),
 });
 
 export const editorEvents = pgTable('editor_events', {
   id: serial('id').primaryKey(),
   sessionId: text('session_id').notNull().references(() => studentSessions.id),
   eventType: text('event_type').notNull(),
-  // 'transaction_step', 'paste_internal', 'paste_external', 'snapshot'
+  // 'paste_internal', 'paste_external', 'snapshot'
   eventData: jsonb('event_data').notNull(),
-  // For transaction_step: { stepType, from, to, slice, ... }
-  // For snapshot: { document: BlockNote JSON }
+  // For snapshot: BlockNote document JSON array
+  // For paste: { content: string }
   timestamp: timestamp('timestamp').notNull(),
   sequenceNumber: integer('sequence_number').notNull(),
 });

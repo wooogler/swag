@@ -1,27 +1,42 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db/db';
-import { authTokens, instructors } from '@/db/schema';
+import { authTokens, studentSessions } from '@/db/schema';
 import { z } from 'zod';
 import crypto from 'crypto';
+import { eq, and } from 'drizzle-orm';
 
 const emailSchema = z.object({
   email: z.string().email(),
+  sessionId: z.string().uuid(),
+  assignmentId: z.string().uuid(),
 });
-
-// Allowed email domains (can be configured via env)
-const ALLOWED_DOMAINS = process.env.ALLOWED_EMAIL_DOMAINS?.split(',') || ['vt.edu'];
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { email } = emailSchema.parse(body);
+    const { email, sessionId, assignmentId } = emailSchema.parse(body);
 
-    // Check if email domain is allowed
-    const domain = email.split('@')[1];
-    if (!ALLOWED_DOMAINS.includes(domain)) {
+    // Verify that the session exists and matches the email
+    const session = await db.query.studentSessions.findFirst({
+      where: and(
+        eq(studentSessions.id, sessionId),
+        eq(studentSessions.studentEmail, email),
+        eq(studentSessions.assignmentId, assignmentId)
+      ),
+    });
+
+    if (!session) {
       return NextResponse.json(
-        { error: `Only ${ALLOWED_DOMAINS.join(', ')} email addresses are allowed` },
-        { status: 403 }
+        { error: 'Session not found or email mismatch' },
+        { status: 404 }
+      );
+    }
+
+    // If already verified, don't send another link
+    if (session.isVerified) {
+      return NextResponse.json(
+        { error: 'This session is already verified' },
+        { status: 400 }
       );
     }
 
@@ -35,44 +50,23 @@ export async function POST(request: Request) {
       id: tokenId,
       email,
       token,
+      type: 'student_verification',
       expiresAt,
       used: false,
       createdAt: new Date(),
     });
 
-    // Check if instructor exists
-    const existingInstructor = await db.query.instructors.findFirst({
-      where: (instructors, { eq }) => eq(instructors.email, email),
-    });
-
-    // If instructor exists and is already verified, they should use login instead
-    if (existingInstructor?.isVerified) {
-      return NextResponse.json(
-        { error: 'Account already exists. Please use login instead.' },
-        { status: 400 }
-      );
-    }
-
-    // Create new instructor if doesn't exist
-    if (!existingInstructor) {
-      await db.insert(instructors).values({
-        id: crypto.randomUUID(),
-        email,
-        isVerified: false,
-        createdAt: new Date(),
-      });
-    }
-
     // Build magic link URL
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const magicLink = `${baseUrl}/instructor/verify?token=${token}`;
+    const magicLink = `${baseUrl}/student/verify?token=${token}&sessionId=${sessionId}`;
 
     // In development, log the link; in production, send email
     if (process.env.NODE_ENV === 'development') {
       console.log('\n========================================');
-      console.log('EMAIL VERIFICATION LINK (Development Mode)');
+      console.log('STUDENT VERIFICATION LINK (Development Mode)');
       console.log('========================================');
       console.log(`Email: ${email}`);
+      console.log(`Session ID: ${sessionId}`);
       console.log(`Link: ${magicLink}`);
       console.log('========================================\n');
       
@@ -80,10 +74,11 @@ export async function POST(request: Request) {
       if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
         console.log('📧 Gmail SMTP로 실제 이메일 발송 중...');
         try {
-          const { sendMagicLink: sendVerificationEmail } = await import('@/lib/email');
-          await sendVerificationEmail({
+          const { sendStudentVerificationEmail } = await import('@/lib/email');
+          await sendStudentVerificationEmail({
             to: email,
             magicLink,
+            studentName: session.studentName,
           });
           console.log('✅ 이메일 발송 성공!');
         } catch (error) {
@@ -92,10 +87,11 @@ export async function POST(request: Request) {
       }
     } else {
       // Send verification email via Gmail
-      const { sendMagicLink: sendVerificationEmail } = await import('@/lib/email');
-      await sendVerificationEmail({
+      const { sendStudentVerificationEmail } = await import('@/lib/email');
+      await sendStudentVerificationEmail({
         to: email,
         magicLink,
+        studentName: session.studentName,
       });
     }
 
@@ -106,18 +102,19 @@ export async function POST(request: Request) {
       ...(process.env.NODE_ENV === 'development' && { link: magicLink }),
     });
   } catch (error) {
-    console.error('Magic link error:', error);
+    console.error('Student verification link error:', error);
 
     if (error instanceof z.ZodError) {
       return NextResponse.json(
-        { error: 'Invalid email address' },
+        { error: 'Invalid request data' },
         { status: 400 }
       );
     }
 
     return NextResponse.json(
-      { error: 'Failed to send login link' },
+      { error: 'Failed to send verification link' },
       { status: 500 }
     );
   }
 }
+

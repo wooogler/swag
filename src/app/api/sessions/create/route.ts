@@ -25,14 +25,16 @@ export async function POST(request: Request) {
 
     let sessionId: string;
     let isExisting = false;
+    let isVerified = false;
 
     if (existingSession) {
       // Reuse existing session
       sessionId = existingSession.id;
       isExisting = true;
-      console.log(`Existing session found for ${validated.studentEmail}: ${sessionId}`);
+      isVerified = existingSession.isVerified || false;
+      console.log(`Existing session found for ${validated.studentEmail}: ${sessionId} (verified: ${isVerified})`);
     } else {
-      // Create new session
+      // Create new session (unverified)
       sessionId = crypto.randomUUID();
 
       await db.insert(studentSessions).values({
@@ -40,15 +42,16 @@ export async function POST(request: Request) {
         assignmentId: validated.assignmentId,
         studentName: validated.studentName,
         studentEmail: validated.studentEmail,
+        isVerified: false,
         startedAt: new Date(),
         lastSavedAt: null,
       });
 
-      console.log(`New session created for ${validated.studentEmail}: ${sessionId}`);
+      console.log(`New session created for ${validated.studentEmail}: ${sessionId} (unverified)`);
     }
 
     return NextResponse.json(
-      { sessionId, isExisting },
+      { sessionId, isExisting, isVerified },
       {
         status: isExisting ? 200 : 201,
         headers: {

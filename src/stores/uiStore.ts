@@ -9,7 +9,7 @@ interface UIState {
 
   // Other UI states
   showInstructions: boolean;
-  saveStatus: 'ready' | 'saved';
+  saveStatus: 'ready' | 'saving' | 'saved';
 
   // Actions
   toggleChat: () => void;
@@ -17,7 +17,7 @@ interface UIState {
   setChatWidth: (width: number) => void;
   setResizing: (isResizing: boolean) => void;
   toggleInstructions: () => void;
-  setSaveStatus: (status: 'ready' | 'saved') => void;
+  setSaveStatus: (status: 'ready' | 'saving' | 'saved') => void;
 
   // Resize logic
   startResize: () => void;

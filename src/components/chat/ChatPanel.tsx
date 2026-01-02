@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { getGlobalValidator } from '@/lib/copy-validator';
 import toast, { Toaster } from 'react-hot-toast';
 import ConversationList from './ConversationList';
@@ -55,6 +55,10 @@ export default function ChatPanel({
 
   const isReplayMode = mode === 'replay';
 
+  // Memoize replay props to prevent infinite loops
+  const memoizedReplayMessages = useMemo(() => replayMessages, [JSON.stringify(replayMessages)]);
+  const memoizedReplayConversations = useMemo(() => replayConversations, [JSON.stringify(replayConversations)]);
+
   // Set mode on mount
   useEffect(() => {
     setMode(mode);
@@ -64,7 +68,7 @@ export default function ChatPanel({
   useEffect(() => {
     if (isReplayMode) {
       // Use replay conversations
-      setConversations(replayConversations.map(c => ({
+      setConversations(memoizedReplayConversations.map(c => ({
         ...c,
         createdAt: new Date(c.createdAt)
       })));
@@ -77,7 +81,7 @@ export default function ChatPanel({
       loadConversations(sessionId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, isReplayMode]);
+  }, [sessionId, isReplayMode, memoizedReplayConversations]);
 
   // Load messages when active conversation changes
   useEffect(() => {
@@ -86,9 +90,9 @@ export default function ChatPanel({
     if (isReplayMode) {
       // Filter replay messages by active conversation
       if (activeConversationId === 'all') {
-        setMessages(replayMessages);
+        setMessages(memoizedReplayMessages);
       } else {
-        const filtered = replayMessages.filter(m =>
+        const filtered = memoizedReplayMessages.filter(m =>
           m.conversationTitle === conversations.find(c => c.id === activeConversationId)?.title
         );
         setMessages(filtered);
@@ -100,7 +104,7 @@ export default function ChatPanel({
       loadMessages(activeConversationId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConversationId, isReplayMode, replayMessages]);
+  }, [activeConversationId, isReplayMode, memoizedReplayMessages]);
 
   // Copy/Paste validation for chat input
   useEffect(() => {

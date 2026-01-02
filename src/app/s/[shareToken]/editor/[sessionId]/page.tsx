@@ -1,7 +1,8 @@
 import { db } from '@/db/db';
 import { assignments, studentSessions } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import EditorClient from '@/components/editor/EditorClient';
 
 interface EditorPageProps {
@@ -33,6 +34,21 @@ export default async function EditorPage({ params }: EditorPageProps) {
     notFound();
   }
 
+  // Check if session is verified
+  if (!session.isVerified) {
+    // Redirect back to access page with error message
+    redirect(`/s/${shareToken}?error=not-verified`);
+  }
+
+  // Check if user has valid session cookie
+  const cookieStore = await cookies();
+  const sessionCookie = cookieStore.get(`student_session_${assignment.id}`);
+
+  if (!sessionCookie || sessionCookie.value !== sessionId) {
+    // No valid session cookie - redirect to login
+    redirect(`/s/${shareToken}?error=login-required`);
+  }
+
   return (
     <EditorClient
       sessionId={session.id}
@@ -43,3 +59,4 @@ export default async function EditorPage({ params }: EditorPageProps) {
     />
   );
 }
+

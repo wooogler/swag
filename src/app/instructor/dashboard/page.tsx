@@ -66,6 +66,12 @@ export default async function DashboardPage() {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm text-gray-600">{instructor.email}</span>
+              <Link
+                href="/instructor/settings"
+                className="text-sm text-gray-600 hover:text-gray-800"
+              >
+                Settings
+              </Link>
               <form action="/api/auth/logout" method="POST">
                 <button
                   type="submit"

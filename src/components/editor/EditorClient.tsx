@@ -30,14 +30,22 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
 
   // Listen for save events
   useEffect(() => {
-    const handleSave = () => {
+    const handleSaving = () => {
+      setSaveStatus('saving');
+    };
+
+    const handleSaved = () => {
       setSaveStatus('saved');
       // Reset to ready after 2 seconds
       setTimeout(() => setSaveStatus('ready'), 2000);
     };
 
-    window.addEventListener('prelude:events-saved', handleSave);
-    return () => window.removeEventListener('prelude:events-saved', handleSave);
+    window.addEventListener('prelude:events-saving', handleSaving);
+    window.addEventListener('prelude:events-saved', handleSaved);
+    return () => {
+      window.removeEventListener('prelude:events-saving', handleSaving);
+      window.removeEventListener('prelude:events-saved', handleSaved);
+    };
   }, [setSaveStatus]);
 
   // Handle resize with mouse events
@@ -79,8 +87,14 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <span className={`text-sm ${saveStatus === 'saved' ? 'text-green-600' : 'text-gray-500'}`}>
-              {saveStatus === 'saved' ? '✓ Saved' : 'Ready'}
+            <span className={`text-sm font-medium ${
+              saveStatus === 'saving' ? 'text-blue-600' : 
+              saveStatus === 'saved' ? 'text-green-600' : 
+              'text-gray-500'
+            }`}>
+              {saveStatus === 'saving' ? '💾 Saving...' : 
+               saveStatus === 'saved' ? '✓ Saved' : 
+               'Ready'}
             </span>
           </div>
         </div>

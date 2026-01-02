@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { useCreateBlockNote } from '@blocknote/react';
 import ChatPanel from '@/components/chat/ChatPanel';
@@ -67,20 +67,132 @@ export default function ReplayPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(startTime);
   const [speed, setSpeed] = useState(5); // Default 5x speed
-  const [editorDocument, setEditorDocument] = useState<any[]>([]);
+  const [editorDocument, setEditorDocument] = useState<any[]>([
+    { type: 'paragraph', content: [] }
+  ]);
   const [visibleMessages, setVisibleMessages] = useState<ChatMessage[]>([]);
   const [lastPasteEvent, setLastPasteEvent] = useState<{ type: string; timestamp: number } | null>(null);
+  const [isEditorReady, setIsEditorReady] = useState(false);
 
   const animationRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(0);
 
   // Create BlockNote editor for replay
   const editor = useCreateBlockNote({
-    initialContent: editorDocument.length > 0 ? editorDocument : undefined,
+    initialContent: [{ type: 'paragraph', content: [] }],
   });
 
+  // Mark editor as ready after mount
+  useEffect(() => {
+    if (editor) {
+      const timer = setTimeout(() => {
+        const tiptapEditor = (editor as any)._tiptapEditor;
+        if (tiptapEditor && tiptapEditor.view) {
+          setIsEditorReady(true);
+        }
+      }, 100); // Small delay to ensure Tiptap is fully mounted
+
+      return () => clearTimeout(timer);
+    }
+  }, [editor]);
+
   const duration = endTime - startTime;
-  const progress = duration > 0 ? ((currentTime - startTime) / duration) * 100 : 0;
+
+  // Detect idle periods FIRST (gaps > 2 minutes with no activity)
+  const idlePeriods = useMemo(() => {
+    const IDLE_THRESHOLD = 2 * 60 * 1000; // 2 minutes
+    const allEventTimes: number[] = [];
+
+    // Collect all event timestamps
+    events.forEach(e => allEventTimes.push(e.timestamp));
+    chatMessages.forEach(m => allEventTimes.push(m.timestamp));
+    
+    // Sort by time
+    allEventTimes.sort((a, b) => a - b);
+
+    const periods: Array<{ 
+      start: number; 
+      end: number; 
+      duration: number;
+      compressedMinutes: number; // 압축된 분 단위
+      edgeSeconds: number; // 앞뒤 표시할 시간 (초)
+    }> = [];
+
+    for (let i = 0; i < allEventTimes.length - 1; i++) {
+      const gap = allEventTimes[i + 1] - allEventTimes[i];
+      if (gap > IDLE_THRESHOLD) {
+        const totalSeconds = Math.floor(gap / 1000);
+        const compressedMinutes = Math.floor(totalSeconds / 60); // 분 단위로 압축
+        const remainingSeconds = totalSeconds - (compressedMinutes * 60);
+        const edgeSeconds = Math.floor(remainingSeconds / 2); // 앞뒤 균등 분할
+        
+        periods.push({
+          start: allEventTimes[i],
+          end: allEventTimes[i + 1],
+          duration: gap,
+          compressedMinutes,
+          edgeSeconds,
+        });
+      }
+    }
+
+    return periods;
+  }, [events, chatMessages]);
+
+  // Calculate compressed timeline (remove idle periods, keeping only edges)
+  const getCompressedTime = useCallback((realTime: number) => {
+    let compressed = realTime - startTime;
+    
+    // Subtract compressed idle periods before this time
+    idlePeriods.forEach(idle => {
+      const idleMiddleStart = idle.start + (idle.edgeSeconds * 1000);
+      const idleMiddleEnd = idle.end - (idle.edgeSeconds * 1000);
+      const compressedDuration = idle.compressedMinutes * 60 * 1000;
+      
+      if (realTime >= idleMiddleEnd) {
+        // We're past the entire idle period - subtract the compressed part
+        compressed -= compressedDuration;
+      } else if (realTime >= idleMiddleStart) {
+        // We're in the middle (compressed) part - this shouldn't happen with jump,
+        // but handle it just in case
+        compressed -= (realTime - idleMiddleStart);
+      }
+    });
+
+    return compressed + startTime;
+  }, [startTime, idlePeriods]);
+
+  const getRealTime = useCallback((compressedTime: number) => {
+    let real = compressedTime - startTime;
+    let accumulatedCompression = 0;
+
+    for (const idle of idlePeriods) {
+      const idleStartCompressed = idle.start - startTime - accumulatedCompression;
+      const compressedDuration = idle.compressedMinutes * 60 * 1000;
+      
+      if (compressedTime - startTime > idleStartCompressed + (idle.edgeSeconds * 1000)) {
+        // We've passed this idle period's first edge
+        real += compressedDuration;
+        accumulatedCompression += compressedDuration;
+      } else {
+        break;
+      }
+    }
+
+    return real + startTime;
+  }, [startTime, idlePeriods]);
+
+  // Compressed timeline duration
+  const compressedDuration = useMemo(() => {
+    const totalCompression = idlePeriods.reduce((sum, idle) => 
+      sum + (idle.compressedMinutes * 60 * 1000), 0
+    );
+    return duration - totalCompression;
+  }, [duration, idlePeriods]);
+
+  const progress = compressedDuration > 0 
+    ? ((getCompressedTime(currentTime) - startTime) / compressedDuration) * 100 
+    : 0;
 
   // Handle resize with mouse events
   useEffect(() => {
@@ -163,7 +275,20 @@ export default function ReplayPlayer({
       lastFrameTimeRef.current = frameTime;
 
       setCurrentTime((prev) => {
-        const newTime = prev + deltaMs * speed;
+        let newTime = prev + deltaMs * speed;
+        
+        // Check if we're entering an idle period and skip it
+        for (const idle of idlePeriods) {
+          const idleMiddleStart = idle.start + (idle.edgeSeconds * 1000);
+          const idleMiddleEnd = idle.end - (idle.edgeSeconds * 1000);
+          
+          // If we just entered the compressed middle part, jump to the end
+          if (prev < idleMiddleStart && newTime >= idleMiddleStart) {
+            newTime = idleMiddleEnd;
+            break;
+          }
+        }
+        
         if (newTime >= endTime) {
           // Stop playing when reaching the end
           // Use setTimeout to avoid state update during render
@@ -184,7 +309,7 @@ export default function ReplayPlayer({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [isPlaying, speed, endTime]);
+  }, [isPlaying, speed, endTime, idlePeriods]);
 
   // Update content when current time changes
   useEffect(() => {
@@ -196,18 +321,36 @@ export default function ReplayPlayer({
 
   // Update editor when document changes
   useEffect(() => {
-    if (editor && editorDocument.length > 0) {
-      editor.replaceBlocks(editor.document, editorDocument);
-    }
-  }, [editor, editorDocument]);
+    if (!editor || !isEditorReady || editorDocument.length === 0) return;
 
-  // Handle timeline click
+    // Safely check if editor is ready
+    try {
+      const tiptapEditor = (editor as any)._tiptapEditor;
+      if (!tiptapEditor || !tiptapEditor.view) {
+        return; // Editor not fully mounted yet
+      }
+
+      // Prevent updates if content is the same
+      const currentDoc = editor.document;
+      if (JSON.stringify(currentDoc) === JSON.stringify(editorDocument)) {
+        return;
+      }
+
+      editor.replaceBlocks(editor.document, editorDocument);
+    } catch (error) {
+      // Silently ignore editor update errors during replay
+      console.debug('Editor update skipped:', error);
+    }
+  }, [editor, isEditorReady, editorDocument]);
+
+  // Handle timeline click (accounting for compressed time)
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percentage = x / rect.width;
-    const newTime = startTime + percentage * duration;
-    setCurrentTime(Math.max(startTime, Math.min(endTime, newTime)));
+    const newCompressedTime = startTime + percentage * compressedDuration;
+    const newRealTime = getRealTime(newCompressedTime);
+    setCurrentTime(Math.max(startTime, Math.min(endTime, newRealTime)));
   };
 
   // Format time for display
@@ -218,14 +361,15 @@ export default function ReplayPlayer({
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
-  // Get timeline markers for events
+  // Get timeline markers for events (using compressed time)
   const getEventMarkers = () => {
     const markers: Array<{ position: number; type: string; tooltip: string }> = [];
 
     // Chat message markers
     chatMessages.forEach((msg) => {
       if (msg.role === 'user') {
-        const position = ((msg.timestamp - startTime) / duration) * 100;
+        const compressedTime = getCompressedTime(msg.timestamp);
+        const position = ((compressedTime - startTime) / compressedDuration) * 100;
         markers.push({
           position,
           type: 'chat',
@@ -238,7 +382,8 @@ export default function ReplayPlayer({
     events
       .filter(e => e.eventType === 'paste_internal' || e.eventType === 'paste_external')
       .forEach((event) => {
-        const position = ((event.timestamp - startTime) / duration) * 100;
+        const compressedTime = getCompressedTime(event.timestamp);
+        const position = ((compressedTime - startTime) / compressedDuration) * 100;
         markers.push({
           position,
           type: event.eventType,
@@ -249,7 +394,96 @@ export default function ReplayPlayer({
     return markers;
   };
 
+  // Get typing sessions from snapshots
+  const getTypingSessions = useCallback(() => {
+    const snapshots = events
+      .filter(e => e.eventType === 'snapshot')
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    const sessions: Array<{ startTime: number; endTime: number }> = [];
+    const GAP_THRESHOLD = 10000; // 10초 gap (snapshot이 없으면 활동 없음)
+    
+    if (snapshots.length === 0) return sessions;
+
+    let currentSession = {
+      startTime: snapshots[0].timestamp,
+      endTime: snapshots[0].timestamp,
+    };
+
+    for (let i = 1; i < snapshots.length; i++) {
+      const timeSinceLastSnapshot = snapshots[i].timestamp - currentSession.endTime;
+
+      if (timeSinceLastSnapshot <= GAP_THRESHOLD) {
+        // 같은 세션 - 종료 시간 연장
+        currentSession.endTime = snapshots[i].timestamp;
+      } else {
+        // 새로운 세션 시작
+        sessions.push(currentSession);
+        currentSession = {
+          startTime: snapshots[i].timestamp,
+          endTime: snapshots[i].timestamp,
+        };
+      }
+    }
+
+    // 마지막 세션 추가
+    sessions.push(currentSession);
+
+    return sessions;
+  }, [events]);
+
   const markers = getEventMarkers();
+  const typingSessions = getTypingSessions();
+
+  // Get all navigable events
+  const getNavigableEvents = useCallback(() => {
+    const navEvents: Array<{ 
+      time: number; 
+      type: 'typing_start' | 'chat' | 'paste_internal' | 'paste_external';
+      label: string;
+      description: string;
+    }> = [];
+
+    // Typing session starts
+    typingSessions.forEach((session, i) => {
+      navEvents.push({
+        time: session.startTime,
+        type: 'typing_start',
+        label: `Typing Session ${i + 1}`,
+        description: `Started at ${formatTime(session.startTime)}`,
+      });
+    });
+
+    // Chat messages
+    chatMessages.forEach((msg, i) => {
+      if (msg.role === 'user') {
+        navEvents.push({
+          time: msg.timestamp,
+          type: 'chat',
+          label: `Chat Message ${i + 1}`,
+          description: msg.content.slice(0, 50) + (msg.content.length > 50 ? '...' : ''),
+        });
+      }
+    });
+
+    // Paste events
+    events
+      .filter(e => e.eventType === 'paste_internal' || e.eventType === 'paste_external')
+      .forEach((event, i) => {
+        navEvents.push({
+          time: event.timestamp,
+          type: event.eventType as 'paste_internal' | 'paste_external',
+          label: event.eventType === 'paste_external' ? `External Paste ${i + 1}` : `Internal Paste ${i + 1}`,
+          description: `At ${formatTime(event.timestamp)}`,
+        });
+      });
+
+    // Sort by time
+    return navEvents.sort((a, b) => a.time - b.time);
+  }, [typingSessions, chatMessages, events, formatTime]);
+
+  const navigableEvents = getNavigableEvents();
+  const [showEventMenu, setShowEventMenu] = useState(false);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -274,42 +508,105 @@ export default function ReplayPlayer({
           </button>
 
           {/* Time Display */}
-          <div className="text-sm text-gray-600 w-24">
+          <div className="text-sm text-gray-600 w-32">
             {formatTime(currentTime)} / {formatTime(endTime)}
+            {idlePeriods.length > 0 && (
+              <div className="text-xs text-orange-600">
+                ({idlePeriods.length} breaks)
+              </div>
+            )}
           </div>
 
-          {/* Timeline */}
-          <div
-            className="flex-1 h-6 bg-gray-200 rounded cursor-pointer relative"
-            onClick={handleTimelineClick}
-          >
-            {/* Progress bar */}
-            <div
-              className="absolute top-0 left-0 h-full bg-blue-500 rounded-l"
-              style={{ width: `${progress}%` }}
-            />
+          {/* Timeline Container */}
+          <div className="flex-1 flex flex-col gap-1">
+            {/* Typing Activity Bar (위쪽) */}
+            <div className="h-2 bg-gray-100 rounded relative">
+              {typingSessions.map((session, i) => {
+                const compressedStart = getCompressedTime(session.startTime);
+                const compressedEnd = getCompressedTime(session.endTime);
+                const startPos = ((compressedStart - startTime) / compressedDuration) * 100;
+                const endPos = ((compressedEnd - startTime) / compressedDuration) * 100;
+                const width = endPos - startPos;
+                
+                return (
+                  <div
+                    key={`session-${i}`}
+                    className="absolute top-0 h-full bg-blue-400 rounded"
+                    style={{ 
+                      left: `${startPos}%`,
+                      width: `${width}%`,
+                    }}
+                    title={`Typing: ${formatTime(session.startTime)} - ${formatTime(session.endTime)}`}
+                  />
+                );
+              })}
+              
+              {/* Idle period indicators - compressed middle part only */}
+              {idlePeriods.map((idle, i) => {
+                const middleStart = idle.start + (idle.edgeSeconds * 1000);
+                const compressedMiddleStart = getCompressedTime(middleStart);
+                const middlePos = ((compressedMiddleStart - startTime) / compressedDuration) * 100;
+                
+                // Fixed width for visibility
+                const markerWidth = 2; // 2% width
+                // Center the marker by offsetting half its width
+                const centeredPos = middlePos - (markerWidth / 2);
+                
+                return (
+                  <div key={`idle-${i}`}>
+                    {/* Only show the compressed middle part (dark gray) */}
+                    <div
+                      className="absolute top-0 h-full bg-gray-700"
+                      style={{ 
+                        left: `${centeredPos}%`,
+                        width: `${markerWidth}%`,
+                      }}
+                      title={`Break: ${idle.compressedMinutes} min compressed`}
+                    >
+                      <div 
+                        className="absolute -top-5 left-1/2 transform -translate-x-1/2 text-xs font-bold text-gray-800 whitespace-nowrap"
+                      >
+                        {idle.compressedMinutes} min
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
-            {/* Event markers */}
-            {markers.map((marker, i) => (
+            {/* Main Timeline (아래쪽) */}
+            <div
+              className="h-4 bg-gray-200 rounded cursor-pointer relative"
+              onClick={handleTimelineClick}
+            >
+              {/* Progress bar */}
               <div
-                key={i}
-                className={`absolute top-0 w-1 h-full ${
-                  marker.type === 'paste_external'
-                    ? 'bg-red-500'
-                    : marker.type === 'paste_internal'
-                    ? 'bg-green-500'
-                    : 'bg-purple-500'
-                }`}
-                style={{ left: `${marker.position}%` }}
-                title={marker.tooltip}
+                className="absolute top-0 left-0 h-full bg-blue-500 rounded-l"
+                style={{ width: `${progress}%` }}
               />
-            ))}
 
-            {/* Playhead */}
-            <div
-              className="absolute top-0 w-3 h-full bg-blue-700 rounded"
-              style={{ left: `calc(${progress}% - 6px)` }}
-            />
+              {/* Event markers */}
+              {markers.map((marker, i) => (
+                <div
+                  key={i}
+                  className={`absolute top-0 w-1 h-full ${
+                    marker.type === 'paste_external'
+                      ? 'bg-red-500'
+                      : marker.type === 'paste_internal'
+                      ? 'bg-green-500'
+                      : 'bg-purple-500'
+                  }`}
+                  style={{ left: `${marker.position}%` }}
+                  title={marker.tooltip}
+                />
+              ))}
+
+              {/* Playhead */}
+              <div
+                className="absolute top-0 w-3 h-full bg-blue-700 rounded"
+                style={{ left: `calc(${progress}% - 6px)` }}
+              />
+            </div>
           </div>
 
           {/* Speed Control */}
@@ -329,19 +626,120 @@ export default function ReplayPlayer({
           </div>
         </div>
 
-        {/* Legend */}
-        <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-purple-500 rounded" />
-            <span>Chat</span>
+        {/* Legend and Event Navigation - Same Row */}
+        <div className="flex items-center justify-between mt-2">
+          {/* Legend */}
+          <div className="flex items-center gap-4 text-xs text-gray-500">
+            <div className="flex items-center gap-1">
+              <div className="w-4 h-2 bg-blue-400 rounded" />
+              <span>Typing Activity</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-purple-500 rounded" />
+              <span>Chat</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-green-500 rounded" />
+              <span>Internal Paste</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-red-500 rounded" />
+              <span>External Paste</span>
+            </div>
+            {idlePeriods.length > 0 && (
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-2 bg-gray-700 rounded" />
+                <span>Break (compressed)</span>
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-green-500 rounded" />
-            <span>Internal Paste</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-red-500 rounded" />
-            <span>External Paste</span>
+
+          {/* Event Navigation Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowEventMenu(!showEventMenu)}
+              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-sm font-medium flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+              </svg>
+              Events
+              <svg className={`w-4 h-4 transition-transform ${showEventMenu ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {showEventMenu && (
+              <>
+                {/* Backdrop */}
+                <div 
+                  className="fixed inset-0 z-10" 
+                  onClick={() => setShowEventMenu(false)}
+                />
+                
+                {/* Dropdown Menu */}
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-20 max-h-96 overflow-y-auto">
+                  <div className="sticky top-0 bg-gray-50 px-4 py-2 border-b border-gray-200">
+                    <p className="text-xs font-semibold text-gray-600 uppercase">
+                      Jump to Event ({navigableEvents.length})
+                    </p>
+                  </div>
+                  
+                  {navigableEvents.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-gray-500 text-sm">
+                      No events recorded
+                    </div>
+                  ) : (
+                    <div className="py-1">
+                      {navigableEvents.map((event, i) => {
+                        const isPast = event.time <= currentTime;
+                        const eventIcon = event.type === 'typing_start' ? '⌨️' :
+                                        event.type === 'chat' ? '💬' :
+                                        event.type === 'paste_internal' ? '📋' : '🚫';
+                        
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => {
+                              setCurrentTime(event.time);
+                              setShowEventMenu(false);
+                            }}
+                            className={`w-full px-4 py-3 text-left transition-colors border-b border-gray-100 last:border-0 ${
+                              isPast 
+                                ? 'bg-blue-50 hover:bg-blue-100' 
+                                : 'bg-white hover:bg-gray-50'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <span className="text-lg mt-0.5">{eventIcon}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className={`text-sm font-medium truncate ${
+                                    isPast ? 'text-blue-700' : 'text-gray-900'
+                                  }`}>
+                                    {event.label}
+                                  </p>
+                                  <span className={`text-xs font-mono whitespace-nowrap ${
+                                    isPast ? 'text-blue-600' : 'text-gray-500'
+                                  }`}>
+                                    {formatTime(event.time)}
+                                  </span>
+                                </div>
+                                <p className={`text-xs mt-1 truncate ${
+                                  isPast ? 'text-blue-600' : 'text-gray-500'
+                                }`}>
+                                  {event.description}
+                                </p>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
