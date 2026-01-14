@@ -32,17 +32,17 @@ SWAG captures character-level writing interactions to help educators understand 
 - **Framework**: Next.js 15 + React 19
 - **Editor**: BlockNote 0.42 (Notion-like UX)
 - **Chat**: Assistant UI + OpenAI API
-- **Database**: PostgreSQL (Vercel Postgres)
+- **Database**: PostgreSQL
 - **ORM**: Drizzle ORM
 - **Email**: Resend API
-- **Deployment**: Vercel (free tier)
+- **Deployment**: Self-hosted (see `deploy.sh`)
 
 ## Getting Started
 
 ### Prerequisites
 - Node.js 18+ or Bun 1.x
 - OpenAI API key
-- PostgreSQL database (Vercel Postgres for production, local Postgres for dev)
+- PostgreSQL database (production or local)
 
 ### Installation
 
@@ -71,7 +71,7 @@ cp .env.example .env
 ```
 
 Required variables:
-- `POSTGRES_URL` - PostgreSQL connection string (Vercel Postgres or local)
+- `POSTGRES_URL` - PostgreSQL connection string
 - `OPENAI_API_KEY` - Your OpenAI API key
 - `NEXT_PUBLIC_APP_URL` - Application URL
 - `JWT_SECRET` - Random secret for authentication (generate with `openssl rand -base64 32`)
@@ -112,6 +112,33 @@ Using Resend (https://resend.com) for email verification:
 **Returning instructors:**
 - Use "Login" tab with email + password
 - Session lasts 30 days (JWT cookie)
+
+## Production Deployment (Self-hosted)
+
+Use the provided deployment script to set up PostgreSQL, build the container, and configure Nginx:
+
+```bash
+# Make the script executable (first time only)
+chmod +x deploy.sh
+
+# Run deployment (optionally pass your domain)
+./deploy.sh swag.cs.vt.edu
+```
+
+The script will:
+- Initialize PostgreSQL (if needed)
+- Create database/user
+- Run migrations
+- Build and run the container via systemd
+- Configure Nginx + HTTPS placeholders
+
+After the script completes:
+1. Point your DNS to the server
+2. Run Certbot for SSL:
+   ```bash
+   sudo certbot --nginx -d swag.cs.vt.edu
+   ```
+3. Verify the app at `https://swag.cs.vt.edu`
 
 ## Project Structure
 
@@ -158,12 +185,10 @@ swag/
 - ✅ Student writing portal with AI chat assistance
 - ✅ Instructor dashboard with session replay
 - ✅ Email authentication with Resend
-- ✅ Vercel deployment configuration
 - ✅ Real-time event tracking and replay
 - ✅ Copy-paste detection and prevention
 
 **Production Ready:**
-- ✅ Deployed on Vercel with PostgreSQL
 - ✅ Email verification for instructor signup
 - ✅ Session-based authentication (30-day cookies)
 - ✅ Environment variable configuration
@@ -222,98 +247,6 @@ swag/
 - Pause/resume with keyboard shortcuts
 - Color-coded markers for chat, internal paste, external paste attempts
 
-## Production Deployment
-
-### Deploy to Vercel (Recommended)
-
-**Step 1: Prepare GitHub Repository**
-```bash
-# Ensure all changes are committed
-git add -A
-git commit -m "Prepare for Vercel deployment"
-git push origin main
-```
-
-**Step 2: Create Vercel Project**
-1. Go to [vercel.com](https://vercel.com) and sign in with GitHub
-2. Click "Add New" → "Project"
-3. Import your GitHub repository
-4. Framework Preset: Next.js (auto-detected)
-5. Click "Deploy" (initial deployment will fail - database not configured yet)
-
-**Step 3: Create Vercel Postgres Database (Powered by Neon)**
-1. In your Vercel project, go to "Storage" tab
-2. Click "Create Database" → "Postgres"
-3. Name: `swag-db` (or any name)
-4. Region: `iad1` (Washington D.C. - closest to VT)
-5. Click "Create"
-   - ℹ️ Vercel Postgres uses Neon as the underlying database provider
-
-**Step 4: Configure Environment Variables**
-1. Go to "Settings" → "Environment Variables"
-2. Add the following variables:
-
-```bash
-# Database (automatically added by Vercel Postgres)
-POSTGRES_URL=<automatically populated>
-
-# OpenAI
-OPENAI_API_KEY=sk-...
-
-# Authentication
-JWT_SECRET=<generate with: openssl rand -base64 32>
-
-# Email (Resend)
-RESEND_API_KEY=re_...
-EMAIL_FROM=SWAG <onboarding@resend.dev>
-ALLOWED_EMAIL_DOMAINS=vt.edu
-
-# Application
-NEXT_PUBLIC_APP_URL=https://your-app.vercel.app
-NODE_ENV=production
-```
-
-**Step 5: Run Database Migrations**
-```bash
-# Connect to Vercel Postgres from local machine
-# Get POSTGRES_URL from Vercel dashboard → Storage → your database → .env.local tab
-export POSTGRES_URL="postgres://..."
-
-# Run migrations
-npm run db:migrate
-```
-
-**Step 6: Redeploy**
-1. Go to "Deployments" tab
-2. Click "Redeploy" on the latest deployment
-3. Check "Use existing Build Cache" is off
-4. Click "Redeploy"
-
-**Step 7: Verify Deployment**
-1. Visit your Vercel URL (e.g., `https://swag.vercel.app`)
-2. Go to `/instructor/login`
-3. Test signup and login flow
-
-### Vercel Free Tier Limits
-- **Compute**: 60 hours/month (sufficient for research projects)
-- **Database**: 256MB PostgreSQL (thousands of assignments)
-- **Bandwidth**: 100GB/month
-- **Deployments**: Unlimited
-
-### Production Checklist
-
-- [ ] ✅ Push code to GitHub
-- [ ] ✅ Create Vercel project
-- [ ] ✅ Create Vercel Postgres database
-- [ ] ✅ Set environment variables
-- [ ] ✅ Run database migrations
-- [ ] ✅ Redeploy application
-- [ ] 🔲 Test instructor signup/login
-- [ ] 🔲 Create test assignment
-- [ ] 🔲 Test student portal
-- [ ] 🔲 Verify Resend email delivery
-- [ ] 🔲 Set up custom domain (optional)
-- [ ] 🔲 Configure database backups (Vercel auto-backups included)
 
 ## Database Management
 

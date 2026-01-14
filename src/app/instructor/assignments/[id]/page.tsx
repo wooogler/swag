@@ -1,7 +1,7 @@
 import { db } from '@/db/db';
 import { assignments, instructors, studentSessions, editorEvents } from '@/db/schema';
 import { eq, desc, count, and } from 'drizzle-orm';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import DeleteAssignmentButton from './DeleteAssignmentButton';
@@ -10,15 +10,21 @@ import CopyLinkButton from '@/components/instructor/CopyLinkButton';
 
 async function getInstructor() {
   const cookieStore = await cookies();
-  const instructorId = cookieStore.get('instructor_session')?.value;
+  const userId = cookieStore.get('user_session')?.value;
 
-  if (!instructorId) {
+  if (!userId) {
     return null;
   }
 
-  return db.query.instructors.findFirst({
-    where: eq(instructors.id, instructorId),
+  const user = await db.query.instructors.findFirst({
+    where: eq(instructors.id, userId),
   });
+
+  if (!user || user.role !== 'instructor') {
+    return null;
+  }
+
+  return user;
 }
 
 interface PageProps {
@@ -30,8 +36,15 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
   const instructor = await getInstructor();
 
   if (!instructor) {
-    redirect('/instructor/login');
+    redirect('/login');
   }
+
+  const requestHeaders = await headers();
+  const forwardedProto = requestHeaders.get('x-forwarded-proto') ?? 'http';
+  const forwardedHost = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
+  const baseUrl = forwardedHost
+    ? `${forwardedProto}://${forwardedHost}`
+    : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000');
 
   // Get assignment
   const assignment = await db.query.assignments.findFirst({
@@ -89,7 +102,7 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
     })
   );
 
-  const shareUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/s/${assignment.shareToken}`;
+  const shareUrl = `${baseUrl}/s/${assignment.shareToken}`;
   const isOverdue = new Date(assignment.deadline) < new Date();
 
   return (

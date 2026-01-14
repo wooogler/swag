@@ -30,7 +30,7 @@ export default function EditAssignmentPage() {
         const res = await fetch(`/api/assignments/${assignmentId}`);
         if (!res.ok) {
           if (res.status === 401) {
-            router.push('/instructor/login');
+            router.push('/login');
             return;
           }
           throw new Error('Failed to load assignment');

@@ -7,15 +7,21 @@ import ViewWrapper from './ViewWrapper';
 
 async function getInstructor() {
   const cookieStore = await cookies();
-  const instructorId = cookieStore.get('instructor_session')?.value;
+  const userId = cookieStore.get('user_session')?.value;
 
-  if (!instructorId) {
+  if (!userId) {
     return null;
   }
 
-  return db.query.instructors.findFirst({
-    where: eq(instructors.id, instructorId),
+  const user = await db.query.instructors.findFirst({
+    where: eq(instructors.id, userId),
   });
+
+  if (!user || user.role !== 'instructor') {
+    return null;
+  }
+
+  return user;
 }
 
 interface PageProps {
@@ -27,7 +33,7 @@ export default async function ViewPage({ params }: PageProps) {
   const instructor = await getInstructor();
 
   if (!instructor) {
-    redirect('/instructor/login');
+    redirect('/login');
   }
 
   // Get student session

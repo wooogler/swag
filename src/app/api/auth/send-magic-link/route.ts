@@ -4,8 +4,11 @@ import { authTokens, instructors } from '@/db/schema';
 import { z } from 'zod';
 import crypto from 'crypto';
 
-const emailSchema = z.object({
+const signupSchema = z.object({
   email: z.string().email(),
+  name: z.string().min(1).max(100).optional(),
+  passcode: z.string().optional(),
+  shareToken: z.string().optional(),
 });
 
 // Allowed email domains (can be configured via env)
@@ -14,15 +17,29 @@ const ALLOWED_DOMAINS = process.env.ALLOWED_EMAIL_DOMAINS?.split(',') || ['vt.ed
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { email } = emailSchema.parse(body);
+    const { email, name, passcode, shareToken } = signupSchema.parse(body);
 
-    // Check if email domain is allowed
-    const domain = email.split('@')[1];
-    if (!ALLOWED_DOMAINS.includes(domain)) {
-      return NextResponse.json(
-        { error: `Only ${ALLOWED_DOMAINS.join(', ')} email addresses are allowed` },
-        { status: 403 }
-      );
+    const trimmedPasscode = passcode?.trim();
+    const instructorPasscode = process.env.INSTRUCTOR_PASSCODE;
+    let role: 'instructor' | 'student' = 'student';
+
+    if (trimmedPasscode) {
+      // Instructor signup still enforces allowed domains
+      const domain = email.split('@')[1];
+      if (!ALLOWED_DOMAINS.includes(domain)) {
+        return NextResponse.json(
+          { error: `Only ${ALLOWED_DOMAINS.join(', ')} email addresses are allowed` },
+          { status: 403 }
+        );
+      }
+
+      if (!instructorPasscode || trimmedPasscode !== instructorPasscode) {
+        return NextResponse.json(
+          { error: 'Invalid instructor passcode' },
+          { status: 403 }
+        );
+      }
+      role = 'instructor';
     }
 
     // Generate magic link token
@@ -40,32 +57,46 @@ export async function POST(request: Request) {
       createdAt: new Date(),
     });
 
-    // Check if instructor exists
-    const existingInstructor = await db.query.instructors.findFirst({
+    // Check if user exists
+    const existingUser = await db.query.instructors.findFirst({
       where: (instructors, { eq }) => eq(instructors.email, email),
     });
 
-    // If instructor exists and is already verified, they should use login instead
-    if (existingInstructor?.isVerified) {
+    // If user exists and is already verified, they should use login instead
+    if (existingUser?.isVerified) {
       return NextResponse.json(
         { error: 'Account already exists. Please use login instead.' },
         { status: 400 }
       );
     }
 
-    // Create new instructor if doesn't exist
-    if (!existingInstructor) {
+    if (existingUser && existingUser.role !== role) {
+      return NextResponse.json(
+        { error: 'Account already exists with a different role.' },
+        { status: 400 }
+      );
+    }
+
+    // Create new user if doesn't exist
+    if (!existingUser) {
       await db.insert(instructors).values({
         id: crypto.randomUUID(),
         email,
+        name: name ?? null,
+        role,
         isVerified: false,
         createdAt: new Date(),
       });
+    } else if (name && !existingUser.name) {
+      await db
+        .update(instructors)
+        .set({ name })
+        .where((instructors, { eq }) => eq(instructors.id, existingUser.id));
     }
 
     // Build magic link URL
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const magicLink = `${baseUrl}/instructor/verify?token=${token}`;
+    const magicLink = `${baseUrl}/verify?token=${token}${shareToken ? `&shareToken=${encodeURIComponent(shareToken)}` : ''}`;
 
     // In development, log the link; in production, send email
     if (process.env.NODE_ENV === 'development') {

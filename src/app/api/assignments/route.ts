@@ -14,9 +14,9 @@ export async function POST(request: Request) {
   try {
     // Verify instructor session
     const cookieStore = await cookies();
-    const instructorId = cookieStore.get('instructor_session')?.value;
+    const userId = cookieStore.get('user_session')?.value;
 
-    if (!instructorId) {
+    if (!userId) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -25,10 +25,10 @@ export async function POST(request: Request) {
 
     // Verify instructor exists
     const instructor = await db.query.instructors.findFirst({
-      where: eq(instructors.id, instructorId),
+      where: eq(instructors.id, userId),
     });
 
-    if (!instructor) {
+    if (!instructor || instructor.role !== 'instructor') {
       return NextResponse.json(
         { error: 'Instructor not found' },
         { status: 401 }
@@ -55,6 +55,12 @@ export async function POST(request: Request) {
       );
     }
 
+    const forwardedProto = request.headers.get('x-forwarded-proto') ?? 'http';
+    const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+    const baseUrl = forwardedHost
+      ? `${forwardedProto}://${forwardedHost}`
+      : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000');
+
     // Create assignment
     const assignmentId = randomUUID();
     const shareToken = generateShareToken();
@@ -65,7 +71,7 @@ export async function POST(request: Request) {
       instructions,
       deadline: deadlineDate,
       shareToken,
-      instructorId,
+      instructorId: instructor.id,
       customSystemPrompt: customSystemPrompt || null,
       includeInstructionInPrompt: includeInstructionInPrompt || false,
       allowWebSearch: allowWebSearch || false,
@@ -75,7 +81,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       id: assignmentId,
       shareToken,
-      shareUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/s/${shareToken}`,
+      shareUrl: `${baseUrl}/s/${shareToken}`,
     });
   } catch (error) {
     console.error('Failed to create assignment:', error);

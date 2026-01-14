@@ -48,19 +48,19 @@ export async function POST(request: Request) {
       .set({ used: true })
       .where(eq(authTokens.id, authToken.id));
 
-    // Get instructor
-    const instructor = await db.query.instructors.findFirst({
+    // Get user
+    const user = await db.query.instructors.findFirst({
       where: eq(instructors.email, authToken.email),
     });
 
-    if (!instructor) {
+    if (!user) {
       return NextResponse.json(
-        { error: 'Instructor not found' },
+        { error: 'User not found' },
         { status: 404 }
       );
     }
 
-    // Hash password and update instructor
+    // Hash password and update user
     const hashedPassword = await hashPassword(password);
     await db
       .update(instructors)
@@ -69,11 +69,11 @@ export async function POST(request: Request) {
         isVerified: true,
         lastLoginAt: new Date(),
       })
-      .where(eq(instructors.id, instructor.id));
+      .where(eq(instructors.id, user.id));
 
     // Set session cookie
     const cookieStore = await cookies();
-    cookieStore.set('instructor_session', instructor.id, {
+    cookieStore.set('user_session', user.id, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
@@ -81,7 +81,7 @@ export async function POST(request: Request) {
       path: '/',
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, role: user.role });
   } catch (error) {
     console.error('Set password error:', error);
     return NextResponse.json(

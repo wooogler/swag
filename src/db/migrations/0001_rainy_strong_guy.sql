@@ -1,0 +1,1 @@
+ALTER TABLE "chat_conversations" ADD COLUMN "web_search_enabled" boolean DEFAULT false NOT NULL;

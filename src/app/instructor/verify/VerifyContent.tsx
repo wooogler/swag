@@ -7,10 +7,12 @@ export default function VerifyContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get('token');
+  const shareToken = searchParams.get('shareToken');
 
   const [error, setError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
+  const [role, setRole] = useState<'instructor' | 'student' | null>(null);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -33,6 +35,7 @@ export default function VerifyContent() {
         if (res.ok) {
           const data = await res.json();
           setEmail(data.email);
+          setRole(data.role ?? null);
           setIsVerifying(false);
         } else {
           const data = await res.json();
@@ -72,7 +75,30 @@ export default function VerifyContent() {
       });
 
       if (res.ok) {
-        router.push('/instructor/dashboard');
+        const data = await res.json();
+        const resolvedRole = data.role ?? role;
+        if (resolvedRole === 'student' && shareToken) {
+          try {
+            const sessionRes = await fetch('/api/student-sessions/start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ shareToken }),
+            });
+            if (sessionRes.ok) {
+              const sessionData = await sessionRes.json();
+              router.push(`/s/${sessionData.shareToken}/editor/${sessionData.sessionId}`);
+              return;
+            }
+          } catch {
+            // fall through to dashboard
+          }
+        }
+
+        if (resolvedRole === 'instructor') {
+          router.push('/instructor/dashboard');
+        } else {
+          router.push('/student/dashboard');
+        }
       } else {
         const data = await res.json();
         setError(data.error || 'Failed to set password');
@@ -105,7 +131,7 @@ export default function VerifyContent() {
           <p className="mt-2 text-gray-600">
             {error}
           </p>
-          <a href="/instructor/login" className="mt-4 inline-block text-blue-600 hover:underline">
+          <a href="/login" className="mt-4 inline-block text-blue-600 hover:underline">
             Back to login
           </a>
         </div>

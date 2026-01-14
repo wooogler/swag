@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import TrackedEditor from './TrackedEditor';
 import ChatPanel from '../chat/ChatPanel';
 import { useUIStore } from '@/stores/uiStore';
@@ -153,6 +154,12 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
                saveStatus === 'saved' ? '✓ Saved' : 
                'Ready'}
             </span>
+            <Link
+              href="/student/dashboard"
+              className="px-3 py-2 border border-gray-300 text-gray-700 rounded hover:bg-gray-50 text-sm font-medium"
+            >
+              Dashboard
+            </Link>
             <button
               onClick={() => window.dispatchEvent(new CustomEvent('prelude:submit-request'))}
               className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium"

@@ -16,12 +16,12 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { email, password } = loginSchema.parse(body);
 
-    // Find instructor
-    const instructor = await db.query.instructors.findFirst({
+    // Find user
+    const user = await db.query.instructors.findFirst({
       where: eq(instructors.email, email),
     });
 
-    if (!instructor) {
+    if (!user) {
       return NextResponse.json(
         { error: 'Invalid email or password' },
         { status: 401 }
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     }
 
     // Check if verified
-    if (!instructor.isVerified || !instructor.password) {
+    if (!user.isVerified || !user.password) {
       return NextResponse.json(
         { error: 'Account not verified. Please check your email for verification link.' },
         { status: 401 }
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     }
 
     // Verify password
-    const isValid = await verifyPassword(password, instructor.password);
+    const isValid = await verifyPassword(password, user.password);
     if (!isValid) {
       return NextResponse.json(
         { error: 'Invalid email or password' },
@@ -49,11 +49,11 @@ export async function POST(request: Request) {
     await db
       .update(instructors)
       .set({ lastLoginAt: new Date() })
-      .where(eq(instructors.id, instructor.id));
+      .where(eq(instructors.id, user.id));
 
     // Set session cookie
     const cookieStore = await cookies();
-    cookieStore.set('instructor_session', instructor.id, {
+    cookieStore.set('user_session', user.id, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
@@ -63,10 +63,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      instructor: {
-        id: instructor.id,
-        email: instructor.email,
-        name: instructor.name,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
       },
     });
   } catch (error) {

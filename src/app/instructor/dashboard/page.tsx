@@ -1,30 +1,43 @@
 import { db } from '@/db/db';
 import { assignments, instructors, studentSessions } from '@/db/schema';
 import { eq, desc, count } from 'drizzle-orm';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import CopyLinkButton from '@/components/instructor/CopyLinkButton';
 
 async function getInstructor() {
   const cookieStore = await cookies();
-  const instructorId = cookieStore.get('instructor_session')?.value;
+  const userId = cookieStore.get('user_session')?.value;
 
-  if (!instructorId) {
+  if (!userId) {
     return null;
   }
 
-  return db.query.instructors.findFirst({
-    where: eq(instructors.id, instructorId),
+  const user = await db.query.instructors.findFirst({
+    where: eq(instructors.id, userId),
   });
+
+  if (!user || user.role !== 'instructor') {
+    return null;
+  }
+
+  return user;
 }
 
 export default async function DashboardPage() {
   const instructor = await getInstructor();
 
   if (!instructor) {
-    redirect('/instructor/login');
+    redirect('/login');
   }
+
+  const requestHeaders = await headers();
+  const forwardedProto = requestHeaders.get('x-forwarded-proto') ?? 'http';
+  const forwardedHost = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
+  const baseUrl = forwardedHost
+    ? `${forwardedProto}://${forwardedHost}`
+    : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000');
 
   // Get instructor's assignments with student counts
   const instructorAssignments = await db
@@ -131,7 +144,7 @@ export default async function DashboardPage() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {assignmentWithCounts.map((assignment) => {
                   const isOverdue = new Date(assignment.deadline) < new Date();
-                  const shareUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/s/${assignment.shareToken}`;
+                  const shareUrl = `${baseUrl}/s/${assignment.shareToken}`;
 
                   return (
                     <tr key={assignment.id} className="hover:bg-gray-50">

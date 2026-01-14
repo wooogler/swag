@@ -6,8 +6,10 @@ import { useRouter } from 'next/navigation';
 export default function InstructorLoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [passcode, setPasscode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -31,8 +33,11 @@ export default function InstructorLoginPage() {
         throw new Error(data.error || 'Login failed');
       }
 
-      // Redirect to dashboard
-      router.push('/instructor/dashboard');
+      if (data.user?.role === 'instructor') {
+        router.push('/instructor/dashboard');
+      } else {
+        router.push('/student/dashboard');
+      }
     } catch (error) {
       setMessage({
         type: 'error',
@@ -54,7 +59,11 @@ export default function InstructorLoginPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({
+          email,
+          name,
+          passcode: passcode.trim() || undefined,
+        }),
       });
 
       const data = await response.json();
@@ -67,7 +76,9 @@ export default function InstructorLoginPage() {
         type: 'success',
         text: 'Check your email for a verification link!',
       });
+      setName('');
       setEmail('');
+      setPasscode('');
     } catch (error) {
       setMessage({
         type: 'error',
@@ -86,7 +97,7 @@ export default function InstructorLoginPage() {
             SWAG
           </h1>
           <h2 className="mt-2 text-center text-xl text-gray-600">
-            Instructor Portal
+            Account Portal
           </h2>
         </div>
 
@@ -176,24 +187,62 @@ export default function InstructorLoginPage() {
           </form>
         ) : (
           <form onSubmit={handleSignup} className="mt-8 space-y-6">
-            <div>
-              <label htmlFor="signup-email" className="block text-sm font-medium text-gray-700 mb-1">
-                Email address
-              </label>
-              <input
-                id="signup-email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="appearance-none block w-full px-4 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="instructor@vt.edu"
-              />
-              <p className="mt-2 text-xs text-gray-500">
-                We'll send you a verification link to set your password
-              </p>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="signup-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  Name
+                </label>
+                <input
+                  id="signup-name"
+                  name="name"
+                  type="text"
+                  autoComplete="name"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="appearance-none block w-full px-4 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Your full name"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="signup-email" className="block text-sm font-medium text-gray-700 mb-1">
+                  Email address
+                </label>
+                <input
+                  id="signup-email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="appearance-none block w-full px-4 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="you@vt.edu"
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  We'll send you a verification link to set your password
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="signup-passcode" className="block text-sm font-medium text-gray-700 mb-1">
+                  Instructor Passcode (optional)
+                </label>
+                <input
+                  id="signup-passcode"
+                  name="passcode"
+                  type="password"
+                  autoComplete="off"
+                  value={passcode}
+                  onChange={(e) => setPasscode(e.target.value)}
+                  className="appearance-none block w-full px-4 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Enter only if you are an instructor"
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  Leave blank to create a student account
+                </p>
+              </div>
             </div>
 
             {message && (

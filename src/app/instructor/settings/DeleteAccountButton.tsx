@@ -27,7 +27,7 @@ export default function DeleteAccountButton({ instructorId }: DeleteAccountButto
 
       if (res.ok) {
         // Redirect to login page
-        router.push('/instructor/login?message=account-deleted');
+        router.push('/login?message=account-deleted');
       } else {
         const data = await res.json();
         alert(data.error || 'Failed to delete account');
