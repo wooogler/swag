@@ -72,7 +72,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     }
 
     const body = await request.json();
-    const { title, instructions, deadline, customSystemPrompt, includeInstructionInPrompt } = body;
+    const { title, instructions, deadline, customSystemPrompt, includeInstructionInPrompt, allowWebSearch } = body;
 
     // Validate required fields
     if (!title || !instructions || !deadline) {
@@ -97,6 +97,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
         deadline: deadlineDate,
         customSystemPrompt: customSystemPrompt || null,
         includeInstructionInPrompt: includeInstructionInPrompt || false,
+        allowWebSearch: allowWebSearch || false,
       })
       .where(eq(assignments.id, id));
 

@@ -114,6 +114,36 @@ export default function BlockNoteEditor({ sessionId }: BlockNoteEditorProps) {
     };
   }, [sessionId, editor]);
 
+  // Listen for submission requests from the UI
+  useEffect(() => {
+    const handleSubmissionRequest = async () => {
+      const tracker = trackerRef.current;
+      if (!tracker || !editor) return;
+
+      try {
+        const documentState = editor.document;
+        tracker.trackSubmission(documentState);
+        await tracker.forceSave();
+        window.dispatchEvent(new CustomEvent('prelude:submission-saved'));
+        toast.success("Submitted! You can resubmit anytime before the deadline.", {
+          duration: 3000,
+          position: "top-center",
+        });
+      } catch (error) {
+        console.error("Failed to submit:", error);
+        toast.error("Submission failed. Please try again.", {
+          duration: 4000,
+          position: "top-center",
+        });
+      }
+    };
+
+    window.addEventListener("prelude:submit-request", handleSubmissionRequest);
+    return () => {
+      window.removeEventListener("prelude:submit-request", handleSubmissionRequest);
+    };
+  }, [editor]);
+
   // Track changes
   useEffect(() => {
     if (!editor) return;

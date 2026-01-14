@@ -70,7 +70,8 @@ export default function AccessForm({ assignmentId, shareToken }: AccessFormProps
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create session');
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to create session');
       }
 
       const { sessionId, isVerified } = await response.json();

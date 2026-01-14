@@ -35,6 +35,7 @@ export const assignments = pgTable('assignments', {
   instructorId: text('instructor_id'), // nullable for Phase 1
   customSystemPrompt: text('custom_system_prompt'), // nullable
   includeInstructionInPrompt: boolean('include_instruction_in_prompt').default(false),
+  allowWebSearch: boolean('allow_web_search').default(false),
   createdAt: timestamp('created_at').notNull(),
 });
 
@@ -54,7 +55,7 @@ export const editorEvents = pgTable('editor_events', {
   id: serial('id').primaryKey(),
   sessionId: text('session_id').notNull().references(() => studentSessions.id),
   eventType: text('event_type').notNull(),
-  // 'paste_internal', 'paste_external', 'snapshot'
+  // 'paste_internal', 'paste_external', 'snapshot', 'submission'
   eventData: jsonb('event_data').notNull(),
   // For snapshot: BlockNote document JSON array
   // For paste: { content: string }

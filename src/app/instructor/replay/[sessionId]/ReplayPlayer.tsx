@@ -3,10 +3,22 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { useCreateBlockNote } from '@blocknote/react';
+import { Tooltip } from 'react-tooltip';
 import ChatPanel from '@/components/chat/ChatPanel';
 import { useUIStore } from '@/stores/uiStore';
+import {
+  Listbox,
+  ListboxButton,
+  ListboxOption,
+  ListboxOptions,
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuItems,
+} from '@headlessui/react';
 import '@blocknote/core/fonts/inter.css';
 import '@blocknote/mantine/style.css';
+import 'react-tooltip/dist/react-tooltip.css';
 
 interface EditorEvent {
   id: number;
@@ -363,17 +375,27 @@ export default function ReplayPlayer({
 
   // Get timeline markers for events (using compressed time)
   const getEventMarkers = () => {
-    const markers: Array<{ position: number; type: string; tooltip: string }> = [];
+    const markers: Array<{
+      id: string;
+      position: number;
+      type: string;
+      label: string;
+      content: string;
+      time: string;
+    }> = [];
 
     // Chat message markers
-    chatMessages.forEach((msg) => {
+    chatMessages.forEach((msg, i) => {
       if (msg.role === 'user') {
         const compressedTime = getCompressedTime(msg.timestamp);
         const position = ((compressedTime - startTime) / compressedDuration) * 100;
         markers.push({
+          id: `chat-${i}`,
           position,
           type: 'chat',
-          tooltip: `Chat: "${msg.content.slice(0, 50)}..."`,
+          label: 'Chat Message',
+          content: msg.content.length > 100 ? msg.content.slice(0, 100) + '...' : msg.content,
+          time: formatTime(msg.timestamp),
         });
       }
     });
@@ -381,13 +403,33 @@ export default function ReplayPlayer({
     // Paste event markers
     events
       .filter(e => e.eventType === 'paste_internal' || e.eventType === 'paste_external')
-      .forEach((event) => {
+      .forEach((event, i) => {
+        const compressedTime = getCompressedTime(event.timestamp);
+        const position = ((compressedTime - startTime) / compressedDuration) * 100;
+        const pasteContent = (event.eventData as { content?: string })?.content || '';
+        markers.push({
+          id: `paste-${i}`,
+          position,
+          type: event.eventType,
+          label: event.eventType === 'paste_external' ? 'External Paste (Blocked)' : 'Internal Paste',
+          content: pasteContent.length > 100 ? pasteContent.slice(0, 100) + '...' : pasteContent,
+          time: formatTime(event.timestamp),
+        });
+      });
+
+    // Submission markers
+    events
+      .filter(e => e.eventType === 'submission')
+      .forEach((event, i) => {
         const compressedTime = getCompressedTime(event.timestamp);
         const position = ((compressedTime - startTime) / compressedDuration) * 100;
         markers.push({
+          id: `submission-${i}`,
           position,
-          type: event.eventType,
-          tooltip: event.eventType === 'paste_external' ? 'External paste attempt' : 'Internal paste',
+          type: 'submission',
+          label: `Submission ${i + 1}`,
+          content: '',
+          time: formatTime(event.timestamp),
         });
       });
 
@@ -401,7 +443,7 @@ export default function ReplayPlayer({
       .sort((a, b) => a.timestamp - b.timestamp);
 
     const sessions: Array<{ startTime: number; endTime: number }> = [];
-    const GAP_THRESHOLD = 10000; // 10초 gap (snapshot이 없으면 활동 없음)
+    const GAP_THRESHOLD = 5 * 60 * 1000; // 5 minute gap to identify when user resumed writing after a break
     
     if (snapshots.length === 0) return sessions;
 
@@ -439,7 +481,7 @@ export default function ReplayPlayer({
   const getNavigableEvents = useCallback(() => {
     const navEvents: Array<{ 
       time: number; 
-      type: 'typing_start' | 'chat' | 'paste_internal' | 'paste_external';
+      type: 'typing_start' | 'chat' | 'paste_internal' | 'paste_external' | 'submission';
       label: string;
       description: string;
     }> = [];
@@ -478,12 +520,23 @@ export default function ReplayPlayer({
         });
       });
 
+    // Submissions
+    events
+      .filter(e => e.eventType === 'submission')
+      .forEach((event, i) => {
+        navEvents.push({
+          time: event.timestamp,
+          type: 'submission',
+          label: `Submission ${i + 1}`,
+          description: `At ${formatTime(event.timestamp)}`,
+        });
+      });
+
     // Sort by time
     return navEvents.sort((a, b) => a.time - b.time);
   }, [typingSessions, chatMessages, events, formatTime]);
 
   const navigableEvents = getNavigableEvents();
-  const [showEventMenu, setShowEventMenu] = useState(false);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -527,43 +580,48 @@ export default function ReplayPlayer({
                 const startPos = ((compressedStart - startTime) / compressedDuration) * 100;
                 const endPos = ((compressedEnd - startTime) / compressedDuration) * 100;
                 const width = endPos - startPos;
-                
+                const durationMs = session.endTime - session.startTime;
+                const durationMin = Math.floor(durationMs / 60000);
+                const durationSec = Math.floor((durationMs % 60000) / 1000);
+
                 return (
                   <div
                     key={`session-${i}`}
-                    className="absolute top-0 h-full bg-blue-400 rounded"
-                    style={{ 
+                    className="absolute top-0 h-full bg-blue-400 rounded cursor-pointer"
+                    style={{
                       left: `${startPos}%`,
-                      width: `${width}%`,
+                      width: `${Math.max(width, 0.5)}%`,
                     }}
-                    title={`Typing: ${formatTime(session.startTime)} - ${formatTime(session.endTime)}`}
+                    data-tooltip-id="timeline-tooltip"
+                    data-tooltip-html={`<div class="text-center"><div class="font-semibold">Typing Session ${i + 1}</div><div class="text-xs text-gray-300 mt-1">${formatTime(session.startTime)} - ${formatTime(session.endTime)}</div><div class="text-xs text-gray-400">Duration: ${durationMin}m ${durationSec}s</div></div>`}
                   />
                 );
               })}
-              
+
               {/* Idle period indicators - compressed middle part only */}
               {idlePeriods.map((idle, i) => {
                 const middleStart = idle.start + (idle.edgeSeconds * 1000);
                 const compressedMiddleStart = getCompressedTime(middleStart);
                 const middlePos = ((compressedMiddleStart - startTime) / compressedDuration) * 100;
-                
+
                 // Fixed width for visibility
                 const markerWidth = 2; // 2% width
                 // Center the marker by offsetting half its width
                 const centeredPos = middlePos - (markerWidth / 2);
-                
+
                 return (
                   <div key={`idle-${i}`}>
                     {/* Only show the compressed middle part (dark gray) */}
                     <div
-                      className="absolute top-0 h-full bg-gray-700"
-                      style={{ 
+                      className="absolute top-0 h-full bg-gray-700 cursor-pointer"
+                      style={{
                         left: `${centeredPos}%`,
                         width: `${markerWidth}%`,
                       }}
-                      title={`Break: ${idle.compressedMinutes} min compressed`}
+                      data-tooltip-id="timeline-tooltip"
+                      data-tooltip-html={`<div class="text-center"><div class="font-semibold">Break</div><div class="text-xs text-gray-300 mt-1">${idle.compressedMinutes} minutes</div><div class="text-xs text-gray-400">Student was inactive</div></div>`}
                     >
-                      <div 
+                      <div
                         className="absolute -top-5 left-1/2 transform -translate-x-1/2 text-xs font-bold text-gray-800 whitespace-nowrap"
                       >
                         {idle.compressedMinutes} min
@@ -586,18 +644,27 @@ export default function ReplayPlayer({
               />
 
               {/* Event markers */}
-              {markers.map((marker, i) => (
+              {markers.map((marker) => (
                 <div
-                  key={i}
-                  className={`absolute top-0 w-1 h-full ${
+                  key={marker.id}
+                  className={`absolute top-0 w-1.5 h-full cursor-pointer hover:w-2 transition-all ${
                     marker.type === 'paste_external'
                       ? 'bg-red-500'
                       : marker.type === 'paste_internal'
                       ? 'bg-green-500'
+                      : marker.type === 'submission'
+                      ? 'bg-orange-500'
                       : 'bg-purple-500'
                   }`}
                   style={{ left: `${marker.position}%` }}
-                  title={marker.tooltip}
+                  data-tooltip-id="timeline-tooltip"
+                  data-tooltip-html={`<div style="max-width: 250px;"><div class="font-semibold ${
+                    marker.type === 'paste_external' ? 'text-red-300' :
+                    marker.type === 'paste_internal' ? 'text-green-300' :
+                    marker.type === 'submission' ? 'text-orange-300' : 'text-purple-300'
+                  }">${marker.label}</div><div class="text-xs text-gray-300 mt-1">at ${marker.time}</div>${
+                    marker.content ? `<div class="text-xs text-gray-200 mt-2 whitespace-pre-wrap">${marker.content}</div>` : ''
+                  }</div>`}
                 />
               ))}
 
@@ -612,17 +679,36 @@ export default function ReplayPlayer({
           {/* Speed Control */}
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-600">Speed:</span>
-            <select
-              value={speed}
-              onChange={(e) => setSpeed(Number(e.target.value))}
-              className="px-2 py-1 border border-gray-300 rounded text-sm"
-            >
-              {SPEED_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}x
-                </option>
-              ))}
-            </select>
+            <Listbox value={speed} onChange={(value) => setSpeed(value)}>
+              <div className="relative">
+                <ListboxButton className="px-2 py-1 border border-gray-300 rounded text-sm bg-white text-gray-700 min-w-[72px] text-left flex items-center justify-between gap-2">
+                  <span>{speed}x</span>
+                  <svg className="w-4 h-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.292l3.71-4.06a.75.75 0 111.1 1.02l-4.25 4.65a.75.75 0 01-1.1 0l-4.25-4.65a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </ListboxButton>
+                <ListboxOptions className="absolute right-0 mt-2 max-h-60 w-24 overflow-auto rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black/5 z-10">
+                  {SPEED_OPTIONS.map((s) => (
+                    <ListboxOption
+                      key={s}
+                      value={s}
+                      className="cursor-pointer select-none px-3 py-2 hover:bg-gray-100"
+                    >
+                      {({ selected }) => (
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">{s}x</span>
+                          {selected && (
+                            <svg className="w-4 h-4 text-blue-600" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                              <path fillRule="evenodd" d="M16.704 5.29a1 1 0 01.006 1.414l-7.1 7.2a1 1 0 01-1.42.01l-3.3-3.2a1 1 0 011.4-1.44l2.59 2.51 6.39-6.48a1 1 0 011.414-.006z" clipRule="evenodd" />
+                            </svg>
+                          )}
+                        </div>
+                      )}
+                    </ListboxOption>
+                  ))}
+                </ListboxOptions>
+              </div>
+            </Listbox>
           </div>
         </div>
 
@@ -646,6 +732,10 @@ export default function ReplayPlayer({
               <div className="w-3 h-3 bg-red-500 rounded" />
               <span>External Paste</span>
             </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-orange-500 rounded" />
+              <span>Submission</span>
+            </div>
             {idlePeriods.length > 0 && (
               <div className="flex items-center gap-1">
                 <div className="w-3 h-2 bg-gray-700 rounded" />
@@ -655,59 +745,45 @@ export default function ReplayPlayer({
           </div>
 
           {/* Event Navigation Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowEventMenu(!showEventMenu)}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-sm font-medium flex items-center gap-2"
-            >
+          <Menu as="div" className="relative">
+            <MenuButton className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-sm font-medium flex items-center gap-2">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
               </svg>
               Events
-              <svg className={`w-4 h-4 transition-transform ${showEventMenu ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
-            </button>
+            </MenuButton>
 
-            {showEventMenu && (
-              <>
-                {/* Backdrop */}
-                <div 
-                  className="fixed inset-0 z-10" 
-                  onClick={() => setShowEventMenu(false)}
-                />
-                
-                {/* Dropdown Menu */}
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-20 max-h-96 overflow-y-auto">
-                  <div className="sticky top-0 bg-gray-50 px-4 py-2 border-b border-gray-200">
-                    <p className="text-xs font-semibold text-gray-600 uppercase">
-                      Jump to Event ({navigableEvents.length})
-                    </p>
-                  </div>
-                  
-                  {navigableEvents.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-gray-500 text-sm">
-                      No events recorded
-                    </div>
-                  ) : (
-                    <div className="py-1">
-                      {navigableEvents.map((event, i) => {
-                        const isPast = event.time <= currentTime;
-                        const eventIcon = event.type === 'typing_start' ? '⌨️' :
-                                        event.type === 'chat' ? '💬' :
-                                        event.type === 'paste_internal' ? '📋' : '🚫';
-                        
-                        return (
+            <MenuItems className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-20 max-h-96 overflow-y-auto focus:outline-none">
+              <div className="sticky top-0 bg-gray-50 px-4 py-2 border-b border-gray-200">
+                <p className="text-xs font-semibold text-gray-600 uppercase">
+                  Jump to Event ({navigableEvents.length})
+                </p>
+              </div>
+
+              {navigableEvents.length === 0 ? (
+                <div className="px-4 py-8 text-center text-gray-500 text-sm">
+                  No events recorded
+                </div>
+              ) : (
+                <div className="py-1">
+                  {navigableEvents.map((event, i) => {
+                    const isPast = event.time <= currentTime;
+                    const eventIcon = event.type === 'typing_start' ? '⌨️' :
+                                    event.type === 'chat' ? '💬' :
+                                    event.type === 'paste_internal' ? '📋' :
+                                    event.type === 'submission' ? '✅' : '🚫';
+
+                    return (
+                      <MenuItem key={i}>
+                        {({ active }) => (
                           <button
-                            key={i}
-                            onClick={() => {
-                              setCurrentTime(event.time);
-                              setShowEventMenu(false);
-                            }}
+                            onClick={() => setCurrentTime(event.time)}
                             className={`w-full px-4 py-3 text-left transition-colors border-b border-gray-100 last:border-0 ${
-                              isPast 
-                                ? 'bg-blue-50 hover:bg-blue-100' 
-                                : 'bg-white hover:bg-gray-50'
+                              active ? 'bg-gray-50' :
+                              isPast ? 'bg-blue-50 hover:bg-blue-100' : 'bg-white hover:bg-gray-50'
                             }`}
                           >
                             <div className="flex items-start gap-3">
@@ -733,14 +809,14 @@ export default function ReplayPlayer({
                               </div>
                             </div>
                           </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                        )}
+                      </MenuItem>
+                    );
+                  })}
                 </div>
-              </>
-            )}
-          </div>
+              )}
+            </MenuItems>
+          </Menu>
         </div>
       </div>
 
@@ -824,6 +900,14 @@ export default function ReplayPlayer({
           </div>
         )}
       </div>
+
+      {/* Timeline Tooltip */}
+      <Tooltip
+        id="timeline-tooltip"
+        place="top"
+        className="!bg-gray-900 !rounded-lg !px-3 !py-2 !text-sm !max-w-xs z-50"
+        opacity={1}
+      />
     </div>
   );
 }

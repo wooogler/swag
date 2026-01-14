@@ -1,5 +1,5 @@
 export interface EditorEventData {
-  type: 'paste_internal' | 'paste_external' | 'snapshot';
+  type: 'paste_internal' | 'paste_external' | 'snapshot' | 'submission';
   timestamp: number;
   sequenceNumber: number;
   data?: any;
@@ -67,6 +67,17 @@ export class EventTracker {
     this.scheduleSave();
   }
 
+  trackSubmission(documentState: any) {
+    this.queue.push({
+      type: 'submission',
+      timestamp: Date.now(),
+      sequenceNumber: this.sequenceNumber++,
+      data: documentState,
+    });
+
+    this.scheduleSave();
+  }
+
   trackPaste(content: string, isInternal: boolean) {
     this.queue.push({
       type: isInternal ? 'paste_internal' : 'paste_external',
@@ -94,7 +105,11 @@ export class EventTracker {
 
   private scheduleSave() {
     // Snapshot은 즉시 저장 (다른 이벤트는 배치 처리)
-    if (this.queue.length > 0 && this.queue[this.queue.length - 1].type === 'snapshot') {
+    if (
+      this.queue.length > 0 &&
+      (this.queue[this.queue.length - 1].type === 'snapshot' ||
+        this.queue[this.queue.length - 1].type === 'submission')
+    ) {
       // 즉시 저장
       this.flush();
     } else if (this.queue.length >= 10) {

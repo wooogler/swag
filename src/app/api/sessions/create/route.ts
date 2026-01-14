@@ -10,10 +10,22 @@ const createSessionSchema = z.object({
   studentEmail: z.string().email(),
 });
 
+// Allowed email domains (can be configured via env)
+const ALLOWED_DOMAINS = process.env.ALLOWED_EMAIL_DOMAINS?.split(',') || ['vt.edu'];
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const validated = createSessionSchema.parse(body);
+
+    // Check if email domain is allowed
+    const domain = validated.studentEmail.split('@')[1];
+    if (!ALLOWED_DOMAINS.includes(domain)) {
+      return NextResponse.json(
+        { error: `Only ${ALLOWED_DOMAINS.join(', ')} email addresses are allowed` },
+        { status: 403 }
+      );
+    }
 
     // Check if a session already exists for this email + assignment combination
     const existingSession = await db.query.studentSessions.findFirst({

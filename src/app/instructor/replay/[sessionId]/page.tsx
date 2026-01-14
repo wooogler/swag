@@ -87,8 +87,18 @@ export default async function ReplayPage({ params }: PageProps) {
     }))
   );
 
-  // Calculate timeline boundaries
-  const startTime = session.startedAt.getTime();
+  // Calculate timeline boundaries (start at first recorded event if available)
+  const firstEditorEventTime = events.length > 0
+    ? events[0].timestamp.getTime()
+    : null;
+  const firstChatEventTime = flatMessages.length > 0
+    ? flatMessages[0].timestamp.getTime()
+    : null;
+  const firstEventTime = [firstEditorEventTime, firstChatEventTime]
+    .filter((time): time is number => time !== null)
+    .sort((a, b) => a - b)[0];
+
+  const startTime = firstEventTime ?? session.startedAt.getTime();
   const endTime = events.length > 0
     ? Math.max(...events.map(e => e.timestamp.getTime()))
     : startTime + 60000; // Default 1 minute if no events

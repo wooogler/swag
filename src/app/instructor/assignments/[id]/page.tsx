@@ -72,14 +72,14 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
         .groupBy(editorEvents.eventType);
 
       const stats = {
-        transactionSteps: 0,
+        submissions: 0,
         pasteInternal: 0,
         pasteExternal: 0,
         snapshots: 0,
       };
 
       eventCounts.forEach(({ eventType, count: c }) => {
-        if (eventType === 'transaction_step') stats.transactionSteps = c;
+        if (eventType === 'submission') stats.submissions = c;
         else if (eventType === 'paste_internal') stats.pasteInternal = c;
         else if (eventType === 'paste_external') stats.pasteExternal = c;
         else if (eventType === 'snapshot') stats.snapshots = c;
@@ -181,7 +181,7 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
                     Last Active
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Typing Events
+                    Submissions
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Pastes
@@ -208,7 +208,7 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
                       }
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {student.stats.transactionSteps}
+                      {student.stats.submissions}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">

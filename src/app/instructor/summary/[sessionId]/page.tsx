@@ -59,7 +59,9 @@ export default async function ViewPage({ params }: PageProps) {
     .orderBy(asc(editorEvents.sequenceNumber));
 
   const snapshots = events.filter(e => e.eventType === 'snapshot');
+  const submissions = events.filter(e => e.eventType === 'submission');
   const latestSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+  const latestSubmission = submissions.length > 0 ? submissions[submissions.length - 1] : null;
 
   // Get all chat conversations
   const conversations = await db
@@ -91,13 +93,22 @@ export default async function ViewPage({ params }: PageProps) {
   const userMessages = flatMessages.filter(m => m.role === 'user').length;
   const assistantMessages = flatMessages.filter(m => m.role === 'assistant').length;
 
-  const timeSpent = session.lastSavedAt
-    ? session.lastSavedAt.getTime() - session.startedAt.getTime()
-    : 0;
+  // Calculate active typing time based on snapshot gaps
+  const TYPING_GAP_THRESHOLD = 2 * 60 * 1000; // 2 minutes
+  const snapshotTimes = snapshots
+    .map(e => e.timestamp.getTime())
+    .sort((a, b) => a - b);
+
+  let timeSpent = 0;
+  for (let i = 1; i < snapshotTimes.length; i++) {
+    const gap = snapshotTimes[i] - snapshotTimes[i - 1];
+    timeSpent += Math.min(gap, TYPING_GAP_THRESHOLD);
+  }
 
   // Calculate word count from final document
-  const wordCount = latestSnapshot?.eventData
-    ? JSON.stringify(latestSnapshot.eventData)
+  const finalDocument = (latestSubmission?.eventData || latestSnapshot?.eventData) as any[] | undefined;
+  const wordCount = finalDocument
+    ? JSON.stringify(finalDocument)
         .replace(/<[^>]*>/g, '') // Remove HTML tags
         .split(/\s+/)
         .filter(word => word.length > 0).length
@@ -121,6 +132,8 @@ export default async function ViewPage({ params }: PageProps) {
       assignment={assignment}
       stats={stats}
       latestSnapshot={latestSnapshot}
+      submissions={submissions}
+      latestSubmission={latestSubmission}
     />
   );
 }

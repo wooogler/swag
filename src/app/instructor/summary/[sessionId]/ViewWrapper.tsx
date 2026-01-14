@@ -31,9 +31,19 @@ interface ViewWrapperProps {
     wordCount: number;
   };
   latestSnapshot: any;
+  submissions: Array<{
+    id: number;
+    eventData: any;
+    timestamp: Date;
+    sequenceNumber: number;
+  }>;
+  latestSubmission: {
+    eventData: any;
+    timestamp: Date;
+  } | null;
 }
 
-export default function ViewWrapper({ session, assignment, stats, latestSnapshot }: ViewWrapperProps) {
+export default function ViewWrapper({ session, assignment, stats, latestSnapshot, submissions, latestSubmission }: ViewWrapperProps) {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -74,12 +84,12 @@ export default function ViewWrapper({ session, assignment, stats, latestSnapshot
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {/* Time Spent */}
           <div className="bg-white rounded-lg shadow p-4">
-            <div className="text-sm text-gray-600 mb-1">Time Spent</div>
+            <div className="text-sm text-gray-600 mb-1">Active Time</div>
             <div className="text-2xl font-bold text-gray-900">
               {Math.floor(stats.timeSpent / (1000 * 60))}m {Math.floor((stats.timeSpent % (1000 * 60)) / 1000)}s
             </div>
             <div className="text-xs text-gray-500 mt-1">
-              Started: {session.startedAt.toLocaleString()}
+              Typing activity only
             </div>
           </div>
 
@@ -191,7 +201,12 @@ export default function ViewWrapper({ session, assignment, stats, latestSnapshot
 
         {/* Final Document */}
         <ViewClient
-          finalDocument={latestSnapshot?.eventData || [{ type: 'paragraph', content: [] }]}
+          finalDocument={
+            latestSubmission?.eventData ||
+            latestSnapshot?.eventData ||
+            [{ type: 'paragraph', content: [] }]
+          }
+          submissions={submissions}
         />
       </div>
     </div>

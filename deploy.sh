@@ -16,7 +16,7 @@ HOST_PORT="127.0.0.1:3000"
 DB_NAME="swag"
 DB_USER="swag"
 DB_PASSWORD="swag"
-DB_HOST="localhost"
+DB_HOST="127.0.0.1"
 DB_PORT="5432"
 
 echo "🚀 Starting deployment for $DOMAIN..."
@@ -30,14 +30,19 @@ if ! command -v psql &> /dev/null; then
 fi
 
 # Step 2: Initialize PostgreSQL if needed
-if [ ! -d "/var/lib/pgsql/data" ] || [ ! -f "/var/lib/pgsql/data/PG_VERSION" ]; then
+# Check if PostgreSQL is already initialized by checking if postgresql is active or data directory has content
+if systemctl is-active --quiet postgresql || [ -f "/var/lib/pgsql/data/postgresql.conf" ]; then
+    echo "✅ PostgreSQL already initialized, skipping setup..."
+else
     echo "🔧 Initializing PostgreSQL database..."
     sudo postgresql-setup --initdb
 
     # Configure PostgreSQL to use md5 authentication for local connections
     echo "🔐 Configuring PostgreSQL authentication..."
-    sudo sed -i 's/ident$/md5/g' /var/lib/pgsql/data/pg_hba.conf
-    sudo sed -i 's/peer$/md5/g' /var/lib/pgsql/data/pg_hba.conf
+    sudo sed -i 's/^local.*all.*all.*peer$/local   all             all                                     md5/' /var/lib/pgsql/data/pg_hba.conf
+    sudo sed -i 's/^local.*all.*all.*ident$/local   all             all                                     md5/' /var/lib/pgsql/data/pg_hba.conf
+    sudo sed -i 's/^host.*all.*all.*127\.0\.0\.1\/32.*ident$/host    all             all             127.0.0.1\/32            md5/' /var/lib/pgsql/data/pg_hba.conf
+    sudo sed -i 's/^host.*all.*all.*127\.0\.0\.1\/32.*peer$/host    all             all             127.0.0.1\/32            md5/' /var/lib/pgsql/data/pg_hba.conf
 fi
 
 # Step 3: Check if PostgreSQL is running
@@ -52,14 +57,14 @@ fi
 
 # Step 3: Create database and user (if not exists)
 echo "🗄️  Setting up database..."
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
+sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;" 2>/dev/null || echo "Database might already exist"
 
-sudo -u postgres psql -tc "SELECT 1 FROM pg_user WHERE usename = '$DB_USER'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';"
+sudo -u postgres psql -tc "SELECT 1 FROM pg_user WHERE usename = '$DB_USER'" 2>/dev/null | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';" 2>/dev/null || echo "User might already exist"
 
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
-sudo -u postgres psql -d $DB_NAME -c "GRANT ALL ON SCHEMA public TO $DB_USER;"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" 2>/dev/null || true
+sudo -u postgres psql -d $DB_NAME -c "GRANT ALL ON SCHEMA public TO $DB_USER;" 2>/dev/null || true
 
 echo "✅ Database setup complete"
 
@@ -88,36 +93,64 @@ echo "✅ .env file ready"
 
 # Step 5: Run database migrations
 echo "🔄 Running database migrations..."
-export $(cat .env | grep -v '^#' | xargs)
+set -a
+source .env
+set +a
 npm run db:push || npm run db:migrate || true
 
 # Step 6: Stop and remove existing container
 echo "🛑 Stopping existing container..."
 podman stop $CONTAINER_NAME 2>/dev/null || true
-podman rm $CONTAINER_NAME 2>/dev/null || true
+podman rm -f $CONTAINER_NAME 2>/dev/null || true
+# Also try to clean up any root-owned containers with the same name
+sudo podman stop $CONTAINER_NAME 2>/dev/null || true
+sudo podman rm -f $CONTAINER_NAME 2>/dev/null || true
 
 # Step 7: Build Docker image
 echo "🔨 Building Docker image..."
 podman build -t $IMAGE_NAME .
 
-# Step 8: Run container
-echo "🏃 Running container..."
-podman run -d \
-  --name $CONTAINER_NAME \
-  --restart=always \
-  -p $HOST_PORT:$CONTAINER_PORT \
-  --env-file .env \
-  $IMAGE_NAME
+# Step 8: Create systemd service for auto-restart (using root podman)
+echo "🔧 Setting up systemd service..."
+ABSOLUTE_PATH=$(realpath $PWD)
+sudo tee /etc/systemd/system/swag.service > /dev/null << EOF
+[Unit]
+Description=SWAG Application Container
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$ABSOLUTE_PATH
+ExecStartPre=-/usr/bin/podman stop $CONTAINER_NAME
+ExecStartPre=-/usr/bin/podman rm -f $CONTAINER_NAME
+ExecStart=/usr/bin/podman run --rm --name $CONTAINER_NAME --network=host --env-file $ABSOLUTE_PATH/.env $IMAGE_NAME
+ExecStop=/usr/bin/podman stop -t 10 $CONTAINER_NAME
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Copy image to root podman
+echo "📦 Copying image to root podman..."
+podman save $IMAGE_NAME | sudo podman load
+
+# Reload systemd and enable service
+sudo systemctl daemon-reload
+sudo systemctl enable swag.service
+sudo systemctl restart swag.service
 
 # Step 9: Wait for container to be healthy
 echo "⏳ Waiting for container to be healthy..."
 sleep 5
 
-if podman ps | grep -q $CONTAINER_NAME; then
-    echo "✅ Container is running"
+if systemctl is-active --quiet swag.service; then
+    echo "✅ Service is running"
 else
-    echo "❌ Container failed to start. Checking logs..."
-    podman logs $CONTAINER_NAME
+    echo "❌ Service failed to start. Checking logs..."
+    sudo journalctl -u swag.service -n 50 --no-pager
     exit 1
 fi
 
@@ -194,6 +227,7 @@ echo "✅ Deployment complete!"
 echo "🌐 App will be available at: https://$DOMAIN (after SSL setup)"
 echo ""
 echo "📊 Useful commands:"
-echo "   podman logs $CONTAINER_NAME       # View logs"
-echo "   podman restart $CONTAINER_NAME    # Restart container"
-echo "   podman stop $CONTAINER_NAME       # Stop container"
+echo "   sudo systemctl status swag        # Check service status"
+echo "   sudo systemctl restart swag       # Restart service"
+echo "   sudo journalctl -u swag -f        # View logs (follow mode)"
+echo "   podman logs $CONTAINER_NAME       # View container logs"

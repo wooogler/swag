@@ -11,6 +11,7 @@ interface Assignment {
   deadline: Date;
   customSystemPrompt: string | null;
   includeInstructionInPrompt: boolean;
+  allowWebSearch: boolean;
 }
 
 export default function EditAssignmentPage() {
@@ -58,6 +59,7 @@ export default function EditAssignmentPage() {
       deadline: formData.get('deadline') as string,
       customSystemPrompt: formData.get('customSystemPrompt') as string || null,
       includeInstructionInPrompt: formData.get('includeInstructionInPrompt') === 'on',
+      allowWebSearch: formData.get('allowWebSearch') === 'on',
     };
 
     try {
@@ -199,6 +201,31 @@ export default function EditAssignmentPage() {
                 <label htmlFor="includeInstructionInPrompt" className="text-sm text-gray-700">
                   Include assignment instructions in the AI system prompt
                 </label>
+              </div>
+
+              {/* Web Search Toggle */}
+              <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="allowWebSearch"
+                    name="allowWebSearch"
+                    defaultChecked={assignment.allowWebSearch}
+                    className="h-4 w-4 text-amber-600 focus:ring-amber-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="allowWebSearch" className="text-sm font-medium text-gray-900">
+                    Allow Web Search
+                  </label>
+                </div>
+                <p className="mt-2 text-sm text-gray-600 ml-6">
+                  When enabled, students can use the web search feature in the AI assistant to find
+                  real-time information from the internet. This allows the AI to access up-to-date
+                  information beyond its training data.
+                </p>
+                <p className="mt-1 text-sm text-amber-700 ml-6">
+                  <strong>Note:</strong> Web search is disabled by default. Only enable this if your
+                  assignment requires or benefits from accessing external web resources.
+                </p>
               </div>
             </div>
           </div>

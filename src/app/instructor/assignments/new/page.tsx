@@ -21,6 +21,7 @@ export default function NewAssignmentPage() {
       deadline: formData.get('deadline') as string,
       customSystemPrompt: formData.get('customSystemPrompt') as string || null,
       includeInstructionInPrompt: formData.get('includeInstructionInPrompt') === 'on',
+      allowWebSearch: formData.get('allowWebSearch') === 'on',
     };
 
     try {
@@ -43,10 +44,15 @@ export default function NewAssignmentPage() {
     }
   }
 
-  // Default deadline: 7 days from now
-  const defaultDeadline = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 16);
+  // Default deadline: 7 days from now at 11:59 PM (local time)
+  const defaultDeadlineDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  defaultDeadlineDate.setHours(23, 59, 0, 0);
+  const year = defaultDeadlineDate.getFullYear();
+  const month = String(defaultDeadlineDate.getMonth() + 1).padStart(2, '0');
+  const day = String(defaultDeadlineDate.getDate()).padStart(2, '0');
+  const hours = String(defaultDeadlineDate.getHours()).padStart(2, '0');
+  const minutes = String(defaultDeadlineDate.getMinutes()).padStart(2, '0');
+  const defaultDeadline = `${year}-${month}-${day}T${hours}:${minutes}`;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -157,6 +163,30 @@ export default function NewAssignmentPage() {
               <p className="text-sm text-gray-500 ml-6">
                 When enabled, the AI assistant will be aware of the assignment requirements.
               </p>
+
+              {/* Web Search Toggle */}
+              <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="allowWebSearch"
+                    name="allowWebSearch"
+                    className="h-4 w-4 text-amber-600 focus:ring-amber-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="allowWebSearch" className="text-sm font-medium text-gray-900">
+                    Allow Web Search
+                  </label>
+                </div>
+                <p className="mt-2 text-sm text-gray-600 ml-6">
+                  When enabled, students can use the web search feature in the AI assistant to find
+                  real-time information from the internet. This allows the AI to access up-to-date
+                  information beyond its training data.
+                </p>
+                <p className="mt-1 text-sm text-amber-700 ml-6">
+                  <strong>Note:</strong> Web search is disabled by default. Only enable this if your
+                  assignment requires or benefits from accessing external web resources.
+                </p>
+              </div>
             </div>
           </div>
 

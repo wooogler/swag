@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useMemo } from 'react';
+import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from '@headlessui/react';
 import { getGlobalValidator } from '@/lib/copy-validator';
 import toast, { Toaster } from 'react-hot-toast';
 import ConversationList from './ConversationList';
@@ -12,6 +13,7 @@ interface ChatPanelProps {
   assignmentId?: string;
   isOpen: boolean;
   onToggle: (isOpen: boolean) => void;
+  allowWebSearch?: boolean;
   // Replay mode props
   mode?: 'live' | 'replay';
   replayConversations?: Conversation[];
@@ -23,6 +25,7 @@ export default function ChatPanel({
   assignmentId,
   isOpen,
   onToggle,
+  allowWebSearch = false,
   mode = 'live',
   replayConversations = [],
   replayMessages = []
@@ -236,18 +239,58 @@ export default function ChatPanel({
         {/* Conversation filter - show in replay mode when there are conversations */}
         {isReplayMode && conversations.length > 0 && (
           <div className="border-b border-gray-200 px-4 py-2 bg-gray-50">
-            <select
-              value={activeConversationId || ''}
-              onChange={(e) => setActiveConversationId(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            <Listbox
+              value={activeConversationId || 'all'}
+              onChange={(value) => setActiveConversationId(value)}
             >
-              <option value="all">All conversations ({conversations.length})</option>
-              {conversations.map((conv) => (
-                <option key={conv.id} value={conv.id}>
-                  {conv.title}
-                </option>
-              ))}
-            </select>
+              <div className="relative">
+                <ListboxButton className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 text-left flex items-center justify-between gap-2">
+                  <span>
+                    {activeConversationId === 'all' || !activeConversationId
+                      ? `All conversations (${conversations.length})`
+                      : conversations.find(c => c.id === activeConversationId)?.title || 'Conversation'}
+                  </span>
+                  <svg className="w-4 h-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.292l3.71-4.06a.75.75 0 111.1 1.02l-4.25 4.65a.75.75 0 01-1.1 0l-4.25-4.65a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </ListboxButton>
+                <ListboxOptions className="absolute left-0 mt-2 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black/5 z-10">
+                  <ListboxOption
+                    value="all"
+                    className="cursor-pointer select-none px-3 py-2 hover:bg-gray-100"
+                  >
+                    {({ selected }) => (
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">All conversations ({conversations.length})</span>
+                        {selected && (
+                          <svg className="w-4 h-4 text-blue-600" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fillRule="evenodd" d="M16.704 5.29a1 1 0 01.006 1.414l-7.1 7.2a1 1 0 01-1.42.01l-3.3-3.2a1 1 0 011.4-1.44l2.59 2.51 6.39-6.48a1 1 0 011.414-.006z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </div>
+                    )}
+                  </ListboxOption>
+                  {conversations.map((conv) => (
+                    <ListboxOption
+                      key={conv.id}
+                      value={conv.id}
+                      className="cursor-pointer select-none px-3 py-2 hover:bg-gray-100"
+                    >
+                      {({ selected }) => (
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">{conv.title}</span>
+                          {selected && (
+                            <svg className="w-4 h-4 text-blue-600" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                              <path fillRule="evenodd" d="M16.704 5.29a1 1 0 01.006 1.414l-7.1 7.2a1 1 0 01-1.42.01l-3.3-3.2a1 1 0 011.4-1.44l2.59 2.51 6.39-6.48a1 1 0 011.414-.006z" clipRule="evenodd" />
+                            </svg>
+                          )}
+                        </div>
+                      )}
+                    </ListboxOption>
+                  ))}
+                </ListboxOptions>
+              </div>
+            </Listbox>
           </div>
         )}
 
@@ -309,21 +352,25 @@ export default function ChatPanel({
 
                 {/* Web Search Toggle and Send Button Row */}
                 <div className="flex items-center justify-between">
-                  {/* Web Search Toggle - Ghost style */}
-                  <button
-                    type="button"
-                    onClick={toggleWebSearch}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-semibold transition-colors ${
-                      webSearchEnabled
-                        ? 'text-sky-500 bg-gray-300 hover:bg-gray-400'
-                        : 'text-gray-500 hover:bg-gray-300'
-                    }`}
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 919-9" />
-                    </svg>
-                    <span>Web search</span>
-                  </button>
+                  {/* Web Search Toggle - Ghost style (only show if allowed by instructor) */}
+                  {allowWebSearch ? (
+                    <button
+                      type="button"
+                      onClick={toggleWebSearch}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-semibold transition-colors ${
+                        webSearchEnabled
+                          ? 'text-sky-500 bg-gray-300 hover:bg-gray-400'
+                          : 'text-gray-500 hover:bg-gray-300'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 919-9" />
+                      </svg>
+                      <span>Web search</span>
+                    </button>
+                  ) : (
+                    <div />
+                  )}
 
                   {/* Send Button - Circular */}
                   <button

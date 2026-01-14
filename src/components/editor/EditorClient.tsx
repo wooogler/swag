@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import TrackedEditor from './TrackedEditor';
 import ChatPanel from '../chat/ChatPanel';
 import { useUIStore } from '@/stores/uiStore';
+import SubmissionModal from './SubmissionModal';
 
 interface EditorClientProps {
   sessionId: string;
@@ -11,9 +12,10 @@ interface EditorClientProps {
   assignmentTitle: string;
   assignmentInstructions: string;
   deadline: Date;
+  allowWebSearch: boolean;
 }
 
-export default function EditorClient({ sessionId, assignmentId, assignmentTitle, assignmentInstructions, deadline }: EditorClientProps) {
+export default function EditorClient({ sessionId, assignmentId, assignmentTitle, assignmentInstructions, deadline, allowWebSearch }: EditorClientProps) {
   const {
     isChatOpen,
     chatWidth,
@@ -27,6 +29,15 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
     handleResize,
     stopResize,
   } = useUIStore();
+
+  const [submissions, setSubmissions] = useState<Array<{
+    id: number;
+    eventData: any;
+    timestamp: string | Date;
+    sequenceNumber: number;
+  }>>([]);
+  const [selectedSubmissionId, setSelectedSubmissionId] = useState<number | null>(null);
+  const [isSubmissionModalOpen, setIsSubmissionModalOpen] = useState(false);
 
   // Listen for save events
   useEffect(() => {
@@ -47,6 +58,52 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
       window.removeEventListener('prelude:events-saved', handleSaved);
     };
   }, [setSaveStatus]);
+
+  const loadSubmissions = useCallback(async () => {
+    const response = await fetch('/api/events/submissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to load submissions');
+    }
+
+    const { submissions: loaded } = await response.json();
+    const nextSubmissions = Array.isArray(loaded) ? loaded : [];
+    setSubmissions(nextSubmissions);
+
+    if (nextSubmissions.length > 0) {
+      setSelectedSubmissionId(nextSubmissions[nextSubmissions.length - 1].id);
+    } else {
+      setSelectedSubmissionId(null);
+    }
+  }, [sessionId]);
+
+  // Open submission modal after a successful submission
+  useEffect(() => {
+    const handleSubmissionSaved = () => {
+      loadSubmissions()
+        .then(() => setIsSubmissionModalOpen(true))
+        .catch(() => {
+          // If loading fails, just keep the editor view
+        });
+    };
+
+    window.addEventListener('prelude:submission-saved', handleSubmissionSaved);
+    return () => {
+      window.removeEventListener('prelude:submission-saved', handleSubmissionSaved);
+    };
+  }, [loadSubmissions]);
+
+  const handleOpenSubmissions = () => {
+    loadSubmissions()
+      .then(() => setIsSubmissionModalOpen(true))
+      .catch(() => {
+        setIsSubmissionModalOpen(true);
+      });
+  };
 
   // Handle resize with mouse events
   useEffect(() => {
@@ -96,6 +153,20 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
                saveStatus === 'saved' ? '✓ Saved' : 
                'Ready'}
             </span>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('prelude:submit-request'))}
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium"
+              title="You can resubmit anytime before the deadline"
+            >
+              Submit
+            </button>
+            <button
+              onClick={handleOpenSubmissions}
+              className="px-3 py-2 border border-gray-300 text-gray-700 rounded hover:bg-gray-50 text-sm font-medium"
+              title="View previous submissions"
+            >
+              Submissions
+            </button>
           </div>
         </div>
       </header>
@@ -142,6 +213,7 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
               assignmentId={assignmentId}
               isOpen={isChatOpen}
               onToggle={setChatOpen}
+              allowWebSearch={allowWebSearch}
             />
           </div>
         )}
@@ -161,6 +233,14 @@ export default function EditorClient({ sessionId, assignmentId, assignmentTitle,
           </div>
         )}
       </div>
+
+      <SubmissionModal
+        isOpen={isSubmissionModalOpen}
+        submissions={submissions}
+        selectedSubmissionId={selectedSubmissionId}
+        onSelectSubmission={setSelectedSubmissionId}
+        onClose={() => setIsSubmissionModalOpen(false)}
+      />
     </div>
   );
 }
