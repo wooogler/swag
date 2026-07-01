@@ -54,6 +54,20 @@ export default async function ScorePage({ params }: PageProps) {
   // Only show rows that still correspond to an existing query in the logs.
   const liveMessageIds = new Set(records.map((r) => r.messageId));
 
+  // Turn number = ordinal of this student message within its conversation
+  // (records are ordered by conversation then sequence). Robust to gaps.
+  const turnByMessage = new Map<number, number>();
+  let prevConversation: string | null = null;
+  let turnCounter = 0;
+  for (const rec of records) {
+    if (rec.conversationId !== prevConversation) {
+      prevConversation = rec.conversationId;
+      turnCounter = 0;
+    }
+    turnCounter += 1;
+    turnByMessage.set(rec.messageId, turnCounter);
+  }
+
   const rows: ScoreQueryRow[] = cachedRows
     .filter((r) => liveMessageIds.has(r.messageId))
     .map((r) => ({
@@ -62,7 +76,10 @@ export default async function ScorePage({ params }: PageProps) {
       participantToken: tokenBySession.get(r.sessionId) ?? '',
       queryText: r.queryText,
       responseText: r.responseText,
+      prevQueryText: r.prevQueryText,
+      prevResponseText: r.prevResponseText,
       turnIndex: r.turnIndex,
+      turnNumber: turnByMessage.get(r.messageId) ?? 0,
       queryTimestamp: r.queryTimestamp.toISOString(),
       typeA: (r.typeA as ScoreQueryRow['typeA']) ?? null,
       subtypeA: r.subtypeA ?? null,

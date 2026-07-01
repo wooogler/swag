@@ -104,8 +104,14 @@ export const scoreClassifications = pgTable('score_classifications', {
   sessionId: text('session_id').notNull().references(() => studentSessions.id),
   // Snapshot of the Q-A pair at classification time (the response is the most
   // recent chatbot reply that followed the query within the same conversation).
+  // responseText is kept for human display only — it is NOT sent to the model.
   queryText: text('query_text').notNull(),
   responseText: text('response_text'),
+  // Prior context actually sent to the classifier: the previous student message
+  // and the chatbot reply the student had just seen before writing this query.
+  // This is what the query is reacting to (see src/lib/score/prompts.ts).
+  prevQueryText: text('prev_query_text'),
+  prevResponseText: text('prev_response_text'),
   turnIndex: integer('turn_index').notNull(), // sequenceNumber of the user message
   queryTimestamp: timestamp('query_timestamp').notNull(),
   // Classifier A — Hierarchical single-label: exactly one Type + one Subtype.

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 
 type TooltipPlace = 'top' | 'bottom' | 'left' | 'right';
@@ -32,51 +32,62 @@ const getAnchorForId = (target: EventTarget | null, id: string): HTMLElement | n
   return target.closest<HTMLElement>(`[data-tooltip-id="${id}"]`);
 };
 
-const getPositionStyle = (rect: DOMRect, place: TooltipPlace): CSSProperties => {
-  const gap = 8;
+interface Placement {
+  left: number;
+  top: number;
+  place: TooltipPlace;
+  arrow: CSSProperties;
+}
 
-  switch (place) {
-    case 'bottom':
-      return {
-        left: rect.left + rect.width / 2,
-        top: rect.bottom + gap,
-        transform: 'translate(-50%, 0)',
-      };
-    case 'left':
-      return {
-        left: rect.left - gap,
-        top: rect.top + rect.height / 2,
-        transform: 'translate(-100%, -50%)',
-      };
-    case 'right':
-      return {
-        left: rect.right + gap,
-        top: rect.top + rect.height / 2,
-        transform: 'translate(0, -50%)',
-      };
-    case 'top':
-    default:
-      return {
-        left: rect.left + rect.width / 2,
-        top: rect.top - gap,
-        transform: 'translate(-50%, -100%)',
-      };
-  }
-};
+const VIEWPORT_MARGIN = 8;
+const ANCHOR_GAP = 8;
 
-const getArrowStyle = (place: TooltipPlace): CSSProperties => {
-  switch (place) {
-    case 'bottom':
-      return { top: -4, left: '50%', transform: 'translateX(-50%) rotate(45deg)' };
-    case 'left':
-      return { right: -4, top: '50%', transform: 'translateY(-50%) rotate(45deg)' };
-    case 'right':
-      return { left: -4, top: '50%', transform: 'translateY(-50%) rotate(45deg)' };
-    case 'top':
-    default:
-      return { bottom: -4, left: '50%', transform: 'translateX(-50%) rotate(45deg)' };
+// Viewport-aware placement: pick the requested side, flip to the opposite side
+// if there isn't room, then clamp the box inside the viewport so it never
+// renders off-screen. The arrow is re-pointed at the anchor center after clamp.
+function computePlacement(rect: DOMRect, w: number, h: number, requested: TooltipPlace): Placement {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const M = VIEWPORT_MARGIN;
+  const G = ANCHOR_GAP;
+
+  let place = requested;
+  if (requested === 'top' && rect.top - G - h < M) place = 'bottom';
+  else if (requested === 'bottom' && rect.bottom + G + h > vh - M) place = 'top';
+  else if (requested === 'left' && rect.left - G - w < M) place = 'right';
+  else if (requested === 'right' && rect.right + G + w > vw - M) place = 'left';
+
+  let left: number;
+  let top: number;
+  if (place === 'top' || place === 'bottom') {
+    left = rect.left + rect.width / 2 - w / 2;
+    top = place === 'top' ? rect.top - G - h : rect.bottom + G;
+  } else {
+    top = rect.top + rect.height / 2 - h / 2;
+    left = place === 'left' ? rect.left - G - w : rect.right + G;
   }
-};
+
+  left = Math.max(M, Math.min(left, vw - w - M));
+  top = Math.max(M, Math.min(top, vh - h - M));
+
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  let arrow: CSSProperties;
+  if (place === 'top' || place === 'bottom') {
+    const ax = Math.max(8, Math.min(cx - left, w - 8));
+    arrow =
+      place === 'top'
+        ? { bottom: -4, left: ax, transform: 'translateX(-50%) rotate(45deg)' }
+        : { top: -4, left: ax, transform: 'translateX(-50%) rotate(45deg)' };
+  } else {
+    const ay = Math.max(8, Math.min(cy - top, h - 8));
+    arrow =
+      place === 'left'
+        ? { right: -4, top: ay, transform: 'translateY(-50%) rotate(45deg)' }
+        : { left: -4, top: ay, transform: 'translateY(-50%) rotate(45deg)' };
+  }
+  return { left, top, place, arrow };
+}
 
 export function Tooltip({
   id,
@@ -94,6 +105,8 @@ export function Tooltip({
     html: '',
   });
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const [placement, setPlacement] = useState<Placement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
 
   const hideTooltip = () => {
@@ -206,28 +219,42 @@ export function Tooltip({
     };
   }, [id, state.anchor, state.visible]);
 
-  const positionStyle = useMemo(() => {
-    if (!anchorRect) {
-      return {};
+  // Measure the rendered tooltip and place it inside the viewport. Runs before
+  // paint, so the corrected position is what the user sees (no flash). Recompute
+  // whenever the anchor moves (scroll/resize) or the content changes.
+  useLayoutEffect(() => {
+    if (!state.visible || !anchorRect || !tooltipRef.current) {
+      return;
     }
-    return getPositionStyle(anchorRect, place);
-  }, [anchorRect, place]);
+    const el = tooltipRef.current;
+    setPlacement(computePlacement(anchorRect, el.offsetWidth, el.offsetHeight, place));
+  }, [state.visible, anchorRect, state.content, state.html, place]);
 
   if (!mounted || !state.visible || !anchorRect) {
     return null;
   }
 
+  // Until measured, render off-screen + transparent so it is measurable but unseen.
+  const ready = placement !== null;
+
   return createPortal(
     <div
+      ref={tooltipRef}
       role="tooltip"
       className={`${DEFAULT_TOOLTIP_CLASS} ${className}`.trim()}
-      style={{ ...positionStyle, ...style, opacity }}
+      style={{
+        left: ready ? placement.left : -9999,
+        top: ready ? placement.top : -9999,
+        transform: 'none',
+        ...style,
+        opacity: ready ? opacity : 0,
+      }}
     >
-      {!noArrow && (
+      {!noArrow && ready && (
         <span
           aria-hidden="true"
           className="absolute block h-2 w-2 border-l border-t border-[hsl(var(--border))] bg-[hsl(var(--popover))]"
-          style={getArrowStyle(place)}
+          style={placement.arrow}
         />
       )}
       {state.html ? (

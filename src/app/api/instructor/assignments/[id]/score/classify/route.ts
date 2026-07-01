@@ -39,11 +39,19 @@ async function authorizeAssignment(id: string) {
 async function loadStatus(assignmentId: string) {
   const records = await getQueryRecords(assignmentId);
   const cached = await db
-    .select({ messageId: scoreClassifications.messageId })
+    .select({
+      messageId: scoreClassifications.messageId,
+      classifierVersion: scoreClassifications.classifierVersion,
+    })
     .from(scoreClassifications)
     .where(eq(scoreClassifications.assignmentId, assignmentId));
-  const cachedIds = new Set(cached.map((r) => r.messageId));
-  const unclassified = records.filter((r) => !cachedIds.has(r.messageId));
+  // A row counts as classified only if it was produced by the CURRENT classifier
+  // version. Older rows used a different context strategy, so they are treated as
+  // unclassified and re-run on the next batch (no explicit force needed).
+  const currentIds = new Set(
+    cached.filter((r) => (r.classifierVersion ?? 0) >= CLASSIFIER_VERSION).map((r) => r.messageId)
+  );
+  const unclassified = records.filter((r) => !currentIds.has(r.messageId));
   return {
     records,
     unclassified,
@@ -136,7 +144,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   await mapWithConcurrency(batch, CONCURRENCY, async (record: QueryRecord) => {
     try {
-      const result = await classifyQuery(config, record.queryText, record.responseText, model);
+      const result = await classifyQuery(
+        config,
+        record.queryText,
+        record.prevQueryText,
+        record.prevResponseText,
+        model
+      );
       await db
         .insert(scoreClassifications)
         .values({
@@ -146,6 +160,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           sessionId: record.sessionId,
           queryText: record.queryText,
           responseText: record.responseText,
+          prevQueryText: record.prevQueryText,
+          prevResponseText: record.prevResponseText,
           turnIndex: record.turnIndex,
           queryTimestamp: record.queryTimestamp,
           typeA: result.a.type,
@@ -163,6 +179,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           set: {
             queryText: record.queryText,
             responseText: record.responseText,
+            prevQueryText: record.prevQueryText,
+            prevResponseText: record.prevResponseText,
             turnIndex: record.turnIndex,
             queryTimestamp: record.queryTimestamp,
             typeA: result.a.type,

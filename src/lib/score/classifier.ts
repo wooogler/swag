@@ -21,11 +21,14 @@ import {
   isValidCode,
   typeKeyOfCode,
   allCodes,
+  SCORE_B_THRESHOLD,
 } from './config';
 
-export const CLASSIFIER_VERSION = 1;
-/** A subtype "fires" in Classifier B when its 0-10 score is at least this. */
-export const SCORE_B_THRESHOLD = 6;
+// v2: classify against PRIOR context (previous student message + the reply the
+// student had just seen) instead of the following response — avoids leaking the
+// bot's interpretation into the intent label. Rows below this version are
+// treated as stale and re-classified on the next run (see loadStatus).
+export const CLASSIFIER_VERSION = 2;
 
 export interface ClassifierAResult {
   type: ScoreTypeKey | null;
@@ -126,10 +129,15 @@ function extractJsonObject(text: string): Record<string, unknown> {
 export async function classifyA(
   config: ScoreConfig,
   queryText: string,
-  responseText: string | null,
+  prevQueryText: string | null,
+  prevResponseText: string | null,
   model: string
 ): Promise<{ result: ClassifierAResult; raw: string }> {
-  const raw = await callModel(buildSystemA(config), buildQueryContent(queryText, responseText), model);
+  const raw = await callModel(
+    buildSystemA(config),
+    buildQueryContent(queryText, prevQueryText, prevResponseText),
+    model
+  );
   const parsed = extractJsonObject(raw);
 
   let type = typeof parsed.type === 'string' ? (parsed.type as string) : null;
@@ -154,10 +162,15 @@ export async function classifyA(
 export async function classifyB(
   config: ScoreConfig,
   queryText: string,
-  responseText: string | null,
+  prevQueryText: string | null,
+  prevResponseText: string | null,
   model: string
 ): Promise<{ result: ClassifierBResult; raw: string }> {
-  const raw = await callModel(buildSystemB(config), buildQueryContent(queryText, responseText), model);
+  const raw = await callModel(
+    buildSystemB(config),
+    buildQueryContent(queryText, prevQueryText, prevResponseText),
+    model
+  );
   const parsed = extractJsonObject(raw);
 
   const codes = allCodes(config);
@@ -177,13 +190,14 @@ export async function classifyB(
 export async function classifyQuery(
   config: ScoreConfig,
   queryText: string,
-  responseText: string | null,
+  prevQueryText: string | null,
+  prevResponseText: string | null,
   model?: string
 ): Promise<QueryClassification> {
   const resolved = resolveScoreModel(model);
   const [a, b] = await Promise.all([
-    classifyA(config, queryText, responseText, resolved),
-    classifyB(config, queryText, responseText, resolved),
+    classifyA(config, queryText, prevQueryText, prevResponseText, resolved),
+    classifyB(config, queryText, prevQueryText, prevResponseText, resolved),
   ]);
   return { a: a.result, b: b.result, rawA: a.raw, rawB: b.raw, model: resolved };
 }

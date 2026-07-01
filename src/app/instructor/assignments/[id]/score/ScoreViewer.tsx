@@ -9,6 +9,7 @@ import {
   type ScoreConfig,
   type ScoreConfigSubtype,
   type ScoreTypeKey,
+  SCORE_B_THRESHOLD,
 } from '@/lib/score/config';
 import { SCORE_MODELS, SCORE_MODEL_LABELS } from '@/lib/score/models';
 import { buildSystemA, buildSystemB, buildQueryContent } from '@/lib/score/prompts';
@@ -17,7 +18,6 @@ import TaxonomyEditor from './TaxonomyEditor';
 import {
   ChevronDown,
   ChevronRight,
-  Loader2,
   Play,
   RefreshCw,
   AlertTriangle,
@@ -26,6 +26,9 @@ import {
   Code2,
   Pencil,
   SlidersHorizontal,
+  Filter,
+  Search,
+  X,
 } from 'lucide-react';
 
 export interface ScoreQueryRow {
@@ -34,7 +37,10 @@ export interface ScoreQueryRow {
   participantToken: string;
   queryText: string;
   responseText: string | null;
+  prevQueryText: string | null;
+  prevResponseText: string | null;
   turnIndex: number;
+  turnNumber: number;
   queryTimestamp: string;
   typeA: ScoreTypeKey | null;
   subtypeA: string | null;
@@ -81,13 +87,96 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function truncate(text: string, n: number): string {
-  const t = text.replace(/\s+/g, ' ').trim();
-  return t.length > n ? `${t.slice(0, n)}…` : t;
+// Bold highlight with no horizontal padding so matches don't shift the layout.
+const MARK_CLASS = 'bg-yellow-200 text-black font-semibold rounded-[1px] mx-0 px-0';
+
+/** Highlight every occurrence of `query` in `text` (whitespace preserved). */
+function highlightAll(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const ql = q.toLowerCase();
+  const tl = text.toLowerCase();
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i <= text.length) {
+    const idx = tl.indexOf(ql, i);
+    if (idx === -1) {
+      nodes.push(text.slice(i));
+      break;
+    }
+    if (idx > i) nodes.push(text.slice(i, idx));
+    nodes.push(
+      <mark key={key++} className={MARK_CLASS}>
+        {text.slice(idx, idx + ql.length)}
+      </mark>
+    );
+    i = idx + ql.length;
+  }
+  return nodes;
+}
+
+/**
+ * Truncate a query for the list, but if there's a search term, center the
+ * snippet on the first match and <mark> every occurrence of the term.
+ */
+function highlightSnippet(text: string, query: string, maxLen: number): React.ReactNode {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  const q = query.trim();
+  if (!q) return clean.length > maxLen ? `${clean.slice(0, maxLen)}…` : clean;
+
+  const ql = q.toLowerCase();
+  const first = clean.toLowerCase().indexOf(ql);
+
+  let start = 0;
+  let prefix = '';
+  if (first > 40 && clean.length > maxLen) {
+    start = first - 30;
+    prefix = '…';
+  }
+  let slice = clean.slice(start);
+  if (slice.length > maxLen) slice = `${slice.slice(0, maxLen)}…`;
+  slice = prefix + slice;
+
+  const nodes: React.ReactNode[] = [];
+  const sl = slice.toLowerCase();
+  let i = 0;
+  let key = 0;
+  while (i <= slice.length) {
+    const idx = sl.indexOf(ql, i);
+    if (idx === -1) {
+      nodes.push(slice.slice(i));
+      break;
+    }
+    if (idx > i) nodes.push(slice.slice(i, idx));
+    nodes.push(
+      <mark key={key++} className={MARK_CLASS}>
+        {slice.slice(idx, idx + ql.length)}
+      </mark>
+    );
+    i = idx + ql.length;
+  }
+  return nodes;
 }
 
 function comboKey(tags: string[]): string {
   return [...tags].sort().join('+');
+}
+
+function toggleInSet<T>(set: Set<T>, value: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return next;
+}
+
+// Classifier B tags are derived live from the stored 0-10 scores using the
+// current threshold (so the threshold slider re-tags without re-classifying).
+// Ordered by score descending for display.
+function firedTags(scoresB: Record<string, number>, threshold: number): string[] {
+  return Object.keys(scoresB)
+    .filter((c) => (scoresB[c] ?? 0) >= threshold)
+    .sort((a, b) => (scoresB[b] ?? 0) - (scoresB[a] ?? 0));
 }
 
 // Config-derived lookups (rebuilt whenever the taxonomy config changes).
@@ -159,6 +248,11 @@ export default function ScoreViewer({
   const [sortMode, setSortMode] = useState<
     'recent' | 'oldest' | 'score-desc' | 'score-asc' | 'participant-asc' | 'participant-desc'
   >('recent');
+  const [threshold, setThreshold] = useState<number>(SCORE_B_THRESHOLD);
+  const [querySearch, setQuerySearch] = useState('');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterSubtypes, setFilterSubtypes] = useState<Set<string>>(() => new Set());
+  const [filterParticipants, setFilterParticipants] = useState<Set<string>>(() => new Set());
 
   const remaining = Math.max(0, total - classified);
 
@@ -176,6 +270,48 @@ export default function ScoreViewer({
     };
   }, []);
 
+  const allParticipants = useMemo(
+    () =>
+      Array.from(new Set(rows.map((r) => r.participantToken).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true })
+      ),
+    [rows]
+  );
+
+  // Global filter (subtypes + participants) applied before everything else.
+  const scopedRows = useMemo(() => {
+    if (filterSubtypes.size === 0 && filterParticipants.size === 0) return rows;
+    return rows.filter((r) => {
+      if (filterParticipants.size > 0 && !filterParticipants.has(r.participantToken)) return false;
+      if (filterSubtypes.size > 0) {
+        if (classifier === 'A') {
+          if (!r.subtypeA || !filterSubtypes.has(r.subtypeA)) return false;
+        } else {
+          if (!firedTags(r.scoresB, threshold).some((c) => filterSubtypes.has(c))) return false;
+        }
+      }
+      return true;
+    });
+  }, [rows, filterSubtypes, filterParticipants, classifier, threshold]);
+
+  // The filter chooses which subtypes (and thus types) appear in the left
+  // browser; scopedRows limits queries to those subtypes accordingly.
+  const subFilterActive = filterSubtypes.size > 0;
+  const isSubVisible = (code: string) => !subFilterActive || filterSubtypes.has(code);
+  const visibleTypes = !subFilterActive
+    ? config.types
+    : config.types.filter((t) => t.subtypes.some((s) => filterSubtypes.has(s.code)));
+
+  const filterActive = filterSubtypes.size > 0 || filterParticipants.size > 0;
+  const filterSummary = filterActive
+    ? [
+        filterSubtypes.size ? `${filterSubtypes.size} subtype${filterSubtypes.size > 1 ? 's' : ''}` : null,
+        filterParticipants.size ? `${filterParticipants.size} student${filterParticipants.size > 1 ? 's' : ''}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : 'All';
+
   // ---- Counts -----------------------------------------------------------
   const counts = useMemo(() => {
     const typeA = new Map<ScoreTypeKey, number>();
@@ -183,21 +319,23 @@ export default function ScoreViewer({
     const subB = new Map<string, number>();
     let unclassifiedA = 0;
     let untaggedB = 0;
-    for (const r of rows) {
+    for (const r of scopedRows) {
       if (r.typeA) typeA.set(r.typeA, (typeA.get(r.typeA) ?? 0) + 1);
       else unclassifiedA += 1;
       if (r.subtypeA) subA.set(r.subtypeA, (subA.get(r.subtypeA) ?? 0) + 1);
-      if (r.tagsB.length === 0) untaggedB += 1;
-      for (const code of r.tagsB) subB.set(code, (subB.get(code) ?? 0) + 1);
+      const fired = firedTags(r.scoresB, threshold);
+      if (fired.length === 0) untaggedB += 1;
+      for (const code of fired) subB.set(code, (subB.get(code) ?? 0) + 1);
     }
     return { typeA, subA, subB, unclassifiedA, untaggedB };
-  }, [rows]);
+  }, [scopedRows, threshold]);
 
   const combos = useMemo(() => {
     const m = new Map<string, { codes: string[]; count: number }>();
-    for (const r of rows) {
-      if (r.tagsB.length >= 2) {
-        const codes = [...r.tagsB].sort();
+    for (const r of scopedRows) {
+      const fired = firedTags(r.scoresB, threshold);
+      if (fired.length >= 2) {
+        const codes = [...fired].sort();
         const key = codes.join('+');
         const e = m.get(key);
         if (e) e.count += 1;
@@ -207,29 +345,38 @@ export default function ScoreViewer({
     return Array.from(m.values())
       .filter((c) => c.count >= 1)
       .sort((a, b) => b.count - a.count || a.codes.length - b.codes.length);
-  }, [rows]);
+  }, [scopedRows, threshold]);
 
-  // ---- Filtered + sorted middle column ----------------------------------
+  // ---- Filtered + searched + sorted middle column -----------------------
   const filteredRows = useMemo(() => {
     switch (selection.kind) {
       case 'all':
-        return rows;
+        return scopedRows;
       case 'unclassified':
-        return rows.filter((r) => !r.typeA);
+        return scopedRows.filter((r) => !r.typeA);
       case 'untagged':
-        return rows.filter((r) => r.tagsB.length === 0);
+        return scopedRows.filter((r) => firedTags(r.scoresB, threshold).length === 0);
       case 'type':
-        return rows.filter((r) => r.typeA === selection.key);
+        return scopedRows.filter((r) => r.typeA === selection.key);
       case 'combo':
-        return rows.filter((r) => r.tagsB.length >= 2 && comboKey(r.tagsB) === selection.key);
+        return scopedRows.filter((r) => {
+          const fired = firedTags(r.scoresB, threshold);
+          return fired.length >= 2 && comboKey(fired) === selection.key;
+        });
       case 'subtype':
         return classifier === 'A'
-          ? rows.filter((r) => r.subtypeA === selection.code)
-          : rows.filter((r) => r.tagsB.includes(selection.code));
+          ? scopedRows.filter((r) => r.subtypeA === selection.code)
+          : scopedRows.filter((r) => (r.scoresB[selection.code] ?? 0) >= threshold);
       default:
-        return rows;
+        return scopedRows;
     }
-  }, [rows, selection, classifier]);
+  }, [scopedRows, selection, classifier, threshold]);
+
+  const searchedRows = useMemo(() => {
+    const q = querySearch.trim().toLowerCase();
+    if (!q) return filteredRows;
+    return filteredRows.filter((r) => r.queryText.toLowerCase().includes(q));
+  }, [filteredRows, querySearch]);
 
   const sortedRows = useMemo(() => {
     const scoreOf = (r: ScoreQueryRow): number => {
@@ -243,7 +390,7 @@ export default function ScoreViewer({
     const ts = (r: ScoreQueryRow) => new Date(r.queryTimestamp).getTime();
     const pc = (a: ScoreQueryRow, b: ScoreQueryRow) =>
       a.participantToken.localeCompare(b.participantToken, undefined, { numeric: true, sensitivity: 'base' });
-    const arr = filteredRows.slice();
+    const arr = searchedRows.slice();
     switch (sortMode) {
       case 'recent':
         arr.sort((a, b) => ts(b) - ts(a));
@@ -265,7 +412,7 @@ export default function ScoreViewer({
         break;
     }
     return arr;
-  }, [filteredRows, sortMode, selection]);
+  }, [searchedRows, sortMode, selection]);
 
   const selectedRow = useMemo(
     () => rows.find((r) => r.messageId === selectedMessageId) ?? null,
@@ -336,7 +483,6 @@ export default function ScoreViewer({
         classifier={classifier}
         onSwitch={switchClassifier}
         total={total}
-        classified={classified}
         remaining={remaining}
         model={selectedModel}
         onModelChange={setSelectedModel}
@@ -348,6 +494,8 @@ export default function ScoreViewer({
         onRerun={() => runClassification(true)}
         onEditTaxonomy={() => openEditor(null)}
         canEditTaxonomy={canEditTaxonomy}
+        threshold={threshold}
+        onThresholdChange={setThreshold}
       />
 
       {classified === 0 ? (
@@ -356,7 +504,20 @@ export default function ScoreViewer({
         <div className="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 h-[calc(100vh-260px)] min-h-[520px]">
           {/* LEFT — intent list */}
           <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
-            <SidebarHeader label={classifier === 'A' ? 'Type → Subtype' : 'Subtypes (multi-tag)'} count={rows.length} />
+            <button
+              onClick={() => setFilterOpen(true)}
+              className={`sticky top-0 z-10 w-full px-3 py-2 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2 ${
+                filterActive ? 'bg-[hsl(var(--primary))]/10' : 'bg-[hsl(var(--card))] hover:bg-[hsl(var(--muted))]/50'
+              }`}
+            >
+              <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <Filter className="w-3.5 h-3.5" /> Filter
+              </span>
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="text-[11px] truncate text-[hsl(var(--muted-foreground))]">{filterSummary}</span>
+                <CountBadge n={scopedRows.length} />
+              </span>
+            </button>
             <button
               onClick={() => setSelection({ kind: 'all' })}
               className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between border-b border-[hsl(var(--border))] ${
@@ -364,11 +525,11 @@ export default function ScoreViewer({
               }`}
             >
               <span>All queries</span>
-              <CountBadge n={rows.length} />
+              <CountBadge n={scopedRows.length} />
             </button>
 
             {classifier === 'A'
-              ? config.types.map((type) => {
+              ? visibleTypes.map((type) => {
                   const isOpen = expanded.has(type.key);
                   const typeCount = counts.typeA.get(type.key) ?? 0;
                   return (
@@ -405,7 +566,7 @@ export default function ScoreViewer({
                       </div>
                       {isOpen && (
                         <div className="pb-1">
-                          {type.subtypes.map((s) => (
+                          {type.subtypes.filter((s) => isSubVisible(s.code)).map((s) => (
                             <SubtypeRow
                               key={s.code}
                               code={s.code}
@@ -419,19 +580,18 @@ export default function ScoreViewer({
                               onEdit={() => openEditor(s.code)}
                             />
                           ))}
-                          {canEditTaxonomy && <AddSubtypeRow onClick={() => openEditor(null)} />}
                         </div>
                       )}
                     </div>
                   );
                 })
-              : config.types.map((type) => (
+              : visibleTypes.map((type) => (
                   <div key={type.key} className="border-b border-[hsl(var(--border))]">
                     <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] flex items-center gap-2 bg-[hsl(var(--muted))]/30">
                       <span className={`w-2 h-2 rounded-full ${TYPE_STYLES[type.key].dot}`} />
                       {type.label}
                     </div>
-                    {type.subtypes.map((s) => (
+                    {type.subtypes.filter((s) => isSubVisible(s.code)).map((s) => (
                       <SubtypeRow
                         key={s.code}
                         code={s.code}
@@ -503,11 +663,32 @@ export default function ScoreViewer({
 
           {/* MIDDLE — query list */}
           <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
-            <div className="sticky top-0 z-10 px-3 py-2 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] truncate">
-                {selectionLabel(selection, classifier, combos, index)}
-              </span>
+            <div className="sticky top-0 z-10 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))] px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] truncate">
+                  {selectionLabel(selection, classifier, combos, index)}
+                </span>
+                <CountBadge n={sortedRows.length} />
+              </div>
               <div className="flex items-center gap-2 shrink-0">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+                  <input
+                    value={querySearch}
+                    onChange={(e) => setQuerySearch(e.target.value)}
+                    placeholder="Search query text…"
+                    className="w-44 pl-7 pr-7 py-1 text-xs border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                  />
+                  {querySearch && (
+                    <button
+                      onClick={() => setQuerySearch('')}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                      aria-label="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
                 <select
                   value={sortMode}
                   onChange={(e) => setSortMode(e.target.value as typeof sortMode)}
@@ -516,12 +697,11 @@ export default function ScoreViewer({
                 >
                   <option value="recent">Newest</option>
                   <option value="oldest">Oldest</option>
-                  <option value="participant-asc">Participant (P-001 → …)</option>
-                  <option value="participant-desc">Participant (… → P-001)</option>
-                  <option value="score-desc">Score (high → low)</option>
-                  <option value="score-asc">Score (low → high)</option>
+                  <option value="participant-asc">PID ↑</option>
+                  <option value="participant-desc">PID ↓</option>
+                  <option value="score-desc">Score ↓</option>
+                  <option value="score-asc">Score ↑</option>
                 </select>
-                <CountBadge n={sortedRows.length} />
               </div>
             </div>
             {sortedRows.length === 0 ? (
@@ -541,14 +721,17 @@ export default function ScoreViewer({
                         <div className="flex items-center justify-between gap-2 mb-1">
                           <span className="text-[11px] font-mono text-[hsl(var(--muted-foreground))]">
                             {r.participantToken || '—'}
+                            {r.turnNumber > 0 && <span className="ml-1 font-sans">· Turn {r.turnNumber}</span>}
                           </span>
                           <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
                             {new Date(r.queryTimestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                           </span>
                         </div>
-                        <p className="text-sm text-[hsl(var(--foreground))] leading-snug mb-1.5">{truncate(r.queryText, 140)}</p>
+                        <p className="text-sm text-[hsl(var(--foreground))] leading-snug mb-1.5">
+                          {highlightSnippet(r.queryText, querySearch, 140)}
+                        </p>
                         <div className="flex flex-wrap gap-1">
-                          <RowTags row={r} classifier={classifier} index={index} />
+                          <RowTags row={r} classifier={classifier} index={index} threshold={threshold} />
                         </div>
                       </button>
                     </li>
@@ -569,8 +752,11 @@ export default function ScoreViewer({
               <div className="p-4 space-y-4">
                 <div className="flex items-start justify-between gap-2 text-xs text-[hsl(var(--muted-foreground))]">
                   <div className="flex items-center flex-wrap gap-1.5">
-                    <span className="font-mono">{selectedRow.participantToken || '—'}</span>
-                    <RowTags row={selectedRow} classifier={classifier} index={index} />
+                    <span className="font-mono">
+                      {selectedRow.participantToken || '—'}
+                      {selectedRow.turnNumber > 0 && <span className="ml-1 font-sans">· Turn {selectedRow.turnNumber}</span>}
+                    </span>
+                    <RowTags row={selectedRow} classifier={classifier} index={index} threshold={threshold} />
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span>{new Date(selectedRow.queryTimestamp).toLocaleString()}</span>
@@ -589,13 +775,13 @@ export default function ScoreViewer({
                     Student query
                   </h3>
                   <p className="text-sm whitespace-pre-wrap rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-3">
-                    {selectedRow.queryText}
+                    {highlightAll(selectedRow.queryText, querySearch)}
                   </p>
                 </section>
 
                 <section>
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
-                    Chatbot response
+                    Chatbot response <span className="font-normal normal-case">(the reply to this query — not sent to the model)</span>
                   </h3>
                   {selectedRow.responseText && selectedRow.responseText.trim() ? (
                     <div className="prose prose-sm max-w-none dark:prose-invert prose-pre:bg-[hsl(var(--muted))] prose-pre:text-[hsl(var(--foreground))] prose-pre:border prose-pre:border-[hsl(var(--border))]">
@@ -620,9 +806,35 @@ export default function ScoreViewer({
           row={selectedRow}
           config={config}
           index={index}
+          threshold={threshold}
           initialClassifier={classifier}
         />
       )}
+
+      <FilterModal
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        types={config.types}
+        participants={allParticipants}
+        selectedSubtypes={filterSubtypes}
+        selectedParticipants={filterParticipants}
+        onToggleSubtype={(code) => setFilterSubtypes((prev) => toggleInSet(prev, code))}
+        onToggleType={(key) =>
+          setFilterSubtypes((prev) => {
+            const codes = config.types.find((t) => t.key === key)?.subtypes.map((s) => s.code) ?? [];
+            const allOn = codes.length > 0 && codes.every((c) => prev.has(c));
+            const next = new Set(prev);
+            if (allOn) codes.forEach((c) => next.delete(c));
+            else codes.forEach((c) => next.add(c));
+            return next;
+          })
+        }
+        onToggleParticipant={(p) => setFilterParticipants((prev) => toggleInSet(prev, p))}
+        onClear={() => {
+          setFilterSubtypes(new Set());
+          setFilterParticipants(new Set());
+        }}
+      />
 
       <TaxonomyEditor
         open={editorOpen}
@@ -671,46 +883,46 @@ function SubtypeRow({
 }) {
   return (
     <div
-      className={`group flex items-center ${active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/50'}`}
+      onClick={onSelect}
+      role="button"
       title={description}
+      className={`group flex items-center gap-1.5 ${indent ? 'pl-9' : 'pl-3'} pr-3 py-1.5 text-xs cursor-pointer ${
+        active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/50'
+      } ${active ? 'font-medium text-[hsl(var(--foreground))]' : count === 0 ? 'text-[hsl(var(--muted-foreground))]' : 'text-[hsl(var(--foreground))]'}`}
     >
-      <button
-        onClick={onSelect}
-        className={`flex-1 text-left ${indent ? 'pl-9' : 'pl-3'} ${editable ? 'pr-1' : 'pr-3'} py-1.5 text-xs flex items-center justify-between min-w-0 ${
-          active ? 'font-medium text-[hsl(var(--foreground))]' : count === 0 ? 'text-[hsl(var(--muted-foreground))]' : 'text-[hsl(var(--foreground))]'
-        }`}
-      >
-        <span className="truncate">
-          <span className="font-mono">{code}</span> {label}
-        </span>
-        <CountBadge n={count} />
-      </button>
+      <span className="truncate min-w-0">
+        <span className="font-mono">{code}</span> {label}
+      </span>
       {editable && (
         <button
-          onClick={onEdit}
-          className="opacity-0 group-hover:opacity-100 px-2 py-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))]"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit();
+          }}
+          className="shrink-0 opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))]"
           aria-label={`Edit ${code}`}
           title={`Edit ${code}`}
         >
           <Pencil className="w-3.5 h-3.5" />
         </button>
       )}
+      <span className="flex-1" />
+      <CountBadge n={count} />
     </div>
   );
 }
 
-function AddSubtypeRow({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full text-left pl-9 pr-3 py-1 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))]"
-    >
-      + edit subtypes…
-    </button>
-  );
-}
-
-function RowTags({ row, classifier, index }: { row: ScoreQueryRow; classifier: Classifier; index: TaxIndex }) {
+function RowTags({
+  row,
+  classifier,
+  index,
+  threshold,
+}: {
+  row: ScoreQueryRow;
+  classifier: Classifier;
+  index: TaxIndex;
+  threshold: number;
+}) {
   if (classifier === 'A') {
     if (row.subtypeA) {
       return (
@@ -728,20 +940,18 @@ function RowTags({ row, classifier, index }: { row: ScoreQueryRow; classifier: C
     }
     return <Chip className={NEUTRAL_CHIP}>unclassified</Chip>;
   }
-  if (row.tagsB.length === 0) {
+  const fired = firedTags(row.scoresB, threshold);
+  if (fired.length === 0) {
     return <Chip className={NEUTRAL_CHIP}>no tags</Chip>;
   }
   return (
     <>
-      {row.tagsB
-        .slice()
-        .sort((a, b) => (row.scoresB[b] ?? 0) - (row.scoresB[a] ?? 0))
-        .map((code) => (
-          <Chip key={code} className={index.chipClass(code)} tooltipHtml={index.tooltipHtml(code, row.scoresB[code])}>
-            {code}
-            <span className="ml-1 font-sans opacity-60">{row.scoresB[code] ?? 0}</span>
-          </Chip>
-        ))}
+      {fired.map((code) => (
+        <Chip key={code} className={index.chipClass(code)} tooltipHtml={index.tooltipHtml(code, row.scoresB[code])}>
+          {code}
+          <span className="ml-1 font-sans opacity-60">{row.scoresB[code] ?? 0}</span>
+        </Chip>
+      ))}
     </>
   );
 }
@@ -776,6 +986,7 @@ function PromptPreviewModal({
   row,
   config,
   index,
+  threshold,
   initialClassifier,
 }: {
   open: boolean;
@@ -783,6 +994,7 @@ function PromptPreviewModal({
   row: ScoreQueryRow;
   config: ScoreConfig;
   index: TaxIndex;
+  threshold: number;
   initialClassifier: Classifier;
 }) {
   const [which, setWhich] = useState<Classifier>(initialClassifier);
@@ -791,7 +1003,7 @@ function PromptPreviewModal({
   }, [open, initialClassifier]);
 
   const system = which === 'A' ? buildSystemA(config) : buildSystemB(config);
-  const user = buildQueryContent(row.queryText, row.responseText);
+  const user = buildQueryContent(row.queryText, row.prevQueryText, row.prevResponseText);
   const raw = which === 'A' ? row.rawA : row.rawB;
 
   return (
@@ -853,7 +1065,7 @@ function PromptPreviewModal({
                   {row.subtypeA && <span className="text-sm">{index.labelOf(row.subtypeA)}</span>}
                 </div>
               ) : (
-                <BScores row={row} index={index} />
+                <BScores row={row} index={index} threshold={threshold} />
               )}
             </div>
           </div>
@@ -874,22 +1086,23 @@ function PreBlock({ label, text }: { label: string; text: string }) {
   );
 }
 
-function BScores({ row, index }: { row: ScoreQueryRow; index: TaxIndex }) {
+function BScores({ row, index, threshold }: { row: ScoreQueryRow; index: TaxIndex; threshold: number }) {
   const [showAll, setShowAll] = useState(false);
+  const fired = firedTags(row.scoresB, threshold);
   const entries = Object.entries(row.scoresB)
     .filter(([, v]) => (showAll ? true : v > 0))
     .sort((a, b) => b[1] - a[1]);
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1">
-        {row.tagsB.length > 0 ? (
-          row.tagsB.map((code) => (
+        {fired.length > 0 ? (
+          fired.map((code) => (
             <Chip key={code} className={index.chipClass(code)} tooltipHtml={index.tooltipHtml(code, row.scoresB[code])}>
               {index.labelOf(code)}
             </Chip>
           ))
         ) : (
-          <Chip className={NEUTRAL_CHIP}>no tags fired</Chip>
+          <Chip className={NEUTRAL_CHIP}>no tags fired (≥ {threshold})</Chip>
         )}
       </div>
       {entries.length > 0 && (
@@ -916,7 +1129,6 @@ function ControlBar(props: {
   classifier: Classifier;
   onSwitch: (c: Classifier) => void;
   total: number;
-  classified: number;
   remaining: number;
   model: string;
   onModelChange: (m: string) => void;
@@ -928,12 +1140,13 @@ function ControlBar(props: {
   onRerun: () => void;
   onEditTaxonomy: () => void;
   canEditTaxonomy: boolean;
+  threshold: number;
+  onThresholdChange: (n: number) => void;
 }) {
   const {
     classifier,
     onSwitch,
     total,
-    classified,
     remaining,
     model,
     onModelChange,
@@ -945,53 +1158,58 @@ function ControlBar(props: {
     onRerun,
     onEditTaxonomy,
     canEditTaxonomy,
+    threshold,
+    onThresholdChange,
   } = props;
-  const pct = total > 0 ? Math.round((classified / total) * 100) : 0;
+  const runPct = runProgress ? Math.round((runProgress.classified / Math.max(1, runProgress.total)) * 100) : 0;
 
   return (
     <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="inline-flex rounded-md border border-[hsl(var(--border))] overflow-hidden self-start">
-        <button
-          onClick={() => onSwitch('A')}
-          className={`px-3 py-1.5 text-sm font-medium ${
-            classifier === 'A'
-              ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
-              : 'bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
-          }`}
-        >
-          Classifier A · single
-        </button>
-        <button
-          onClick={() => onSwitch('B')}
-          className={`px-3 py-1.5 text-sm font-medium border-l border-[hsl(var(--border))] ${
-            classifier === 'B'
-              ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
-              : 'bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
-          }`}
-        >
-          Classifier B · multi-tag
-        </button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="inline-flex rounded-md border border-[hsl(var(--border))] overflow-hidden">
+          <button
+            onClick={() => onSwitch('A')}
+            className={`px-3 py-1.5 text-sm font-medium ${
+              classifier === 'A'
+                ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
+                : 'bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+            }`}
+          >
+            Classifier A · single
+          </button>
+          <button
+            onClick={() => onSwitch('B')}
+            className={`px-3 py-1.5 text-sm font-medium border-l border-[hsl(var(--border))] ${
+              classifier === 'B'
+                ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
+                : 'bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+            }`}
+          >
+            Classifier B · multi-tag
+          </button>
+        </div>
+
+        {classifier === 'B' && (
+          <label
+            className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]"
+            title="A subtype counts as a fired tag when its 0-10 score is at least this. Re-tags instantly from stored scores."
+          >
+            <span className="hidden sm:inline">Tag ≥</span>
+            <input
+              type="range"
+              min={0}
+              max={10}
+              step={1}
+              value={threshold}
+              onChange={(e) => onThresholdChange(Number(e.target.value))}
+              className="w-24 accent-[hsl(var(--primary))]"
+            />
+            <span className="w-4 tabular-nums font-medium text-[hsl(var(--foreground))]">{threshold}</span>
+          </label>
+        )}
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="text-sm text-[hsl(var(--muted-foreground))]">
-          <span className="font-medium text-[hsl(var(--foreground))]">
-            {running && runProgress ? runProgress.classified : classified}
-          </span>
-          /{total} classified
-          {running && runProgress && runProgress.failed > 0 && (
-            <span className="text-[hsl(var(--destructive))]"> · {runProgress.failed} failed</span>
-          )}
-        </div>
-        {total > 0 && (
-          <div className="w-24 h-1.5 rounded-full bg-[hsl(var(--muted))] overflow-hidden">
-            <div
-              className="h-full bg-[hsl(var(--primary))] transition-all"
-              style={{ width: `${running && runProgress ? Math.round((runProgress.classified / Math.max(1, runProgress.total)) * 100) : pct}%` }}
-            />
-          </div>
-        )}
-
         {canEditTaxonomy && (
           <button
             onClick={onEditTaxonomy}
@@ -1023,22 +1241,33 @@ function ControlBar(props: {
           <span className="inline-flex items-center gap-1 text-xs text-[hsl(var(--destructive))]">
             <AlertTriangle className="w-3.5 h-3.5" /> OPENAI_API_KEY not set
           </span>
+        ) : running ? (
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-[hsl(var(--border))]">
+            <RefreshCw className="w-4 h-4 animate-spin text-[hsl(var(--primary))]" />
+            <div className="w-32 h-1.5 rounded-full bg-[hsl(var(--muted))] overflow-hidden">
+              <div className="h-full bg-[hsl(var(--primary))] transition-all" style={{ width: `${runPct}%` }} />
+            </div>
+            <span className="text-xs tabular-nums text-[hsl(var(--muted-foreground))]">
+              {runProgress?.classified ?? 0}/{runProgress?.total ?? total}
+              {runProgress && runProgress.failed > 0 && (
+                <span className="text-[hsl(var(--destructive))]"> · {runProgress.failed} failed</span>
+              )}
+            </span>
+          </div>
         ) : remaining > 0 ? (
           <button
             onClick={onRun}
-            disabled={running}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90"
           >
-            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-            {running ? 'Classifying…' : `Classify ${remaining} remaining`}
+            <Play className="w-4 h-4" />
+            {`Classify ${remaining} remaining`}
           </button>
         ) : (
           <button
             onClick={onRerun}
-            disabled={running}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
           >
-            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            <RefreshCw className="w-4 h-4" />
             Re-classify all
           </button>
         )}
@@ -1075,12 +1304,187 @@ function EmptyState({ openaiConfigured, total }: { openaiConfigured: boolean; to
   );
 }
 
-function SidebarHeader({ label, count }: { label: string; count: number }) {
+function FilterCheckbox({ state }: { state: 'on' | 'off' | 'partial' }) {
   return (
-    <div className="sticky top-0 z-10 px-3 py-2 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))] flex items-center justify-between">
-      <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] truncate">{label}</span>
-      <CountBadge n={count} />
-    </div>
+    <span
+      className={`w-3.5 h-3.5 shrink-0 rounded-sm border flex items-center justify-center ${
+        state === 'off' ? 'border-[hsl(var(--border))]' : 'bg-[hsl(var(--primary))] border-[hsl(var(--primary))]'
+      }`}
+    >
+      {state === 'on' && <span className="text-[hsl(var(--primary-foreground))] text-[9px]">✓</span>}
+      {state === 'partial' && <span className="text-[hsl(var(--primary-foreground))] text-[9px]">–</span>}
+    </span>
+  );
+}
+
+function FilterModal({
+  open,
+  onClose,
+  types,
+  participants,
+  selectedSubtypes,
+  selectedParticipants,
+  onToggleType,
+  onToggleSubtype,
+  onToggleParticipant,
+  onClear,
+}: {
+  open: boolean;
+  onClose: () => void;
+  types: ScoreConfig['types'];
+  participants: string[];
+  selectedSubtypes: Set<string>;
+  selectedParticipants: Set<string>;
+  onToggleType: (key: ScoreTypeKey) => void;
+  onToggleSubtype: (code: string) => void;
+  onToggleParticipant: (p: string) => void;
+  onClear: () => void;
+}) {
+  const [pSearch, setPSearch] = useState('');
+  const shownParticipants = useMemo(() => {
+    const q = pSearch.trim().toLowerCase();
+    return q ? participants.filter((p) => p.toLowerCase().includes(q)) : participants;
+  }, [participants, pSearch]);
+
+  const [tSearch, setTSearch] = useState('');
+  const shownTypes = useMemo(() => {
+    const q = tSearch.trim().toLowerCase();
+    if (!q) return types.map((t) => ({ type: t, subs: t.subtypes }));
+    const out: { type: (typeof types)[number]; subs: (typeof types)[number]['subtypes'] }[] = [];
+    for (const t of types) {
+      const typeMatches = t.label.toLowerCase().includes(q) || t.key.toLowerCase().includes(q);
+      const subs = typeMatches
+        ? t.subtypes
+        : t.subtypes.filter((s) => `${s.code} ${s.label}`.toLowerCase().includes(q));
+      if (typeMatches || subs.length > 0) out.push({ type: t, subs });
+    }
+    return out;
+  }, [types, tSearch]);
+
+  return (
+    <Dialog open={open} onClose={onClose} className="relative z-50">
+      <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
+      <div className="fixed inset-0 flex items-center justify-center p-4">
+        <DialogPanel className="w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col rounded-lg bg-[hsl(var(--card))] border border-[hsl(var(--border))] shadow-xl">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--border))]">
+            <DialogTitle className="text-sm font-semibold text-[hsl(var(--foreground))]">Filter queries</DialogTitle>
+            <button onClick={onClose} className="p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]" aria-label="Close">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="overflow-y-auto px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Types → Subtypes tree */}
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-2">
+                Types &amp; subtypes {selectedSubtypes.size === 0 ? '(all)' : `(${selectedSubtypes.size})`}
+              </p>
+              <div className="relative mb-2">
+                <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+                <input
+                  value={tSearch}
+                  onChange={(e) => setTSearch(e.target.value)}
+                  placeholder="Search type / subtype…"
+                  className="w-full pl-7 pr-2 py-1 text-xs border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                />
+              </div>
+              <div className="max-h-72 overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
+                {shownTypes.length === 0 ? (
+                  <p className="p-3 text-xs text-[hsl(var(--muted-foreground))]">No matching types.</p>
+                ) : (
+                  shownTypes.map(({ type: t, subs }) => {
+                  const codes = t.subtypes.map((s) => s.code);
+                  const on = codes.filter((c) => selectedSubtypes.has(c)).length;
+                  const typeState = on === 0 ? 'off' : on === codes.length ? 'on' : 'partial';
+                  return (
+                    <div key={t.key}>
+                      <button
+                        onClick={() => onToggleType(t.key)}
+                        className={`w-full text-left px-2.5 py-1.5 text-xs font-medium flex items-center gap-2 ${
+                          typeState !== 'off' ? 'bg-[hsl(var(--primary))]/5' : 'hover:bg-[hsl(var(--muted))]/50'
+                        }`}
+                      >
+                        <FilterCheckbox state={typeState} />
+                        <span className={`w-2 h-2 rounded-full ${TYPE_STYLES[t.key].dot}`} />
+                        {t.label}
+                      </button>
+                      {subs.map((s) => {
+                        const sOn = selectedSubtypes.has(s.code);
+                        return (
+                          <button
+                            key={s.code}
+                            onClick={() => onToggleSubtype(s.code)}
+                            className={`w-full text-left pl-8 pr-2.5 py-1 text-xs flex items-center gap-2 ${
+                              sOn ? 'bg-[hsl(var(--primary))]/10 font-medium' : 'hover:bg-[hsl(var(--muted))]/50'
+                            }`}
+                            title={s.description}
+                          >
+                            <FilterCheckbox state={sOn ? 'on' : 'off'} />
+                            <span className="truncate">
+                              <span className="font-mono">{s.code}</span> {s.label}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Participants */}
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-2">
+                Students {selectedParticipants.size === 0 ? '(all)' : `(${selectedParticipants.size})`}
+              </p>
+              <div className="relative mb-2">
+                <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+                <input
+                  value={pSearch}
+                  onChange={(e) => setPSearch(e.target.value)}
+                  placeholder="Search participant… (e.g. P76)"
+                  className="w-full pl-7 pr-2 py-1 text-xs border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                />
+              </div>
+              <div className="max-h-72 overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
+                {shownParticipants.length === 0 ? (
+                  <p className="p-3 text-xs text-[hsl(var(--muted-foreground))]">No matching participants.</p>
+                ) : (
+                  shownParticipants.map((p) => {
+                    const on = selectedParticipants.has(p);
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => onToggleParticipant(p)}
+                        className={`w-full text-left px-3 py-1.5 text-xs font-mono flex items-center gap-2 ${
+                          on ? 'bg-[hsl(var(--primary))]/10 font-medium' : 'hover:bg-[hsl(var(--muted))]/50'
+                        }`}
+                      >
+                        <FilterCheckbox state={on ? 'on' : 'off'} />
+                        {p}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between px-4 py-3 border-t border-[hsl(var(--border))]">
+            <button onClick={onClear} className="text-xs text-[hsl(var(--primary))] hover:underline">
+              Clear all
+            </button>
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 rounded-md text-sm font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90"
+            >
+              Done
+            </button>
+          </div>
+        </DialogPanel>
+      </div>
+    </Dialog>
   );
 }
 

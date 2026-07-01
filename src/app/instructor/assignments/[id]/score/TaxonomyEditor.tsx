@@ -32,6 +32,7 @@ interface EditorType {
 interface EditorConfig {
   version: number;
   types: EditorType[];
+  noneExamples: string[];
 }
 
 let UID_SEQ = 0;
@@ -44,6 +45,7 @@ function clone<T>(value: T): T {
 function withUids(config: ScoreConfig): EditorConfig {
   return {
     version: config.version,
+    noneExamples: config.noneExamples ?? [],
     types: config.types.map((t) => ({
       ...t,
       subtypes: t.subtypes.map((s) => ({ ...s, uid: nextUid() })),
@@ -54,6 +56,7 @@ function withUids(config: ScoreConfig): EditorConfig {
 function stripUids(draft: EditorConfig): ScoreConfig {
   return {
     version: draft.version,
+    noneExamples: draft.noneExamples,
     types: draft.types.map((t) => ({
       key: t.key,
       letter: t.letter,
@@ -313,6 +316,25 @@ export default function TaxonomyEditor({
                 </div>
               </div>
             ))}
+
+            {/* No-category / off-topic examples */}
+            <div className="border-t border-[hsl(var(--border))] pt-4">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-gray-400" />
+                <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Other / no category</h3>
+              </div>
+              <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2">
+                Off-topic, chit-chat, or meta queries that fit no subtype. Few-shot the &ldquo;none of the above&rdquo;
+                case: Classifier A returns null, Classifier B scores everything 0.
+              </p>
+              <textarea
+                value={draft.noneExamples.join('\n')}
+                onChange={(e) => setDraft((prev) => ({ ...clone(prev), noneExamples: e.target.value.split('\n') }))}
+                placeholder="Off-topic / no-category example queries — one per line"
+                rows={Math.max(2, draft.noneExamples.length)}
+                className="w-full text-xs font-mono border border-[hsl(var(--border))] rounded px-2 py-1 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] resize-y"
+              />
+            </div>
           </div>
 
           {/* Footer */}

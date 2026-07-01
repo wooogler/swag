@@ -12,6 +12,15 @@ import { SCORE_CONFIG_VERSION } from './config';
 
 export const DEFAULT_SCORE_CONFIG: ScoreConfig = {
   version: SCORE_CONFIG_VERSION,
+  // "Other" — queries that fit no writing-process subtype (md §Other).
+  noneExamples: [
+    "That's a great idea, thanks!",
+    'Thank you, this is helpful.',
+    'I think your revision is good.',
+    'What can you do?',
+    'Can you search the web for me?',
+    'What did you change in that revision?',
+  ],
   types: [
     {
       key: 'Planning',

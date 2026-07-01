@@ -20,6 +20,9 @@ export const SCORE_CONFIG_VERSION = 1;
 /** Cap few-shot examples per subtype so an import/edit can't blow up the prompt. */
 export const MAX_EXAMPLES_PER_SUBTYPE = 20;
 
+/** Default Classifier B "fired" threshold (0-10); adjustable live in the viewer. */
+export const SCORE_B_THRESHOLD = 6;
+
 export interface ScoreConfigSubtype {
   code: string;
   label: string;
@@ -38,6 +41,9 @@ export interface ScoreConfigType {
 export interface ScoreConfig {
   version: number;
   types: ScoreConfigType[];
+  /** Example queries that fit NO subtype (off-topic, chit-chat, meta). Few-shot
+   * the "none of the above" case: Classifier A returns null, B scores all 0. */
+  noneExamples: string[];
 }
 
 export function isValidTypeKey(key: string | null | undefined): key is ScoreTypeKey {
@@ -151,5 +157,14 @@ export function normalizeConfig(raw: unknown): ScoreConfig | null {
   );
 
   if (ordered.every((t) => t.subtypes.length === 0)) return null; // nothing usable
-  return { version: SCORE_CONFIG_VERSION, types: ordered };
+
+  const noneExamples = Array.isArray(obj.noneExamples)
+    ? obj.noneExamples
+        .filter((e): e is string => typeof e === 'string')
+        .map((e) => e.trim())
+        .filter(Boolean)
+        .slice(0, MAX_EXAMPLES_PER_SUBTYPE)
+    : [];
+
+  return { version: SCORE_CONFIG_VERSION, types: ordered, noneExamples };
 }

@@ -17,7 +17,13 @@ export interface QueryRecord {
   conversationId: string;
   sessionId: string;
   queryText: string;
+  /** The chatbot reply that FOLLOWED this query. Kept for human display only —
+   *  it is NOT sent to the classifier (it is downstream of the query's intent). */
   responseText: string | null;
+  /** Prior context the query is reacting to (sent to the classifier): the
+   *  previous student message and the chatbot reply the student had just seen. */
+  prevQueryText: string | null;
+  prevResponseText: string | null;
   turnIndex: number; // sequenceNumber of the user message
   queryTimestamp: Date;
 }
@@ -38,9 +44,28 @@ async function createScoreTable(): Promise<void> {
     sql`SELECT to_regclass('public.score_classifications') AS reg`
   );
   if (existing[0]?.reg) {
-    // Table present — add columns introduced after the initial create (raw output).
-    await db.execute(sql`ALTER TABLE "score_classifications" ADD COLUMN IF NOT EXISTS "raw_response_a" text`);
-    await db.execute(sql`ALTER TABLE "score_classifications" ADD COLUMN IF NOT EXISTS "raw_response_b" text`);
+    // Table present — add columns introduced after the initial create (raw
+    // output) ONLY if missing. `ADD COLUMN IF NOT EXISTS` would emit a Postgres
+    // NOTICE every time (noisy under dev hot-reload), so pre-check first.
+    const cols = await db.execute<{ column_name: string }>(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'score_classifications'
+        AND column_name IN ('raw_response_a', 'raw_response_b', 'prev_query_text', 'prev_response_text')
+    `);
+    const have = new Set(cols.map((c) => c.column_name));
+    if (!have.has('raw_response_a')) {
+      await db.execute(sql`ALTER TABLE "score_classifications" ADD COLUMN "raw_response_a" text`);
+    }
+    if (!have.has('raw_response_b')) {
+      await db.execute(sql`ALTER TABLE "score_classifications" ADD COLUMN "raw_response_b" text`);
+    }
+    if (!have.has('prev_query_text')) {
+      await db.execute(sql`ALTER TABLE "score_classifications" ADD COLUMN "prev_query_text" text`);
+    }
+    if (!have.has('prev_response_text')) {
+      await db.execute(sql`ALTER TABLE "score_classifications" ADD COLUMN "prev_response_text" text`);
+    }
     return;
   }
 
@@ -53,6 +78,8 @@ async function createScoreTable(): Promise<void> {
       "session_id" text NOT NULL,
       "query_text" text NOT NULL,
       "response_text" text,
+      "prev_query_text" text,
+      "prev_response_text" text,
       "turn_index" integer NOT NULL,
       "query_timestamp" timestamp NOT NULL,
       "type_a" text,
@@ -118,7 +145,7 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
     if (!m.content || !m.content.trim()) continue;
 
     // Find the chatbot response: next assistant message in the same
-    // conversation, before the next user message.
+    // conversation, before the next user message. Kept for human display only.
     let responseText: string | null = null;
     for (let j = i + 1; j < rows.length; j++) {
       const next = rows[j];
@@ -130,12 +157,43 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
       }
     }
 
+    // Prior context — what the student had just seen before writing this query:
+    // the chatbot reply immediately before it, and the student message before
+    // that reply. This is the context the query is actually reacting to, so it
+    // (not the following response) is what the classifier receives.
+    let prevResponseText: string | null = null;
+    let prevQueryText: string | null = null;
+    let k = i - 1;
+    for (; k >= 0; k--) {
+      const p = rows[k];
+      if (p.conversationId !== m.conversationId) {
+        k = -1;
+        break;
+      }
+      if (p.role === 'assistant') {
+        prevResponseText = p.content;
+        k--;
+        break;
+      }
+      if (p.role === 'user') break; // consecutive student messages: no reply between
+    }
+    for (; k >= 0; k--) {
+      const p = rows[k];
+      if (p.conversationId !== m.conversationId) break;
+      if (p.role === 'user' && p.content && p.content.trim()) {
+        prevQueryText = p.content;
+        break;
+      }
+    }
+
     records.push({
       messageId: m.messageId,
       conversationId: m.conversationId,
       sessionId: m.sessionId,
       queryText: m.content,
       responseText,
+      prevQueryText,
+      prevResponseText,
       turnIndex: m.seq,
       queryTimestamp: m.ts,
     });

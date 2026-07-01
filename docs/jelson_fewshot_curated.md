@@ -123,3 +123,19 @@
 - Make the essay you wrote longer.
 - Rewrite that essay with a clearer structure.
 - Add more detail to the conclusion you generated.
+
+---
+
+## Other (null / no-tag — 4범주에 안 맞는 비글쓰기 쿼리)
+
+> 잡담·메타·AI에 대한 코멘트 등 *어느 글쓰기 과정에도 속하지 않는* 쿼리. 분류기가 이런 걸 억지로 P/T/R/A에 밀어넣지 않게 하는 **none-of-the-above** 클래스.
+
+**Conversational / Feedback to AI** (잡담·감사·AI 출력에 코멘트, 쓰기 요청 없음)
+- That's a great idea, thanks!
+- Thank you, this is helpful.
+- I think your revision is good.
+
+**Meta / Capabilities** (AI 능력·한 일 묻기)
+- What can you do?
+- Can you search the web for me?
+- What did you change in that revision?
