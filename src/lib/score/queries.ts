@@ -101,9 +101,54 @@ async function createScoreTable(): Promise<void> {
   );
 }
 
+/** Defensively create the Classifier B per-subtype score table (see schema.ts). */
+async function createSubtypeScoresTable(): Promise<void> {
+  const existing = await db.execute<{ reg: string | null }>(
+    sql`SELECT to_regclass('public.score_subtype_scores') AS reg`
+  );
+  if (!existing[0]?.reg) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "score_subtype_scores" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "assignment_id" text NOT NULL,
+        "message_id" integer NOT NULL,
+        "subtype_code" text NOT NULL,
+        "score" integer NOT NULL,
+        "def_hash" text NOT NULL,
+        "raw_response" text,
+        "model" text,
+        "scored_at" timestamp NOT NULL
+      )
+    `);
+  }
+  // Ensure the indexes even when the table pre-exists: a crash between CREATE
+  // TABLE and CREATE UNIQUE INDEX must not strand the table index-less forever —
+  // every upsert targets the unique index and would fail with "no unique or
+  // exclusion constraint matching the ON CONFLICT specification". Pre-check via
+  // pg_indexes to avoid the noisy IF NOT EXISTS NOTICE on every boot.
+  const idx = await db.execute<{ indexname: string }>(sql`
+    SELECT indexname FROM pg_indexes
+    WHERE schemaname = 'public' AND tablename = 'score_subtype_scores'
+  `);
+  const have = new Set(idx.map((r) => r.indexname));
+  if (!have.has('score_subtype_scores_assignment_idx')) {
+    await db.execute(
+      sql`CREATE INDEX IF NOT EXISTS "score_subtype_scores_assignment_idx" ON "score_subtype_scores" USING btree ("assignment_id")`
+    );
+  }
+  if (!have.has('score_subtype_scores_message_subtype_unique')) {
+    await db.execute(
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_subtype_scores_message_subtype_unique" ON "score_subtype_scores" USING btree ("message_id", "subtype_code")`
+    );
+  }
+}
+
 export function ensureScoreTable(): Promise<void> {
   if (!ensured) {
-    ensured = createScoreTable().catch((error) => {
+    ensured = (async () => {
+      await createScoreTable();
+      await createSubtypeScoresTable();
+    })().catch((error) => {
       ensured = null; // allow retry on next call if creation failed
       throw error;
     });

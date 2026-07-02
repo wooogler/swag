@@ -131,6 +131,39 @@ export const scoreClassifications = pgTable('score_classifications', {
   messageUnique: uniqueIndex('score_classifications_message_unique').on(table.messageId),
 }));
 
+// SCORE Classifier B — per-subtype independent scores.
+//
+// Unlike Classifier A (one joint call per message, stored on
+// score_classifications), B scores each subtype in ITS OWN call, in isolation.
+// That independence is what lets us cache partially: one row per
+// (message, subtype). When an instructor edits ONE subtype's definition/examples
+// its defHash changes and only that subtype's rows are re-scored on the next
+// run; every other subtype's rows stay valid. Adding a subtype only computes the
+// new column; deleting one drops it — the rest are untouched.
+//
+// The 0-10 "fired" threshold is applied at READ time (adjustable live in the
+// viewer), so only the raw score is persisted here — never the derived tags.
+export const scoreSubtypeScores = pgTable('score_subtype_scores', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  subtypeCode: text('subtype_code').notNull(), // e.g. 'PL01'
+  score: integer('score').notNull(), // 0-10
+  // hash(rubric version + this subtype's code/label/description/examples). A
+  // mismatch vs the current config means this subtype was edited → re-score.
+  defHash: text('def_hash').notNull(),
+  rawResponse: text('raw_response'), // raw model output (preview/debug)
+  model: text('model'),
+  scoredAt: timestamp('scored_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_subtype_scores_assignment_idx').on(table.assignmentId),
+  // One score per (message, subtype); upserts target this.
+  messageSubtypeUnique: uniqueIndex('score_subtype_scores_message_subtype_unique').on(
+    table.messageId,
+    table.subtypeCode
+  ),
+}));
+
 // SCORE — editable taxonomy + few-shot config (singleton row, id='default').
 // Drives both the viewer and the classifier prompts. See src/lib/score/config.ts.
 export const scoreConfig = pgTable('score_config', {
@@ -163,6 +196,9 @@ export type NewAuthToken = typeof authTokens.$inferInsert;
 
 export type ScoreClassification = typeof scoreClassifications.$inferSelect;
 export type NewScoreClassification = typeof scoreClassifications.$inferInsert;
+
+export type ScoreSubtypeScore = typeof scoreSubtypeScores.$inferSelect;
+export type NewScoreSubtypeScore = typeof scoreSubtypeScores.$inferInsert;
 
 export type ScoreConfigRow = typeof scoreConfig.$inferSelect;
 export type NewScoreConfigRow = typeof scoreConfig.$inferInsert;

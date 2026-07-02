@@ -12,7 +12,7 @@ import {
   SCORE_B_THRESHOLD,
 } from '@/lib/score/config';
 import { SCORE_MODELS, SCORE_MODEL_LABELS } from '@/lib/score/models';
-import { buildSystemA, buildSystemB, buildQueryContent } from '@/lib/score/prompts';
+import { buildSystemA, buildSystemBSingle, buildQueryContent, buildQueryContentB } from '@/lib/score/prompts';
 import { Tooltip } from '@/components/ui/tooltip';
 import TaxonomyEditor from './TaxonomyEditor';
 import {
@@ -28,6 +28,7 @@ import {
   SlidersHorizontal,
   Filter,
   Search,
+  Download,
   X,
 } from 'lucide-react';
 
@@ -47,15 +48,23 @@ export interface ScoreQueryRow {
   tagsB: string[];
   scoresB: Record<string, number>;
   model: string | null;
+  /** Model that produced the B scores ('mixed' after partial re-runs). */
+  bModel: string | null;
   rawA: string | null;
   rawB: string | null;
 }
 
 interface ScoreViewerProps {
   assignmentId: string;
+  assignmentTitle: string;
   rows: ScoreQueryRow[];
   total: number;
   classified: number;
+  /** Messages with stale/missing work PER classifier (mirrors the route's
+   * staleness rules). The A/B toggle selects which drives "Classify N
+   * remaining", keeping it consistent with the scoped "Re-classify" button. */
+  pendingA: number;
+  pendingB: number;
   defaultModel: string;
   openaiConfigured: boolean;
   initialConfig: ScoreConfig;
@@ -179,6 +188,39 @@ function firedTags(scoresB: Record<string, number>, threshold: number): string[]
     .sort((a, b) => (scoresB[b] ?? 0) - (scoresB[a] ?? 0));
 }
 
+// ---- CSV export (matches the GPTWriting_recoded.csv reference: the three
+// columns Inquiry, Response, Code; UTF-8 BOM + CRLF so Excel opens it cleanly) --
+function csvEscape(value: string): string {
+  // RFC-4180 quoting: wrap in quotes and double any embedded quote when the
+  // field contains a comma, quote, or line break.
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+/**
+ * Build the results CSV for the given rows. `Code` holds Classifier A's single
+ * subtype code, or — for Classifier B — the codes whose 0-10 score fired at the
+ * current threshold, joined (a query with no fired tag exports an empty Code,
+ * mirroring the blank cells in the reference document).
+ */
+function buildResultsCsv(rows: ScoreQueryRow[], classifier: Classifier, threshold: number): string {
+  const header = ['Inquiry', 'Response', 'Code'];
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    const code = classifier === 'A' ? r.subtypeA ?? '' : firedTags(r.scoresB, threshold).join('; ');
+    lines.push([r.queryText, r.responseText ?? '', code].map(csvEscape).join(','));
+  }
+  return '\ufeff' + lines.join('\r\n');
+}
+
+/** Slugify the assignment title for a filesystem-friendly download name. */
+function slugForFilename(title: string): string {
+  const slug = title
+    .trim()
+    .replace(/[^\p{L}\p{N}]+/gu, '_')
+    .replace(/^_+|_+$/g, '');
+  return slug || 'score';
+}
+
 // Config-derived lookups (rebuilt whenever the taxonomy config changes).
 interface TaxIndex {
   typeOf: (code: string) => ScoreTypeKey | undefined;
@@ -223,9 +265,12 @@ function buildIndex(config: ScoreConfig): TaxIndex {
 
 export default function ScoreViewer({
   assignmentId,
+  assignmentTitle,
   rows,
   total,
   classified,
+  pendingA,
+  pendingB,
   defaultModel,
   openaiConfigured,
   initialConfig,
@@ -254,7 +299,10 @@ export default function ScoreViewer({
   const [filterSubtypes, setFilterSubtypes] = useState<Set<string>>(() => new Set());
   const [filterParticipants, setFilterParticipants] = useState<Set<string>>(() => new Set());
 
-  const remaining = Math.max(0, total - classified);
+  // Stale/missing work for the SELECTED classifier (version bumps and taxonomy
+  // edits count) — not merely "messages without any cached row". Switching the
+  // A/B toggle re-points both the count and the run scope.
+  const remaining = classifier === 'A' ? pendingA : pendingB;
 
   const [running, setRunning] = useState(false);
   const [runProgress, setRunProgress] = useState<{ classified: number; total: number; failed: number } | null>(null);
@@ -430,16 +478,27 @@ export default function ScoreViewer({
   }
 
   // ---- Classification runner -------------------------------------------
-  async function runClassification(force: boolean) {
+  async function runClassification(force: boolean, scope: 'all' | 'a' | 'b' = 'all') {
     if (running) return;
-    if (force && !window.confirm('Re-classify ALL queries? This discards cached results and makes new LLM calls.')) {
-      return;
+    if (force) {
+      const what =
+        scope === 'a' ? 'Classifier A' : scope === 'b' ? 'Classifier B' : 'both classifiers';
+      if (
+        !window.confirm(
+          `Re-classify ${what} for ALL queries? This re-runs the LLM for every query and overwrites the cached results.`
+        )
+      ) {
+        return;
+      }
     }
     const controller = new AbortController();
     abortRef.current = controller;
     setRunning(true);
     setRunError(null);
-    setRunProgress({ classified: force ? 0 : classified, total, failed: 0 });
+    // Seed from staleness-aware pending work (server semantics), not from the
+    // row count — after a version/taxonomy bump every row exists but is stale,
+    // and seeding with rows.length would render a bogus 100% bar.
+    setRunProgress({ classified: force ? 0 : total - remaining, total, failed: 0 });
     let first = true;
     let totalFailed = 0;
     try {
@@ -447,7 +506,7 @@ export default function ScoreViewer({
         const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/classify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ force: first && force, limit: 50, model: selectedModel }),
+          body: JSON.stringify({ force: first && force, scope, limit: 50, model: selectedModel }),
           signal: controller.signal,
         });
         const data = await res.json().catch(() => ({}));
@@ -461,7 +520,7 @@ export default function ScoreViewer({
         setRunProgress({ classified: data.classified, total: data.total, failed: totalFailed });
         if (data.remaining <= 0 || data.processed === 0) break;
         if ((data.succeeded ?? 0) === 0) {
-          setRunError(`Classification stalled — ${data.failed ?? 0} queries failed this batch. Check the server logs.`);
+          setRunError(`Classification stalled — ${data.failed ?? 0} LLM calls failed this batch. Check the server logs.`);
           break;
         }
       }
@@ -474,6 +533,24 @@ export default function ScoreViewer({
         router.refresh();
       }
     }
+  }
+
+  // ---- Results download -------------------------------------------------
+  // Exports exactly what the middle column currently shows (global filter +
+  // left-panel selection + search + sort all applied) for the active
+  // classifier, in the reference Inquiry/Response/Code CSV shape.
+  function downloadResults() {
+    if (sortedRows.length === 0) return;
+    const csv = buildResultsCsv(sortedRows, classifier, threshold);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slugForFilename(assignmentTitle)}_classifier${classifier}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   // ---- Render -----------------------------------------------------------
@@ -490,12 +567,15 @@ export default function ScoreViewer({
         running={running}
         runProgress={runProgress}
         runError={runError}
-        onRun={() => runClassification(false)}
-        onRerun={() => runClassification(true)}
+        onRun={() => runClassification(false, classifier === 'A' ? 'a' : 'b')}
+        onRerunA={() => runClassification(true, 'a')}
+        onRerunB={() => runClassification(true, 'b')}
         onEditTaxonomy={() => openEditor(null)}
         canEditTaxonomy={canEditTaxonomy}
         threshold={threshold}
         onThresholdChange={setThreshold}
+        onDownload={downloadResults}
+        downloadCount={sortedRows.length}
       />
 
       {classified === 0 ? (
@@ -1002,8 +1082,11 @@ function PromptPreviewModal({
     if (open) setWhich(initialClassifier);
   }, [open, initialClassifier]);
 
-  const system = which === 'A' ? buildSystemA(config) : buildSystemB(config);
-  const user = buildQueryContent(row.queryText, row.prevQueryText, row.prevResponseText);
+  const system = which === 'A' ? buildSystemA(config) : buildSystemBSingle();
+  const user =
+    which === 'A'
+      ? buildQueryContent(row.queryText, row.prevQueryText, row.prevResponseText)
+      : buildQueryContentB(row.queryText, row.prevQueryText, row.prevResponseText);
   const raw = which === 'A' ? row.rawA : row.rawB;
 
   return (
@@ -1014,7 +1097,11 @@ function PromptPreviewModal({
           <div className="flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--border))]">
             <DialogTitle className="text-sm font-semibold text-[hsl(var(--foreground))]">
               Prompt &amp; result
-              {row.model && <span className="ml-2 text-xs font-normal text-[hsl(var(--muted-foreground))]">({row.model})</span>}
+              {(which === 'A' ? row.model : row.bModel ?? row.model) && (
+                <span className="ml-2 text-xs font-normal text-[hsl(var(--muted-foreground))]">
+                  ({which === 'A' ? row.model : row.bModel ?? row.model})
+                </span>
+              )}
             </DialogTitle>
             <div className="flex items-center gap-2">
               <div className="inline-flex rounded-md border border-[hsl(var(--border))] overflow-hidden text-xs">
@@ -1039,8 +1126,27 @@ function PromptPreviewModal({
           </div>
 
           <div className="overflow-y-auto px-4 py-3 space-y-4 text-sm">
-            <PreBlock label="System prompt (includes few-shot examples)" text={system} />
-            <PreBlock label="User message (query + context)" text={user} />
+            <PreBlock
+              label={
+                which === 'A'
+                  ? 'System prompt (includes few-shot examples)'
+                  : 'System prompt (shared rubric — one independent call per subtype)'
+              }
+              text={system}
+            />
+            <PreBlock
+              label={
+                which === 'A'
+                  ? 'User message (query + context)'
+                  : 'User message (query + context; each call appends one subtype block below this)'
+              }
+              text={user}
+            />
+            {which === 'B' && (
+              <p className="text-xs text-[hsl(var(--muted-foreground))] italic -mt-2">
+                Raw output below shows each subtype&apos;s independent 0-10 score.
+              </p>
+            )}
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">Raw model output</p>
               {raw ? (
@@ -1137,11 +1243,14 @@ function ControlBar(props: {
   runProgress: { classified: number; total: number; failed: number } | null;
   runError: string | null;
   onRun: () => void;
-  onRerun: () => void;
+  onRerunA: () => void;
+  onRerunB: () => void;
   onEditTaxonomy: () => void;
   canEditTaxonomy: boolean;
   threshold: number;
   onThresholdChange: (n: number) => void;
+  onDownload: () => void;
+  downloadCount: number;
 }) {
   const {
     classifier,
@@ -1155,11 +1264,14 @@ function ControlBar(props: {
     runProgress,
     runError,
     onRun,
-    onRerun,
+    onRerunA,
+    onRerunB,
     onEditTaxonomy,
     canEditTaxonomy,
     threshold,
     onThresholdChange,
+    onDownload,
+    downloadCount,
   } = props;
   const runPct = runProgress ? Math.round((runProgress.classified / Math.max(1, runProgress.total)) * 100) : 0;
 
@@ -1220,6 +1332,21 @@ function ControlBar(props: {
           </button>
         )}
 
+        <button
+          onClick={onDownload}
+          disabled={downloadCount === 0}
+          title={
+            downloadCount === 0
+              ? 'No results to download for the current view'
+              : `Download the ${downloadCount} shown Classifier ${classifier} result${
+                  downloadCount === 1 ? '' : 's'
+                } as CSV (Inquiry, Response, Code)`
+          }
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50 disabled:pointer-events-none"
+        >
+          <Download className="w-4 h-4" /> CSV
+        </button>
+
         <label className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
           <span className="hidden sm:inline">Model</span>
           <select
@@ -1254,22 +1381,31 @@ function ControlBar(props: {
               )}
             </span>
           </div>
-        ) : remaining > 0 ? (
-          <button
-            onClick={onRun}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90"
-          >
-            <Play className="w-4 h-4" />
-            {`Classify ${remaining} remaining`}
-          </button>
         ) : (
-          <button
-            onClick={onRerun}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Re-classify all
-          </button>
+          <div className="flex items-center gap-2">
+            {remaining > 0 && (
+              <button
+                onClick={onRun}
+                title={`Classify only the ${remaining} queries still pending for Classifier ${classifier}`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90"
+              >
+                <Play className="w-4 h-4" />
+                {`Classify ${remaining} remaining · ${classifier}`}
+              </button>
+            )}
+            <button
+              onClick={classifier === 'A' ? onRerunA : onRerunB}
+              title={
+                classifier === 'A'
+                  ? 'Re-run Classifier A (single-label) for every query, overwriting cached results'
+                  : 'Re-run Classifier B (per-subtype scores) for every query, overwriting cached results'
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Re-classify {classifier}
+            </button>
+          </div>
         )}
       </div>
       {runError && <p className="w-full text-xs text-[hsl(var(--destructive))] sm:order-last">{runError}</p>}

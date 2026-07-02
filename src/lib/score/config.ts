@@ -23,6 +23,25 @@ export const MAX_EXAMPLES_PER_SUBTYPE = 20;
 /** Default Classifier B "fired" threshold (0-10); adjustable live in the viewer. */
 export const SCORE_B_THRESHOLD = 6;
 
+/**
+ * Version of the SHARED Classifier B rubric (the fixed scoring instructions that
+ * are identical for every subtype — see buildSystemBSingle). Bump this to force a
+ * global re-score of B when the rubric wording/scale changes. Per-subtype edits
+ * are handled automatically by subtypeDefHash; this is only for the shared part.
+ *
+ * v2: type-scope rules (whose text is operated on), instruction-vs-pasted-text
+ * rule, parent Type header in the subtype block, compact B context.
+ * v3: dropped the non-paper interpretive rules (scope/whose-text, instruction-
+ * vs-pasted-text, referent resolution) and reworded the rubric so scoring is
+ * driven only by the paper's own Type/Subtype descriptions + examples.
+ */
+export const SCORE_B_RUBRIC_VERSION = 3;
+
+/** Max few-shot examples included in a single-subtype B call (the rest are kept
+ * in config for the viewer/Classifier A but not sent to B — keeps the per-call
+ * variable suffix small). subtypeDefHash hashes the same slice. */
+export const B_MAX_EXAMPLES_PER_CALL = 6;
+
 export interface ScoreConfigSubtype {
   code: string;
   label: string;
@@ -60,6 +79,48 @@ export function allCodes(config: ScoreConfig): string[] {
   return config.types.flatMap((t) => t.subtypes.map((s) => s.code));
 }
 
+/** Small, stable (non-crypto) string hash. Pure JS so config.ts stays
+ * client-safe; used only for cache-invalidation keys, not security. */
+function stableHash(input: string): string {
+  // Two independent FNV-1a-style accumulators combined → ~13 base36 chars, low
+  // enough collision risk for the (subtype-definition → re-score) decision.
+  let h1 = 0x811c9dc5;
+  let h2 = 0x1000193;
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b) >>> 0;
+  }
+  return h1.toString(36) + h2.toString(36);
+}
+
+/**
+ * Content hash of everything that affects a subtype's Classifier B score in
+ * isolation: the shared rubric version + the parent Type's header (its label/
+ * letter/description appear in the B prompt) + this subtype's code/label/
+ * description/examples (only the slice actually sent — B_MAX_EXAMPLES_PER_CALL).
+ * It deliberately does NOT depend on any SIBLING subtype — that is what makes a
+ * per-subtype edit re-score only that subtype. Store it alongside each
+ * (message, subtype) score; a mismatch vs the current config means "re-score".
+ */
+export function subtypeDefHash(type: ScoreConfigType, subtype: ScoreConfigSubtype): string {
+  const sent = subtype.examples.slice(0, B_MAX_EXAMPLES_PER_CALL);
+  // JSON-encode so instructor-entered '|' or embedded newlines can't make two
+  // different definitions collapse to the same canonical string.
+  const canonical = JSON.stringify([
+    `v${SCORE_B_RUBRIC_VERSION}`,
+    type.key,
+    type.letter,
+    type.label,
+    type.description,
+    subtype.code,
+    subtype.label,
+    subtype.description,
+    sent,
+  ]);
+  return stableHash(canonical);
+}
+
 export function getSubtypeFromConfig(
   config: ScoreConfig,
   code: string | null | undefined
@@ -88,7 +149,7 @@ export function isValidCode(config: ScoreConfig, code: string | null | undefined
   return !!getSubtypeFromConfig(config, code);
 }
 
-/** "PL01 · Information Search" — falls back to the bare code if unknown. */
+/** "PL01 · Provide an answer to a question on a topic" — falls back to the bare code if unknown. */
 export function subtypeLabelOf(config: ScoreConfig, code: string): string {
   const s = getSubtypeFromConfig(config, code);
   return s ? `${s.code} · ${s.label}` : code;
