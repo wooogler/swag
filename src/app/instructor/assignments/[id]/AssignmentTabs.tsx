@@ -5,7 +5,6 @@ import CopyLinkButton from '@/components/instructor/CopyLinkButton';
 import StudentTable from './StudentTable';
 import InstructionEditor from '@/components/editor/InstructionEditor';
 import { Card, CardContent } from '@/components/ui/card';
-import { resolveAssignmentAiGuidance } from '@/lib/assignment-ai';
 import { Link as LinkIcon, Users, FileText, Brain, ListChecks } from 'lucide-react';
 
 interface Assignment {
@@ -121,14 +120,22 @@ export default function AssignmentTabs({ assignment, students, shareUrl }: Assig
                   How the AI helps
                 </h3>
                 <div className="space-y-3 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-4">
-                  <p className="whitespace-pre-wrap text-sm text-[hsl(var(--muted-foreground))]">
-                    {resolveAssignmentAiGuidance(assignment.customSystemPrompt)}
-                  </p>
-                  <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                    {assignment.includeInstructionInPrompt
-                      ? 'The AI also receives the assignment instructions for more task-specific help.'
-                      : 'The AI uses only the guidance above unless the assignment instructions are shared separately.'}
-                  </p>
+                  {assignment.customSystemPrompt && assignment.customSystemPrompt.trim() ? (
+                    <>
+                      <p className="whitespace-pre-wrap text-sm text-[hsl(var(--muted-foreground))]">
+                        {assignment.customSystemPrompt.trim()}
+                      </p>
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                        {assignment.includeInstructionInPrompt
+                          ? 'The AI also receives the assignment instructions for more task-specific help.'
+                          : 'The AI uses only the guidance above unless the assignment instructions are shared separately.'}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm italic text-[hsl(var(--muted-foreground))]">
+                      No system prompt — the chatbot ran without any default guidance.
+                    </p>
+                  )}
                 </div>
               </div>
             </CardContent>

@@ -89,7 +89,6 @@ async function main() {
   const { db } = await import('./db');
   const { assignments, studentSessions, editorEvents, chatConversations, chatMessages, instructors } =
     await import('./schema');
-  const { DEFAULT_ASSIGNMENT_AI_GUIDANCE } = await import('../lib/assignment-ai');
 
   // Ensure the metadata column exists even if the formal migration hasn't run.
   await db.execute(sql`ALTER TABLE student_sessions ADD COLUMN IF NOT EXISTS metadata jsonb`);
@@ -153,7 +152,10 @@ async function main() {
     deadline: new Date(BASE_TIME),
     shareToken: seed.shareToken,
     instructorId: owner.id,
-    customSystemPrompt: DEFAULT_ASSIGNMENT_AI_GUIDANCE,
+    // NIRVANA's chatbot ran with NO default system prompt, so store an empty
+    // guidance (surfaced as blank in the "How the AI helps" tab) rather than the
+    // app's default writing-coach prompt.
+    customSystemPrompt: '',
     includeInstructionInPrompt: false,
     createdAt: new Date(),
   });
