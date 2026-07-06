@@ -172,6 +172,170 @@ export const scoreConfig = pgTable('score_config', {
   updatedAt: timestamp('updated_at').notNull(),
 });
 
+// ---------------------------------------------------------------------------
+// SCORE v6 — instructor-created Intents with Rules (per assignment).
+//
+// Unlike score_config (global Jelson taxonomy, demoted to a tagging/browse
+// layer), intents are the real classification units: each is a WHEN
+// (definition) that owns one THEN (rule) injected on top of the assignment's
+// Base Prompt. See src/lib/score/intents.ts and the v6 design doc.
+// Tables are created by runtime DDL in src/lib/score/intent-store.ts (the
+// migration journal is not used for recent tables).
+// ---------------------------------------------------------------------------
+
+export const scoreIntents = pgTable('score_intents', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  title: text('title').notNull(), // short card label
+  definition: text('definition').notNull(), // the WHEN — what the classifier rates against
+  rule: text('rule'), // the THEN — response guideline; null = "No rule yet → base prompt applies"
+  // Soft delete: ratings/pins/versions keep referencing archived intents so
+  // history and granular revert stay reconstructible.
+  archived: boolean('archived').notNull().default(false),
+  createdAt: timestamp('created_at').notNull(),
+  updatedAt: timestamp('updated_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_intents_assignment_idx').on(table.assignmentId),
+}));
+
+// Per-(message, intent) 5-level rating + short rationale. Mirrors
+// score_subtype_scores: def_hash makes invalidation per-intent granular —
+// editing one intent (or its pins) re-rates only that intent's rows.
+export const scoreIntentRatings = pgTable('score_intent_ratings', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  intentId: integer('intent_id').notNull().references(() => scoreIntents.id),
+  rating: text('rating').notNull(), // RatingLevel (clearly_in … clearly_out)
+  rationale: text('rationale'), // ≤10 words, emitted before the rating
+  // intentDefHash(definition, promptPins) at rating time; mismatch = re-rate.
+  defHash: text('def_hash').notNull(),
+  rawResponse: text('raw_response'),
+  model: text('model'),
+  ratedAt: timestamp('rated_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_intent_ratings_assignment_idx').on(table.assignmentId),
+  intentIdx: index('score_intent_ratings_intent_idx').on(table.intentId),
+  messageIntentUnique: uniqueIndex('score_intent_ratings_message_intent_unique').on(
+    table.messageId,
+    table.intentId
+  ),
+}));
+
+// Boundary Examples ("pins") — instructor in/out verdicts on ambiguous
+// questions. The latest few are injected into the rating prompt as contrast
+// examples. query_text is snapshotted at pin time (same denormalization as
+// score_classifications) so prompt building needs no joins.
+export const scoreIntentPins = pgTable('score_intent_pins', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  intentId: integer('intent_id').notNull().references(() => scoreIntents.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  verdict: text('verdict').notNull(), // 'in' | 'out'
+  queryText: text('query_text').notNull(),
+  source: text('source').notNull().default('manual'), // 'manual' | 'ownership' | …
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_intent_pins_assignment_idx').on(table.assignmentId),
+  intentMessageUnique: uniqueIndex('score_intent_pins_intent_message_unique').on(
+    table.intentId,
+    table.messageId
+  ),
+}));
+
+// Exception Links — "A except B": when a question is included by both, B owns
+// it. Applied deterministically in the assignment resolver (zero LLM cost);
+// deleting the link restores the previous behavior.
+export const scoreIntentLinks = pgTable('score_intent_links', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  fromIntentId: integer('from_intent_id').notNull().references(() => scoreIntents.id),
+  toIntentId: integer('to_intent_id').notNull().references(() => scoreIntents.id),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_intent_links_assignment_idx').on(table.assignmentId),
+  pairUnique: uniqueIndex('score_intent_links_pair_unique').on(
+    table.fromIntentId,
+    table.toIntentId
+  ),
+}));
+
+// Immediate-apply versioning (§1.11): every approved config change writes a
+// FULL snapshot (intents + pins + links + prompt versions + base prompt ref)
+// plus a summary of what changed. Diffs are computed at read time (git-style);
+// granular revert creates a NEW snapshot. No deploy gate.
+export const scoreConfigVersions = pgTable('score_config_versions', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  versionNo: integer('version_no').notNull(),
+  snapshot: jsonb('snapshot').notNull(), // IntentConfigSnapshot
+  summary: jsonb('summary').notNull(), // { action, intentIds, messageId?, detail? }
+  createdBy: text('created_by'), // instructors.id
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentVersionUnique: uniqueIndex('score_config_versions_assignment_version_unique').on(
+    table.assignmentId,
+    table.versionNo
+  ),
+}));
+
+// Cached rule-preview responses (§1.7/§4.6): what the chatbot WOULD answer to
+// a question under Base Prompt + one intent's Rule. Generated on demand for
+// ownership comparisons (and later the Revise before/after), keyed per
+// (message, intent) with a prompt_hash covering base+rule+model — any edit
+// regenerates. Indicative single-turn output, never shown to students.
+export const scoreRulePreviews = pgTable('score_rule_previews', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  intentId: integer('intent_id').notNull().references(() => scoreIntents.id),
+  // rulePreviewHash(model, basePrompt, rule) at generation time.
+  promptHash: text('prompt_hash').notNull(),
+  response: text('response').notNull(),
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_rule_previews_assignment_idx').on(table.assignmentId),
+  messageIntentUnique: uniqueIndex('score_rule_previews_message_intent_unique').on(
+    table.messageId,
+    table.intentId
+  ),
+}));
+
+// Query embeddings (P3): one vector per student message, used to order the
+// Revise modal's edge-case sweep (semantic distance from the anchor question)
+// at zero LLM cost per sweep. Stored as a jsonb number[] — assignment logs
+// are a few hundred rows, so in-memory cosine beats a pgvector dependency.
+export const scoreQueryEmbeddings = pgTable('score_query_embeddings', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  embedding: jsonb('embedding').notNull(), // number[]
+  model: text('model').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_query_embeddings_assignment_idx').on(table.assignmentId),
+  messageUnique: uniqueIndex('score_query_embeddings_message_unique').on(table.messageId),
+}));
+
+// Message dissection (§1.4a): Material kinds + verbatim Request substrings,
+// one row per student message. Intent-independent, so it lives apart from
+// ratings and is versioned by DISSECTION_VERSION alone.
+export const scoreDissections = pgTable('score_dissections', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  materialKinds: jsonb('material_kinds').notNull(), // MaterialKind[]
+  requests: jsonb('requests').notNull(), // string[] — verbatim substrings
+  version: integer('version').notNull(), // DISSECTION_VERSION at write time
+  rawResponse: text('raw_response'),
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_dissections_assignment_idx').on(table.assignmentId),
+  messageUnique: uniqueIndex('score_dissections_message_unique').on(table.messageId),
+}));
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
@@ -202,3 +366,27 @@ export type NewScoreSubtypeScore = typeof scoreSubtypeScores.$inferInsert;
 
 export type ScoreConfigRow = typeof scoreConfig.$inferSelect;
 export type NewScoreConfigRow = typeof scoreConfig.$inferInsert;
+
+export type ScoreIntent = typeof scoreIntents.$inferSelect;
+export type NewScoreIntent = typeof scoreIntents.$inferInsert;
+
+export type ScoreIntentRating = typeof scoreIntentRatings.$inferSelect;
+export type NewScoreIntentRating = typeof scoreIntentRatings.$inferInsert;
+
+export type ScoreIntentPin = typeof scoreIntentPins.$inferSelect;
+export type NewScoreIntentPin = typeof scoreIntentPins.$inferInsert;
+
+export type ScoreIntentLink = typeof scoreIntentLinks.$inferSelect;
+export type NewScoreIntentLink = typeof scoreIntentLinks.$inferInsert;
+
+export type ScoreConfigVersion = typeof scoreConfigVersions.$inferSelect;
+export type NewScoreConfigVersion = typeof scoreConfigVersions.$inferInsert;
+
+export type ScoreDissection = typeof scoreDissections.$inferSelect;
+export type NewScoreDissection = typeof scoreDissections.$inferInsert;
+
+export type ScoreRulePreview = typeof scoreRulePreviews.$inferSelect;
+export type NewScoreRulePreview = typeof scoreRulePreviews.$inferInsert;
+
+export type ScoreQueryEmbedding = typeof scoreQueryEmbeddings.$inferSelect;
+export type NewScoreQueryEmbedding = typeof scoreQueryEmbeddings.$inferInsert;

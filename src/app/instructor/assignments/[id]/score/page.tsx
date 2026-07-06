@@ -13,7 +13,19 @@ import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import { getScoreConfig } from '@/lib/score/config-store';
-import ScoreViewer, { type ScoreQueryRow } from './ScoreViewer';
+import {
+  listDissections,
+  listIntentRatings,
+  loadIntentState,
+} from '@/lib/score/intent-store';
+import { assignmentBasePrompt } from '@/lib/assignment-ai';
+import {
+  DISSECTION_VERSION,
+  isRatingLevel,
+  type MaterialKind,
+  type RatingLevel,
+} from '@/lib/score/intents';
+import ScoreViewer, { type IntentSummary, type ScoreQueryRow } from './ScoreViewer';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -37,7 +49,7 @@ export default async function ScorePage({ params }: PageProps) {
 
   await ensureScoreTable();
 
-  const [config, records, cachedRows, sessions, subtypeScoreRows] = await Promise.all([
+  const [config, records, cachedRows, sessions, subtypeScoreRows, intentState, intentRatingRows, dissectionRows] = await Promise.all([
     getScoreConfig(),
     getQueryRecords(id),
     db
@@ -60,6 +72,9 @@ export default async function ScorePage({ params }: PageProps) {
       })
       .from(scoreSubtypeScores)
       .where(eq(scoreSubtypeScores.assignmentId, id)),
+    loadIntentState(id),
+    listIntentRatings(id),
+    listDissections(id),
   ]);
 
   const tokenBySession = new Map(sessions.map((s) => [s.id, s.participantToken]));
@@ -105,6 +120,67 @@ export default async function ScorePage({ params }: PageProps) {
     }
   }
 
+  // --- SCORE v6 intent layer ------------------------------------------------
+  // Per-message intent ratings (with per-row staleness vs the CURRENT defHash)
+  // and dissections. Assignment resolution happens client-side with the shared
+  // deterministic resolver so link/pin edits re-derive without reload logic.
+  const currentIntentHash = new Map(intentState.promptReady.map((p) => [p.intent.id, p.defHash]));
+  const intentRatingsByMessage = new Map<
+    number,
+    Record<number, { rating: RatingLevel; rationale: string | null; stale: boolean }>
+  >();
+  for (const r of intentRatingRows) {
+    if (!isRatingLevel(r.rating)) continue;
+    let m = intentRatingsByMessage.get(r.messageId);
+    if (!m) {
+      m = {};
+      intentRatingsByMessage.set(r.messageId, m);
+    }
+    m[r.intentId] = {
+      rating: r.rating,
+      rationale: r.rationale,
+      stale: r.defHash !== currentIntentHash.get(r.intentId),
+    };
+  }
+  const dissectionByMessage = new Map(
+    dissectionRows.map((d) => [
+      d.messageId,
+      {
+        materialKinds: (Array.isArray(d.materialKinds) ? d.materialKinds : []) as MaterialKind[],
+        requests: (Array.isArray(d.requests) ? d.requests : []) as string[],
+        stale: d.version < DISSECTION_VERSION,
+      },
+    ])
+  );
+
+  // Pin verdicts per (message, intent) — instructor decisions that override
+  // the classifier for the pinned question itself (applyPinOverrides).
+  const pinsByMessage = new Map<number, Record<number, 'in' | 'out'>>();
+  for (const p of intentState.pins) {
+    let m = pinsByMessage.get(p.messageId);
+    if (!m) {
+      m = {};
+      pinsByMessage.set(p.messageId, m);
+    }
+    m[p.intentId] = p.verdict as 'in' | 'out';
+  }
+
+  // Pending rating work, mirroring the rate route: a message is pending when
+  // any active intent's rating is missing/stale, or its dissection is (the
+  // latter only counted once intents exist — see the rate route's gate).
+  let pendingRatings = 0;
+  if (intentState.promptReady.length > 0) {
+    for (const rec of records) {
+      const have = intentRatingsByMessage.get(rec.messageId);
+      const intentsStale = intentState.promptReady.some((p) => {
+        const r = have?.[p.intent.id];
+        return !r || r.stale;
+      });
+      const d = dissectionByMessage.get(rec.messageId);
+      if (intentsStale || !d || d.stale) pendingRatings += 1;
+    }
+  }
+
   // Turn number = ordinal of this student message within its conversation
   // (records are ordered by conversation then sequence). Robust to gaps.
   const turnByMessage = new Map<number, number>();
@@ -119,15 +195,16 @@ export default async function ScorePage({ params }: PageProps) {
     turnByMessage.set(rec.messageId, turnCounter);
   }
 
-  // Build rows from the live query records (A and B are now decoupled tables, so
-  // a message can have B scores while its A call failed — it must still show).
-  // A message appears once it has an A row OR any B score; text fields come from
-  // the live record, A fields from the cached A row when present.
+  // Build rows from the live query records. Every record appears (the intents
+  // mode organizes the WHOLE log); hasJelson marks messages carrying tag data
+  // (an A row OR any B score) — the tags mode shows only those, preserving its
+  // original behavior. Text fields come from the live record, A fields from
+  // the cached A row when present.
   const aRowByMessage = new Map(cachedRows.map((r) => [r.messageId, r]));
   const rows: ScoreQueryRow[] = records
-    .filter((rec) => aRowByMessage.has(rec.messageId) || scoresByMessage.has(rec.messageId))
     .map((rec) => {
       const a = aRowByMessage.get(rec.messageId);
+      const dissection = dissectionByMessage.get(rec.messageId);
       return {
         messageId: rec.messageId,
         sessionId: rec.sessionId,
@@ -139,6 +216,7 @@ export default async function ScorePage({ params }: PageProps) {
         turnIndex: rec.turnIndex,
         turnNumber: turnByMessage.get(rec.messageId) ?? 0,
         queryTimestamp: rec.queryTimestamp.toISOString(),
+        hasJelson: aRowByMessage.has(rec.messageId) || scoresByMessage.has(rec.messageId),
         typeA: (a?.typeA as ScoreQueryRow['typeA']) ?? null,
         subtypeA: a?.subtypeA ?? null,
         // tagsB is derived client-side from scoresB at the live threshold.
@@ -148,6 +226,11 @@ export default async function ScorePage({ params }: PageProps) {
         bModel: bModelByMessage.get(rec.messageId) ?? null,
         rawA: a?.rawResponseA ?? null,
         rawB: (rawBByMessage.get(rec.messageId) ?? []).sort().join('\n') || null,
+        intentRatings: intentRatingsByMessage.get(rec.messageId) ?? {},
+        pinnedIntents: pinsByMessage.get(rec.messageId) ?? {},
+        dissection: dissection
+          ? { materialKinds: dissection.materialKinds, requests: dissection.requests }
+          : null,
       };
     })
     .sort(
@@ -156,7 +239,20 @@ export default async function ScorePage({ params }: PageProps) {
     );
 
   const total = records.length;
-  const classified = rows.length;
+  const classified = rows.filter((r) => r.hasJelson).length;
+
+  const intents: IntentSummary[] = intentState.intents.map((i) => ({
+    id: i.id,
+    title: i.title,
+    definition: i.definition,
+    rule: i.rule,
+    archived: i.archived,
+    pinCount: intentState.pins.filter((p) => p.intentId === i.id).length,
+  }));
+  const links = intentState.links.map((l) => ({
+    fromIntentId: l.fromIntentId,
+    toIntentId: l.toIntentId,
+  }));
 
   // Pending work PER CLASSIFIER, mirroring the classify route's staleness rules:
   // A is stale when its row is missing/below CLASSIFIER_VERSION; B is stale when
@@ -193,7 +289,7 @@ export default async function ScorePage({ params }: PageProps) {
                 SCORE · <span className="font-normal">{assignment.title}</span>
               </h1>
               <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                Intent viewer — Jelson taxonomy · two classifiers compared
+                Organize · Revise · Evaluate — intents own the log; Jelson tags assist browsing
               </p>
             </div>
             <InstructorHeaderActions email={instructor.email} />
@@ -214,6 +310,11 @@ export default async function ScorePage({ params }: PageProps) {
           openaiConfigured={isOpenAIConfigured()}
           initialConfig={config}
           canEditTaxonomy={isAdministrator(instructor)}
+          intents={intents}
+          intentLinks={links}
+          versionNo={intentState.versionNo}
+          pendingRatings={pendingRatings}
+          basePrompt={assignmentBasePrompt(assignment)}
         />
       </main>
     </div>

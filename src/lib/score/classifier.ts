@@ -95,14 +95,16 @@ let structuredSupported = true;
  * (NOT the older 'minimal'). callModel self-heals by dropping `reasoning` or the
  * schema if a model rejects either.
  */
-type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh';
 
-interface StructuredSchema {
+export interface StructuredSchema {
   name: string;
   schema: Record<string, unknown>;
 }
 
-async function callModel(
+// Exported for reuse by the v6 intent classifier (intent-classifier.ts) so all
+// SCORE LLM calls share one client, one self-heal path, and one retry policy.
+export async function callModel(
   systemPrompt: string,
   userPrompt: string,
   model: string,
@@ -187,7 +189,7 @@ function isStructuredOutputUnsupported(error: unknown): boolean {
 }
 
 /** Extract the first JSON object from a model reply, tolerating code fences/prose. */
-function extractJsonObject(text: string): Record<string, unknown> {
+export function extractJsonObject(text: string): Record<string, unknown> {
   const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
   try {
     return JSON.parse(cleaned) as Record<string, unknown>;

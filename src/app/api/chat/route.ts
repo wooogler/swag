@@ -1,7 +1,7 @@
 import OpenAI, { APIConnectionError, AuthenticationError, RateLimitError } from 'openai';
 import { db } from '@/db/db';
 import { assignments, chatMessages } from '@/db/schema';
-import { buildAssignmentAiGuidance } from '@/lib/assignment-ai';
+import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { eq } from 'drizzle-orm';
 
 interface ChatErrorDetails {
@@ -132,11 +132,9 @@ export async function POST(req: Request) {
       });
     }
 
-    const systemPrompt = buildAssignmentAiGuidance({
-      guidance: assignment.customSystemPrompt,
-      instructions: assignment.instructions,
-      includeInstructions: assignment.includeInstructionInPrompt ?? false,
-    });
+    // Shared with SCORE's rule previews (preview = runtime) — see
+    // assignmentBasePrompt in assignment-ai.ts before changing.
+    const systemPrompt = assignmentBasePrompt(assignment);
 
     // Save user message immediately
     const lastMessage = messages[messages.length - 1];

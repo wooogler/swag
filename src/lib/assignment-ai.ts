@@ -35,3 +35,22 @@ export function buildAssignmentAiGuidance({
 
   return `${resolvedGuidance}\n\nAssignment Instructions:\n${instructions.trim()}`;
 }
+
+/**
+ * The assignment's FULL base system prompt — guidance plus (when enabled) the
+ * assignment instructions — from an assignments row. This is the "Base
+ * Prompt" the SCORE loop treats as fixed: /api/chat, the SCORE rule previews,
+ * the SCORE page display, and the SCORE config snapshots must all resolve it
+ * through here, or previews drift from what students actually get.
+ */
+export function assignmentBasePrompt(assignment: {
+  customSystemPrompt?: string | null;
+  instructions?: string | null;
+  includeInstructionInPrompt?: boolean | null;
+}) {
+  return buildAssignmentAiGuidance({
+    guidance: assignment.customSystemPrompt,
+    instructions: assignment.instructions,
+    includeInstructions: assignment.includeInstructionInPrompt ?? false,
+  });
+}

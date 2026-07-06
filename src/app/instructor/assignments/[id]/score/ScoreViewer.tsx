@@ -10,11 +10,24 @@ import {
   type ScoreConfigSubtype,
   type ScoreTypeKey,
   SCORE_B_THRESHOLD,
+  flattenSubtypes,
 } from '@/lib/score/config';
 import { SCORE_MODELS, SCORE_MODEL_LABELS } from '@/lib/score/models';
-import { buildSystemA, buildSystemBSingle, buildQueryContent, buildQueryContentB } from '@/lib/score/prompts';
+import {
+  buildSystemA,
+  buildSystemBSingle,
+  buildQueryContent,
+  buildQueryContentB,
+  buildBSubtypeUserContent,
+} from '@/lib/score/prompts';
 import { Tooltip } from '@/components/ui/tooltip';
 import TaxonomyEditor from './TaxonomyEditor';
+import IntentBoard, {
+  type IntentLinkSummary,
+  type IntentSummary,
+  type JelsonChip,
+} from './IntentBoard';
+import type { MaterialKind, RatingLevel } from '@/lib/score/intents';
 import {
   ChevronDown,
   ChevronRight,
@@ -43,6 +56,9 @@ export interface ScoreQueryRow {
   turnIndex: number;
   turnNumber: number;
   queryTimestamp: string;
+  /** Whether this message carries Jelson tag data (an A row or any B score).
+   * The tags mode shows only these; the intents mode organizes the whole log. */
+  hasJelson: boolean;
   typeA: ScoreTypeKey | null;
   subtypeA: string | null;
   tagsB: string[];
@@ -52,7 +68,15 @@ export interface ScoreQueryRow {
   bModel: string | null;
   rawA: string | null;
   rawB: string | null;
+  /** v6 intent layer: per-intent 5-level rating (+staleness vs the current
+   * intent defHash) and the message dissection, when rated. */
+  intentRatings: Record<number, { rating: RatingLevel; rationale: string | null; stale: boolean }>;
+  /** Instructor pin verdicts on this question — override its ratings (§1.6). */
+  pinnedIntents: Record<number, 'in' | 'out'>;
+  dissection: { materialKinds: MaterialKind[]; requests: string[] } | null;
 }
+
+export type { IntentSummary, IntentLinkSummary } from './IntentBoard';
 
 interface ScoreViewerProps {
   assignmentId: string;
@@ -69,6 +93,12 @@ interface ScoreViewerProps {
   openaiConfigured: boolean;
   initialConfig: ScoreConfig;
   canEditTaxonomy: boolean;
+  // v6 intent layer (per assignment)
+  intents: IntentSummary[];
+  intentLinks: IntentLinkSummary[];
+  versionNo: number;
+  pendingRatings: number;
+  basePrompt: string;
 }
 
 type Classifier = 'A' | 'B';
@@ -275,10 +305,21 @@ export default function ScoreViewer({
   openaiConfigured,
   initialConfig,
   canEditTaxonomy,
+  intents,
+  intentLinks,
+  versionNo,
+  pendingRatings,
+  basePrompt,
 }: ScoreViewerProps) {
   const router = useRouter();
   const [config, setConfig] = useState<ScoreConfig>(initialConfig);
   const index = useMemo(() => buildIndex(config), [config]);
+
+  // v6: intents are the primary organization; the Jelson A/B viewer remains
+  // as the demoted "tags" browse layer (cold-start aid + research tooling).
+  const [mode, setMode] = useState<'intents' | 'tags'>('intents');
+  // The tags mode only ever sees messages with tag data (its original rows).
+  const tagRows = useMemo(() => rows.filter((r) => r.hasJelson), [rows]);
 
   const [classifier, setClassifier] = useState<Classifier>('A');
   const [selection, setSelection] = useState<Selection>({ kind: 'all' });
@@ -320,16 +361,16 @@ export default function ScoreViewer({
 
   const allParticipants = useMemo(
     () =>
-      Array.from(new Set(rows.map((r) => r.participantToken).filter(Boolean))).sort((a, b) =>
+      Array.from(new Set(tagRows.map((r) => r.participantToken).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b, undefined, { numeric: true })
       ),
-    [rows]
+    [tagRows]
   );
 
   // Global filter (subtypes + participants) applied before everything else.
   const scopedRows = useMemo(() => {
-    if (filterSubtypes.size === 0 && filterParticipants.size === 0) return rows;
-    return rows.filter((r) => {
+    if (filterSubtypes.size === 0 && filterParticipants.size === 0) return tagRows;
+    return tagRows.filter((r) => {
       if (filterParticipants.size > 0 && !filterParticipants.has(r.participantToken)) return false;
       if (filterSubtypes.size > 0) {
         if (classifier === 'A') {
@@ -340,7 +381,7 @@ export default function ScoreViewer({
       }
       return true;
     });
-  }, [rows, filterSubtypes, filterParticipants, classifier, threshold]);
+  }, [tagRows, filterSubtypes, filterParticipants, classifier, threshold]);
 
   // The filter chooses which subtypes (and thus types) appear in the left
   // browser; scopedRows limits queries to those subtypes accordingly.
@@ -554,8 +595,63 @@ export default function ScoreViewer({
   }
 
   // ---- Render -----------------------------------------------------------
+  const jelsonChipOf = (row: ScoreQueryRow) =>
+    row.subtypeA
+      ? ({
+          text: row.subtypeA,
+          className: index.chipClass(row.subtypeA),
+          title: index.labelOf(row.subtypeA),
+        } as JelsonChip)
+      : null;
+
   return (
     <div className="space-y-4">
+      {/* Mode toggle — the v6 intent view is primary; the Jelson A/B viewer
+          stays available as the demoted tagging/browse layer. */}
+      <div className="inline-flex rounded-md border border-[hsl(var(--border))] overflow-hidden text-xs font-medium">
+        <button
+          onClick={() => setMode('intents')}
+          className={`px-3 py-1.5 ${
+            mode === 'intents'
+              ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
+              : 'bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+          }`}
+        >
+          Intents · v{versionNo}
+        </button>
+        <button
+          onClick={() => setMode('tags')}
+          className={`px-3 py-1.5 border-l border-[hsl(var(--border))] ${
+            mode === 'tags'
+              ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
+              : 'bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+          }`}
+          title="Browse the log by the Jelson auto-tagging layer (classifiers A/B)"
+        >
+          Jelson tags
+        </button>
+      </div>
+
+      {/* Both modes stay MOUNTED (css-hidden) so switching views mid-run
+          doesn't silently abort an in-flight rate/classify batch loop or
+          drop selection state. */}
+      <div className={mode === 'intents' ? 'space-y-4' : 'hidden'}>
+        <IntentBoard
+          assignmentId={assignmentId}
+          rows={rows}
+          intents={intents}
+          links={intentLinks}
+          versionNo={versionNo}
+          pendingRatings={pendingRatings}
+          basePrompt={basePrompt}
+          defaultModel={defaultModel}
+          openaiConfigured={openaiConfigured}
+          jelsonChipOf={jelsonChipOf}
+          onBrowseTags={() => setMode('tags')}
+        />
+      </div>
+
+      <div className={mode === 'tags' ? 'space-y-4' : 'hidden'}>
       <ControlBar
         classifier={classifier}
         onSwitch={switchClassifier}
@@ -936,6 +1032,7 @@ export default function ScoreViewer({
       />
 
       <Tooltip id={TAG_TOOLTIP_ID} place="top" className="max-w-xs leading-snug" />
+      </div>
     </div>
   );
 }
@@ -1082,12 +1179,44 @@ function PromptPreviewModal({
     if (open) setWhich(initialClassifier);
   }, [open, initialClassifier]);
 
+  // Classifier B sends ONE call per subtype: the shared query block + that
+  // subtype's block appended. Let the reader pick which subtype's exact prompt
+  // to preview (defaulting to the highest-scoring one for this query).
+  const bSubtypes = useMemo(() => flattenSubtypes(config), [config]);
+  const defaultBCode = useMemo(() => {
+    let best = bSubtypes[0]?.subtype.code ?? '';
+    let bestScore = -1;
+    for (const { subtype } of bSubtypes) {
+      const s = row.scoresB[subtype.code] ?? 0;
+      if (s > bestScore) {
+        bestScore = s;
+        best = subtype.code;
+      }
+    }
+    return best;
+  }, [bSubtypes, row.scoresB]);
+  const [bCode, setBCode] = useState(defaultBCode);
+  useEffect(() => {
+    if (open) setBCode(defaultBCode);
+  }, [open, defaultBCode]);
+  const bSel = bSubtypes.find((s) => s.subtype.code === bCode) ?? bSubtypes[0];
+
   const system = which === 'A' ? buildSystemA(config) : buildSystemBSingle();
+  const queryContentB = buildQueryContentB(row.queryText, row.prevQueryText, row.prevResponseText);
   const user =
     which === 'A'
       ? buildQueryContent(row.queryText, row.prevQueryText, row.prevResponseText)
-      : buildQueryContentB(row.queryText, row.prevQueryText, row.prevResponseText);
-  const raw = which === 'A' ? row.rawA : row.rawB;
+      : bSel
+        ? buildBSubtypeUserContent(queryContentB, bSel.type, bSel.subtype)
+        : queryContentB;
+  // For B, show only the selected subtype's raw line (rawB stores all as
+  // "CODE: {...}" lines); fall back to the full dump if not found.
+  const raw =
+    which === 'A'
+      ? row.rawA
+      : row.rawB
+          ?.split('\n')
+          .find((l) => l.startsWith(`${bCode}:`)) ?? row.rawB;
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-50">
@@ -1134,19 +1263,35 @@ function PromptPreviewModal({
               }
               text={system}
             />
+            {which === 'B' && (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  Preview subtype call
+                </span>
+                <select
+                  value={bCode}
+                  onChange={(e) => setBCode(e.target.value)}
+                  className="border border-[hsl(var(--border))] rounded px-2 py-1 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                >
+                  {bSubtypes.map(({ subtype }) => (
+                    <option key={subtype.code} value={subtype.code}>
+                      {subtype.code} · {subtype.label} — score {row.scoresB[subtype.code] ?? 0}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[hsl(var(--muted-foreground))]">
+                  B runs one such call per subtype, independently.
+                </span>
+              </div>
+            )}
             <PreBlock
               label={
                 which === 'A'
                   ? 'User message (query + context)'
-                  : 'User message (query + context; each call appends one subtype block below this)'
+                  : `User message — query + context + the ${bCode} subtype block appended at the end`
               }
               text={user}
             />
-            {which === 'B' && (
-              <p className="text-xs text-[hsl(var(--muted-foreground))] italic -mt-2">
-                Raw output below shows each subtype&apos;s independent 0-10 score.
-              </p>
-            )}
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">Raw model output</p>
               {raw ? (

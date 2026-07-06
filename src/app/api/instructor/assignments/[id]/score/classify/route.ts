@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { assignments, scoreClassifications, scoreSubtypeScores } from '@/db/schema';
-import { getInstructor, isAdministrator } from '@/lib/auth';
+import { scoreClassifications, scoreSubtypeScores } from '@/db/schema';
+import { authorizeAssignment } from '@/lib/score/authz';
+import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { ensureScoreTable, getQueryRecords, type QueryRecord } from '@/lib/score/queries';
 import { classifyA, classifyBSubtype, isOpenAIConfigured, CLASSIFIER_VERSION } from '@/lib/score/classifier';
 import { getDefaultScoreModel, resolveScoreModel } from '@/lib/score/models';
@@ -34,10 +35,7 @@ const MAX_MESSAGE_LIMIT = 100;
 //   Tier 1 (500 RPM / 500K TPM):  ~8-10 (above that the SDK just burns retries)
 //   Tier 2 (5,000 RPM / 2M TPM):  ~48-64
 // Default 32 ≈ what Tier 2 TPM sustains with the compact B prompts.
-const CONCURRENCY = (() => {
-  const parsed = Number.parseInt(process.env.SCORE_LLM_CONCURRENCY ?? '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(128, parsed) : 32;
-})();
+const CONCURRENCY = SCORE_CONCURRENCY;
 // Size each POST to ~12 "waves" of the pool (call latency is ~1.5-2.5s →
 // ~25-30s per POST), safely inside maxDuration at ANY configured concurrency
 // while amortizing per-POST overhead. Never a fixed floor: at low concurrency a
@@ -52,20 +50,6 @@ const bodySchema = z.object({
   scope: z.enum(['all', 'a', 'b']).optional(),
   model: z.string().optional(), // validated against the allowlist via resolveScoreModel
 });
-
-/** Verify the caller may access this assignment; returns it or null. */
-async function authorizeAssignment(id: string) {
-  const instructor = await getInstructor();
-  if (!instructor) return { error: 'unauthorized' as const };
-
-  const assignment = await db.query.assignments.findFirst({
-    where: isAdministrator(instructor)
-      ? eq(assignments.id, id)
-      : and(eq(assignments.id, id), eq(assignments.instructorId, instructor.id)),
-  });
-  if (!assignment) return { error: 'not_found' as const };
-  return { assignment };
-}
 
 /** Which classifier(s) a request operates on. 'a'/'b' scope every count and every
  * LLM call to that one classifier; 'all' does both. The viewer sends the
@@ -148,31 +132,6 @@ async function loadStatus(assignmentId: string, config: ScoreConfig, scope: Scop
   const total = records.length;
   const remaining = jobs.length;
   return { jobs, total, remaining, classified: total - remaining };
-}
-
-/**
- * Global slot limiter: every LLM call in the batch draws from ONE pool of
- * CONCURRENCY slots, so utilization stays maximal whether a message needs 22
- * calls (full re-run) or 1 (single edited subtype). On release a queued waiter
- * inherits the slot directly (no decrement/increment race).
- */
-function createLimiter(max: number) {
-  let active = 0;
-  const waiters: Array<() => void> = [];
-  return async function run<T>(fn: () => Promise<T>): Promise<T> {
-    if (active < max) {
-      active++;
-    } else {
-      await new Promise<void>((resolve) => waiters.push(resolve)); // slot inherited
-    }
-    try {
-      return await fn();
-    } finally {
-      const next = waiters.shift();
-      if (next) next();
-      else active--;
-    }
-  };
 }
 
 // GET: current classification status for the assignment (no LLM calls).

@@ -80,8 +80,9 @@ export function allCodes(config: ScoreConfig): string[] {
 }
 
 /** Small, stable (non-crypto) string hash. Pure JS so config.ts stays
- * client-safe; used only for cache-invalidation keys, not security. */
-function stableHash(input: string): string {
+ * client-safe; used only for cache-invalidation keys, not security.
+ * Exported for reuse by the intent layer (intentDefHash). */
+export function stableHash(input: string): string {
   // Two independent FNV-1a-style accumulators combined → ~13 base36 chars, low
   // enough collision risk for the (subtype-definition → re-score) decision.
   let h1 = 0x811c9dc5;
