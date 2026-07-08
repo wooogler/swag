@@ -9,10 +9,19 @@
 import OpenAI from 'openai';
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { scoreQueryEmbeddings } from '@/db/schema';
+import { scoreDissections, scoreQueryEmbeddings } from '@/db/schema';
+import { MATERIAL_LABELS, type MaterialKind } from './intents';
 import type { QueryRecord } from './queries';
 
-export const EMBEDDING_MODEL = 'text-embedding-3-small';
+// Env-overridable (SCORE_EMBEDDING_MODEL). Because the model name is part of
+// EMBED_TAG below, changing it AUTO-INVALIDATES the cache — stored vectors from
+// the old model are ignored and recomputed lazily on the next edge-case sweep.
+export const EMBEDDING_MODEL = process.env.SCORE_EMBEDDING_MODEL || 'text-embedding-3-small';
+// Cache marker stored in row.model — bump the suffix when the embed-INPUT scheme
+// changes so stale rows recompute. matph-v2: the request text with pasted
+// material replaced by its kind placeholder (the ask + the presence/kind of
+// material, not the noisy pasted content).
+const EMBED_TAG = `${EMBEDDING_MODEL}#matph-v2`;
 
 /** Chars of query text embedded — long pasted essays add cost, not meaning,
  * beyond this (the request lives at the edges; keep head+tail like prompts.ts). */
@@ -24,6 +33,46 @@ function embedText(queryText: string): string {
   const head = Math.floor(EMBED_TEXT_LIMIT * 0.7);
   const tail = EMBED_TEXT_LIMIT - head;
   return `${t.slice(0, head)}\n…\n${t.slice(t.length - tail)}`;
+}
+
+/**
+ * The text we embed: the message with pasted MATERIAL replaced by a short
+ * placeholder (its kind) and the REQUEST(s) kept verbatim — so similarity
+ * reflects the ASK plus the structural presence/kind of material, not the
+ * material's noisy content. Falls back to the full message when there is no
+ * usable dissection.
+ */
+export function buildEmbedText(
+  queryText: string,
+  dissection: { materialKinds: MaterialKind[]; requests: string[] } | null | undefined
+): string {
+  const requests = dissection?.requests ?? [];
+  if (requests.length === 0) return queryText;
+  const spans: { start: number; end: number }[] = [];
+  let from = 0;
+  for (const req of requests) {
+    const q = req.trim();
+    if (!q) continue;
+    const idx = queryText.indexOf(q, from);
+    if (idx === -1) continue;
+    spans.push({ start: idx, end: idx + q.length });
+    from = idx + q.length;
+  }
+  if (spans.length === 0) return queryText;
+  const label =
+    dissection && dissection.materialKinds.length
+      ? dissection.materialKinds.map((k) => MATERIAL_LABELS[k]).join(' ')
+      : 'material';
+  const ph = `[${label}]`;
+  const out: string[] = [];
+  let cursor = 0;
+  for (const s of spans) {
+    if (s.start > cursor && queryText.slice(cursor, s.start).trim()) out.push(ph);
+    out.push(queryText.slice(s.start, s.end));
+    cursor = s.end;
+  }
+  if (cursor < queryText.length && queryText.slice(cursor).trim()) out.push(ph);
+  return out.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 let cachedClient: OpenAI | null = null;
@@ -61,7 +110,7 @@ export async function getQueryEmbeddings(
     .from(scoreQueryEmbeddings)
     .where(inArray(scoreQueryEmbeddings.messageId, [...wanted.keys()]));
   for (const row of cached) {
-    if (row.model === EMBEDDING_MODEL && Array.isArray(row.embedding)) {
+    if (row.model === EMBED_TAG && Array.isArray(row.embedding)) {
       result.set(row.messageId, row.embedding as number[]);
     }
   }
@@ -69,19 +118,38 @@ export async function getQueryEmbeddings(
   const missing = [...wanted.values()].filter((r) => !result.has(r.messageId));
   if (missing.length === 0) return result;
 
+  // Dissections for the missing messages → build the placeholder embed text.
+  const dissRows = await db
+    .select({
+      messageId: scoreDissections.messageId,
+      materialKinds: scoreDissections.materialKinds,
+      requests: scoreDissections.requests,
+    })
+    .from(scoreDissections)
+    .where(inArray(scoreDissections.messageId, missing.map((r) => r.messageId)));
+  const dissByMsg = new Map(
+    dissRows.map((d) => [
+      d.messageId,
+      {
+        materialKinds: (Array.isArray(d.materialKinds) ? d.materialKinds : []) as MaterialKind[],
+        requests: (Array.isArray(d.requests) ? d.requests : []) as string[],
+      },
+    ])
+  );
+
   const now = new Date();
   const writes: Promise<unknown>[] = [];
   for (let start = 0; start < missing.length; start += EMBED_BATCH_SIZE) {
     const chunk = missing.slice(start, start + EMBED_BATCH_SIZE);
     const response = await getClient().embeddings.create({
       model: EMBEDDING_MODEL,
-      input: chunk.map((r) => embedText(r.queryText)),
+      input: chunk.map((r) => embedText(buildEmbedText(r.queryText, dissByMsg.get(r.messageId)))),
     });
     for (const item of response.data) {
       const rec = chunk[item.index]; // index is chunk-relative
       if (!rec) continue;
       result.set(rec.messageId, item.embedding);
-      const values = { embedding: item.embedding, model: EMBEDDING_MODEL, createdAt: now };
+      const values = { embedding: item.embedding, model: EMBED_TAG, createdAt: now };
       writes.push(
         db
           .insert(scoreQueryEmbeddings)

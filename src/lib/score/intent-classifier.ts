@@ -11,7 +11,7 @@
  * reject reasoning/structured outputs) and prompts.ts's buildQueryContent
  * (prior-context v2 strategy — the following bot reply is never sent).
  */
-import { callModel, extractJsonObject } from './classifier';
+import { callModel, extractJsonObject, type CallOptions, type ReasoningEffort } from './classifier';
 import { buildQueryContent } from './prompts';
 import {
   buildIntentSchema,
@@ -27,6 +27,18 @@ import {
   type MaterialKind,
   type RatingLevel,
 } from './intents';
+
+// Reasoning effort for rating calls. Default 'low' (a little deliberation for
+// boundary judgments); override with SCORE_RATING_EFFORT=none for the fastest/
+// cheapest tier. Note: gpt-5.4 accepts none|low|medium|high|xhigh — there is
+// no 'minimal' (an invalid value would make callModel's self-heal drop the
+// reasoning param entirely, landing on the model DEFAULT effort, i.e. slower).
+const EFFORT_VALUES: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
+const RATING_EFFORT: ReasoningEffort = EFFORT_VALUES.includes(
+  process.env.SCORE_RATING_EFFORT as ReasoningEffort
+)
+  ? (process.env.SCORE_RATING_EFFORT as ReasoningEffort)
+  : 'low';
 
 export interface IntentRatingOutput {
   rationale: string;
@@ -48,7 +60,16 @@ export async function rateMessageIntents(args: {
   prevResponseText: string | null;
   intents: PromptIntent[];
   includeDissection: boolean;
+  /** The deterministic Material/Request split for THIS message (dissect.ts),
+   * rendered into the prompt so the judge rates only the typed request and never
+   * treats pasted material (esp. the assignment prompt) as an implicit request.
+   * Optional: the live chat runtime may not have it and passes null — the
+   * reworded no-request rule in the system prompt still applies either way. */
+  dissection?: DissectionResult | null;
   model: string;
+  /** Override the default timeout/retry budget — the LIVE chat runtime passes
+   * a much tighter one (a student is waiting; it fails open to base). */
+  callOptions?: CallOptions;
 }): Promise<RateMessageResult> {
   const { queryText, prevQueryText, prevResponseText, includeDissection, model } = args;
   const intents = args.intents.slice(0, MAX_INTENTS_PER_CALL);
@@ -59,15 +80,21 @@ export async function rateMessageIntents(args: {
   const intentIds = intents.map((i) => i.id);
   const raw = await callModel(
     buildIntentSystemPrompt(intents, includeDissection),
-    buildQueryContent(queryText, prevQueryText, prevResponseText),
+    buildQueryContent(queryText, prevQueryText, prevResponseText, args.dissection),
     model,
     // Boundary judgments against instructor-authored definitions benefit from
-    // a little deliberation (same tier as Classifier A's full-taxonomy pick).
-    'low',
+    // a little deliberation ('low'). SCORE_RATING_EFFORT=none trades some of
+    // that judgment for a big latency/cost cut — gpt-5.4 has no 'minimal';
+    // 'none' is the bottom tier. (Server-only module, so env is fine here.)
+    RATING_EFFORT,
     {
       name: 'intent_ratings',
       schema: buildIntentSchema(intentIds, includeDissection) as Record<string, unknown>,
-    }
+    },
+    // Fail fast: a hung call must not stall its whole batch for minutes (one
+    // 5-min straggler was observed to freeze an Apply). A message that fails
+    // here simply stays pending and the next Apply re-rates just that one.
+    args.callOptions ?? { timeoutMs: 60_000, maxRetries: 2 }
   );
   const parsed = extractJsonObject(raw);
 

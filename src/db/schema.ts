@@ -192,15 +192,20 @@ export const scoreIntents = pgTable('score_intents', {
   // Soft delete: ratings/pins/versions keep referencing archived intents so
   // history and granular revert stay reconstructible.
   archived: boolean('archived').notNull().default(false),
+  // Pre-built starter-set template: rated in advance (via "Run all") but NOT
+  // owning the log — excluded from the active set until activated (→ false).
+  isTemplate: boolean('is_template').notNull().default(false),
   createdAt: timestamp('created_at').notNull(),
   updatedAt: timestamp('updated_at').notNull(),
 }, (table) => ({
   assignmentIdx: index('score_intents_assignment_idx').on(table.assignmentId),
 }));
 
-// Per-(message, intent) 5-level rating + short rationale. Mirrors
-// score_subtype_scores: def_hash makes invalidation per-intent granular —
-// editing one intent (or its pins) re-rates only that intent's rows.
+// Per-(message, intent, def_hash) 5-level rating + short rationale. Keyed by
+// def_hash so every (definition + pins) combination ever rated KEEPS its rows —
+// version checkout/rollback re-reads them instantly; only never-seen
+// combinations cost LLM calls. Readers pick the current-hash row when present,
+// else the latest row (shown as stale).
 export const scoreIntentRatings = pgTable('score_intent_ratings', {
   id: serial('id').primaryKey(),
   assignmentId: text('assignment_id').notNull().references(() => assignments.id),
@@ -216,9 +221,10 @@ export const scoreIntentRatings = pgTable('score_intent_ratings', {
 }, (table) => ({
   assignmentIdx: index('score_intent_ratings_assignment_idx').on(table.assignmentId),
   intentIdx: index('score_intent_ratings_intent_idx').on(table.intentId),
-  messageIntentUnique: uniqueIndex('score_intent_ratings_message_intent_unique').on(
+  messageIntentHashUnique: uniqueIndex('score_intent_ratings_message_intent_hash_unique').on(
     table.messageId,
-    table.intentId
+    table.intentId,
+    table.defHash
   ),
 }));
 
@@ -336,6 +342,29 @@ export const scoreDissections = pgTable('score_dissections', {
   messageUnique: uniqueIndex('score_dissections_message_unique').on(table.messageId),
 }));
 
+// Chatbot DEPLOY versions: each Deploy freezes the assignment's intent→rule
+// set (active intents' definitions, rules, prompt pins, exception links) as a
+// numbered snapshot. The STUDENT chat runtime (/api/chat) always serves the
+// LATEST deploy — instructors edit intents freely on the SCORE board without
+// touching students until they press Deploy. Base prompt stays live (§1.9:
+// managed in assignment settings, outside the SCORE loop); it is recorded in
+// the snapshot for reference only.
+export const scoreChatDeploys = pgTable('score_chat_deploys', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  versionNo: integer('version_no').notNull(),
+  snapshot: jsonb('snapshot').notNull(), // ChatDeploySnapshot (deploy-store.ts)
+  note: text('note'),
+  createdBy: text('created_by'), // instructors.id
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_chat_deploys_assignment_idx').on(table.assignmentId),
+  assignmentVersionUnique: uniqueIndex('score_chat_deploys_assignment_version_unique').on(
+    table.assignmentId,
+    table.versionNo
+  ),
+}));
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
@@ -390,3 +419,6 @@ export type NewScoreRulePreview = typeof scoreRulePreviews.$inferInsert;
 
 export type ScoreQueryEmbedding = typeof scoreQueryEmbeddings.$inferSelect;
 export type NewScoreQueryEmbedding = typeof scoreQueryEmbeddings.$inferInsert;
+
+export type ScoreChatDeploy = typeof scoreChatDeploys.$inferSelect;
+export type NewScoreChatDeploy = typeof scoreChatDeploys.$inferInsert;

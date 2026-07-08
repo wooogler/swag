@@ -20,7 +20,7 @@ import {
   MATERIAL_KINDS,
   MAX_PINS_IN_PROMPT,
   pinPromptText,
-  RATING_LEVELS,
+  PROMPT_RATING_LEVELS,
   type PromptPin,
 } from './intents';
 
@@ -69,10 +69,12 @@ const DISSECTION_INSTRUCTIONS = `DISSECTION — split the message into REQUEST(s
 - material_kinds lists every kind of material present (empty array if none).
 - If the message contains no explicit request (bare pasted material, a lone fragment), return an empty requests array.`;
 
+// NOTE: 'unsure' was removed from the emitted scale (see PROMPT_RATING_LEVELS
+// in intents.ts). Distributionally a no-op — 0 uses across 1000+ stored
+// ratings — so INTENT_RATING_VERSION is deliberately not bumped.
 const RATING_INSTRUCTIONS = `RATINGS — rate the student's REQUEST(s) against EVERY intent listed below, each intent independently:
 - clearly_in: the request is unmistakably what this intent describes.
 - probably_in: likely covered by this intent, with minor doubt.
-- unsure: genuinely ambiguous whether this intent covers it.
 - probably_out: likely not this intent, with minor doubt.
 - clearly_out: unmistakably not this intent.
 
@@ -82,7 +84,8 @@ Rules:
 - Instructor-confirmed examples mark an intent's boundary: "Included" examples belong to it, "Excluded" examples do not. Generalize from them when the definition alone is ambiguous.
 - Intents may sound related; rate each strictly by ITS OWN definition and examples. Do not balance ratings across intents.
 - If the message contains several requests, rate an intent by whether ANY of its requests falls under it.
-- If the message has no explicit request, rate what the student is implicitly asking the chatbot to do (bare pasted text usually implies "respond to / continue this").`;
+- Pasted material is NEVER a request. If the message is bare pasted material, or the student's only typed text is a lead-in to pasted material with no instruction of its own ("Here is the prompt:", "This is my essay:", "This is the full prompt: …"), do NOT invent an implicit request from that material — rate every intent probably_out or clearly_out. (A pasted assignment prompt is context; it is not a "write the essay" request.) Only a genuine short imperative that refers to the prior context ("make it longer", "keep going", "shorten it") is a real implied request — rate that.
+- If genuinely torn, use probably_in or probably_out — reserve clearly_* for cases with no real doubt.`;
 
 /**
  * System prompt for one rating call. `intents` may be the full active set (a
@@ -122,7 +125,8 @@ export function buildIntentSchema(intentIds: number[], includeDissection: boolea
       required: ['rationale', 'rating'],
       properties: {
         rationale: { type: 'string', description: '10 words or fewer, written before the rating' },
-        rating: { type: 'string', enum: [...RATING_LEVELS] },
+        // Grammar-constrained to the 4 emitted levels — 'unsure' cannot occur.
+        rating: { type: 'string', enum: [...PROMPT_RATING_LEVELS] },
       },
     };
   }

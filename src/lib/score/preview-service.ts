@@ -20,7 +20,7 @@ import { db } from '@/db/db';
 import { scoreRulePreviews, type ScoreIntent } from '@/db/schema';
 import { buildInjectedSystemPrompt, rulePreviewHash } from './injection';
 import { createLimiter, SCORE_CONCURRENCY } from './limiter';
-import type { QueryRecord } from './queries';
+import { getConversationHistories, type ChatTurn, type QueryRecord } from './queries';
 
 let cachedClient: OpenAI | null = null;
 function getClient(): OpenAI {
@@ -38,19 +38,28 @@ function getClient(): OpenAI {
 }
 
 /** One non-streaming chatbot turn under the injected prompt — the same input
- * shape /api/chat sends (system + history + user), with history approximated
- * by the stored prior pair. No reasoning/temperature overrides: /api/chat
+ * shape /api/chat sends (system + full prior thread + user). `history` is the
+ * reconstructed conversation before the anchor (getConversationHistories); when
+ * absent we fall back to the stored prior pair, which for a single-turn
+ * exchange IS the full context. No reasoning/temperature overrides: /api/chat
  * sets none either (§1.9). */
 async function generatePreview(
   systemPrompt: string,
   rec: QueryRecord,
-  model: string
+  model: string,
+  history: ChatTurn[] | undefined
 ): Promise<string> {
-  const input: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-    { role: 'system', content: systemPrompt },
-  ];
-  if (rec.prevQueryText) input.push({ role: 'user', content: rec.prevQueryText });
-  if (rec.prevResponseText) input.push({ role: 'assistant', content: rec.prevResponseText });
+  // An empty base prompt with no rule → no system message at all (NIRVANA
+  // parity), exactly as /api/chat does, so preview = runtime holds even at the
+  // "no guidance" baseline.
+  const input: { role: 'system' | 'user' | 'assistant'; content: string }[] = [];
+  if (systemPrompt.trim()) input.push({ role: 'system', content: systemPrompt });
+  if (history && history.length > 0) {
+    for (const turn of history) input.push({ role: turn.role, content: turn.content });
+  } else {
+    if (rec.prevQueryText) input.push({ role: 'user', content: rec.prevQueryText });
+    if (rec.prevResponseText) input.push({ role: 'assistant', content: rec.prevResponseText });
+  }
   input.push({ role: 'user', content: rec.queryText });
 
   const response = await getClient().responses.create({ model, input });
@@ -97,54 +106,58 @@ export async function getCachedRulePreviews(args: {
 
   const limit = createLimiter(SCORE_CONCURRENCY);
   const now = new Date();
+  const toGenerate = records.filter((rec) => !responses.has(rec.messageId));
+  // Full prior thread per anchor → runtime parity (the cache key already covers
+  // model/base/rule; history is deterministic per message, so it needs no key).
+  const histories = await getConversationHistories(assignmentId, toGenerate.map((r) => r.messageId));
   await Promise.all(
-    records
-      .filter((rec) => !responses.has(rec.messageId))
-      .map((rec) =>
-        limit(async () => {
-          try {
-            const response = await generatePreview(system, rec, model);
-            if (!response) throw new Error('empty preview response');
-            const values = { promptHash: hash, response, model, createdAt: now };
-            await db
-              .insert(scoreRulePreviews)
-              .values({ assignmentId, messageId: rec.messageId, intentId: intent.id, ...values })
-              .onConflictDoUpdate({
-                target: [scoreRulePreviews.messageId, scoreRulePreviews.intentId],
-                set: values,
-              });
-            responses.set(rec.messageId, response);
-          } catch (error) {
-            failed += 1;
-            console.error(
-              `SCORE rule preview failed for message ${rec.messageId} intent ${intent.id}:`,
-              error
-            );
-          }
-        })
-      )
+    toGenerate.map((rec) =>
+      limit(async () => {
+        try {
+          const response = await generatePreview(system, rec, model, histories.get(rec.messageId));
+          if (!response) throw new Error('empty preview response');
+          const values = { promptHash: hash, response, model, createdAt: now };
+          await db
+            .insert(scoreRulePreviews)
+            .values({ assignmentId, messageId: rec.messageId, intentId: intent.id, ...values })
+            .onConflictDoUpdate({
+              target: [scoreRulePreviews.messageId, scoreRulePreviews.intentId],
+              set: values,
+            });
+          responses.set(rec.messageId, response);
+        } catch (error) {
+          failed += 1;
+          console.error(
+            `SCORE rule preview failed for message ${rec.messageId} intent ${intent.id}:`,
+            error
+          );
+        }
+      })
+    )
   );
   return { responses, failed };
 }
 
 /** Previews under a DRAFT rule (not yet applied) — generated fresh, never cached. */
 export async function getDraftPreviews(args: {
+  assignmentId: string;
   records: QueryRecord[];
   rule: string | null;
   basePrompt: string;
   model: string;
 }): Promise<PreviewBatchResult> {
-  const { records, rule, basePrompt, model } = args;
+  const { assignmentId, records, rule, basePrompt, model } = args;
   const system = buildInjectedSystemPrompt(basePrompt, rule);
   const responses = new Map<number, string>();
   let failed = 0;
 
   const limit = createLimiter(SCORE_CONCURRENCY);
+  const histories = await getConversationHistories(assignmentId, records.map((r) => r.messageId));
   await Promise.all(
     records.map((rec) =>
       limit(async () => {
         try {
-          const response = await generatePreview(system, rec, model);
+          const response = await generatePreview(system, rec, model, histories.get(rec.messageId));
           if (!response) throw new Error('empty preview response');
           responses.set(rec.messageId, response);
         } catch (error) {

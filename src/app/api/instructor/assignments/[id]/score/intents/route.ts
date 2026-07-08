@@ -10,6 +10,8 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { isOpenAIConfigured } from '@/lib/score/classifier';
+import { generateIntentTitle } from '@/lib/score/intent-agent';
 import {
   ensureIntentTables,
   loadIntentState,
@@ -22,6 +24,22 @@ const createSchema = z.object({
   title: z.string().trim().max(120).optional(),
   definition: z.string().trim().min(1).max(4000),
   rule: z.string().trim().max(8000).optional(),
+  // Auto-generate the title from the definition (git-commit style).
+  autoTitle: z.boolean().optional(),
+  // false → create WITHOUT a version entry (the modal's Apply; history only
+  // records explicit Saves). Default true keeps other callers versioned.
+  recordVersion: z.boolean().optional(),
+  // true → create as an unregistered DRAFT (discovery): rated and explorable in
+  // the modal, but not owning the log until a Save flips it live.
+  isTemplate: z.boolean().optional(),
+  // Save-time counts from the modal, recorded on the version for history.
+  stats: z
+    .object({
+      included: z.number().int().min(0),
+      excluded: z.number().int().min(0),
+      inCount: z.number().int().min(0),
+    })
+    .optional(),
 });
 
 function serializeState(state: Awaited<ReturnType<typeof loadIntentState>>) {
@@ -72,14 +90,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   await ensureIntentTables();
   const now = new Date();
-  // Card label defaults to the definition's head — the agent-suggested-title
-  // flow arrives with the Revise agent layer (P3).
-  const title =
-    body.title && body.title.length > 0
-      ? body.title
-      : body.definition.length > 60
-        ? `${body.definition.slice(0, 57)}…`
-        : body.definition;
+  // Title: explicit > LLM auto-title (git-commit style, best-effort) >
+  // definition-head fallback.
+  let title = body.title && body.title.length > 0 ? body.title : null;
+  if (!title && body.autoTitle !== false && isOpenAIConfigured()) {
+    title = await generateIntentTitle(body.definition);
+  }
+  if (!title) {
+    title = body.definition.length > 60 ? `${body.definition.slice(0, 57)}…` : body.definition;
+  }
 
   const created = await db.transaction(async (tx) => {
     const rows = await tx
@@ -90,16 +109,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         definition: body.definition,
         rule: body.rule && body.rule.length > 0 ? body.rule : null,
         archived: false,
+        isTemplate: body.isTemplate ?? false,
         createdAt: now,
         updatedAt: now,
       })
       .returning();
     const intent = rows[0];
-    const versionNo = await recordConfigVersion(tx, id, auth.instructor.id, {
-      action: 'create_intent',
-      intentIds: [intent.id],
-      detail: title,
-    });
+    const versionNo =
+      body.recordVersion === false
+        ? null
+        : await recordConfigVersion(tx, id, auth.instructor.id, {
+            action: 'create_intent',
+            intentIds: [intent.id],
+            detail: title,
+            stats: body.stats,
+          });
     return { intent, versionNo };
   });
 

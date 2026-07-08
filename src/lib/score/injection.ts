@@ -13,18 +13,23 @@
  */
 import { stableHash } from './config';
 
-/** Bump when the injection wording below changes — cached rule previews
- * (score_rule_previews) below this version are stale. */
-export const PREVIEW_VERSION = 1;
+/** Bump when anything that changes generated preview output changes — the
+ * injection wording below, or the preview input shape (preview-service). Cached
+ * rule previews (score_rule_previews) below this version are stale.
+ * v2: previews now feed the FULL prior conversation, not just the prior pair. */
+export const PREVIEW_VERSION = 2;
 
 /**
  * Base Prompt + Rule. With no rule (fallback / "No rule yet") the base prompt
  * is returned untouched — fallback is the normal path, not an exception
- * (§ 설계 원칙 14).
+ * (§ 설계 원칙 14). With an EMPTY base prompt (e.g. NIRVANA, which ran with no
+ * system prompt) the rule IS the entire system prompt — the "on top of
+ * everything above" framing would be nonsense with nothing above it.
  */
 export function buildInjectedSystemPrompt(basePrompt: string, rule: string | null): string {
   const r = rule?.trim();
   if (!r) return basePrompt;
+  if (!basePrompt.trim()) return r;
   return `${basePrompt}\n\nAdditional guideline for this reply (the instructor set this for the kind of request the student just made — follow it on top of everything above):\n${r}`;
 }
 

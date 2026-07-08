@@ -8,9 +8,15 @@
  * viewer). Each query is keyed by the user message id (chat_messages.id), which
  * is globally unique and serves as the cache key.
  */
-import { sql, eq, asc } from 'drizzle-orm';
+import { sql, eq, asc, and, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { chatMessages, chatConversations, studentSessions } from '@/db/schema';
+
+/** One prior conversation turn, in the shape the chat model consumes. */
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
 export interface QueryRecord {
   messageId: number;
@@ -245,4 +251,70 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
   }
 
   return records;
+}
+
+/**
+ * Full prior conversation context for specific anchor messages: for each
+ * anchor query, the ordered turns that came BEFORE it in the same conversation
+ * (the anchor itself excluded — callers append it as the final user turn).
+ *
+ * This is exactly what the runtime /api/chat sends the model as context (the
+ * whole thread, not just the immediately-prior pair), so preview generation
+ * that feeds this matches runtime instead of the truncated single-pair
+ * approximation. Reconstructed from the stored chat_messages (what got
+ * persisted ≈ what the client would have re-sent on the next turn).
+ *
+ * Keyed by anchor messageId; an anchor with no prior turns maps to []. Empty /
+ * whitespace-only and non-user/assistant messages are dropped.
+ */
+export async function getConversationHistories(
+  assignmentId: string,
+  anchorMessageIds: number[]
+): Promise<Map<number, ChatTurn[]>> {
+  const result = new Map<number, ChatTurn[]>();
+  const ids = [...new Set(anchorMessageIds)];
+  if (ids.length === 0) return result;
+
+  // Resolve each anchor to its conversation, scoped to this assignment so a
+  // stray id from another assignment can't pull in a foreign thread.
+  const anchors = await db
+    .select({ messageId: chatMessages.id, conversationId: chatMessages.conversationId })
+    .from(chatMessages)
+    .innerJoin(chatConversations, eq(chatMessages.conversationId, chatConversations.id))
+    .innerJoin(studentSessions, eq(chatConversations.sessionId, studentSessions.id))
+    .where(and(eq(studentSessions.assignmentId, assignmentId), inArray(chatMessages.id, ids)));
+  if (anchors.length === 0) return result;
+
+  const convoIds = [...new Set(anchors.map((a) => a.conversationId))];
+  const msgs = await db
+    .select({
+      id: chatMessages.id,
+      conversationId: chatMessages.conversationId,
+      role: chatMessages.role,
+      content: chatMessages.content,
+    })
+    .from(chatMessages)
+    .where(inArray(chatMessages.conversationId, convoIds))
+    .orderBy(asc(chatMessages.conversationId), asc(chatMessages.sequenceNumber), asc(chatMessages.id));
+
+  const byConvo = new Map<string, typeof msgs>();
+  for (const m of msgs) {
+    const arr = byConvo.get(m.conversationId);
+    if (arr) arr.push(m);
+    else byConvo.set(m.conversationId, [m]);
+  }
+
+  for (const a of anchors) {
+    const convo = byConvo.get(a.conversationId) ?? [];
+    const history: ChatTurn[] = [];
+    for (const m of convo) {
+      if (m.id === a.messageId) break; // reached the anchor — the rest is "future"
+      const role = m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : null;
+      if (!role) continue;
+      if (!m.content || !m.content.trim()) continue;
+      history.push({ role, content: m.content });
+    }
+    result.set(a.messageId, history);
+  }
+  return result;
 }

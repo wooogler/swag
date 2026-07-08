@@ -8,6 +8,13 @@
 export const SCORE_MODELS = ['gpt-5.4-mini', 'gpt-5.4-nano'] as const;
 export type ScoreModel = (typeof SCORE_MODELS)[number];
 
+/**
+ * Built-in default for intent rating (the instructor-facing picker was removed).
+ * The live model is env-driven — see getDefaultScoreModel. This const is the
+ * fallback + the client-side default the board sends.
+ */
+export const SCORE_RATING_MODEL: ScoreModel = 'gpt-5.4-mini';
+
 /** Friendly labels for the model picker. */
 export const SCORE_MODEL_LABELS: Record<string, string> = {
   'gpt-5.4-mini': '5.4-mini · accurate',
@@ -19,15 +26,18 @@ export function isValidScoreModel(model: string | null | undefined): model is Sc
 }
 
 /**
- * Default selection: env OPENAI_MODEL when it is one of the selectable SCORE
- * models, otherwise the first listed model. (Server-side only — reads env.)
+ * The intent-RATING model (the classifier). Env-driven via SCORE_RATING_MODEL —
+ * decoupled from OPENAI_MODEL (which is the student CHATBOT model). The operator
+ * picks any model here; callModel self-heals reasoning/schema param mismatches,
+ * so a non-5.4 model still runs. Falls back to the built-in default.
+ * Server-side only (reads env).
  */
 export function getDefaultScoreModel(): string {
-  const env = process.env.OPENAI_MODEL;
-  return isValidScoreModel(env) ? env : SCORE_MODELS[0];
+  return process.env.SCORE_RATING_MODEL?.trim() || SCORE_RATING_MODEL;
 }
 
-/** Resolve a (possibly untrusted) requested model to an allowed one. */
+/** Resolve a (possibly untrusted) requested model to an allowed one. Retained
+ * for the client-passed model; server config (getDefaultScoreModel) wins. */
 export function resolveScoreModel(requested?: string | null): string {
   return isValidScoreModel(requested) ? requested : getDefaultScoreModel();
 }

@@ -33,14 +33,29 @@ export const RATING_LEVELS = [
 
 export type RatingLevel = (typeof RATING_LEVELS)[number];
 
+/** The levels the classifier may EMIT (prompt text + structured-output enum).
+ * 'unsure' was dropped from the emitted scale: across 1000+ stored ratings the
+ * model chose it 0 times, and the UI already buckets uncertainty into Needs
+ * Decision via probably_*. RATING_LEVELS above keeps 'unsure' so legacy stored
+ * rows still type/parse. Dropping it is distributionally a no-op (0 uses), so
+ * INTENT_RATING_VERSION is deliberately NOT bumped — cached ratings and the
+ * hash-keyed version history stay valid. */
+export const PROMPT_RATING_LEVELS = [
+  'clearly_in',
+  'probably_in',
+  'probably_out',
+  'clearly_out',
+] as const;
+
 export function isRatingLevel(value: unknown): value is RatingLevel {
   return typeof value === 'string' && (RATING_LEVELS as readonly string[]).includes(value);
 }
 
-/** Ratings that count as "include" for exclusive assignment. Treating
- * probably_in as include is the v6 doc's provisional choice (§7.6 미결정) —
- * revisit once boundary-event frequency data exists. */
-export const INCLUDED_RATINGS: readonly RatingLevel[] = ['clearly_in', 'probably_in'];
+/** Ratings that count as "include" for exclusive assignment. Only clearly_in is
+ * auto-assigned — matching the instructor's mental model ("the intent captures
+ * what is clearly in"). Anything leaning in but uncertain (probably_in) is
+ * included ONLY when the instructor explicitly pins it in. */
+export const INCLUDED_RATINGS: readonly RatingLevel[] = ['clearly_in'];
 
 export function isIncludedRating(rating: RatingLevel | null | undefined): boolean {
   return !!rating && (INCLUDED_RATINGS as readonly string[]).includes(rating);
@@ -91,13 +106,19 @@ export interface DissectionResult {
 /* ------------------------------------------------------------------ */
 
 /** Version of the shared intent-rating instructions (system prompt + scale).
- * Folded into every intentDefHash — bumping it re-rates everything. */
-export const INTENT_RATING_VERSION = 1;
+ * Folded into every intentDefHash — bumping it re-rates everything.
+ * v2: rating prompt now receives the deterministic Material/Request dissection
+ *     (buildQueryContent) and the reworded "no explicit request" rule, so the
+ *     judge stops treating pasted material (esp. the assignment prompt) as an
+ *     implicit request. */
+export const INTENT_RATING_VERSION = 2;
 
-/** Version of the dissection instructions/output shape. Rows below this are
- * stale and re-dissected on the next rate batch.
- * v2: explicit empty-requests rule for request-less messages. */
-export const DISSECTION_VERSION = 2;
+/** Version of the dissection method/output. Rows below this are stale and
+ * re-dissected on the next rate batch.
+ * v2: explicit empty-requests rule for request-less messages (LLM method).
+ * v3: DETERMINISTIC dissection from the editor-event log (see dissect.ts) —
+ *     supersedes the LLM guess, so every v2 row is recomputed. */
+export const DISSECTION_VERSION = 3;
 
 /** Max boundary examples (pins) injected per intent into the rating prompt.
  * v6 targets top-4 nearest-by-embedding; until the embedding layer lands (P3)

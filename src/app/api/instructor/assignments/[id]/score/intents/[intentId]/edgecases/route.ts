@@ -18,7 +18,7 @@ import { db } from '@/db/db';
 import { scoreIntentRatings, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { cosineSimilarity, getQueryEmbeddings } from '@/lib/score/embeddings';
-import { ensureIntentTables, loadIntentState } from '@/lib/score/intent-store';
+import { ensureIntentTables, loadIntentState, pickDisplayRatings } from '@/lib/score/intent-store';
 import {
   applyPinOverrides,
   isRatingLevel,
@@ -59,19 +59,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     getQueryRecords(id),
     db.select().from(scoreIntentRatings).where(eq(scoreIntentRatings.assignmentId, id)),
   ]);
-  const activeIds = state.promptReady.map((p) => p.intent.id);
+  // Ownership resolution excludes starter-set templates (rated but not active).
+  const activeIds = state.promptReady.filter((p) => !p.intent.isTemplate).map((p) => p.intent.id);
 
   // Questions currently ASSIGNED to this intent (effective, pins applied) —
-  // the rule's exact application scope (§4.2 find→fix duality).
+  // the rule's exact application scope (§4.2 find→fix duality). Ratings are
+  // hash-keyed history: dedupe to one display row per (message, intent).
+  const currentHash = new Map(state.promptReady.map((p) => [p.intent.id, p.defHash]));
+  const displayRatings = pickDisplayRatings(ratingRows, currentHash);
   const ratingsByMessage = new Map<number, Map<number, RatingLevel>>();
-  for (const r of ratingRows) {
-    if (!isRatingLevel(r.rating)) continue;
-    let m = ratingsByMessage.get(r.messageId);
-    if (!m) {
-      m = new Map();
-      ratingsByMessage.set(r.messageId, m);
+  for (const [messageId, perIntent] of displayRatings) {
+    const m = new Map<number, RatingLevel>();
+    for (const [iid, pick] of perIntent) {
+      if (isRatingLevel(pick.row.rating)) m.set(iid, pick.row.rating);
     }
-    m.set(r.intentId, r.rating);
+    ratingsByMessage.set(messageId, m);
   }
   const pinsByMessage = new Map<number, Map<number, 'in' | 'out'>>();
   for (const p of state.pins) {

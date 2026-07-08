@@ -23,8 +23,11 @@ export function createLimiter(max: number) {
   };
 }
 
-/** Shared OpenAI concurrency knob (see the tier guidance in classify/route.ts). */
+/** Shared OpenAI concurrency knob (see the tier guidance in classify/route.ts).
+ * Per-POST pool size; sharded rate runs multiply this across parallel POSTs, so
+ * a single-intent re-rate of a few-hundred-message log lands in ~one wave. Well
+ * within the account's ~500 req/s ceiling even at max shard fan-out. */
 export const SCORE_CONCURRENCY = (() => {
   const parsed = Number.parseInt(process.env.SCORE_LLM_CONCURRENCY ?? '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(128, parsed) : 32;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(128, parsed) : 64;
 })();

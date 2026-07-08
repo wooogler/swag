@@ -56,7 +56,7 @@ async function createIntentTables(): Promise<void> {
   const existing = await db.execute<{ tablename: string }>(sql`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys')
   `);
   const has = new Set(existing.map((r) => r.tablename));
   if (!has.has('score_intents')) {
@@ -168,6 +168,33 @@ async function createIntentTables(): Promise<void> {
       )
     `);
   }
+  if (!has.has('score_chat_deploys')) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "score_chat_deploys" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "assignment_id" text NOT NULL,
+        "version_no" integer NOT NULL,
+        "snapshot" jsonb NOT NULL,
+        "note" text,
+        "created_by" text,
+        "created_at" timestamp NOT NULL
+      )
+    `);
+  }
+
+  // Add columns introduced after the table's original CREATE (existing DBs skip
+  // the CREATE above). Pre-check information_schema so an already-present column
+  // doesn't emit the noisy "already exists, skipping" NOTICE on every boot (same
+  // reasoning as the pg_indexes pre-check below).
+  const cols = await db.execute<{ column_name: string }>(sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'score_intents' AND column_name = 'is_template'
+  `);
+  if (cols.length === 0) {
+    await db.execute(
+      sql`ALTER TABLE "score_intents" ADD COLUMN "is_template" boolean DEFAULT false NOT NULL`
+    );
+  }
 
   // Ensure indexes even when tables pre-exist (crash between CREATE TABLE and
   // CREATE INDEX must not strand a table whose unique index upserts target —
@@ -180,8 +207,8 @@ async function createIntentTables(): Promise<void> {
       sql`CREATE INDEX IF NOT EXISTS "score_intent_ratings_assignment_idx" ON "score_intent_ratings" USING btree ("assignment_id")`],
     ['score_intent_ratings', 'score_intent_ratings_intent_idx',
       sql`CREATE INDEX IF NOT EXISTS "score_intent_ratings_intent_idx" ON "score_intent_ratings" USING btree ("intent_id")`],
-    ['score_intent_ratings', 'score_intent_ratings_message_intent_unique',
-      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_intent_ratings_message_intent_unique" ON "score_intent_ratings" USING btree ("message_id", "intent_id")`],
+    ['score_intent_ratings', 'score_intent_ratings_message_intent_hash_unique',
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_intent_ratings_message_intent_hash_unique" ON "score_intent_ratings" USING btree ("message_id", "intent_id", "def_hash")`],
     ['score_intent_pins', 'score_intent_pins_assignment_idx',
       sql`CREATE INDEX IF NOT EXISTS "score_intent_pins_assignment_idx" ON "score_intent_pins" USING btree ("assignment_id")`],
     ['score_intent_pins', 'score_intent_pins_intent_message_unique',
@@ -204,13 +231,23 @@ async function createIntentTables(): Promise<void> {
       sql`CREATE INDEX IF NOT EXISTS "score_query_embeddings_assignment_idx" ON "score_query_embeddings" USING btree ("assignment_id")`],
     ['score_query_embeddings', 'score_query_embeddings_message_unique',
       sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_query_embeddings_message_unique" ON "score_query_embeddings" USING btree ("message_id")`],
+    ['score_chat_deploys', 'score_chat_deploys_assignment_idx',
+      sql`CREATE INDEX IF NOT EXISTS "score_chat_deploys_assignment_idx" ON "score_chat_deploys" USING btree ("assignment_id")`],
+    ['score_chat_deploys', 'score_chat_deploys_assignment_version_unique',
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_chat_deploys_assignment_version_unique" ON "score_chat_deploys" USING btree ("assignment_id", "version_no")`],
   ];
   const idx = await db.execute<{ indexname: string }>(sql`
     SELECT indexname FROM pg_indexes
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys')
   `);
   const have = new Set(idx.map((r) => r.indexname));
+  // Ratings were re-keyed from (message, intent) to (message, intent, def_hash)
+  // so every rated spec keeps its rows (instant version recall). Drop the old
+  // narrower unique index — it would reject the multi-hash rows.
+  if (have.has('score_intent_ratings_message_intent_unique')) {
+    await db.execute(sql`DROP INDEX "score_intent_ratings_message_intent_unique"`);
+  }
   for (const [, name, ddl] of wanted) {
     if (!have.has(name)) await db.execute(ddl);
   }
@@ -318,6 +355,39 @@ export async function listIntentRatings(assignmentId: string) {
     .where(eq(scoreIntentRatings.assignmentId, assignmentId));
 }
 
+/**
+ * Ratings are stored per (message, intent, def_hash) — every spec ever rated
+ * keeps its rows so version checkout/rollback is instant. This picks the ONE
+ * display row per (message, intent): the row matching the intent's wanted hash
+ * when present (fresh), else the most recently rated row (shown as stale —
+ * same "previous state until overwritten" philosophy as before the re-key).
+ */
+export function pickDisplayRatings<
+  T extends { messageId: number; intentId: number; defHash: string; ratedAt: Date }
+>(
+  rows: T[],
+  wantedHashByIntent: ReadonlyMap<number, string>
+): Map<number, Map<number, { row: T; fresh: boolean }>> {
+  const byMessage = new Map<number, Map<number, { row: T; fresh: boolean }>>();
+  for (const r of rows) {
+    let m = byMessage.get(r.messageId);
+    if (!m) {
+      m = new Map();
+      byMessage.set(r.messageId, m);
+    }
+    const fresh = r.defHash === wantedHashByIntent.get(r.intentId);
+    const prev = m.get(r.intentId);
+    if (
+      !prev ||
+      (fresh && !prev.fresh) ||
+      (fresh === prev.fresh && r.ratedAt.getTime() > prev.row.ratedAt.getTime())
+    ) {
+      m.set(r.intentId, { row: r, fresh });
+    }
+  }
+  return byMessage;
+}
+
 export async function listDissections(assignmentId: string) {
   await ensureIntentTables();
   return db
@@ -358,6 +428,7 @@ export interface IntentConfigSnapshot {
     definition: string;
     rule: string | null;
     archived: boolean;
+    isTemplate?: boolean;
   }[];
   pins: {
     intentId: number;
@@ -391,6 +462,9 @@ export interface VersionSummary {
   intentIds?: number[];
   messageId?: number;
   detail?: string;
+  /** Save-time counts from the Intent modal (for the history display):
+   * included/excluded = labeled examples, inCount = questions in the intent. */
+  stats?: { included: number; excluded: number; inCount: number };
 }
 
 /**
@@ -428,6 +502,7 @@ export async function recordConfigVersion(
       definition: i.definition,
       rule: i.rule,
       archived: i.archived,
+      isTemplate: i.isTemplate,
     })),
     pins: pins.map((p) => ({
       intentId: p.intentId,

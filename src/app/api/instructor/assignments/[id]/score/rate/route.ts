@@ -16,28 +16,33 @@
  * touching the rest.
  */
 import { NextResponse } from 'next/server';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { scoreDissections, scoreIntentRatings } from '@/db/schema';
+import { scoreDissections, scoreIntentRatings, scoreQueryEmbeddings } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
+import { computeDissections } from '@/lib/score/dissect';
 import {
   ensureIntentTables,
   loadIntentState,
   type PromptReadyIntent,
 } from '@/lib/score/intent-store';
-import { DISSECTION_VERSION } from '@/lib/score/intents';
+import { DISSECTION_VERSION, type DissectionResult, type MaterialKind } from '@/lib/score/intents';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
-import { getDefaultScoreModel, resolveScoreModel } from '@/lib/score/models';
+import { getDefaultScoreModel } from '@/lib/score/models';
 import { ensureScoreTable, getQueryRecords, type QueryRecord } from '@/lib/score/queries';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const DEFAULT_MESSAGE_LIMIT = 40;
-const MAX_MESSAGE_LIMIT = 100;
+// Raised so a single shard POST can drain its whole partition in one round
+// trip: the client fans out shardCount POSTs in parallel, each handling a
+// disjoint messageId slice, so one wave of the concurrency pool applies the
+// intent to the entire log at once (rate-limit headroom is ~500 req/s).
+const MAX_MESSAGE_LIMIT = 150;
 
 // One rating call is heavier than a Classifier B call (multi-intent prompt,
 // effort 'low'), so budget fewer waves than classify's 12 — ~8 waves of the
@@ -49,8 +54,22 @@ const bodySchema = z.object({
   force: z.boolean().optional(),
   // Scope the run (and force) to these intents — e.g. the New Intent flow.
   intentIds: z.array(z.number().int().positive()).max(50).optional(),
-  model: z.string().optional(), // validated against the allowlist via resolveScoreModel
+  // Deterministic parallel sharding: this POST only handles messages whose
+  // (messageId % shardCount) === shardIndex. The client dispatches shardCount
+  // POSTs at once so the whole log is rated in one wave. Defaults = no shard.
+  shardIndex: z.number().int().min(0).max(63).optional(),
+  shardCount: z.number().int().min(1).max(64).optional(),
+  model: z.string().optional(), // vestigial — server uses SCORE_RATING_MODEL env
 });
+
+type Shard = { index: number; count: number };
+const NO_SHARD: Shard = { index: 0, count: 1 };
+
+/** True when messageId falls in this shard's disjoint partition. */
+function inShard(messageId: number, shard: Shard): boolean {
+  if (shard.count <= 1) return true;
+  return ((messageId % shard.count) + shard.count) % shard.count === shard.index;
+}
 
 interface MessageJob {
   record: QueryRecord;
@@ -68,9 +87,15 @@ interface MessageJob {
 async function loadRateStatus(
   assignmentId: string,
   promptReady: PromptReadyIntent[],
-  scopedIntentIds: number[] | null
+  scopedIntentIds: number[] | null,
+  shard: Shard = NO_SHARD
 ) {
-  const records = await getQueryRecords(assignmentId);
+  const allRecords = await getQueryRecords(assignmentId);
+  // Restrict to this shard's disjoint slice so parallel POSTs never rate the
+  // same message twice; `total`/`remaining` then reflect the shard (the client
+  // sums across shards for the aggregate progress bar).
+  const records =
+    shard.count > 1 ? allRecords.filter((r) => inShard(r.messageId, shard)) : allRecords;
   const wanted = scopedIntentIds
     ? promptReady.filter((p) => scopedIntentIds.includes(p.intent.id))
     : promptReady;
@@ -96,14 +121,16 @@ async function loadRateStatus(
       .where(eq(scoreDissections.assignmentId, assignmentId)),
   ]);
 
-  const hashByMessage = new Map<number, Map<number, string>>();
+  // Hash-keyed history: a (message, intent) can hold rows for several specs.
+  // Pending = no row exists for the intent's CURRENT hash.
+  const hashesByMessage = new Map<number, Set<string>>();
   for (const r of ratingRows) {
-    let m = hashByMessage.get(r.messageId);
-    if (!m) {
-      m = new Map();
-      hashByMessage.set(r.messageId, m);
+    let s = hashesByMessage.get(r.messageId);
+    if (!s) {
+      s = new Set();
+      hashesByMessage.set(r.messageId, s);
     }
-    m.set(r.intentId, r.defHash);
+    s.add(`${r.intentId}:${r.defHash}`);
   }
   const dissectionFresh = new Set(
     dissectionRows.filter((d) => d.version >= DISSECTION_VERSION).map((d) => d.messageId)
@@ -111,9 +138,9 @@ async function loadRateStatus(
 
   const jobs: MessageJob[] = [];
   for (const record of records) {
-    const have = hashByMessage.get(record.messageId);
+    const have = hashesByMessage.get(record.messageId);
     const staleIntents = wanted.filter(
-      (p) => have?.get(p.intent.id) !== p.defHash
+      (p) => !have?.has(`${p.intent.id}:${p.defHash}`)
     );
     const dissectionStale = !dissectionFresh.has(record.messageId);
     const needsDissection = dissectionStale && (scopedIntentIds ? staleIntents.length > 0 : true);
@@ -180,6 +207,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
   }
 
+  const shard: Shard = { index: body.shardIndex ?? 0, count: body.shardCount ?? 1 };
+  if (shard.index >= shard.count) {
+    return NextResponse.json(
+      { error: 'invalid_input', message: 'shardIndex must be < shardCount' },
+      { status: 400 }
+    );
+  }
+
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
   const state = await loadIntentState(id);
   const scoped = body.intentIds ?? null;
@@ -193,47 +228,128 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   if (body.force) {
-    // Mark stale rather than delete so the UI keeps showing previous ratings
-    // until each row is overwritten (same pattern as classify force).
-    if (scoped) {
+    // Ratings are hash-keyed history now — force must NOT rewrite hashes (that
+    // would corrupt stored versions). Instead DELETE the CURRENT-hash rows of
+    // the targeted intents so they read as unrated and get re-run; historical
+    // rows for other hashes stay untouched. Shard-scoped as before.
+    const ratingShardCond =
+      shard.count > 1
+        ? sql`(${scoreIntentRatings.messageId} % ${shard.count}) = ${shard.index}`
+        : undefined;
+    const targets = scoped
+      ? state.promptReady.filter((p) => scoped.includes(p.intent.id))
+      : state.promptReady;
+    for (const p of targets) {
       // assignment filter too: scoped ids are client-provided and must not be
       // able to touch another assignment's rows.
       await db
-        .update(scoreIntentRatings)
-        .set({ defHash: '' })
+        .delete(scoreIntentRatings)
         .where(
           and(
             eq(scoreIntentRatings.assignmentId, id),
-            inArray(scoreIntentRatings.intentId, scoped)
+            eq(scoreIntentRatings.intentId, p.intent.id),
+            eq(scoreIntentRatings.defHash, p.defHash),
+            ratingShardCond
           )
         );
-    } else {
-      await db
-        .update(scoreIntentRatings)
-        .set({ defHash: '' })
-        .where(eq(scoreIntentRatings.assignmentId, id));
+    }
+    if (!scoped) {
       await db
         .update(scoreDissections)
         .set({ version: 0 })
-        .where(eq(scoreDissections.assignmentId, id));
+        .where(
+          and(
+            eq(scoreDissections.assignmentId, id),
+            shard.count > 1
+              ? sql`(${scoreDissections.messageId} % ${shard.count}) = ${shard.index}`
+              : undefined
+          )
+        );
     }
   }
 
-  const model = resolveScoreModel(body.model);
-  const status = await loadRateStatus(id, state.promptReady, scoped);
+  // Server config wins: the rating model comes from SCORE_RATING_MODEL (env),
+  // not the client — the picker is gone and body.model is now vestigial.
+  const model = getDefaultScoreModel();
+  const status = await loadRateStatus(id, state.promptReady, scoped, shard);
 
   // Call-bounded batch: 1 call per message job (always at least one job so we
   // make progress even when a single job exceeds the leftover budget).
   const messageLimit = body.limit ?? DEFAULT_MESSAGE_LIMIT;
   const batch = status.jobs.slice(0, Math.min(messageLimit, CALLS_PER_BATCH));
 
-  let succeeded = 0;
-  let failed = 0;
   const now = new Date();
+
+  // Dissection is now DETERMINISTIC (reconstructed from the editor-event log,
+  // see dissect.ts) — computed here for the batch's stale-dissection messages,
+  // NOT by the LLM. It cannot fail on model output, so it always makes progress.
+  const dissectTargets = new Set(
+    batch.filter((j) => j.needsDissection).map((j) => j.record.messageId)
+  );
+  const dissections = await computeDissections(id, dissectTargets);
+  await Promise.all(
+    [...dissections].map(([messageId, d]) => {
+      const values = {
+        materialKinds: d.materialKinds,
+        requests: d.requests,
+        version: DISSECTION_VERSION,
+        rawResponse: null,
+        model: 'deterministic',
+        createdAt: now,
+      };
+      return db
+        .insert(scoreDissections)
+        .values({ assignmentId: id, messageId, ...values })
+        .onConflictDoUpdate({ target: scoreDissections.messageId, set: values });
+    })
+  );
+  // The embedding is computed on the dissected text → invalidate it so it
+  // recomputes against the fresh dissection on next use.
+  if (dissections.size > 0) {
+    await db
+      .delete(scoreQueryEmbeddings)
+      .where(inArray(scoreQueryEmbeddings.messageId, [...dissections.keys()]));
+  }
+  // Jobs whose ONLY pending work was the (now-done) dissection are complete.
+  const dissectionOnly = batch.filter(
+    (j) => j.needsDissection && j.staleIntents.length === 0
+  ).length;
+
+  // The LLM now handles ONLY the per-intent ratings (no dissection).
+  const ratingJobs = batch.filter((j) => j.staleIntents.length > 0);
+  let succeeded = dissectionOnly;
+  let failed = 0;
   const limit = createLimiter(SCORE_CONCURRENCY);
 
+  // Each rating call gets THIS message's deterministic Material/Request split so
+  // the judge rates only the typed request and never treats pasted material as an
+  // implicit intent. The split just computed above (`dissections`) is authoritative
+  // for the messages it covers; for the rest (dissection already fresh) load the
+  // stored rows. Missing → null → the reworded no-request rule still applies.
+  const dissectionByMsg = new Map<number, DissectionResult>();
+  const ratingMsgIds = ratingJobs.map((j) => j.record.messageId);
+  if (ratingMsgIds.length > 0) {
+    const stored = await db
+      .select({
+        messageId: scoreDissections.messageId,
+        materialKinds: scoreDissections.materialKinds,
+        requests: scoreDissections.requests,
+      })
+      .from(scoreDissections)
+      .where(
+        and(eq(scoreDissections.assignmentId, id), inArray(scoreDissections.messageId, ratingMsgIds))
+      );
+    for (const s of stored) {
+      dissectionByMsg.set(s.messageId, {
+        materialKinds: (s.materialKinds ?? []) as MaterialKind[],
+        requests: (s.requests ?? []) as string[],
+      });
+    }
+  }
+  for (const [mid, d] of dissections) dissectionByMsg.set(mid, d); // fresh overrides stored
+
   await Promise.all(
-    batch.map((job) =>
+    ratingJobs.map((job) =>
       limit(async () => {
         const rec = job.record;
         try {
@@ -246,7 +362,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
               definition: p.intent.definition,
               pins: p.promptPins,
             })),
-            includeDissection: job.needsDissection,
+            includeDissection: false,
+            dissection: dissectionByMsg.get(rec.messageId) ?? null,
             model,
           });
 
@@ -274,41 +391,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
                   ...values,
                 })
                 .onConflictDoUpdate({
-                  target: [scoreIntentRatings.messageId, scoreIntentRatings.intentId],
+                  // Hash-keyed history: same spec re-rated overwrites its own
+                  // row; a new spec inserts alongside the old rows.
+                  target: [
+                    scoreIntentRatings.messageId,
+                    scoreIntentRatings.intentId,
+                    scoreIntentRatings.defHash,
+                  ],
                   set: values,
                 })
             );
           }
-          if (job.needsDissection && result.dissection) {
-            const values = {
-              materialKinds: result.dissection.materialKinds,
-              requests: result.dissection.requests,
-              version: DISSECTION_VERSION,
-              rawResponse: result.raw,
-              model,
-              createdAt: now,
-            };
-            writes.push(
-              db
-                .insert(scoreDissections)
-                .values({ assignmentId: id, messageId: rec.messageId, ...values })
-                .onConflictDoUpdate({ target: scoreDissections.messageId, set: values })
-            );
-          }
           await Promise.all(writes);
-          // A call that produced NO usable output wrote nothing, so nothing
-          // went fresh — counting it as success would let the client loop
-          // re-request the same jobs forever without tripping its
-          // succeeded===0 stall detector.
-          const wroteSomething =
-            ratingWrites > 0 || (job.needsDissection && !!result.dissection);
-          if (wroteSomething || (job.staleIntents.length === 0 && !job.needsDissection)) {
+          // A call that produced no usable rating wrote nothing → count as failed
+          // so the client's succeeded===0 stall detector can trip.
+          if (ratingWrites > 0) {
             succeeded += 1;
           } else {
             failed += 1;
-            console.error(
-              `SCORE intent rating produced no usable output for message ${rec.messageId} (invalid ratings/dissection)`
-            );
+            console.error(`SCORE intent rating produced no usable output for message ${rec.messageId}`);
           }
         } catch (error) {
           failed += 1;
@@ -319,7 +420,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     )
   );
 
-  const after = await loadRateStatus(id, state.promptReady, scoped);
+  const after = await loadRateStatus(id, state.promptReady, scoped, shard);
   return NextResponse.json({
     processed: batch.length,
     succeeded,

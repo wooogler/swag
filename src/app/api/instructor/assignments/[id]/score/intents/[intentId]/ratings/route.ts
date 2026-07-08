@@ -11,15 +11,27 @@
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { scoreIntentRatings, scoreIntents } from '@/db/schema';
+import {
+  scoreConfigVersions,
+  scoreDissections,
+  scoreIntentRatings,
+  scoreIntents,
+} from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
-import { ensureIntentTables, loadIntentState } from '@/lib/score/intent-store';
+import {
+  ensureIntentTables,
+  loadIntentState,
+  pickDisplayRatings,
+  type IntentConfigSnapshot,
+} from '@/lib/score/intent-store';
 import {
   applyPinOverrides,
+  intentDefHash,
   isIncludedRating,
   isRatingLevel,
   ratingRank,
   resolveAssignment,
+  selectPromptPins,
   type RatingLevel,
 } from '@/lib/score/intents';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
@@ -28,7 +40,7 @@ export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
 
-export async function GET(_req: Request, { params }: RouteParams) {
+export async function GET(req: Request, { params }: RouteParams) {
   const { id, intentId: intentIdRaw } = await params;
   const auth = await authorizeAssignment(id);
   if ('error' in auth) {
@@ -39,6 +51,11 @@ export async function GET(_req: Request, { params }: RouteParams) {
   if (!Number.isFinite(intentId)) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }
+  // Version checkout: ?versionNo=N renders THIS INTENT as of that config
+  // version — its definition/title/pins from the snapshot, and the rating rows
+  // stored for that spec's hash (instant; no LLM).
+  const versionNoRaw = new URL(req.url).searchParams.get('versionNo');
+  const checkoutNo = versionNoRaw ? Number.parseInt(versionNoRaw, 10) : null;
 
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
   const intentRows = await db
@@ -50,39 +67,88 @@ export async function GET(_req: Request, { params }: RouteParams) {
 
   // state.pins carries EVERY pin of the assignment (needed for the prior-
   // resolution pin overrides); this intent's own pins come from the same set.
-  const [state, records, ratingRows] = await Promise.all([
+  const [state, records, ratingRows, dissectionRows] = await Promise.all([
     loadIntentState(id),
     getQueryRecords(id),
     db.select().from(scoreIntentRatings).where(eq(scoreIntentRatings.assignmentId, id)),
+    db
+      .select({
+        messageId: scoreDissections.messageId,
+        materialKinds: scoreDissections.materialKinds,
+        requests: scoreDissections.requests,
+      })
+      .from(scoreDissections)
+      .where(eq(scoreDissections.assignmentId, id)),
   ]);
-  const pinRows = state.pins.filter((p) => p.intentId === intentId);
 
-  const thisReady = state.promptReady.find((p) => p.intent.id === intentId) ?? null;
-  const otherReady = state.promptReady.filter((p) => p.intent.id !== intentId);
-  const otherIds = otherReady.map((p) => p.intent.id);
-  const currentHash = new Map(state.promptReady.map((p) => [p.intent.id, p.defHash]));
-
-  // (message → intent → {rating, fresh}) for prior-resolution + this intent.
-  const byMessage = new Map<number, Map<number, { rating: RatingLevel; fresh: boolean }>>();
-  for (const r of ratingRows) {
-    if (!isRatingLevel(r.rating)) continue;
-    let m = byMessage.get(r.messageId);
-    if (!m) {
-      m = new Map();
-      byMessage.set(r.messageId, m);
-    }
-    m.set(r.intentId, { rating: r.rating, fresh: r.defHash === currentHash.get(r.intentId) });
-  }
-  const ratingRowByMessage = new Map(
-    ratingRows.filter((r) => r.intentId === intentId).map((r) => [r.messageId, r])
+  // Effective spec for THIS intent: live, or the checked-out version's.
+  let specTitle = intent.title;
+  let specDefinition = intent.definition;
+  let pinRows: { messageId: number; verdict: string; queryText: string }[] = state.pins.filter(
+    (p) => p.intentId === intentId
   );
+  if (checkoutNo !== null) {
+    if (!Number.isFinite(checkoutNo)) {
+      return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
+    }
+    const versionRows = await db
+      .select({ snapshot: scoreConfigVersions.snapshot })
+      .from(scoreConfigVersions)
+      .where(
+        and(eq(scoreConfigVersions.assignmentId, id), eq(scoreConfigVersions.versionNo, checkoutNo))
+      );
+    const snapshot = versionRows[0]?.snapshot as IntentConfigSnapshot | undefined;
+    const snapIntent = snapshot?.intents?.find((i) => i.id === intentId);
+    if (!snapshot || !snapIntent) {
+      return NextResponse.json({ error: 'version_not_found' }, { status: 404 });
+    }
+    specTitle = snapIntent.title;
+    specDefinition = snapIntent.definition;
+    pinRows = (snapshot.pins ?? []).filter((p) => p.intentId === intentId);
+  }
+  const titleById = new Map(state.intents.map((i) => [i.id, i.title]));
+  const specHash = intentDefHash(
+    specDefinition,
+    selectPromptPins(pinRows.map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText })))
+  );
+  // Message dissection (Material vs Request) so the viewer can, on expand, show
+  // the request(s) verbatim and collapse pasted material into a placeholder.
+  const dissectionByMessage = new Map(
+    dissectionRows.map((d) => [
+      d.messageId,
+      {
+        materialKinds: (Array.isArray(d.materialKinds) ? d.materialKinds : []) as string[],
+        requests: (Array.isArray(d.requests) ? d.requests : []) as string[],
+      },
+    ])
+  );
+
+  // Overlap/ownership only concerns ACTIVE intents — starter-set templates are
+  // rated in advance but don't own the log, so exclude them here.
+  const otherReady = state.promptReady.filter(
+    (p) => p.intent.id !== intentId && !p.intent.isTemplate
+  );
+  const otherIds = otherReady.map((p) => p.intent.id);
+  // Wanted hash per intent: this intent's effective spec (live or checkout);
+  // others their live hash. pickDisplayRatings then dedupes the hash-keyed rows.
+  const wantedHash = new Map(state.promptReady.map((p) => [p.intent.id, p.defHash]));
+  wantedHash.set(intentId, specHash);
+  const byMessage = pickDisplayRatings(ratingRows, wantedHash);
+
   const pinByMessage = new Map(pinRows.map((p) => [p.messageId, p.verdict as 'in' | 'out']));
 
   const overlapCounts = new Map<number, number>();
   const rows = records.map((rec) => {
     const ratings = byMessage.get(rec.messageId);
-    const mine = ratings?.get(intentId);
-    const mineRow = ratingRowByMessage.get(rec.messageId);
+    const minePick = ratings?.get(intentId);
+    // Under checkout only EXACT spec rows count — a version view must never mix
+    // in ratings produced by a different definition/pin set.
+    const mineRow =
+      minePick && (checkoutNo === null || minePick.fresh) && isRatingLevel(minePick.row.rating)
+        ? minePick.row
+        : null;
+    const mineFresh = !!minePick?.fresh && mineRow !== null;
+    const mineRating = mineRow && isRatingLevel(mineRow.rating) ? mineRow.rating : null;
 
     // Prior resolution: assignment over the OTHER intents only. Stale ratings
     // still count here (same display philosophy as classify force: show the
@@ -90,7 +156,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
     const priorMap = new Map<number, RatingLevel>();
     for (const oid of otherIds) {
       const r = ratings?.get(oid);
-      if (r) priorMap.set(oid, r.rating);
+      if (r && isRatingLevel(r.row.rating)) priorMap.set(oid, r.row.rating);
     }
     const priorPins = new Map<number, 'in' | 'out'>();
     for (const p of state.pins) {
@@ -100,23 +166,30 @@ export async function GET(_req: Request, { params }: RouteParams) {
     }
     const prior = resolveAssignment(applyPinOverrides(priorMap, priorPins), otherIds, state.links);
 
-    if (mine && isIncludedRating(mine.rating) && prior.kind === 'assigned') {
+    if (mineRating && isIncludedRating(mineRating) && prior.kind === 'assigned') {
       overlapCounts.set(prior.intentId, (overlapCounts.get(prior.intentId) ?? 0) + 1);
     }
 
     return {
       messageId: rec.messageId,
       queryText: rec.queryText,
+      // The previous student question — shown as context in the expand view.
+      // (The rating also uses the prior chatbot reply server-side, but it's
+      // verbose, so the viewer omits it.)
+      prevQueryText: rec.prevQueryText ?? null,
       turnIndex: rec.turnIndex,
       queryTimestamp: rec.queryTimestamp.toISOString(),
-      rating: mine?.rating ?? null,
+      rating: mineRating,
       rationale: mineRow?.rationale ?? null,
-      stale: !!mineRow && mineRow.defHash !== (thisReady?.defHash ?? ''),
+      stale: !!mineRow && !mineFresh,
       pinned: pinByMessage.get(rec.messageId) ?? null,
       prior:
         prior.kind === 'assigned'
           ? { kind: 'assigned' as const, intentId: prior.intentId }
           : { kind: prior.kind },
+      // Title of the intent that currently owns this question (assigned only).
+      priorTitle: prior.kind === 'assigned' ? titleById.get(prior.intentId) ?? null : null,
+      dissection: dissectionByMessage.get(rec.messageId) ?? null,
     };
   });
 
@@ -127,15 +200,15 @@ export async function GET(_req: Request, { params }: RouteParams) {
     return b.queryTimestamp.localeCompare(a.queryTimestamp);
   });
 
-  const titleOf = new Map(state.intents.map((i) => [i.id, i.title]));
   return NextResponse.json({
     intent: {
       id: intent.id,
-      title: intent.title,
-      definition: intent.definition,
+      title: specTitle,
+      definition: specDefinition,
       rule: intent.rule,
       archived: intent.archived,
     },
+    checkoutVersionNo: checkoutNo,
     rows,
     ratedCount: rows.filter((r) => r.rating !== null).length,
     staleCount: rows.filter((r) => r.stale).length,
@@ -143,7 +216,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
     overlaps: [...overlapCounts.entries()]
       .map(([otherId, count]) => ({
         intentId: otherId,
-        title: titleOf.get(otherId) ?? `Intent ${otherId}`,
+        title: titleById.get(otherId) ?? `Intent ${otherId}`,
         count,
       }))
       .sort((a, b) => b.count - a.count),

@@ -1,8 +1,6 @@
 import { db } from '@/db/db';
-import { assignments, studentSessions, scoreClassifications, scoreSubtypeScores } from '@/db/schema';
-import { eq, and, desc } from 'drizzle-orm';
-import { allCodes, flattenSubtypes, subtypeDefHash } from '@/lib/score/config';
-import { CLASSIFIER_VERSION } from '@/lib/score/classifier';
+import { assignments, studentSessions } from '@/db/schema';
+import { eq, and } from 'drizzle-orm';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -11,12 +9,13 @@ import { getInstructor, isAdministrator } from '@/lib/auth';
 import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
-import { getDefaultScoreModel } from '@/lib/score/models';
 import { getScoreConfig } from '@/lib/score/config-store';
+import { buildJelsonSuggestions } from '@/lib/score/jelson-suggest';
 import {
   listDissections,
   listIntentRatings,
   loadIntentState,
+  pickDisplayRatings,
 } from '@/lib/score/intent-store';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import {
@@ -25,7 +24,7 @@ import {
   type MaterialKind,
   type RatingLevel,
 } from '@/lib/score/intents';
-import ScoreViewer, { type IntentSummary, type ScoreQueryRow } from './ScoreViewer';
+import IntentBoard, { type IntentSummary, type ScoreQueryRow } from './IntentBoard';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -49,29 +48,13 @@ export default async function ScorePage({ params }: PageProps) {
 
   await ensureScoreTable();
 
-  const [config, records, cachedRows, sessions, subtypeScoreRows, intentState, intentRatingRows, dissectionRows] = await Promise.all([
+  const [config, records, sessions, intentState, intentRatingRows, dissectionRows] = await Promise.all([
     getScoreConfig(),
     getQueryRecords(id),
-    db
-      .select()
-      .from(scoreClassifications)
-      .where(eq(scoreClassifications.assignmentId, id))
-      .orderBy(desc(scoreClassifications.queryTimestamp), desc(scoreClassifications.messageId)),
     db
       .select({ id: studentSessions.id, participantToken: studentSessions.participantToken })
       .from(studentSessions)
       .where(eq(studentSessions.assignmentId, id)),
-    db
-      .select({
-        messageId: scoreSubtypeScores.messageId,
-        subtypeCode: scoreSubtypeScores.subtypeCode,
-        score: scoreSubtypeScores.score,
-        defHash: scoreSubtypeScores.defHash,
-        rawResponse: scoreSubtypeScores.rawResponse,
-        model: scoreSubtypeScores.model,
-      })
-      .from(scoreSubtypeScores)
-      .where(eq(scoreSubtypeScores.assignmentId, id)),
     loadIntentState(id),
     listIntentRatings(id),
     listDissections(id),
@@ -79,68 +62,28 @@ export default async function ScorePage({ params }: PageProps) {
 
   const tokenBySession = new Map(sessions.map((s) => [s.id, s.participantToken]));
 
-  // Aggregate Classifier B's per-subtype rows back into a per-message score map.
-  // Only codes in the CURRENT config are shown; scores from subtypes since
-  // deleted are ignored (their orphan rows linger harmlessly). Tags are NOT
-  // stored — the viewer derives them from these scores at the live threshold.
-  const currentCodes = new Set(allCodes(config));
-  const currentHash = new Map(
-    flattenSubtypes(config).map((s) => [s.subtype.code, subtypeDefHash(s.type, s.subtype)])
-  );
-  const scoresByMessage = new Map<number, Record<string, number>>();
-  const rawBByMessage = new Map<number, string[]>();
-  const bFreshByMessage = new Map<number, Set<string>>();
-  // Model that produced each message's B scores — 'mixed' after partial re-runs.
-  const bModelByMessage = new Map<number, string>();
-  for (const r of subtypeScoreRows) {
-    if (!currentCodes.has(r.subtypeCode)) continue;
-    let scores = scoresByMessage.get(r.messageId);
-    if (!scores) {
-      scores = {};
-      scoresByMessage.set(r.messageId, scores);
-    }
-    scores[r.subtypeCode] = r.score;
-    let raw = rawBByMessage.get(r.messageId);
-    if (!raw) {
-      raw = [];
-      rawBByMessage.set(r.messageId, raw);
-    }
-    raw.push(`${r.subtypeCode}: ${r.rawResponse ?? `{"score":${r.score}}`}`);
-    if (r.model) {
-      const prev = bModelByMessage.get(r.messageId);
-      bModelByMessage.set(r.messageId, prev && prev !== r.model ? 'mixed' : r.model);
-    }
-    if (r.defHash === currentHash.get(r.subtypeCode)) {
-      let fresh = bFreshByMessage.get(r.messageId);
-      if (!fresh) {
-        fresh = new Set();
-        bFreshByMessage.set(r.messageId, fresh);
-      }
-      fresh.add(r.subtypeCode);
-    }
-  }
+  // The Jelson taxonomy is kept only as the New Intent fuzzy-suggestion source.
+  const jelsonSuggestions = buildJelsonSuggestions(config);
 
   // --- SCORE v6 intent layer ------------------------------------------------
   // Per-message intent ratings (with per-row staleness vs the CURRENT defHash)
   // and dissections. Assignment resolution happens client-side with the shared
   // deterministic resolver so link/pin edits re-derive without reload logic.
+  // Ratings are hash-keyed history — pick one display row per (message, intent):
+  // the current-hash row when present, else the latest (marked stale).
   const currentIntentHash = new Map(intentState.promptReady.map((p) => [p.intent.id, p.defHash]));
+  const displayRatings = pickDisplayRatings(intentRatingRows, currentIntentHash);
   const intentRatingsByMessage = new Map<
     number,
     Record<number, { rating: RatingLevel; rationale: string | null; stale: boolean }>
   >();
-  for (const r of intentRatingRows) {
-    if (!isRatingLevel(r.rating)) continue;
-    let m = intentRatingsByMessage.get(r.messageId);
-    if (!m) {
-      m = {};
-      intentRatingsByMessage.set(r.messageId, m);
+  for (const [messageId, perIntent] of displayRatings) {
+    const m: Record<number, { rating: RatingLevel; rationale: string | null; stale: boolean }> = {};
+    for (const [iid, pick] of perIntent) {
+      if (!isRatingLevel(pick.row.rating)) continue;
+      m[iid] = { rating: pick.row.rating, rationale: pick.row.rationale, stale: !pick.fresh };
     }
-    m[r.intentId] = {
-      rating: r.rating,
-      rationale: r.rationale,
-      stale: r.defHash !== currentIntentHash.get(r.intentId),
-    };
+    intentRatingsByMessage.set(messageId, m);
   }
   const dissectionByMessage = new Map(
     dissectionRows.map((d) => [
@@ -165,14 +108,14 @@ export default async function ScorePage({ params }: PageProps) {
     m[p.intentId] = p.verdict as 'in' | 'out';
   }
 
-  // Pending rating work, mirroring the rate route: a message is pending when
-  // any active intent's rating is missing/stale, or its dissection is (the
-  // latter only counted once intents exist — see the rate route's gate).
+  // Pending rating work, mirroring the rate route — but only the ACTIVE intents
+  // (starter-set templates are rated on their own "Run all", not counted here).
+  const activePromptReady = intentState.promptReady.filter((p) => !p.intent.isTemplate);
   let pendingRatings = 0;
-  if (intentState.promptReady.length > 0) {
+  if (activePromptReady.length > 0) {
     for (const rec of records) {
       const have = intentRatingsByMessage.get(rec.messageId);
-      const intentsStale = intentState.promptReady.some((p) => {
+      const intentsStale = activePromptReady.some((p) => {
         const r = have?.[p.intent.id];
         return !r || r.stale;
       });
@@ -195,19 +138,15 @@ export default async function ScorePage({ params }: PageProps) {
     turnByMessage.set(rec.messageId, turnCounter);
   }
 
-  // Build rows from the live query records. Every record appears (the intents
-  // mode organizes the WHOLE log); hasJelson marks messages carrying tag data
-  // (an A row OR any B score) — the tags mode shows only those, preserving its
-  // original behavior. Text fields come from the live record, A fields from
-  // the cached A row when present.
-  const aRowByMessage = new Map(cachedRows.map((r) => [r.messageId, r]));
+  // Build rows from the live query records (the whole log). Text/context from
+  // the record; intent ratings, pins, and dissection from the v6 layer.
   const rows: ScoreQueryRow[] = records
     .map((rec) => {
-      const a = aRowByMessage.get(rec.messageId);
       const dissection = dissectionByMessage.get(rec.messageId);
       return {
         messageId: rec.messageId,
         sessionId: rec.sessionId,
+        conversationId: rec.conversationId,
         participantToken: tokenBySession.get(rec.sessionId) ?? '',
         queryText: rec.queryText,
         responseText: rec.responseText,
@@ -216,16 +155,6 @@ export default async function ScorePage({ params }: PageProps) {
         turnIndex: rec.turnIndex,
         turnNumber: turnByMessage.get(rec.messageId) ?? 0,
         queryTimestamp: rec.queryTimestamp.toISOString(),
-        hasJelson: aRowByMessage.has(rec.messageId) || scoresByMessage.has(rec.messageId),
-        typeA: (a?.typeA as ScoreQueryRow['typeA']) ?? null,
-        subtypeA: a?.subtypeA ?? null,
-        // tagsB is derived client-side from scoresB at the live threshold.
-        tagsB: [],
-        scoresB: scoresByMessage.get(rec.messageId) ?? {},
-        model: a?.model ?? null,
-        bModel: bModelByMessage.get(rec.messageId) ?? null,
-        rawA: a?.rawResponseA ?? null,
-        rawB: (rawBByMessage.get(rec.messageId) ?? []).sort().join('\n') || null,
         intentRatings: intentRatingsByMessage.get(rec.messageId) ?? {},
         pinnedIntents: pinsByMessage.get(rec.messageId) ?? {},
         dissection: dissection
@@ -238,15 +167,13 @@ export default async function ScorePage({ params }: PageProps) {
         y.queryTimestamp.localeCompare(x.queryTimestamp) || y.messageId - x.messageId
     );
 
-  const total = records.length;
-  const classified = rows.filter((r) => r.hasJelson).length;
-
   const intents: IntentSummary[] = intentState.intents.map((i) => ({
     id: i.id,
     title: i.title,
     definition: i.definition,
     rule: i.rule,
     archived: i.archived,
+    isTemplate: i.isTemplate,
     pinCount: intentState.pins.filter((p) => p.intentId === i.id).length,
   }));
   const links = intentState.links.map((l) => ({
@@ -254,29 +181,9 @@ export default async function ScorePage({ params }: PageProps) {
     toIntentId: l.toIntentId,
   }));
 
-  // Pending work PER CLASSIFIER, mirroring the classify route's staleness rules:
-  // A is stale when its row is missing/below CLASSIFIER_VERSION; B is stale when
-  // any current subtype lacks a score with a matching defHash. The viewer's
-  // A/B toggle picks which count the "Classify N remaining" button shows, so it
-  // stays consistent with the scoped "Re-classify A/B" buttons. Version/rubric
-  // bumps and taxonomy edits therefore surface as pending work, not row absence.
-  const aFresh = new Set(
-    cachedRows
-      .filter((r) => (r.classifierVersion ?? 0) >= CLASSIFIER_VERSION)
-      .map((r) => r.messageId)
-  );
-  let pendingA = 0;
-  let pendingB = 0;
-  for (const rec of records) {
-    if (!aFresh.has(rec.messageId)) pendingA += 1;
-    const fresh = bFreshByMessage.get(rec.messageId);
-    const bStale = currentHash.size > 0 && (!fresh || fresh.size < currentHash.size);
-    if (bStale) pendingB += 1;
-  }
-
   return (
-    <div className="min-h-screen bg-[hsl(var(--background))]">
-      <header className="bg-[hsl(var(--card))] border-b border-[hsl(var(--border))] sticky top-0 z-10">
+    <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
+      <header className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center gap-4">
             <Link href={`/instructor/assignments/${id}`}>
@@ -289,32 +196,34 @@ export default async function ScorePage({ params }: PageProps) {
                 SCORE · <span className="font-normal">{assignment.title}</span>
               </h1>
               <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                Organize · Revise · Evaluate — intents own the log; Jelson tags assist browsing
+                Organize · Revise · Evaluate — instructor intents own the log
               </p>
             </div>
+            <span
+              className="text-xs font-mono px-2 py-1 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]"
+              title="Intent config version — every applied change snapshots a new version"
+            >
+              v{intentState.versionNo}
+            </span>
             <InstructorHeaderActions email={instructor.email} />
           </div>
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <ScoreViewer
+      <main className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 flex flex-col min-h-0">
+        <IntentBoard
           assignmentId={id}
-          assignmentTitle={assignment.title}
           rows={rows}
-          total={total}
-          classified={classified}
-          pendingA={pendingA}
-          pendingB={pendingB}
-          defaultModel={getDefaultScoreModel()}
-          openaiConfigured={isOpenAIConfigured()}
-          initialConfig={config}
-          canEditTaxonomy={isAdministrator(instructor)}
           intents={intents}
-          intentLinks={links}
+          links={links}
           versionNo={intentState.versionNo}
           pendingRatings={pendingRatings}
           basePrompt={assignmentBasePrompt(assignment)}
+          openaiConfigured={isOpenAIConfigured()}
+          jelsonSuggestions={jelsonSuggestions}
+          // NIRVANA responses are raw GPT text (single-newline line breaks that
+          // CommonMark would collapse) → render them verbatim, not as markdown.
+          isNirvana={assignment.shareToken === 'nirvana-dataset'}
         />
       </main>
     </div>

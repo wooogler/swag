@@ -152,9 +152,11 @@ async function main() {
     deadline: new Date(BASE_TIME),
     shareToken: seed.shareToken,
     instructorId: owner.id,
-    // NIRVANA's chatbot ran with NO default system prompt, so store an empty
-    // guidance (surfaced as blank in the "How the AI helps" tab) rather than the
-    // app's default writing-coach prompt.
+    // NIRVANA's chatbot ran with NO system prompt, so store an empty guidance
+    // rather than the app's default writing-coach prompt. assignmentBasePrompt
+    // honors this empty-as-empty end-to-end: the "How the AI helps" tab shows
+    // "none", the SCORE Base Prompt is empty, and /api/chat + SCORE previews
+    // send no system message at all — so the loop starts from the real baseline.
     customSystemPrompt: '',
     includeInstructionInPrompt: false,
     createdAt: new Date(),

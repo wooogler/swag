@@ -2,6 +2,7 @@ import OpenAI, { APIConnectionError, AuthenticationError, RateLimitError } from 
 import { db } from '@/db/db';
 import { assignments, chatMessages } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
+import { resolveDeployedChatPrompt } from '@/lib/score/deploy-store';
 import { eq } from 'drizzle-orm';
 
 interface ChatErrorDetails {
@@ -134,7 +135,7 @@ export async function POST(req: Request) {
 
     // Shared with SCORE's rule previews (preview = runtime) — see
     // assignmentBasePrompt in assignment-ai.ts before changing.
-    const systemPrompt = assignmentBasePrompt(assignment);
+    const basePrompt = assignmentBasePrompt(assignment);
 
     // Save user message immediately
     const lastMessage = messages[messages.length - 1];
@@ -143,6 +144,31 @@ export async function POST(req: Request) {
     const existingMessages = await db.query.chatMessages.findMany({
       where: eq(chatMessages.conversationId, conversationId),
     });
+
+    // SCORE rule injection (P5): under the assignment's LATEST DEPLOY, classify
+    // this message against the deployed intents and inject the owning intent's
+    // rule on top of the base prompt. Instructors editing the SCORE board never
+    // affect students until they Deploy. Fail-open: no deploy / no match / any
+    // error → the plain base prompt (deploy-store.resolveDeployedChatPrompt).
+    // Prior exchange for the classifier comes from the SERVER's own record
+    // (not the client-supplied messages array, which a student could fabricate
+    // to steer the classifier): the last stored assistant reply and the user
+    // message that preceded it.
+    const ordered = [...existingMessages].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+    const prevAssistantIdx = ordered.map((m) => m.role).lastIndexOf('assistant');
+    const prevResponseText = prevAssistantIdx >= 0 ? ordered[prevAssistantIdx].content : null;
+    const prevUser = ordered
+      .slice(0, prevAssistantIdx >= 0 ? prevAssistantIdx : ordered.length)
+      .filter((m) => m.role === 'user')
+      .pop();
+    const deployed = await resolveDeployedChatPrompt({
+      assignmentId,
+      basePrompt,
+      queryText: userMessageContent,
+      prevQueryText: prevUser?.content ?? null,
+      prevResponseText,
+    });
+    const systemPrompt = deployed.systemPrompt;
 
     await db.insert(chatMessages).values({
       conversationId,
@@ -187,8 +213,14 @@ export async function POST(req: Request) {
     try {
       stream = await openai.responses.create({
         model: process.env.OPENAI_MODEL ?? 'gpt-4o',
+        // An empty base prompt (e.g. NIRVANA, which ran with no system prompt)
+        // and no injected rule → send no system message at all, rather than an
+        // empty one. SCORE's rule previews (preview-service) do the same so
+        // preview = runtime holds at the "no guidance" baseline.
         input: [
-          { id: 'msg_system', role: 'system', content: systemPrompt },
+          ...(systemPrompt.trim()
+            ? [{ id: 'msg_system', role: 'system' as const, content: systemPrompt }]
+            : []),
           ...formattedMessages,
         ],
         tools: webSearchEnabled ? [{ type: 'web_search' }] : undefined,
@@ -250,6 +282,15 @@ export async function POST(req: Request) {
               model: process.env.OPENAI_MODEL ?? 'gpt-4o',
               webSearchEnabled: webSearchEnabled || false,
               webSearchUsed,
+              // SCORE deploy audit trail: which chat version answered, and
+              // which intent's rule (if any) was injected for this reply.
+              ...(deployed.deployVersion !== null ? { chatDeployVersion: deployed.deployVersion } : {}),
+              ...(deployed.applied
+                ? {
+                    appliedIntentId: deployed.applied.intentId,
+                    appliedIntentTitle: deployed.applied.intentTitle,
+                  }
+                : {}),
               ...(fullResponse.trim()
                 ? {}
                 : {

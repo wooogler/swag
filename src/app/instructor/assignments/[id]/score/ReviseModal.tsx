@@ -10,27 +10,35 @@
  *  ③ rewrite — edit the response to what you wanted; the agent infers the
  *    generalizable rule change.
  *
- * With a draft in hand: the anchor's before/after regenerates, and the
+ * The anchor's "before" is the response the student was ACTUALLY served
+ * (row.responseText), shown verbatim — the instructor's feedback refers to
+ * that exact text. With a draft in hand its "after" regenerates, and the
  * edge-case sweep (§1.10: farthest-by-meaning, boundary, recent — ranked by
  * response delta once generated) checks where the change might break. Broken
  * cases take feedback that folds into the SAME draft — the rule hardens
  * incrementally before one Apply commits it (immediate + version record).
  *
- * Previews are single-turn regenerations under Base + Rule with the live
- * chatbot model — indicative, not a guarantee (§4.6).
+ * "After"/sweep previews are single-turn regenerations under Base + Rule with
+ * the live chatbot model — indicative, not a guarantee (§4.6).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Dialog, DialogPanel, DialogTitle } from '@headlessui/react';
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, Pencil, Sparkles, Wand2, X } from 'lucide-react';
-import type { IntentSummary } from './IntentBoard';
-import type { ScoreQueryRow } from './ScoreViewer';
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Sparkles, Wand2, X } from 'lucide-react';
+import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
+import { MaterialSegments } from './materials';
 
 interface ReviseModalProps {
   assignmentId: string;
   row: ScoreQueryRow; // anchor question (assigned to `intent`)
   intent: IntentSummary;
+  /** Always-applied base prompt — surfaced here so "no rule → base prompt only"
+   * is verifiable and the "on top of everything above" rule framing is legible. */
+  basePrompt: string;
+  /** NIRVANA import → render the delivered response as raw text (its
+   * single-newline line breaks would be collapsed by markdown). */
+  isNirvana: boolean;
   onClose: (changed: boolean) => void;
   /** "이 요청이 이 Intent에 안 맞나요?" → New Intent flow seeded from the anchor. */
   onCreateInstead: () => void;
@@ -112,7 +120,12 @@ function responseDelta(before: string | null, after: string | null): number {
   return union === 0 ? 0 : 1 - common / union;
 }
 
-function Markdown({ text }: { text: string }) {
+function Markdown({ text, raw = false }: { text: string; raw?: boolean }) {
+  // raw = render verbatim (NIRVANA's raw-text replies, whose single newlines
+  // markdown would collapse); otherwise render as markdown.
+  if (raw) {
+    return <p className="whitespace-pre-wrap break-words text-[13px] text-[hsl(var(--foreground))]">{text}</p>;
+  }
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert text-[13px]">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
@@ -130,13 +143,20 @@ export default function ReviseModal({
   assignmentId,
   row,
   intent,
+  basePrompt,
+  isNirvana,
   onClose,
   onCreateInstead,
 }: ReviseModalProps) {
   const base = `/api/instructor/assignments/${assignmentId}/score`;
+  const [basePromptOpen, setBasePromptOpen] = useState(false);
 
-  const [currentPreview, setCurrentPreview] = useState<string | null>(null);
-  const [currentLoading, setCurrentLoading] = useState(true);
+  // Original response = the reply the student ACTUALLY received (recorded at
+  // deploy time), shown verbatim — NOT a fresh regeneration. Regenerating here
+  // produced a different answer than the one the instructor was looking at; the
+  // feedback/rewrite refers to THIS exact text, so it's also what we hand the
+  // agent as `currentResponse` when inferring the rule change.
+  const originalResponse = row.responseText?.trim() ? row.responseText : null;
   const [draft, setDraft] = useState<Draft | null>(null);
   const [updatedPreview, setUpdatedPreview] = useState<string | null>(null);
   const [updatedLoading, setUpdatedLoading] = useState(false);
@@ -188,21 +208,6 @@ export default function ReviseModal({
       (data.previews as { messageId: number; response: string | null }[]).map((p) => [p.messageId, p.response])
     );
   }
-
-  // Original Response — what the CURRENT config answers (cached per intent).
-  useEffect(() => {
-    (async () => {
-      try {
-        const m = await fetchPreviews([row.messageId]);
-        if (live()) setCurrentPreview(m.get(row.messageId) ?? null);
-      } catch (e) {
-        if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
-      } finally {
-        if (live()) setCurrentLoading(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // A new draft invalidates the After column and the sweep results.
   async function adoptDraft(next: Draft) {
@@ -356,7 +361,7 @@ export default function ReviseModal({
     <Dialog open onClose={() => onClose(false)} className="relative z-50">
       <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
       <div className="fixed inset-0 flex items-center justify-center p-4">
-        <DialogPanel className="w-full max-w-6xl max-h-[92vh] flex flex-col rounded-lg bg-[hsl(var(--card))] border border-[hsl(var(--border))] shadow-xl">
+        <DialogPanel className="w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden rounded-lg bg-[hsl(var(--card))] border border-[hsl(var(--border))] shadow-xl">
           <div className="px-4 py-3 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
             <DialogTitle className="text-sm font-semibold truncate">
               Revise — {intent.title}
@@ -375,71 +380,107 @@ export default function ReviseModal({
                     Student question
                   </h3>
                   <p className="text-xs whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 max-h-40 overflow-y-auto">
-                    {row.queryText}
+                    <MaterialSegments text={row.queryText} dissection={row.dissection} compact />
                   </p>
                 </div>
                 <div>
                   <h3 className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-                    Original response <span className="font-normal normal-case">(current rule)</span>
+                    Original response <span className="font-normal normal-case">(as delivered)</span>
                   </h3>
-                  {currentLoading ? (
-                    <p className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))] py-6">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating under the current rule…
+                  {!originalResponse ? (
+                    <p className="text-xs italic text-[hsl(var(--muted-foreground))]">
+                      No chatbot response was recorded for this question.
                     </p>
-                  ) : currentPreview ? (
-                    <div className="rounded border border-[hsl(var(--border))] p-2 max-h-72 overflow-y-auto">
-                      <Markdown text={currentPreview} />
+                  ) : rewriteOpen ? (
+                    // EDIT mode — the markdown view is replaced in place by the
+                    // editable response; the agent infers the rule from the edit.
+                    <div className="space-y-1.5">
+                      <textarea
+                        value={rewriteText}
+                        onChange={(e) => setRewriteText(e.target.value)}
+                        rows={12}
+                        className="w-full text-xs border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => setRewriteOpen(false)}
+                          className="px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() =>
+                            propose(
+                              {
+                                mode: 'rewrite',
+                                messageId: row.messageId,
+                                editedResponse: rewriteText.trim(),
+                                currentResponse: originalResponse ?? undefined,
+                                ...(draft ? { draftRule: draft.rule } : {}),
+                              },
+                              'rewrite'
+                            )
+                          }
+                          disabled={proposing || sweeping || !rewriteText.trim()}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                        >
+                          {proposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                          Propose rule from my rewrite
+                        </button>
+                      </div>
                     </div>
                   ) : (
-                    <p className="text-xs italic text-[hsl(var(--muted-foreground))]">Preview failed to generate.</p>
-                  )}
-                  {currentPreview && (
-                    <button
-                      onClick={() => {
-                        setRewriteText(currentPreview);
-                        setRewriteOpen((v) => !v);
-                      }}
-                      className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                      title="Rewrite the response the way you want it — the agent infers the rule change"
-                    >
-                      <Pencil className="w-3 h-3" /> Rewrite this response instead
-                    </button>
+                    // VIEW mode — rendered markdown, with a visible Rewrite button.
+                    <>
+                      <div className="rounded border border-[hsl(var(--border))] p-2 max-h-72 overflow-y-auto">
+                        <Markdown text={originalResponse} raw={isNirvana} />
+                      </div>
+                      <button
+                        onClick={() => {
+                          setRewriteText(originalResponse);
+                          setRewriteOpen(true);
+                        }}
+                        className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+                        title="Rewrite the response the way you want it — the agent infers the rule change"
+                      >
+                        <Pencil className="w-3 h-3" /> Rewrite this response instead
+                      </button>
+                    </>
                   )}
                 </div>
-                {rewriteOpen && (
-                  <div className="space-y-1.5">
-                    <textarea
-                      value={rewriteText}
-                      onChange={(e) => setRewriteText(e.target.value)}
-                      rows={8}
-                      className="w-full text-xs border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
-                    />
-                    <button
-                      onClick={() =>
-                        propose(
-                          {
-                            mode: 'rewrite',
-                            messageId: row.messageId,
-                            editedResponse: rewriteText.trim(),
-                            currentResponse: currentPreview ?? undefined,
-                            ...(draft ? { draftRule: draft.rule } : {}),
-                          },
-                          'rewrite'
-                        )
-                      }
-                      disabled={proposing || sweeping || !rewriteText.trim()}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                    >
-                      {proposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-                      Propose rule from my rewrite
-                    </button>
-                  </div>
-                )}
               </div>
 
               {/* CENTER — Intent & Rule + actions */}
               <div className="p-4 space-y-3">
                 <div className="rounded border border-[hsl(var(--border))] p-2.5 space-y-1.5">
+                  {/* Base prompt — always applied beneath the rule; kept above
+                      When/Then so what every reply is generated against is
+                      verifiable. Collapsed by default. */}
+                  <div className="pb-1.5 border-b border-[hsl(var(--border))]">
+                    <button
+                      onClick={() => setBasePromptOpen((v) => !v)}
+                      className="w-full flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                    >
+                      <ChevronRight className={`w-3 h-3 transition-transform ${basePromptOpen ? 'rotate-90' : ''}`} />
+                      Base prompt <span className="font-normal normal-case">(always applied)</span>
+                    </button>
+                    {basePromptOpen && (
+                      <div className="mt-1 space-y-1">
+                        {basePrompt.trim() ? (
+                          <p className="text-[11px] text-[hsl(var(--muted-foreground))] whitespace-pre-wrap max-h-40 overflow-y-auto rounded bg-[hsl(var(--muted))]/30 p-1.5">
+                            {basePrompt}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] italic text-[hsl(var(--muted-foreground))]">
+                            Empty — with no rule, the chatbot answers with no system prompt at all.
+                          </p>
+                        )}
+                        <p className="text-[10px] italic text-[hsl(var(--muted-foreground))]">
+                          Managed in assignment settings — not edited in the SCORE loop.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                   <p className="text-[11px] text-[hsl(var(--muted-foreground))]">
                     <span className="font-semibold uppercase tracking-wide">When</span> {intent.definition}
                   </p>
@@ -450,16 +491,18 @@ export default function ReviseModal({
                     ) : (
                       <span className="italic">No rule yet — base prompt applies.</span>
                     )}
-                    <button
-                      onClick={() => {
-                        setRuleEditorText(draft ? draft.rule ?? '' : savedRule);
-                        setRuleEditorOpen((v) => !v);
-                      }}
-                      className="ml-1.5 inline-flex items-center gap-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] align-middle"
-                      title="Edit the rule text directly"
-                    >
-                      <Pencil className="w-3 h-3" />
-                    </button>
+                    {!ruleEditorOpen && (
+                      <button
+                        onClick={() => {
+                          setRuleEditorText(draft ? draft.rule ?? '' : savedRule);
+                          setRuleEditorOpen(true);
+                        }}
+                        className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] align-middle"
+                        title="Edit the rule text directly"
+                      >
+                        <Pencil className="w-2.5 h-2.5" /> Edit rule
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -472,16 +515,24 @@ export default function ReviseModal({
                       placeholder="Empty = no rule (base prompt only)."
                       className="w-full text-xs border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
                     />
-                    <button
-                      onClick={() => {
-                        setRuleEditorOpen(false);
-                        void adoptDraft({ rule: ruleEditorText.trim() || null, source: 'direct' });
-                      }}
-                      disabled={proposing || sweeping}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                    >
-                      <Check className="w-3 h-3" /> Use this rule
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => setRuleEditorOpen(false)}
+                        className="px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          setRuleEditorOpen(false);
+                          void adoptDraft({ rule: ruleEditorText.trim() || null, source: 'direct' });
+                        }}
+                        disabled={proposing || sweeping}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                      >
+                        <Check className="w-3 h-3" /> Use this rule
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -497,25 +548,36 @@ export default function ReviseModal({
                     placeholder='e.g. "Too long", "Don&apos;t hand over the answer — ask them first"'
                     className="w-full text-xs border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
                   />
-                  <button
-                    onClick={() =>
-                      propose(
-                        {
-                          mode: 'feedback',
-                          messageId: row.messageId,
-                          feedback: feedback.trim(),
-                          currentResponse: currentPreview ?? undefined,
-                          ...(draft ? { draftRule: draft.rule } : {}),
-                        },
-                        'feedback'
-                      )
-                    }
-                    disabled={proposing || sweeping || !feedback.trim()}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                  >
-                    {proposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                    Propose revision
-                  </button>
+                  <div className="flex items-center justify-between gap-2">
+                    {/* Escape hatch — this request doesn't belong to this intent;
+                        carve out a new one seeded from it. */}
+                    <button
+                      onClick={onCreateInstead}
+                      title={`This isn't really "${intent.title}" — create a new intent seeded from this question`}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-violet-300 text-violet-700 hover:bg-violet-50"
+                    >
+                      <Plus className="w-3 h-3" /> New intent instead
+                    </button>
+                    <button
+                      onClick={() =>
+                        propose(
+                          {
+                            mode: 'feedback',
+                            messageId: row.messageId,
+                            feedback: feedback.trim(),
+                            currentResponse: originalResponse ?? undefined,
+                            ...(draft ? { draftRule: draft.rule } : {}),
+                          },
+                          'feedback'
+                        )
+                      }
+                      disabled={proposing || sweeping || !feedback.trim()}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                    >
+                      {proposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                      Propose revision
+                    </button>
+                  </div>
                 </div>
 
                 {/* Draft diff — the review artifact every action funnels into */}
@@ -548,14 +610,6 @@ export default function ReviseModal({
                     )}
                   </div>
                 )}
-
-                <button
-                  onClick={onCreateInstead}
-                  className="text-[11px] text-violet-700 hover:underline"
-                  title="This request doesn't belong to this intent — carve out a new one seeded from it"
-                >
-                  This isn&apos;t really &quot;{intent.title}&quot; — create a new intent instead →
-                </button>
               </div>
 
               {/* RIGHT — Updated Response + edge-case sweep */}

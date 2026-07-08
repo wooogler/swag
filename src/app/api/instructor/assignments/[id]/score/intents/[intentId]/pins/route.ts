@@ -8,7 +8,8 @@
  *
  * Pins change what the rating prompt contains, so the intent's defHash moves
  * and its ratings read as stale automatically — the UI offers a re-rate.
- * Every pin change is a config change → version snapshot in-transaction.
+ * Pins are NOT versioned — the version history only records Apply/Save (spec
+ * commits), not each incremental in/out.
  */
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
@@ -16,11 +17,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentPins, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
-import {
-  ensureIntentTables,
-  getAssignmentMessageText,
-  recordConfigVersion,
-} from '@/lib/score/intent-store';
+import { ensureIntentTables, getAssignmentMessageText } from '@/lib/score/intent-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,29 +68,21 @@ export async function POST(req: Request, { params }: RouteParams) {
   }
 
   const now = new Date();
-  const versionNo = await db.transaction(async (tx) => {
-    const set = {
-      verdict: body.verdict,
-      queryText,
-      source: body.source ?? 'manual',
-      createdAt: now, // refresh recency so re-pinned examples lead the prompt
-    };
-    await tx
-      .insert(scoreIntentPins)
-      .values({ assignmentId: id, intentId: intent.id, messageId: body.messageId, ...set })
-      .onConflictDoUpdate({
-        target: [scoreIntentPins.intentId, scoreIntentPins.messageId],
-        set,
-      });
-    return recordConfigVersion(tx, id, auth.instructor.id, {
-      action: 'add_pin',
-      intentIds: [intent.id],
-      messageId: body.messageId,
-      detail: body.verdict,
+  const set = {
+    verdict: body.verdict,
+    queryText,
+    source: body.source ?? 'manual',
+    createdAt: now, // refresh recency so re-pinned examples lead the prompt
+  };
+  await db
+    .insert(scoreIntentPins)
+    .values({ assignmentId: id, intentId: intent.id, messageId: body.messageId, ...set })
+    .onConflictDoUpdate({
+      target: [scoreIntentPins.intentId, scoreIntentPins.messageId],
+      set,
     });
-  });
 
-  return NextResponse.json({ versionNo, verdict: body.verdict, messageId: body.messageId });
+  return NextResponse.json({ verdict: body.verdict, messageId: body.messageId });
 }
 
 export async function DELETE(req: Request, { params }: RouteParams) {
@@ -111,20 +100,10 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
   }
 
-  const versionNo = await db.transaction(async (tx) => {
-    const removed = await tx
-      .delete(scoreIntentPins)
-      .where(
-        and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, messageId))
-      )
-      .returning({ id: scoreIntentPins.id });
-    if (removed.length === 0) return null; // nothing to record
-    return recordConfigVersion(tx, id, auth.instructor.id, {
-      action: 'remove_pin',
-      intentIds: [intent.id],
-      messageId,
-    });
-  });
+  const removed = await db
+    .delete(scoreIntentPins)
+    .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, messageId)))
+    .returning({ id: scoreIntentPins.id });
 
-  return NextResponse.json({ versionNo, messageId });
+  return NextResponse.json({ removed: removed.length > 0, messageId });
 }

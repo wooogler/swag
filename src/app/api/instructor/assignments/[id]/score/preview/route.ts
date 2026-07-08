@@ -84,7 +84,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const basePrompt = assignmentBasePrompt(auth.assignment);
 
   const result = hasDraft
-    ? await getDraftPreviews({ records: targets, rule: body.draftRule ?? null, basePrompt, model })
+    ? await getDraftPreviews({ assignmentId: id, records: targets, rule: body.draftRule ?? null, basePrompt, model })
     : await getCachedRulePreviews({ assignmentId: id, intent, records: targets, basePrompt, model });
 
   return NextResponse.json({
