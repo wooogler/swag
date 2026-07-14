@@ -33,6 +33,13 @@ const SCORE_TABLES_BY_ASSIGNMENT = [
   'score_chat_deploys',
   'score_config_versions',
   'score_intents',
+  // Baseline condition + shared study instrumentation (all keyed by assignment_id)
+  'score_probe_ratings',
+  'baseline_searches',
+  'baseline_prompt_versions',
+  'baseline_previews',
+  'review_set_items',
+  'study_events',
 ] as const;
 
 /** Delete one clone assignment and all of its sessions / messages / SCORE rows. */

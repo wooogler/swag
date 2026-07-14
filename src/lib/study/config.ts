@@ -54,3 +54,29 @@ export const STUDY_SESSION_MAX_AGE_SECONDS = 24 * 60 * 60;
 
 // Internal email domain for the auto-created participant accounts.
 export const STUDY_EMAIL_DOMAIN = 'study.score.local';
+
+// ── Baseline study condition ──────────────────────────────────────────────
+export type StudioView = 'score' | 'baseline';
+
+/**
+ * Deterministic condition assignment (which dataset gets which condition for a
+ * participant). Parity on the participant number's numeric part:
+ *   even → swag=score,   nirvana=baseline
+ *   odd  → swag=baseline, nirvana=score
+ * Session ORDER (which condition first) is controlled by the facilitator via
+ * number issuance; this only fixes the pairing. See spec §1.2.
+ */
+export function conditionForDataset(participantNumber: string, datasetKey: string): StudioView {
+  const digits = participantNumber.replace(/\D/g, '');
+  const n = digits
+    ? parseInt(digits, 10)
+    : [...participantNumber].reduce((s, c) => s + c.charCodeAt(0), 0);
+  const even = n % 2 === 0;
+  if (datasetKey === 'swag') return even ? 'score' : 'baseline';
+  if (datasetKey === 'nirvana') return even ? 'baseline' : 'score';
+  return 'score'; // fallback for any future dataset
+}
+
+// Baseline monolithic prompt editor character ceiling (matches GPT Builder /
+// Claude ~8k). Both conditions write against the same ceiling.
+export const STUDY_PROMPT_CHAR_LIMIT = Number(process.env.STUDY_PROMPT_CHAR_LIMIT ?? 8000);

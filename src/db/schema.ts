@@ -443,6 +443,9 @@ export const studyClones = pgTable('study_clones', {
   datasetKey: text('dataset_key').notNull(), // StudyDataset.key
   assignmentId: text('assignment_id').notNull().references(() => assignments.id),
   sourceAssignmentId: text('source_assignment_id').notNull(),
+  // Study condition for this clone: 'score' (intent/rule tool) | 'baseline'
+  // (monolithic prompt ablation). Drives both the studio UI and /api/chat.
+  condition: text('condition').notNull().default('score'),
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({
   participantDatasetUnique: uniqueIndex('study_clones_participant_dataset_unique').on(
@@ -450,6 +453,91 @@ export const studyClones = pgTable('study_clones', {
     table.datasetKey
   ),
   assignmentIdx: index('study_clones_assignment_idx').on(table.assignmentId),
+}));
+
+// ---------------------------------------------------------------------------
+// Baseline condition + shared study instrumentation. See docs/STUDY_BASELINE_SPEC.md.
+// All created by runtime DDL in src/lib/study/store.ts.
+// ---------------------------------------------------------------------------
+
+// Probe rating cache: an intent-LESS judge sweep over the log for a definition
+// text. def_hash = intentDefHash(definition, []) so preset (intent) ratings and
+// custom-search ratings share one keyspace. Full 5-level rating stored; only
+// clearly_in is ever exposed in the baseline UI.
+export const scoreProbeRatings = pgTable('score_probe_ratings', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  defHash: text('def_hash').notNull(),
+  messageId: integer('message_id').notNull(),
+  rating: text('rating').notNull(),
+  rawResponse: text('raw_response'),
+  model: text('model'),
+  ratedAt: timestamp('rated_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('score_probe_ratings_unique').on(table.assignmentId, table.defHash, table.messageId),
+  assignmentIdx: index('score_probe_ratings_assignment_idx').on(table.assignmentId),
+}));
+
+// Baseline saved custom searches. Presets come from is_template intents (no row
+// here). Label = description prefix; NO title field (intentional).
+export const baselineSearches = pgTable('baseline_searches', {
+  id: text('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  description: text('description').notNull(),
+  defHash: text('def_hash').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+  lastRunAt: timestamp('last_run_at'),
+}, (table) => ({
+  assignmentIdx: index('baseline_searches_assignment_idx').on(table.assignmentId),
+}));
+
+// Baseline coarse prompt versions. A Save creates a version; deployedAt marks
+// the one the student chat serves. draft is never persisted server-side.
+export const baselinePromptVersions = pgTable('baseline_prompt_versions', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  versionNo: integer('version_no').notNull(),
+  prompt: text('prompt').notNull(),
+  deployedAt: timestamp('deployed_at'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('baseline_prompt_versions_unique').on(table.assignmentId, table.versionNo),
+}));
+
+// Baseline per-query preview cache (mirror of score_rule_previews).
+export const baselinePreviews = pgTable('baseline_previews', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  messageId: integer('message_id').notNull(),
+  promptHash: text('prompt_hash').notNull(), // stableHash(model + prompt)
+  response: text('response').notNull(),
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('baseline_previews_unique').on(table.messageId, table.promptHash),
+}));
+
+// Shared review set (both conditions). scope: 'prompt' (baseline) | 'intent:<id>' (score).
+export const reviewSetItems = pgTable('review_set_items', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  scope: text('scope').notNull(),
+  messageId: integer('message_id').notNull(),
+  source: text('source').notNull(), // 'auto' | 'manual' | 'similar' | 'search'
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('review_set_items_unique').on(table.assignmentId, table.scope, table.messageId),
+}));
+
+// Behavioral event log (both conditions) — the source of process metrics.
+export const studyEvents = pgTable('study_events', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  eventType: text('event_type').notNull(),
+  payload: jsonb('payload'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('study_events_assignment_idx').on(table.assignmentId),
 }));
 
 // TypeScript types
@@ -521,3 +609,10 @@ export type NewStudyParticipant = typeof studyParticipants.$inferInsert;
 
 export type StudyClone = typeof studyClones.$inferSelect;
 export type NewStudyClone = typeof studyClones.$inferInsert;
+
+export type ScoreProbeRating = typeof scoreProbeRatings.$inferSelect;
+export type BaselineSearch = typeof baselineSearches.$inferSelect;
+export type BaselinePromptVersion = typeof baselinePromptVersions.$inferSelect;
+export type BaselinePreview = typeof baselinePreviews.$inferSelect;
+export type ReviewSetItem = typeof reviewSetItems.$inferSelect;
+export type StudyEvent = typeof studyEvents.$inferSelect;

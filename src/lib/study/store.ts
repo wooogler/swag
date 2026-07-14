@@ -59,6 +59,59 @@ export async function ensureStudyTables(): Promise<void> {
         CREATE INDEX IF NOT EXISTS "study_clones_assignment_idx"
         ON "study_clones" USING btree ("assignment_id")
       `);
+      await db.execute(sql`
+        ALTER TABLE "study_clones"
+        ADD COLUMN IF NOT EXISTS "condition" text NOT NULL DEFAULT 'score'
+      `);
+
+      // ── Baseline condition + shared study instrumentation (spec §2) ──
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "score_probe_ratings" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "def_hash" text NOT NULL, "message_id" integer NOT NULL,
+          "rating" text NOT NULL, "raw_response" text, "model" text, "rated_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_probe_ratings_unique" ON "score_probe_ratings" ("assignment_id","def_hash","message_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "score_probe_ratings_assignment_idx" ON "score_probe_ratings" ("assignment_id")`);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "baseline_searches" (
+          "id" text PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "description" text NOT NULL, "def_hash" text NOT NULL,
+          "created_at" timestamp NOT NULL, "last_run_at" timestamp
+        )`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "baseline_searches_assignment_idx" ON "baseline_searches" ("assignment_id")`);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "baseline_prompt_versions" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "version_no" integer NOT NULL, "prompt" text NOT NULL,
+          "deployed_at" timestamp, "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "baseline_prompt_versions_unique" ON "baseline_prompt_versions" ("assignment_id","version_no")`);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "baseline_previews" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "message_id" integer NOT NULL, "prompt_hash" text NOT NULL,
+          "response" text NOT NULL, "model" text, "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "baseline_previews_unique" ON "baseline_previews" ("message_id","prompt_hash")`);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "review_set_items" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "scope" text NOT NULL, "message_id" integer NOT NULL,
+          "source" text NOT NULL, "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "review_set_items_unique" ON "review_set_items" ("assignment_id","scope","message_id")`);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_events" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "event_type" text NOT NULL, "payload" jsonb, "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_events_assignment_idx" ON "study_events" ("assignment_id")`);
 
       // FK-column indexes on core tables that Postgres does NOT auto-create.
       // Without them, deleting a clone's sessions/conversations/messages forces

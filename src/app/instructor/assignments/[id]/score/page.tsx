@@ -30,16 +30,23 @@ import {
   type RatingLevel,
 } from '@/lib/score/intents';
 import IntentBoard, { type IntentSummary, type ScoreQueryRow } from './IntentBoard';
+import { getCurrentStudyParticipant } from '@/lib/study/session';
+import { getCloneCondition } from '@/lib/study/baseline-store';
+import { resolveStudioView } from '@/lib/study/view';
+import { ensureStudyTables } from '@/lib/study/store';
+import { getBaselineLog, getBaselineState } from '@/lib/study/baseline-store';
+import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
+import BaselineStudio from './BaselineStudio';
 
 interface PageProps {
   params: Promise<{ id: string }>;
-  /** ?chatv=N → view the board as of chat deploy version N (read-only). */
-  searchParams: Promise<{ chatv?: string }>;
+  /** ?chatv=N → board as of chat deploy version N (read-only); ?view=baseline|score → studio override (admin). */
+  searchParams: Promise<{ chatv?: string; view?: string }>;
 }
 
 export default async function ScorePage({ params, searchParams }: PageProps) {
   const { id } = await params;
-  const { chatv } = await searchParams;
+  const { chatv, view } = await searchParams;
   const instructor = await getInstructor();
   if (!instructor) {
     redirect('/login');
@@ -52,6 +59,31 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   });
   if (!assignment) {
     notFound();
+  }
+
+  // Studio view resolution (SCORE board vs Baseline studio) — the single gate.
+  await ensureStudyTables();
+  const [storedCondition, participant] = await Promise.all([
+    getCloneCondition(id),
+    getCurrentStudyParticipant(),
+  ]);
+  const studioView = resolveStudioView({
+    storedCondition,
+    viewParam: view ?? null,
+    isParticipant: !!participant,
+  });
+  if (studioView === 'baseline') {
+    const [state, log] = await Promise.all([getBaselineState(id), getBaselineLog(id)]);
+    return (
+      <BaselineStudio
+        assignmentId={id}
+        assignmentTitle={assignment.title}
+        instructorEmail={instructor.email}
+        initialState={state}
+        log={log}
+        charLimit={STUDY_PROMPT_CHAR_LIMIT}
+      />
+    );
   }
 
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);

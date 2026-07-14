@@ -5,7 +5,7 @@ import { headers } from 'next/headers';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { ChevronLeft, Edit2, BarChart3 } from 'lucide-react';
+import { ChevronLeft, Edit2, BarChart3, FileText } from 'lucide-react';
 import AssignmentTabs from './AssignmentTabs';
 import { getInstructor, isAdministrator } from '@/lib/auth';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
@@ -156,10 +156,18 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Link href={`/instructor/assignments/${id}/score`}>
+              {/* PHASE 1 (dev/pilot): both conditions openly reachable. PHASE 2
+                  will gate these behind resolveStudioView for participants. */}
+              <Link href={`/instructor/assignments/${id}/score?view=score`}>
                 <Button variant="outline">
                   <BarChart3 className="w-4 h-4 mr-2" />
                   SCORE
+                </Button>
+              </Link>
+              <Link href={`/instructor/assignments/${id}/score?view=baseline`}>
+                <Button variant="outline">
+                  <FileText className="w-4 h-4 mr-2" />
+                  Baseline
                 </Button>
               </Link>
               {canEdit && (

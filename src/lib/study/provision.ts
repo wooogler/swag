@@ -31,7 +31,7 @@ import {
 } from '@/db/schema';
 import { ensureScoreTable } from '@/lib/score/queries';
 import { ensureIntentTables } from '@/lib/score/intent-store';
-import { STUDY_DATASETS, STUDY_EMAIL_DOMAIN, type StudyDataset } from './config';
+import { STUDY_DATASETS, STUDY_EMAIL_DOMAIN, conditionForDataset, type StudyDataset } from './config';
 import {
   ensureStudyTables,
   getParticipantByNumber,
@@ -363,6 +363,7 @@ async function provisionClone(participant: StudyParticipant, dataset: StudyDatas
         datasetKey: dataset.key,
         assignmentId,
         sourceAssignmentId: dataset.assignmentId,
+        condition: conditionForDataset(participant.participantNumber, dataset.key),
         createdAt: new Date(),
       })
       .returning();

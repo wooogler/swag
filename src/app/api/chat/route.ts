@@ -3,6 +3,7 @@ import { db } from '@/db/db';
 import { assignments, chatMessages } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { resolveDeployedChatPrompt } from '@/lib/score/deploy-store';
+import { getCloneCondition, resolveBaselineChatPrompt } from '@/lib/study/baseline-store';
 import { eq } from 'drizzle-orm';
 
 interface ChatErrorDetails {
@@ -161,13 +162,23 @@ export async function POST(req: Request) {
       .slice(0, prevAssistantIdx >= 0 ? prevAssistantIdx : ordered.length)
       .filter((m) => m.role === 'user')
       .pop();
-    const deployed = await resolveDeployedChatPrompt({
-      assignmentId,
-      basePrompt,
-      queryText: userMessageContent,
-      prevQueryText: prevUser?.content ?? null,
-      prevResponseText,
-    });
+    // Study BASELINE clones bypass intent classification/injection entirely and
+    // serve the instructor's deployed monolithic prompt (fail-open to base).
+    // SCORE clones + all non-study assignments take the intent-routing path.
+    const condition = await getCloneCondition(assignmentId);
+    let deployed: Awaited<ReturnType<typeof resolveDeployedChatPrompt>>;
+    if (condition === 'baseline') {
+      const baselinePrompt = await resolveBaselineChatPrompt(assignmentId, basePrompt);
+      deployed = { systemPrompt: baselinePrompt, applied: null, deployVersion: null };
+    } else {
+      deployed = await resolveDeployedChatPrompt({
+        assignmentId,
+        basePrompt,
+        queryText: userMessageContent,
+        prevQueryText: prevUser?.content ?? null,
+        prevResponseText,
+      });
+    }
     const systemPrompt = deployed.systemPrompt;
 
     await db.insert(chatMessages).values({
