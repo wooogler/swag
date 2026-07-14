@@ -47,6 +47,7 @@ import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
 import DecideOwnershipModal from './DecideOwnershipModal';
 import RuleWorkbench from './RuleWorkbench';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
+import PromptReviseWorkbench from './PromptReviseWorkbench';
 import { runShardedRate } from './rate-runner';
 
 /** One student message, with its per-intent ratings/pins and dissection. Built
@@ -579,6 +580,9 @@ export default function IntentBoard({
     /** Set when the viewer had a rule version selected — Revise starts from it. */
     viewVersion: ViewerRuleVersion | null;
   } | null>(null);
+  // BASELINE: Revise targets the whole monolithic prompt (no owning intent) —
+  // opens the inline PromptReviseWorkbench from the anchor question.
+  const [promptReviseTarget, setPromptReviseTarget] = useState<ScoreQueryRow | null>(null);
 
   // Full conversation is a per-question opt-in expansion of the viewer; the
   // default is the single Q/A. Reset it whenever the selection changes so a new
@@ -1230,6 +1234,18 @@ export default function IntentBoard({
           onExit={() => {
             setSearchMode(null);
             void reloadSearches();
+          }}
+        />
+      ) : isBaseline && promptReviseTarget ? (
+        <PromptReviseWorkbench
+          key={`revise-${promptReviseTarget.messageId}`}
+          assignmentId={assignmentId}
+          rows={rows}
+          anchor={promptReviseTarget}
+          promptText={promptDraft}
+          onClose={(revised) => {
+            setPromptReviseTarget(null);
+            if (revised !== null) setPromptDraft(revised);
           }}
         />
       ) : workbenchMode ? (
@@ -2100,7 +2116,17 @@ export default function IntentBoard({
                       </>
                     )}
                   </button>
-                  {(() => {
+                  {isBaseline ? (
+                    // BASELINE: Revise the whole monolithic prompt from this
+                    // question — no owning intent, always available.
+                    <button
+                      onClick={() => setPromptReviseTarget(selectedRow)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+                      title="Revise the system prompt from this question"
+                    >
+                      Revise prompt <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  ) : (() => {
                     const res = resolutions.get(selectedRow.messageId);
                     const owner =
                       res?.kind === 'assigned' ? intentById.get(res.intentId) ?? null : null;
