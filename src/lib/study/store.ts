@@ -1,0 +1,113 @@
+/**
+ * SCORE user-study participant store.
+ *
+ * Owns (a) the runtime DDL for study_participants + study_clones (mirrors the
+ * score tables — the drizzle migration journal is not used for recent tables),
+ * including an in-place migration of the earlier single-clone table shape, (b)
+ * participant-number normalization/validation shared by the /study login, and
+ * (c) lookups.
+ */
+import { eq, sql } from 'drizzle-orm';
+import { db } from '@/db/db';
+import { studyClones, studyParticipants, type StudyClone, type StudyParticipant } from '@/db/schema';
+import { PARTICIPANT_NUMBER_RE } from './config';
+
+let ensured: Promise<void> | null = null;
+
+/** Idempotently create/upgrade the study tables. */
+export async function ensureStudyTables(): Promise<void> {
+  if (!ensured) {
+    ensured = (async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_participants" (
+          "id" text PRIMARY KEY NOT NULL,
+          "participant_number" text NOT NULL,
+          "instructor_id" text NOT NULL,
+          "label" text,
+          "created_at" timestamp NOT NULL,
+          "last_login_at" timestamp
+        )
+      `);
+      // Migrate the earlier single-clone shape (columns moved to study_clones /
+      // auth moved to the shared passcode). No-ops on a fresh table.
+      await db.execute(sql`
+        ALTER TABLE "study_participants"
+          DROP COLUMN IF EXISTS "assignment_id",
+          DROP COLUMN IF EXISTS "source_assignment_id",
+          DROP COLUMN IF EXISTS "passcode_hash"
+      `);
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS "study_participants_number_unique"
+        ON "study_participants" USING btree ("participant_number")
+      `);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_clones" (
+          "id" text PRIMARY KEY NOT NULL,
+          "participant_id" text NOT NULL,
+          "dataset_key" text NOT NULL,
+          "assignment_id" text NOT NULL,
+          "source_assignment_id" text NOT NULL,
+          "created_at" timestamp NOT NULL
+        )
+      `);
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS "study_clones_participant_dataset_unique"
+        ON "study_clones" USING btree ("participant_id", "dataset_key")
+      `);
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS "study_clones_assignment_idx"
+        ON "study_clones" USING btree ("assignment_id")
+      `);
+
+      // FK-column indexes on core tables that Postgres does NOT auto-create.
+      // Without them, deleting a clone's sessions/conversations/messages forces
+      // a full seq-scan of the referencing table per row to validate the FK —
+      // catastrophic for editor_events (100k+ rows), turning a clone teardown
+      // (reset/deprovision) into minutes. IF NOT EXISTS → built once; also speeds
+      // ordinary session/replay reads.
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "editor_events_session_idx" ON "editor_events" USING btree ("session_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "chat_conversations_session_idx" ON "chat_conversations" USING btree ("session_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "chat_messages_conversation_idx" ON "chat_messages" USING btree ("conversation_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "score_classifications_message_fk_idx" ON "score_classifications" USING btree ("message_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "score_classifications_session_fk_idx" ON "score_classifications" USING btree ("session_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "score_classifications_conversation_fk_idx" ON "score_classifications" USING btree ("conversation_id")`);
+    })().catch((err) => {
+      ensured = null; // allow retry rather than caching the rejection
+      throw err;
+    });
+  }
+  return ensured;
+}
+
+/**
+ * Canonical form of a participant number: trimmed, inner whitespace removed,
+ * uppercased. So "p01", " P01 " and "P01" all resolve to the same participant.
+ */
+export function normalizeParticipantNumber(input: string): string {
+  return input.trim().replace(/\s+/g, '').toUpperCase();
+}
+
+/** Whether a (normalized) participant number is an acceptable, cloneable code. */
+export function isValidParticipantNumber(normalized: string): boolean {
+  return PARTICIPANT_NUMBER_RE.test(normalized);
+}
+
+/** Look up a participant by (already-or-not normalized) number. */
+export async function getParticipantByNumber(
+  input: string
+): Promise<StudyParticipant | undefined> {
+  const number = normalizeParticipantNumber(input);
+  if (!number) return undefined;
+  return db.query.studyParticipants.findFirst({
+    where: eq(studyParticipants.participantNumber, number),
+  });
+}
+
+/** All dataset clones a participant currently owns. */
+export async function getParticipantClones(participantId: string): Promise<StudyClone[]> {
+  return db
+    .select()
+    .from(studyClones)
+    .where(eq(studyClones.participantId, participantId));
+}

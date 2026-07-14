@@ -8,6 +8,9 @@ import { Button } from '@/components/ui/button';
 import { ChevronLeft, Edit2, BarChart3 } from 'lucide-react';
 import AssignmentTabs from './AssignmentTabs';
 import { getInstructor, isAdministrator } from '@/lib/auth';
+import { getCurrentStudyParticipant } from '@/lib/study/session';
+import { getParticipantClones } from '@/lib/study/store';
+import { STUDY_DATASETS } from '@/lib/study/config';
 import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 
 interface PageProps {
@@ -20,6 +23,19 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
 
   if (!instructor) {
     redirect('/login');
+  }
+
+  // Study participants shouldn't see the (inherited master) deadline, and get a
+  // per-dataset "Reset" control in the header for this dataset's board.
+  const studyParticipant = await getCurrentStudyParticipant();
+  let studyReset: { scope: 'dataset'; datasetKey: string; datasetLabel: string } | undefined;
+  if (studyParticipant) {
+    const clones = await getParticipantClones(studyParticipant.id);
+    const thisClone = clones.find((c) => c.assignmentId === id);
+    if (thisClone) {
+      const label = STUDY_DATASETS.find((d) => d.key === thisClone.datasetKey)?.label ?? 'this dataset';
+      studyReset = { scope: 'dataset', datasetKey: thisClone.datasetKey, datasetLabel: label };
+    }
   }
 
   const assignmentWhere = isAdministrator(instructor)
@@ -132,10 +148,12 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
             </Link>
             <div className="flex-1">
               <h1 className="text-xl font-bold font-heading text-[hsl(var(--foreground))]">{assignment.title}</h1>
-              <p className={`text-sm ${isOverdue ? 'text-[hsl(var(--destructive))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                Deadline: {new Date(assignment.deadline).toLocaleString()}
-                {isOverdue && ' (Overdue)'}
-              </p>
+              {!studyParticipant && (
+                <p className={`text-sm ${isOverdue ? 'text-[hsl(var(--destructive))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
+                  Deadline: {new Date(assignment.deadline).toLocaleString()}
+                  {isOverdue && ' (Overdue)'}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Link href={`/instructor/assignments/${id}/score`}>
@@ -152,7 +170,7 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
                   </Button>
                 </Link>
               )}
-              <InstructorHeaderActions email={instructor.email} />
+              <InstructorHeaderActions email={instructor.email} studyReset={studyReset} />
             </div>
           </div>
         </div>

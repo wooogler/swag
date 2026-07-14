@@ -14,6 +14,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:import-nirvana": "tsx src/db/import-nirvana.ts",
     "export:participants": "tsx scripts/export-participants.ts",
+    "study:reset": "tsx scripts/study/reset-participants.ts",
+    "study:deprovision": "tsx scripts/study/deprovision-participants.ts",
     "db:local:up": "docker compose -f docker-compose.local.yml up -d",
     "db:local:down": "docker compose -f docker-compose.local.yml down",
     "db:local:logs": "docker compose -f docker-compose.local.yml logs -f postgres"

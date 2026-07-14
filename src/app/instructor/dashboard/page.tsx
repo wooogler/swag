@@ -11,6 +11,7 @@ import EmptyStateCard from '@/components/ui/EmptyStateCard';
 import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 import { Plus, Users, Calendar, Edit2 } from 'lucide-react';
 import { getInstructor, isAdministrator } from '@/lib/auth';
+import { getCurrentStudyParticipant } from '@/lib/study/session';
 
 export default async function DashboardPage() {
   const instructor = await getInstructor();
@@ -18,6 +19,9 @@ export default async function DashboardPage() {
   if (!instructor) {
     redirect('/login');
   }
+
+  // Study participant? → header gets a "reset all my workspaces" control.
+  const studyParticipant = await getCurrentStudyParticipant();
 
   const isAdmin = isAdministrator(instructor);
   const assignmentsQuery = db
@@ -84,7 +88,10 @@ export default async function DashboardPage() {
                 {isAdmin ? 'Administrator Dashboard' : 'Instructor Dashboard'}
               </p>
             </div>
-            <InstructorHeaderActions email={instructor.email} />
+            <InstructorHeaderActions
+              email={instructor.email}
+              studyReset={studyParticipant ? { scope: 'all' } : undefined}
+            />
           </div>
         </div>
       </header>
@@ -127,9 +134,11 @@ export default async function DashboardPage() {
                     <th className="px-6 py-4 text-left text-xs font-semibold text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
                       Title
                     </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
-                      Deadline
-                    </th>
+                    {!studyParticipant && (
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+                        Deadline
+                      </th>
+                    )}
                     <th className="px-6 py-4 text-left text-xs font-semibold text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
                       Students
                     </th>
@@ -161,12 +170,14 @@ export default async function DashboardPage() {
                             {assignment.title}
                           </Link>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className={`text-sm ${isOverdue ? 'text-[hsl(var(--destructive))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                            {new Date(assignment.deadline).toLocaleDateString()}
-                            {isOverdue && <span className="ml-2 text-xs font-medium">(Overdue)</span>}
-                          </div>
-                        </td>
+                        {!studyParticipant && (
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className={`text-sm ${isOverdue ? 'text-[hsl(var(--destructive))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
+                              {new Date(assignment.deadline).toLocaleDateString()}
+                              {isOverdue && <span className="ml-2 text-xs font-medium">(Overdue)</span>}
+                            </div>
+                          </td>
+                        )}
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2 text-sm text-[hsl(var(--foreground))]">
                             <Users className="w-4 h-4 text-[hsl(var(--muted-foreground))]" />

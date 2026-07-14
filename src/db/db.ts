@@ -20,6 +20,10 @@ const client = postgres(connectionString || 'postgresql://dummy@localhost/dummy'
   max: 20,
   idle_timeout: 20,
   connect_timeout: 10,
+  // Silence PostgreSQL NOTICE logs (e.g. "already exists, skipping" from our
+  // idempotent CREATE/ALTER ... IF (NOT) EXISTS DDL). These are informational,
+  // not errors; postgres-js prints them to the console by default.
+  onnotice: () => {},
 });
 
 // Create Drizzle ORM instance with postgres-js

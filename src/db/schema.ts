@@ -365,6 +365,93 @@ export const scoreChatDeploys = pgTable('score_chat_deploys', {
   ),
 }));
 
+// Per-intent RULE version history (P3, Revise modal) — SEPARATE from the intent
+// config-version timeline (scoreConfigVersions): rule edits are their own axis.
+// Each Save records the rule text + the anchor's Updated Response under it (so a
+// version retrieves with its preview) + which GUI action produced it.
+export const scoreRuleVersions = pgTable('score_rule_versions', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  intentId: integer('intent_id').notNull().references(() => scoreIntents.id),
+  versionNo: integer('version_no').notNull(), // this intent's own rule seq (v1, v2, …)
+  name: text('name'), // short git-commit-style label naming the rule
+  rule: text('rule'), // null = no rule (base prompt only)
+  updatedResponse: text('updated_response'), // the anchor's Updated Response under this rule
+  anchorMessageId: integer('anchor_message_id'),
+  source: text('source').notNull(), // 'direct' | 'feedback' | 'rewrite' | 'manual'
+  note: text('note'),
+  // MINOR version: a simulated preview (feedback / direct edit / rewrite) —
+  // checkout-able and revertible, but not a Save. Majors advance the live rule.
+  minor: boolean('minor').default(false).notNull(),
+  createdBy: text('created_by'), // instructors.id
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_rule_versions_assignment_idx').on(table.assignmentId),
+  intentVersionUnique: uniqueIndex('score_rule_versions_intent_version_unique').on(
+    table.intentId,
+    table.versionNo
+  ),
+}));
+
+// Responses generated under a SPECIFIC saved rule version ("apply to intent" in
+// the Revise modal): one row per (rule version, message). Powers the board's
+// per-query version chip and the viewer's version dropdown — past behavior
+// retrieves with zero LLM calls.
+export const scoreRuleVersionResponses = pgTable('score_rule_version_responses', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  intentId: integer('intent_id').notNull().references(() => scoreIntents.id),
+  ruleVersionId: integer('rule_version_id').notNull().references(() => scoreRuleVersions.id),
+  versionNo: integer('version_no').notNull(), // denormalized rule version_no for cheap lookups
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  response: text('response').notNull(),
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_rule_version_responses_assignment_idx').on(table.assignmentId),
+  versionMessageUnique: uniqueIndex('score_rule_version_responses_version_message_unique').on(
+    table.ruleVersionId,
+    table.messageId
+  ),
+}));
+
+// ---------------------------------------------------------------------------
+// SCORE user-study mode — one participant = one instructor account owning a
+// clone of EACH configured dataset. Participants sign in on /study with a
+// participant number + the shared study passcode (NOT email/password); auth is
+// via the global passcode (src/lib/study/config.ts), so no per-row secret.
+// Created by runtime DDL in src/lib/study/store.ts (mirrors the score tables).
+// ---------------------------------------------------------------------------
+export const studyParticipants = pgTable('study_participants', {
+  id: text('id').primaryKey(),
+  // Canonical (trimmed, uppercased) code handed to the participant, e.g. 'P01'.
+  participantNumber: text('participant_number').notNull(),
+  instructorId: text('instructor_id').notNull().references(() => instructors.id),
+  label: text('label'),
+  createdAt: timestamp('created_at').notNull(),
+  lastLoginAt: timestamp('last_login_at'),
+}, (table) => ({
+  numberUnique: uniqueIndex('study_participants_number_unique').on(table.participantNumber),
+}));
+
+// One cloned dataset assignment per (participant, dataset). Lets a participant
+// hold a clone of several datasets (SWAG, NIRVANA, …) at once; the unique
+// (participant, dataset_key) index makes provisioning idempotent + race-safe.
+export const studyClones = pgTable('study_clones', {
+  id: text('id').primaryKey(),
+  participantId: text('participant_id').notNull().references(() => studyParticipants.id),
+  datasetKey: text('dataset_key').notNull(), // StudyDataset.key
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  sourceAssignmentId: text('source_assignment_id').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  participantDatasetUnique: uniqueIndex('study_clones_participant_dataset_unique').on(
+    table.participantId,
+    table.datasetKey
+  ),
+  assignmentIdx: index('study_clones_assignment_idx').on(table.assignmentId),
+}));
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
@@ -422,3 +509,15 @@ export type NewScoreQueryEmbedding = typeof scoreQueryEmbeddings.$inferInsert;
 
 export type ScoreChatDeploy = typeof scoreChatDeploys.$inferSelect;
 export type NewScoreChatDeploy = typeof scoreChatDeploys.$inferInsert;
+
+export type ScoreRuleVersion = typeof scoreRuleVersions.$inferSelect;
+export type NewScoreRuleVersion = typeof scoreRuleVersions.$inferInsert;
+
+export type ScoreRuleVersionResponse = typeof scoreRuleVersionResponses.$inferSelect;
+export type NewScoreRuleVersionResponse = typeof scoreRuleVersionResponses.$inferInsert;
+
+export type StudyParticipant = typeof studyParticipants.$inferSelect;
+export type NewStudyParticipant = typeof studyParticipants.$inferInsert;
+
+export type StudyClone = typeof studyClones.$inferSelect;
+export type NewStudyClone = typeof studyClones.$inferInsert;
