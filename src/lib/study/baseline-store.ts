@@ -4,19 +4,56 @@
  * uses. Mirrors the SCORE deploy-store's fail-open philosophy: any gap → the
  * assignment's live base prompt. DDL lives in store.ts. See spec §5.
  */
+import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   assignments,
   baselinePromptVersions,
+  baselineSearches,
   chatConversations,
   chatMessages,
   studentSessions,
   studyClones,
   studyEvents,
+  type BaselineSearch,
 } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
+import { intentDefHash } from '@/lib/score/intents';
 import type { StudioView } from './config';
+
+/* ------------------------------------------------------------------ */
+/* Saved custom searches                                               */
+/* ------------------------------------------------------------------ */
+
+export async function listBaselineSearches(assignmentId: string): Promise<BaselineSearch[]> {
+  return db
+    .select()
+    .from(baselineSearches)
+    .where(eq(baselineSearches.assignmentId, assignmentId))
+    .orderBy(desc(baselineSearches.createdAt));
+}
+
+export async function createBaselineSearch(
+  assignmentId: string,
+  description: string
+): Promise<{ id: string; defHash: string }> {
+  const defHash = intentDefHash(description, []);
+  const id = randomUUID();
+  await db.insert(baselineSearches).values({ id, assignmentId, description, defHash, createdAt: new Date() });
+  return { id, defHash };
+}
+
+export async function deleteBaselineSearch(assignmentId: string, id: string): Promise<void> {
+  await db.delete(baselineSearches).where(and(eq(baselineSearches.id, id), eq(baselineSearches.assignmentId, assignmentId)));
+}
+
+export async function touchBaselineSearch(assignmentId: string, defHash: string): Promise<void> {
+  await db
+    .update(baselineSearches)
+    .set({ lastRunAt: new Date() })
+    .where(and(eq(baselineSearches.assignmentId, assignmentId), eq(baselineSearches.defHash, defHash)));
+}
 
 export interface BaselineLogRow {
   messageId: number;
