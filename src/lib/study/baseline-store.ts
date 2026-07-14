@@ -14,6 +14,7 @@ import {
   baselineSearches,
   chatConversations,
   chatMessages,
+  reviewSetItems,
   studentSessions,
   studyClones,
   studyEvents,
@@ -92,6 +93,51 @@ export async function touchBaselineSearch(assignmentId: string, defHash: string)
     .update(baselineSearches)
     .set({ lastRunAt: new Date() })
     .where(and(eq(baselineSearches.assignmentId, assignmentId), eq(baselineSearches.defHash, defHash)));
+}
+
+/* ------------------------------------------------------------------ */
+/* Review set (shared shape; baseline uses scope='prompt')             */
+/* ------------------------------------------------------------------ */
+
+export interface ReviewSetRow {
+  messageId: number;
+  source: string;
+  queryText: string;
+}
+
+export async function listReviewSet(assignmentId: string, scope: string): Promise<ReviewSetRow[]> {
+  return db
+    .select({ messageId: reviewSetItems.messageId, source: reviewSetItems.source, queryText: chatMessages.content })
+    .from(reviewSetItems)
+    .innerJoin(chatMessages, eq(reviewSetItems.messageId, chatMessages.id))
+    .where(and(eq(reviewSetItems.assignmentId, assignmentId), eq(reviewSetItems.scope, scope)))
+    .orderBy(asc(reviewSetItems.id));
+}
+
+export async function addToReviewSet(
+  assignmentId: string,
+  scope: string,
+  messageIds: number[],
+  source: string
+): Promise<void> {
+  if (messageIds.length === 0) return;
+  const now = new Date();
+  await db
+    .insert(reviewSetItems)
+    .values(messageIds.map((messageId) => ({ assignmentId, scope, messageId, source, createdAt: now })))
+    .onConflictDoNothing();
+}
+
+export async function removeFromReviewSet(assignmentId: string, scope: string, messageId: number): Promise<void> {
+  await db
+    .delete(reviewSetItems)
+    .where(
+      and(
+        eq(reviewSetItems.assignmentId, assignmentId),
+        eq(reviewSetItems.scope, scope),
+        eq(reviewSetItems.messageId, messageId)
+      )
+    );
 }
 
 export interface BaselineLogRow {

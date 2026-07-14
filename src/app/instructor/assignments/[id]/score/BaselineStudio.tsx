@@ -9,12 +9,13 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, MessageSquare, Play, Plus, Search, Trash2 } from 'lucide-react';
+import { ChevronLeft, MessageSquare, Play, Plus, Search, Trash2, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 import type { BaselineLogRow, BaselineState } from '@/lib/study/baseline-store';
 import SearchWorkbench, { type ClearlyInRow } from './SearchWorkbench';
 import TestChat, { type TurnMessage } from './TestChat';
+import ReviseModal from './ReviseModal';
 
 interface Preset { intentId: number; title: string; definition: string }
 interface SavedSearch { id: string; description: string }
@@ -48,7 +49,8 @@ export default function BaselineStudio({
   const [searches, setSearches] = useState<SavedSearch[]>([]);
   const [wb, setWb] = useState<WorkbenchState | null>(null);
   const [testChatOpen, setTestChatOpen] = useState(false);
-  const [preview, setPreview] = useState<{ queryText: string; response: string | null } | null>(null);
+  const [preview, setPreview] = useState<{ messageId: number; queryText: string; response: string | null } | null>(null);
+  const [revise, setRevise] = useState<{ messageId: number; queryText: string } | null>(null);
 
   const scoreRoot = `/api/instructor/assignments/${assignmentId}/score`;
   const base = `${scoreRoot}/baseline`;
@@ -135,7 +137,7 @@ export default function BaselineStudio({
   }
 
   async function runPreview(row: BaselineLogRow) {
-    setPreview({ queryText: row.queryText, response: null });
+    setPreview({ messageId: row.messageId, queryText: row.queryText, response: null });
     try {
       const res = await fetch(`${base}/preview`, {
         method: 'POST',
@@ -143,9 +145,9 @@ export default function BaselineStudio({
         body: JSON.stringify({ messageId: row.messageId, promptText: prompt }),
       });
       const data = await res.json();
-      setPreview({ queryText: row.queryText, response: res.ok ? data.response : `오류: ${data.error}` });
+      setPreview({ messageId: row.messageId, queryText: row.queryText, response: res.ok ? data.response : `오류: ${data.error}` });
     } catch (e) {
-      setPreview({ queryText: row.queryText, response: `오류: ${e instanceof Error ? e.message : e}` });
+      setPreview({ messageId: row.messageId, queryText: row.queryText, response: `오류: ${e instanceof Error ? e.message : e}` });
     }
   }
 
@@ -263,6 +265,13 @@ export default function BaselineStudio({
                       >
                         <Play className="w-3.5 h-3.5" />
                       </button>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 mt-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                        title="이 질문 기준으로 프롬프트 수정"
+                        onClick={() => setRevise({ messageId: r.messageId, queryText: r.queryText })}
+                      >
+                        <Wand2 className="w-3.5 h-3.5" />
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -335,11 +344,25 @@ export default function BaselineStudio({
                 {preview.response === null ? '생성 중…' : preview.response}
               </div>
             </div>
-            <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex justify-end">
+            <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex justify-between">
+              <Button variant="ghost" className="gap-1.5" onClick={() => { const p = preview; setPreview(null); if (p) setRevise({ messageId: p.messageId, queryText: p.queryText }); }}>
+                <Wand2 className="w-4 h-4" /> 이 응답 개선
+              </Button>
               <Button variant="outline" onClick={() => setPreview(null)}>닫기</Button>
             </div>
           </div>
         </div>
+      )}
+
+      {revise && (
+        <ReviseModal
+          assignmentId={assignmentId}
+          promptText={prompt}
+          anchor={revise}
+          log={log.map((r) => ({ messageId: r.messageId, queryText: r.queryText, participantToken: r.participantToken }))}
+          onApply={(revised) => { setPrompt(revised); setNote('수정 반영됨 (저장하려면 Save)'); }}
+          onClose={() => setRevise(null)}
+        />
       )}
     </div>
   );
