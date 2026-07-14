@@ -171,13 +171,228 @@ type IntentSelection =
   // Starter-set browse: questions rated clearly-in for one prepared template
   // (`set:CODE`) or for every prepared template of a Type (`type:KEY`).
   // ids = template intent ids; label = display name for the middle header.
-  | { kind: 'starter'; key: string; ids: number[]; label: string };
+  | { kind: 'starter'; key: string; ids: number[]; label: string }
+  // Baseline saved-search browse: the search's clearly-in questions by messageId
+  // (from its cached probe). Clicking a saved Search filters the list here — the
+  // baseline analogue of clicking a starter set; only +New opens the workbench.
+  | { kind: 'search'; key: string; ids: number[]; label: string };
 
 function Badge({ n }: { n: number }) {
   return (
     <span className="text-[11px] tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
       {n}
     </span>
+  );
+}
+
+/** One Type in the pre-built starter-set library (a Jelson taxonomy type + its
+ * sub-type sets), as built by the `starterGroups` memo. */
+type StarterGroup = {
+  typeKey: string;
+  typeLabel: string;
+  typeDescription: string;
+  typeSeed: { title: string; definition: string };
+  typeTemplateId: number | null;
+  typeActive: boolean;
+  sets: {
+    code: string;
+    title: string;
+    definition: string;
+    desc: string;
+    templateId: number | null;
+    active: boolean;
+  }[];
+};
+type StarterCounts = { perSet: Map<number, number>; perType: Map<string, number> };
+
+/**
+ * The pre-built starter-set browse tree: Type headers, each with its sub-type
+ * sets, showing the clearly-in count and filtering the question list on click
+ * (setSelection → kind:'starter'). SCORE also renders the activation affordances
+ * (Add a set/Type as a live intent, Added/Adding chips). The BASELINE reuses the
+ * SAME tree with `showActivation={false}`, so a "Search" (starter set) just shows
+ * its matching questions — Type + Sub type + count, no workbench. Single source
+ * of truth for both conditions.
+ */
+function StarterSetTree({
+  groups,
+  counts,
+  selection,
+  setSelection,
+  showActivation,
+  activatingCode,
+  libraryBusy,
+  activateType,
+  activateStarterSet,
+}: {
+  groups: StarterGroup[];
+  counts: StarterCounts;
+  selection: IntentSelection;
+  setSelection: (s: IntentSelection) => void;
+  showActivation: boolean;
+  activatingCode?: string | null;
+  libraryBusy?: boolean;
+  activateType?: (g: StarterGroup) => void;
+  activateStarterSet?: (s: StarterGroup['sets'][number]) => void;
+}) {
+  return (
+    <div className="pb-1">
+      {groups.map((g) => {
+        // Browse the TYPE template's own questions when prepared (what Add would
+        // capture); fall back to the union of its prepared sets. Matches the
+        // badge (counts.perType).
+        const preparedSetIds = g.sets.map((s) => s.templateId).filter((id): id is number => id !== null);
+        const groupIds = g.typeTemplateId !== null ? [g.typeTemplateId] : preparedSetIds;
+        const groupKey = `type:${g.typeKey}`;
+        const groupActive = selection.kind === 'starter' && selection.key === groupKey;
+        return (
+          <div key={g.typeKey}>
+            {/* Type header — click to browse; hover Add turns the whole Type
+                into ONE intent (SCORE only). */}
+            <div
+              className={`group flex items-center gap-1 pr-3 ${
+                groupActive ? 'bg-[hsl(var(--muted))]' : 'bg-[hsl(var(--muted))]/30 hover:bg-[hsl(var(--muted))]/60'
+              }`}
+            >
+              <button
+                onClick={() =>
+                  groupIds.length > 0 &&
+                  setSelection(
+                    groupActive ? { kind: 'all' } : { kind: 'starter', key: groupKey, ids: groupIds, label: g.typeLabel }
+                  )
+                }
+                disabled={groupIds.length === 0}
+                title={
+                  groupIds.length > 0
+                    ? `${g.typeDescription} — click to see this Type's questions`
+                    : `${g.typeDescription} — Run all first to rate these sets`
+                }
+                className={`min-w-0 flex-1 text-left px-3 py-1 flex items-start gap-2 ${
+                  groupIds.length === 0 ? 'cursor-default' : ''
+                }`}
+              >
+                <span className={`mt-1 w-2 h-2 shrink-0 rounded-full ${TYPE_DOT[g.typeKey] ?? 'bg-gray-400'}`} />
+                <span className="min-w-0">
+                  <span className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${groupActive ? 'font-semibold text-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
+                    {g.typeLabel} ({g.sets.length})
+                    {showActivation && g.typeTemplateId !== null && (
+                      <span
+                        className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500"
+                        title="Prepared — the one-intent Add is instant"
+                      />
+                    )}
+                  </span>
+                  <span className="block text-[10px] normal-case text-[hsl(var(--muted-foreground))] truncate">
+                    {g.typeDescription}
+                  </span>
+                </span>
+              </button>
+              {showActivation &&
+                (g.typeActive ? (
+                  <span
+                    className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
+                    title={`"${g.typeLabel}" is already a live intent — the library keeps the set for later re-use`}
+                  >
+                    <Check className="w-3 h-3" /> Added
+                  </span>
+                ) : activatingCode === `type:${g.typeKey}` ? (
+                  <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+                    <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
+                  </span>
+                ) : libraryBusy ? null : (
+                  <button
+                    onClick={() => activateType?.(g)}
+                    className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[10px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+                    title={`Add "${g.typeLabel}" as ONE intent covering the whole type (subtypes stay in the library)`}
+                  >
+                    <Plus className="w-3 h-3" /> Add
+                  </button>
+                ))}
+              {groupIds.length > 0 && (
+                <span className="shrink-0">
+                  <Badge n={counts.perType.get(g.typeKey) ?? 0} />
+                </span>
+              )}
+            </div>
+            {g.sets.map((s) => {
+              const setKey = `set:${s.code}`;
+              const setActive = selection.kind === 'starter' && selection.key === setKey;
+              const browsable = s.templateId !== null;
+              return (
+                <div
+                  key={s.code}
+                  className={`group flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[hsl(var(--border))]/40 ${
+                    setActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
+                  }`}
+                >
+                  {/* Click the set → browse its clearly-in questions (prepared
+                      sets only — unprepared have no ratings). */}
+                  <button
+                    onClick={() =>
+                      browsable &&
+                      setSelection(
+                        setActive
+                          ? { kind: 'all' }
+                          : { kind: 'starter', key: setKey, ids: [s.templateId as number], label: s.title }
+                      )
+                    }
+                    title={
+                      browsable
+                        ? `${s.definition} — click to see its questions`
+                        : `${s.definition} — Run all first to rate this set`
+                    }
+                    className={`min-w-0 flex-1 text-left ${browsable ? '' : 'cursor-default'}`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className={`text-xs truncate ${setActive ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
+                        {s.title}
+                      </span>
+                      {showActivation && browsable && (
+                        <span
+                          className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500"
+                          title="Prepared — rated; click to browse, Add is instant"
+                        />
+                      )}
+                    </span>
+                    <span className="block text-[10px] text-[hsl(var(--muted-foreground))] truncate">{s.desc}</span>
+                  </button>
+                  {showActivation &&
+                    (s.active ? (
+                      <span
+                        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
+                        title="Already a live intent — the library keeps this set for later re-use"
+                      >
+                        <Check className="w-3 h-3" /> Added
+                      </span>
+                    ) : activatingCode === s.code ? (
+                      <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
+                      </span>
+                    ) : libraryBusy ? null : (
+                      <button
+                        onClick={() => activateStarterSet?.(s)}
+                        className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[11px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+                        title={
+                          s.templateId !== null
+                            ? 'Activate — a copy of the prepared set becomes a live intent, instantly'
+                            : 'Add as an intent and rate the log against it'
+                        }
+                      >
+                        <Plus className="w-3 h-3" /> Add
+                      </button>
+                    ))}
+                  {browsable && (
+                    <span className="shrink-0">
+                      <Badge n={counts.perSet.get(s.templateId as number) ?? 0} />
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -544,20 +759,42 @@ export default function IntentBoard({
     definition?: string;
   } | null>(null);
 
-  // BASELINE: the Intents list is replaced by Searches (presets + saved custom
-  // searches); searchMode holds the open Search workbench.
+  // BASELINE: the Intents list is replaced by Searches — the pre-built starter
+  // sets (reusing the SCORE StarterSetTree over `starterGroups`) plus the user's
+  // saved custom searches. searchMode holds the open Search workbench (+New).
   const [searchMode, setSearchMode] = useState<SearchMode | null>(null);
-  const [presets, setPresets] = useState<{ intentId: number; title: string; definition: string }[]>([]);
   const [savedSearches, setSavedSearches] = useState<{ id: string; description: string }[]>([]);
   async function reloadSearches() {
     if (!isBaseline) return;
     const b = `/api/instructor/assignments/${assignmentId}/score/baseline`;
-    const [p, s] = await Promise.all([
-      getJSON<{ presets?: { intentId: number; title: string; definition: string }[] }>(`${b}/presets`).catch(() => ({ presets: [] })),
-      getJSON<{ searches?: { id: string; description: string }[] }>(`${b}/searches`).catch(() => ({ searches: [] })),
-    ]);
-    setPresets(p.presets ?? []);
+    const s = await getJSON<{ searches?: { id: string; description: string }[] }>(`${b}/searches`).catch(() => ({
+      searches: [],
+    }));
     setSavedSearches(s.searches ?? []);
+  }
+  // Clicking a saved Search filters the list to its matches (like clicking a
+  // starter set) rather than opening the workbench — only +New does that. The
+  // probe is cached from when the search was run, so this is normally instant.
+  const [openingSearchId, setOpeningSearchId] = useState<string | null>(null);
+  async function openSavedSearch(s: { id: string; description: string }) {
+    setOpeningSearchId(s.id);
+    const probeUrl = `/api/instructor/assignments/${assignmentId}/score/probe`;
+    try {
+      let ids: number[] = [];
+      for (let guard = 0; guard < 100; guard++) {
+        const data = await postJSON<{ clearlyIn?: { messageId: number }[]; remaining: number; ratedThisBatch: number }>(
+          probeUrl,
+          { description: s.description }
+        );
+        ids = (data.clearlyIn ?? []).map((x) => x.messageId);
+        if (data.remaining === 0 || data.ratedThisBatch === 0) break;
+      }
+      setSelection({ kind: 'search', key: `search:${s.id}`, ids, label: s.description });
+    } catch {
+      /* ignore — leave the current selection in place */
+    } finally {
+      setOpeningSearchId(null);
+    }
   }
   useEffect(() => {
     void reloadSearches();
@@ -994,6 +1231,9 @@ export default function IntentBoard({
             if (pin) return pin === 'in';
             return r.intentRatings[tid]?.rating === 'clearly_in';
           });
+        case 'search':
+          // A baseline saved search: its cached clearly-in messageIds.
+          return selection.ids.includes(r.messageId);
       }
     });
   }, [rows, resolutions, selection]);
@@ -1139,6 +1379,8 @@ export default function IntentBoard({
         return selection.key.split('+').map((s) => titleOf(Number(s))).join(' ↔ ');
       case 'starter':
         return `Starter set · ${selection.label}`;
+      case 'search':
+        return `Search · ${selection.label}`;
     }
   })();
 
@@ -1394,40 +1636,51 @@ export default function IntentBoard({
           </div>
 
           {isBaseline && (
-            /* SEARCHES: saved custom searches + read-only presets. Each opens the
-               Search workbench (definition + clearly_in matches). */
-            <div className="px-2 pb-2 space-y-2">
+            /* SEARCHES: the user's saved custom searches, then the pre-built
+               starter-set library (reusing the SCORE StarterSetTree). Clicking
+               either filters the question list to its matches — Type + Sub type
+               + count — WITHOUT opening the workbench; only +New does that. */
+            <div className="pb-1">
               {savedSearches.length > 0 && (
-                <ul className="space-y-0.5">
-                  {savedSearches.map((s) => (
-                    <li key={s.id}>
-                      <button
-                        onClick={() => setSearchMode({ kind: 'saved', searchId: s.id, definition: s.description })}
-                        className="w-full text-left px-2 py-1.5 rounded text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]/50 truncate"
-                        title={s.description}
-                      >
-                        {s.description}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                    Saved
+                  </div>
+                  <ul>
+                    {savedSearches.map((s) => {
+                      const active = selection.kind === 'search' && selection.key === `search:${s.id}`;
+                      return (
+                        <li key={s.id}>
+                          <button
+                            onClick={() => openSavedSearch(s)}
+                            disabled={openingSearchId !== null}
+                            className={`group w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left border-b border-[hsl(var(--border))]/40 ${
+                              active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
+                            }`}
+                            title={s.description}
+                          >
+                            <span className={`min-w-0 truncate text-xs ${active ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
+                              {s.description}
+                            </span>
+                            {openingSearchId === s.id && (
+                              <RefreshCw className="w-3 h-3 shrink-0 animate-spin text-[hsl(var(--muted-foreground))]" />
+                            )}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
               )}
-              <div className="px-2 pt-1 text-[11px] font-medium text-[hsl(var(--muted-foreground))]">
-                Presets ({presets.length})
-              </div>
-              <ul className="space-y-0.5">
-                {presets.map((p) => (
-                  <li key={p.intentId}>
-                    <button
-                      onClick={() => setSearchMode({ kind: 'preset', intentId: p.intentId, definition: p.definition, title: p.title })}
-                      className="w-full text-left px-2 py-1.5 rounded text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]/50 truncate"
-                      title={p.definition}
-                    >
-                      {p.title}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {starterGroups.length > 0 && (
+                <StarterSetTree
+                  groups={starterGroups}
+                  counts={starterCounts}
+                  selection={selection}
+                  setSelection={setSelection}
+                  showActivation={false}
+                />
+              )}
             </div>
           )}
           {isBaseline ? null : activeIntents.length === 0 ? (
@@ -1662,8 +1915,10 @@ export default function IntentBoard({
             </div>
           )}
 
-          {/* PENDING + UNASSIGNED + STARTER SETS — intent-only, hidden in baseline */}
-          <div className={`mt-auto border-t border-[hsl(var(--border))] ${isBaseline ? 'hidden' : ''}`}>
+          {/* PENDING + UNASSIGNED + STARTER SETS — intent-only. Baseline shows
+              its own Searches section (above) instead of this whole block. */}
+          {!isBaseline && (
+          <div className="mt-auto border-t border-[hsl(var(--border))]">
             {counts.pending > 0 && (
               <button
                 onClick={() => setSelection({ kind: 'pending' })}
@@ -1746,181 +2001,22 @@ export default function IntentBoard({
                   )}
                 </div>
                 {starterOpen && (
-                  <div className="pb-1">
-                    {starterGroups.map((g) => {
-                      // Browse the TYPE template's own questions when prepared
-                      // (what Add would capture); fall back to the union of its
-                      // prepared sets. Matches the badge (starterCounts.perType).
-                      const preparedSetIds = g.sets
-                        .map((s) => s.templateId)
-                        .filter((id): id is number => id !== null);
-                      const groupIds =
-                        g.typeTemplateId !== null ? [g.typeTemplateId] : preparedSetIds;
-                      const groupKey = `type:${g.typeKey}`;
-                      const groupActive = selection.kind === 'starter' && selection.key === groupKey;
-                      return (
-                        <div key={g.typeKey}>
-                          {/* Type header — click to browse; hover Add turns the
-                              whole Type into ONE intent. */}
-                          <div
-                            className={`group flex items-center gap-1 pr-3 ${
-                              groupActive ? 'bg-[hsl(var(--muted))]' : 'bg-[hsl(var(--muted))]/30 hover:bg-[hsl(var(--muted))]/60'
-                            }`}
-                          >
-                            <button
-                              onClick={() =>
-                                groupIds.length > 0 &&
-                                setSelection(
-                                  groupActive
-                                    ? { kind: 'all' }
-                                    : { kind: 'starter', key: groupKey, ids: groupIds, label: g.typeLabel }
-                                )
-                              }
-                              disabled={groupIds.length === 0}
-                              title={
-                                groupIds.length > 0
-                                  ? `${g.typeDescription} — click to see this Type's questions`
-                                  : `${g.typeDescription} — Run all first to rate these sets`
-                              }
-                              className={`min-w-0 flex-1 text-left px-3 py-1 flex items-start gap-2 ${
-                                groupIds.length === 0 ? 'cursor-default' : ''
-                              }`}
-                            >
-                              <span className={`mt-1 w-2 h-2 shrink-0 rounded-full ${TYPE_DOT[g.typeKey] ?? 'bg-gray-400'}`} />
-                              <span className="min-w-0">
-                                <span className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${groupActive ? 'font-semibold text-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                                  {g.typeLabel} ({g.sets.length})
-                                  {g.typeTemplateId !== null && (
-                                    <span
-                                      className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500"
-                                      title="Prepared — the one-intent Add is instant"
-                                    />
-                                  )}
-                                </span>
-                                <span className="block text-[10px] normal-case text-[hsl(var(--muted-foreground))] truncate">
-                                  {g.typeDescription}
-                                </span>
-                              </span>
-                            </button>
-                            {g.typeActive ? (
-                              <span
-                                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
-                                title={`"${g.typeLabel}" is already a live intent — the library keeps the set for later re-use`}
-                              >
-                                <Check className="w-3 h-3" /> Added
-                              </span>
-                            ) : activatingCode === `type:${g.typeKey}` ? (
-                              // This row is being activated — its own progress chip.
-                              <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
-                                <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
-                              </span>
-                            ) : libraryBusy ? null : (
-                              // Idle library → the usual hover-reveal Add.
-                              <button
-                                onClick={() => activateType(g)}
-                                className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[10px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                                title={`Add "${g.typeLabel}" as ONE intent covering the whole type (subtypes stay in the library)`}
-                              >
-                                <Plus className="w-3 h-3" /> Add
-                              </button>
-                            )}
-                            {groupIds.length > 0 && (
-                              <span className="shrink-0">
-                                <Badge n={starterCounts.perType.get(g.typeKey) ?? 0} />
-                              </span>
-                            )}
-                          </div>
-                          {g.sets.map((s) => {
-                            const setKey = `set:${s.code}`;
-                            const setActive = selection.kind === 'starter' && selection.key === setKey;
-                            const browsable = s.templateId !== null;
-                            return (
-                              <div
-                                key={s.code}
-                                className={`group flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[hsl(var(--border))]/40 ${
-                                  setActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
-                                }`}
-                              >
-                                {/* Click the set → browse its clearly-in questions
-                                    (prepared sets only — unprepared have no ratings). */}
-                                <button
-                                  onClick={() =>
-                                    browsable &&
-                                    setSelection(
-                                      setActive
-                                        ? { kind: 'all' }
-                                        : {
-                                            kind: 'starter',
-                                            key: setKey,
-                                            ids: [s.templateId as number],
-                                            label: s.title,
-                                          }
-                                    )
-                                  }
-                                  title={
-                                    browsable
-                                      ? `${s.definition} — click to see its questions`
-                                      : `${s.definition} — Run all first to rate this set`
-                                  }
-                                  className={`min-w-0 flex-1 text-left ${browsable ? '' : 'cursor-default'}`}
-                                >
-                                  <span className="flex items-center gap-1.5">
-                                    <span className={`text-xs truncate ${setActive ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
-                                      {s.title}
-                                    </span>
-                                    {browsable && (
-                                      <span
-                                        className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500"
-                                        title="Prepared — rated; click to browse, Add is instant"
-                                      />
-                                    )}
-                                  </span>
-                                  <span className="block text-[10px] text-[hsl(var(--muted-foreground))] truncate">
-                                    {s.desc}
-                                  </span>
-                                </button>
-                                {s.active ? (
-                                  <span
-                                    className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
-                                    title="Already a live intent — the library keeps this set for later re-use"
-                                  >
-                                    <Check className="w-3 h-3" /> Added
-                                  </span>
-                                ) : activatingCode === s.code ? (
-                                  // This row is being activated — its own progress chip.
-                                  <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
-                                    <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
-                                  </span>
-                                ) : libraryBusy ? null : (
-                                  // Idle library → the usual hover-reveal Add.
-                                  <button
-                                    onClick={() => activateStarterSet(s)}
-                                    className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[11px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                                    title={
-                                      s.templateId !== null
-                                        ? 'Activate — a copy of the prepared set becomes a live intent, instantly'
-                                        : 'Add as an intent and rate the log against it'
-                                    }
-                                  >
-                                    <Plus className="w-3 h-3" /> Add
-                                  </button>
-                                )}
-                                {browsable && (
-                                  <span className="shrink-0">
-                                    <Badge n={starterCounts.perSet.get(s.templateId as number) ?? 0} />
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <StarterSetTree
+                    groups={starterGroups}
+                    counts={starterCounts}
+                    selection={selection}
+                    setSelection={setSelection}
+                    showActivation
+                    activatingCode={activatingCode}
+                    libraryBusy={libraryBusy}
+                    activateType={activateType}
+                    activateStarterSet={activateStarterSet}
+                  />
                 )}
               </div>
             )}
           </div>
+          )}
         </div>
 
         {/* MIDDLE — question group */}
