@@ -1507,11 +1507,17 @@ export default function IntentBoard({
         />
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 flex-1 min-h-0">
-        {/* LEFT — Base prompt · Intents · Needs decision · Unassigned */}
-        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
+        {/* LEFT — Base prompt · Intents · Needs decision · Unassigned. In the
+            baseline the System Prompt is pinned at the top and only the Searches
+            list below it scrolls (flex column); SCORE scrolls as one panel. */}
+        <div
+          className={`rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] ${
+            isBaseline ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'
+          }`}
+        >
           {isBaseline ? (
             /* BASELINE: editable monolithic system prompt in the original slot. */
-            <div className="border-b border-[hsl(var(--border))] px-3 py-2">
+            <div className="shrink-0 border-b border-[hsl(var(--border))] px-3 py-2">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   System Prompt
@@ -1611,8 +1617,9 @@ export default function IntentBoard({
             </div>
           )}
 
-          {/* INTENTS (score) / SEARCHES (baseline) */}
-          <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2">
+          {/* INTENTS (score) / SEARCHES (baseline) — the header stays fixed in
+              the baseline (shrink-0 is inert in SCORE's non-flex panel). */}
+          <div className="shrink-0 px-3 pt-2 pb-1 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                 {isBaseline ? 'Searches' : 'Intents'}
@@ -1639,8 +1646,9 @@ export default function IntentBoard({
             /* SEARCHES: the user's saved custom searches, then the pre-built
                starter-set library (reusing the SCORE StarterSetTree). Clicking
                either filters the question list to its matches — Type + Sub type
-               + count — WITHOUT opening the workbench; only +New does that. */
-            <div className="pb-1">
+               + count — WITHOUT opening the workbench; only +New does that. This
+               list is the ONLY scrolling region of the baseline left column. */
+            <div className="flex-1 min-h-0 overflow-y-auto pb-1">
               {savedSearches.length > 0 && (
                 <>
                   <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
@@ -2127,10 +2135,14 @@ export default function IntentBoard({
                               />
                             );
                           })}
-                        {(selection.kind === 'unassigned' ||
-                          selection.kind === 'all' ||
-                          selection.kind === 'pending' ||
-                          selection.kind === 'starter') &&
+                        {/* Baseline hides this: it's an intent-membership tag
+                            AND a shortcut into Edit intent — both intent-mechanism
+                            leakage the ablation must not expose. */}
+                        {!isBaseline &&
+                          (selection.kind === 'unassigned' ||
+                            selection.kind === 'all' ||
+                            selection.kind === 'pending' ||
+                            selection.kind === 'starter') &&
                           res?.kind === 'assigned' &&
                           (() => {
                             const target = intentById.get(res.intentId);
