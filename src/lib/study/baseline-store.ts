@@ -17,13 +17,16 @@ import {
   reviewSetItems,
   studentSessions,
   studyClones,
-  studyEvents,
   type BaselineSearch,
 } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { intentDefHash } from '@/lib/score/intents';
 import { runChatTurn } from './chat-run';
 import type { StudioView } from './config';
+
+// Behavioral event logging lives in events.ts (shared with SCORE routes);
+// re-exported here so existing baseline routes keep importing it from baseline-store.
+export { logStudyEvent } from './events';
 
 /* ------------------------------------------------------------------ */
 /* Per-query preview under a draft prompt (cached, single-turn)         */
@@ -164,18 +167,6 @@ export async function getBaselineLog(assignmentId: string): Promise<BaselineLogR
   return rows;
 }
 
-/** Append a behavioral study event (process-metric source). Never throws into callers. */
-export async function logStudyEvent(
-  assignmentId: string,
-  eventType: string,
-  payload?: Record<string, unknown>
-): Promise<void> {
-  try {
-    await db.insert(studyEvents).values({ assignmentId, eventType, payload: payload ?? null, createdAt: new Date() });
-  } catch {
-    /* instrumentation must never break the action */
-  }
-}
 
 /** The study condition of an assignment, or null if it isn't a study clone. */
 export async function getCloneCondition(assignmentId: string): Promise<StudioView | null> {

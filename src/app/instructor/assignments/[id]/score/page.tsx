@@ -23,6 +23,7 @@ import {
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { listChatDeploys, type ChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
+import ScoreTestChatButton from './ScoreTestChatButton';
 import {
   DISSECTION_VERSION,
   isRatingLevel,
@@ -309,6 +310,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               versions={deployVersions}
               selectedVersion={deployView?.versionNo ?? null}
             />
+            <ScoreTestChatButton assignmentId={id} />
             <InstructorHeaderActions email={instructor.email} />
           </div>
         </div>

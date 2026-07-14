@@ -4,11 +4,17 @@
  * GET  → current intent state (intents + pins + links + version number).
  * POST → create an intent. Immediate-apply versioning: the create and its
  *        config snapshot commit in one transaction (§1.11).
+ *        With `fromTemplateId`, the create is a CLONE of a starter-set
+ *        template: spec copied from the template AND its rating rows copied to
+ *        the new id, so the clone is instantly fresh (defHash is definition-
+ *        keyed and templates carry no pins). The template itself is never
+ *        mutated — the library keeps its prepared set forever.
  */
 import { NextResponse } from 'next/server';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { scoreIntents } from '@/db/schema';
+import { scoreIntentRatings, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { generateIntentTitle } from '@/lib/score/intent-agent';
@@ -17,30 +23,42 @@ import {
   loadIntentState,
   recordConfigVersion,
 } from '@/lib/score/intent-store';
+import { logStudyEvent } from '@/lib/study/events';
 
 export const dynamic = 'force-dynamic';
 
-const createSchema = z.object({
-  title: z.string().trim().max(120).optional(),
-  definition: z.string().trim().min(1).max(4000),
-  rule: z.string().trim().max(8000).optional(),
-  // Auto-generate the title from the definition (git-commit style).
-  autoTitle: z.boolean().optional(),
-  // false → create WITHOUT a version entry (the modal's Apply; history only
-  // records explicit Saves). Default true keeps other callers versioned.
-  recordVersion: z.boolean().optional(),
-  // true → create as an unregistered DRAFT (discovery): rated and explorable in
-  // the modal, but not owning the log until a Save flips it live.
-  isTemplate: z.boolean().optional(),
-  // Save-time counts from the modal, recorded on the version for history.
-  stats: z
-    .object({
-      included: z.number().int().min(0),
-      excluded: z.number().int().min(0),
-      inCount: z.number().int().min(0),
-    })
-    .optional(),
-});
+const createSchema = z
+  .object({
+    title: z.string().trim().max(120).optional(),
+    definition: z.string().trim().min(1).max(4000).optional(),
+    rule: z.string().trim().max(8000).optional(),
+    // Auto-generate the title from the definition (git-commit style).
+    autoTitle: z.boolean().optional(),
+    // false → create WITHOUT a version entry (e.g. template clones). Default
+    // true keeps other callers versioned.
+    recordVersion: z.boolean().optional(),
+    // Record as a MINOR version (an Apply — revertible but not a Save; the
+    // history accordion folds these under their preceding major).
+    minorVersion: z.boolean().optional(),
+    // true → create as an unregistered DRAFT (discovery): rated and explorable in
+    // the modal, but not owning the log until a Save flips it live.
+    isTemplate: z.boolean().optional(),
+    // Clone this starter-set template: spec + rating rows copied to the new
+    // intent, the template row untouched. definition/rule default to the
+    // template's own when omitted.
+    fromTemplateId: z.number().int().positive().optional(),
+    // Save-time counts from the modal, recorded on the version for history.
+    stats: z
+      .object({
+        included: z.number().int().min(0),
+        excluded: z.number().int().min(0),
+        inCount: z.number().int().min(0),
+      })
+      .optional(),
+  })
+  .refine((b) => b.definition !== undefined || b.fromTemplateId !== undefined, {
+    message: 'definition is required unless cloning a template',
+  });
 
 function serializeState(state: Awaited<ReturnType<typeof loadIntentState>>) {
   return {
@@ -90,14 +108,41 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   await ensureIntentTables();
   const now = new Date();
-  // Title: explicit > LLM auto-title (git-commit style, best-effort) >
-  // definition-head fallback.
-  let title = body.title && body.title.length > 0 ? body.title : null;
+
+  // Clone source: an assignment-scoped template. Its spec fills any omitted
+  // fields, and its rating rows are copied below so the clone lands fresh.
+  let template: typeof scoreIntents.$inferSelect | null = null;
+  if (body.fromTemplateId !== undefined) {
+    const tplRows = await db
+      .select()
+      .from(scoreIntents)
+      .where(
+        and(
+          eq(scoreIntents.id, body.fromTemplateId),
+          eq(scoreIntents.assignmentId, id),
+          eq(scoreIntents.isTemplate, true)
+        )
+      );
+    template = tplRows[0] ?? null;
+    if (!template) {
+      return NextResponse.json({ error: 'template_not_found' }, { status: 404 });
+    }
+  }
+
+  const definition = body.definition ?? template?.definition;
+  if (!definition) {
+    return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
+  }
+  const rule = body.rule !== undefined ? body.rule : template?.rule ?? undefined;
+
+  // Title: explicit > template's own > LLM auto-title (git-commit style,
+  // best-effort) > definition-head fallback.
+  let title = body.title && body.title.length > 0 ? body.title : template?.title ?? null;
   if (!title && body.autoTitle !== false && isOpenAIConfigured()) {
-    title = await generateIntentTitle(body.definition);
+    title = await generateIntentTitle(definition);
   }
   if (!title) {
-    title = body.definition.length > 60 ? `${body.definition.slice(0, 57)}…` : body.definition;
+    title = definition.length > 60 ? `${definition.slice(0, 57)}…` : definition;
   }
 
   const created = await db.transaction(async (tx) => {
@@ -106,8 +151,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .values({
         assignmentId: id,
         title,
-        definition: body.definition,
-        rule: body.rule && body.rule.length > 0 ? body.rule : null,
+        definition,
+        rule: rule && rule.length > 0 ? rule : null,
         archived: false,
         isTemplate: body.isTemplate ?? false,
         createdAt: now,
@@ -115,6 +160,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       })
       .returning();
     const intent = rows[0];
+    if (template) {
+      // Copy the template's rating rows (all hashes — the unique index keys on
+      // (message, intent, hash), so history rides along). Cloning only when the
+      // definition is unchanged keeps the copied current-hash rows fresh; a
+      // caller that overrides the definition just gets stale rows and re-rates.
+      await tx.execute(sql`
+        INSERT INTO "score_intent_ratings"
+          ("assignment_id", "message_id", "intent_id", "rating", "rationale", "def_hash", "raw_response", "model", "rated_at")
+        SELECT "assignment_id", "message_id", ${intent.id}, "rating", "rationale", "def_hash", "raw_response", "model", "rated_at"
+        FROM ${scoreIntentRatings}
+        WHERE "assignment_id" = ${id} AND "intent_id" = ${template.id}
+      `);
+    }
     const versionNo =
       body.recordVersion === false
         ? null
@@ -122,10 +180,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             action: 'create_intent',
             intentIds: [intent.id],
             detail: title,
+            ...(body.minorVersion ? { minor: true } : {}),
             stats: body.stats,
           });
     return { intent, versionNo };
   });
+
+  await logStudyEvent(id, 'intent_create', { condition: 'score', intentId: created.intent.id });
 
   return NextResponse.json(
     {

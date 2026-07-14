@@ -23,6 +23,7 @@ import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/cl
 import { ensureIntentTables } from '@/lib/score/intent-store';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
+import { logStudyEvent } from '@/lib/study/events';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -55,9 +56,13 @@ const PROPOSAL_SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['revised_rule', 'note'],
+    required: ['revised_rule', 'title', 'note'],
     properties: {
       revised_rule: { type: 'string' },
+      title: {
+        type: 'string',
+        description: 'a short label naming this rule, AT MOST 5 words, git-commit-subject style, no trailing period',
+      },
       note: { type: 'string', description: 'one sentence: what changed and why' },
     },
   },
@@ -73,6 +78,7 @@ function buildSystemPrompt(): string {
     '- FEEDBACK mode: the input is a complaint about the response — fold it into the rule as a durable guideline.',
     '- REWRITE mode: the input is the response rewritten the way the instructor wants it — infer the GENERALIZABLE change in behavior (tone, structure, what to withhold or ask), never the anchor-specific content.',
     '- Imperative voice, addressed to the chatbot, scoped to this intent\'s requests. Self-contained. Under 120 words.',
+    '- Also give a short TITLE naming this rule: at most 5 words, git-commit-subject style, no trailing period (e.g. "Scaffold, don\'t write").',
     '- The note is one sentence for the instructor: what you changed and why.',
     'Answer in the required JSON shape.',
   ].join('\n');
@@ -152,8 +158,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const parsed = extractJsonObject(raw);
     const revisedRule = typeof parsed.revised_rule === 'string' ? parsed.revised_rule.trim() : '';
     if (!revisedRule) throw new Error('proposal missing revised_rule');
+    await logStudyEvent(id, 'revise_submit', { condition: 'score', mode: body.mode, intentId, anchorMessageId: body.messageId });
     return NextResponse.json({
       revisedRule,
+      title: typeof parsed.title === 'string' ? parsed.title.trim() : '',
       note: typeof parsed.note === 'string' ? parsed.note.trim() : '',
       mode: body.mode,
       raw,

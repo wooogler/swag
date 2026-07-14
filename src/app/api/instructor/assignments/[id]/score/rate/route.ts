@@ -33,6 +33,7 @@ import { DISSECTION_VERSION, type DissectionResult, type MaterialKind } from '@/
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import { ensureScoreTable, getQueryRecords, type QueryRecord } from '@/lib/score/queries';
+import { logStudyEvent } from '@/lib/study/events';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -421,6 +422,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   );
 
   const after = await loadRateStatus(id, state.promptReady, scoped, shard);
+  if (batch.length > 0) await logStudyEvent(id, 'rating_run', { condition: 'score', processed: batch.length, intentIds: scoped ?? null });
   return NextResponse.json({
     processed: batch.length,
     succeeded,
