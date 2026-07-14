@@ -46,6 +46,7 @@ import ChatMessages from '@/components/chat/ChatMessages';
 import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
 import DecideOwnershipModal from './DecideOwnershipModal';
 import RuleWorkbench from './RuleWorkbench';
+import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
 import { runShardedRate } from './rate-runner';
 
 /** One student message, with its per-intent ratings/pins and dissection. Built
@@ -546,6 +547,26 @@ export default function IntentBoard({
     title?: string;
     definition?: string;
   } | null>(null);
+
+  // BASELINE: the Intents list is replaced by Searches (presets + saved custom
+  // searches); searchMode holds the open Search workbench.
+  const [searchMode, setSearchMode] = useState<SearchMode | null>(null);
+  const [presets, setPresets] = useState<{ intentId: number; title: string; definition: string }[]>([]);
+  const [savedSearches, setSavedSearches] = useState<{ id: string; description: string }[]>([]);
+  async function reloadSearches() {
+    if (!isBaseline) return;
+    const b = `/api/instructor/assignments/${assignmentId}/score/baseline`;
+    const [p, s] = await Promise.all([
+      fetch(`${b}/presets`).then((r) => r.json()).catch(() => ({ presets: [] })),
+      fetch(`${b}/searches`).then((r) => r.json()).catch(() => ({ searches: [] })),
+    ]);
+    setPresets(p.presets ?? []);
+    setSavedSearches(s.searches ?? []);
+  }
+  useEffect(() => {
+    void reloadSearches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignmentId, isBaseline]);
   const [editIntent, setEditIntent] = useState<IntentSummary | null>(null);
   const [ownershipPair, setOwnershipPair] = useState<{
     a: IntentSummary;
@@ -1199,6 +1220,18 @@ export default function IntentBoard({
             setNewIntentOpen(true);
           }}
         />
+      ) : isBaseline && searchMode ? (
+        <SearchWorkbench
+          key={searchMode.kind === 'preset' ? `preset-${searchMode.intentId}` : searchMode.kind === 'saved' ? `saved-${searchMode.searchId}` : 'new-search'}
+          assignmentId={assignmentId}
+          rows={rows}
+          isNirvana={isNirvana}
+          mode={searchMode}
+          onExit={() => {
+            setSearchMode(null);
+            void reloadSearches();
+          }}
+        />
       ) : workbenchMode ? (
         <IntentWorkbench
           key={editIntent ? `edit-${editIntent.id}` : 'create'}
@@ -1297,7 +1330,7 @@ export default function IntentBoard({
               the tree, unreachable): overlaps are resolved by tightening the
               intents' definitions in Edit intent, where overlapping questions
               are tagged and sorted first. */}
-          {counts.boundaryList.length > 0 && (
+          {!isBaseline && counts.boundaryList.length > 0 && (
             <div className="border-b border-[hsl(var(--border))] bg-amber-50/60 px-3 py-2 space-y-1">
               <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
                 <AlertTriangle className="w-3.5 h-3.5" /> Overlaps
@@ -1325,11 +1358,11 @@ export default function IntentBoard({
             </div>
           )}
 
-          {/* INTENTS */}
+          {/* INTENTS (score) / SEARCHES (baseline) */}
           <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                Intents
+                {isBaseline ? 'Searches' : 'Intents'}
               </span>
               <button
                 onClick={() => setSelection({ kind: 'all' })}
@@ -1341,14 +1374,52 @@ export default function IntentBoard({
               </button>
             </div>
             <button
-              onClick={() => setNewIntentOpen(true)}
+              onClick={() => (isBaseline ? setSearchMode({ kind: 'new' }) : setNewIntentOpen(true))}
               className="inline-flex items-center gap-1 shrink-0 text-[11px] px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-              title="Create a new intent"
+              title={isBaseline ? 'Create a new search' : 'Create a new intent'}
             >
               <Plus className="w-3 h-3" /> New
             </button>
           </div>
-          {activeIntents.length === 0 ? (
+
+          {isBaseline && (
+            /* SEARCHES: saved custom searches + read-only presets. Each opens the
+               Search workbench (definition + clearly_in matches). */
+            <div className="px-2 pb-2 space-y-2">
+              {savedSearches.length > 0 && (
+                <ul className="space-y-0.5">
+                  {savedSearches.map((s) => (
+                    <li key={s.id}>
+                      <button
+                        onClick={() => setSearchMode({ kind: 'saved', searchId: s.id, definition: s.description })}
+                        className="w-full text-left px-2 py-1.5 rounded text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]/50 truncate"
+                        title={s.description}
+                      >
+                        {s.description}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="px-2 pt-1 text-[11px] font-medium text-[hsl(var(--muted-foreground))]">
+                Presets ({presets.length})
+              </div>
+              <ul className="space-y-0.5">
+                {presets.map((p) => (
+                  <li key={p.intentId}>
+                    <button
+                      onClick={() => setSearchMode({ kind: 'preset', intentId: p.intentId, definition: p.definition, title: p.title })}
+                      className="w-full text-left px-2 py-1.5 rounded text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]/50 truncate"
+                      title={p.definition}
+                    >
+                      {p.title}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {isBaseline ? null : activeIntents.length === 0 ? (
             <div className="px-3 py-3 text-xs text-[hsl(var(--muted-foreground))] space-y-2">
               <p>
                 No intents yet. Create your first one — describe when a student is making a particular kind
@@ -1580,8 +1651,8 @@ export default function IntentBoard({
             </div>
           )}
 
-          {/* PENDING + UNASSIGNED */}
-          <div className="mt-auto border-t border-[hsl(var(--border))]">
+          {/* PENDING + UNASSIGNED + STARTER SETS — intent-only, hidden in baseline */}
+          <div className={`mt-auto border-t border-[hsl(var(--border))] ${isBaseline ? 'hidden' : ''}`}>
             {counts.pending > 0 && (
               <button
                 onClick={() => setSelection({ kind: 'pending' })}
