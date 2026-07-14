@@ -81,6 +81,7 @@ export function QueryTextButton({
   onToggleExpand,
   onOpen,
   max = 120,
+  children,
 }: {
   queryText: string;
   dissection: Dissection | null;
@@ -88,6 +89,9 @@ export function QueryTextButton({
   onToggleExpand: () => void;
   onOpen: () => void;
   max?: number;
+  /** Intent-only extras (rationale / drift / overlap chips) rendered inside the
+   * clickable button, right after the query text. */
+  children?: React.ReactNode;
 }) {
   const truncatable = snippetOverflows(queryText, dissection, max);
   const isExpanded = truncatable && expanded;
@@ -123,6 +127,7 @@ export function QueryTextButton({
           </span>
         )}
       </p>
+      {children}
     </button>
   );
 }
