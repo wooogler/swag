@@ -23,7 +23,6 @@ import {
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { listChatDeploys, type ChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
-import ScoreTestChatButton from './ScoreTestChatButton';
 import {
   DISSECTION_VERSION,
   isRatingLevel,
@@ -35,9 +34,8 @@ import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
 import { ensureStudyTables } from '@/lib/study/store';
-import { getBaselineLog, getBaselineState } from '@/lib/study/baseline-store';
+import { getBaselineState } from '@/lib/study/baseline-store';
 import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
-import BaselineStudio from './BaselineStudio';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -73,19 +71,11 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     viewParam: view ?? null,
     isParticipant: !!participant,
   });
-  if (studioView === 'baseline') {
-    const [state, log] = await Promise.all([getBaselineState(id), getBaselineLog(id)]);
-    return (
-      <BaselineStudio
-        assignmentId={id}
-        assignmentTitle={assignment.title}
-        instructorEmail={instructor.email}
-        initialState={state}
-        log={log}
-        charLimit={STUDY_PROMPT_CHAR_LIMIT}
-      />
-    );
-  }
+  // Baseline is the SAME board with ablations (condition prop) — not a separate
+  // page. It shares the SCORE data load below; only the monolithic prompt state
+  // is baseline-specific.
+  const isBaselineView = studioView === 'baseline';
+  const baselineState = isBaselineView ? await getBaselineState(id) : null;
 
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
 
@@ -299,18 +289,21 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
             </Link>
             <div className="flex-1">
               <h1 className="text-xl font-bold font-heading text-[hsl(var(--foreground))]">
-                SCORE · <span className="font-normal">{assignment.title}</span>
+                Chatbot Studio · <span className="font-normal">{assignment.title}</span>
               </h1>
               <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                Organize · Revise · Evaluate — instructor intents own the log
+                {isBaselineView
+                  ? 'Customize the chatbot from real student questions'
+                  : 'Organize · Revise · Evaluate — instructor intents own the log'}
               </p>
             </div>
-            <DeployControls
-              assignmentId={id}
-              versions={deployVersions}
-              selectedVersion={deployView?.versionNo ?? null}
-            />
-            <ScoreTestChatButton assignmentId={id} />
+            {!isBaselineView && (
+              <DeployControls
+                assignmentId={id}
+                versions={deployVersions}
+                selectedVersion={deployView?.versionNo ?? null}
+              />
+            )}
             <InstructorHeaderActions email={instructor.email} />
           </div>
         </div>
@@ -323,6 +316,16 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
           intents={intents}
           links={links}
           basePrompt={assignmentBasePrompt(assignment)}
+          condition={studioView}
+          baseline={
+            isBaselineView && baselineState
+              ? {
+                  currentPrompt: baselineState.currentPrompt,
+                  deployedVersionNo: baselineState.deployedVersionNo,
+                  charLimit: STUDY_PROMPT_CHAR_LIMIT,
+                }
+              : undefined
+          }
           openaiConfigured={isOpenAIConfigured()}
           jelsonSuggestions={jelsonSuggestions}
           // NIRVANA responses are raw GPT text (single-newline line breaks that
