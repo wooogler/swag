@@ -48,6 +48,7 @@ import DecideOwnershipModal from './DecideOwnershipModal';
 import RuleWorkbench from './RuleWorkbench';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
 import PromptReviseWorkbench from './PromptReviseWorkbench';
+import { getJSON, postJSON } from './http';
 import { runShardedRate } from './rate-runner';
 
 /** One student message, with its per-intent ratings/pins and dissection. Built
@@ -526,13 +527,7 @@ export default function IntentBoard({
     setPromptNote(null);
     try {
       const url = `/api/instructor/assignments/${assignmentId}/score/baseline/${kind === 'save' ? 'versions' : 'deploy'}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptDraft }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error || `${kind}_failed`);
-      const { versionNo } = await res.json();
+      const { versionNo } = await postJSON<{ versionNo: number }>(url, { prompt: promptDraft });
       setSavedPrompt(promptDraft);
       if (kind === 'deploy') setDeployedVersionNo(versionNo);
       setPromptNote(`${kind === 'save' ? 'Saved' : 'Deployed'} · v${versionNo}`);
@@ -558,8 +553,8 @@ export default function IntentBoard({
     if (!isBaseline) return;
     const b = `/api/instructor/assignments/${assignmentId}/score/baseline`;
     const [p, s] = await Promise.all([
-      fetch(`${b}/presets`).then((r) => r.json()).catch(() => ({ presets: [] })),
-      fetch(`${b}/searches`).then((r) => r.json()).catch(() => ({ searches: [] })),
+      getJSON<{ presets?: { intentId: number; title: string; definition: string }[] }>(`${b}/presets`).catch(() => ({ presets: [] })),
+      getJSON<{ searches?: { id: string; description: string }[] }>(`${b}/searches`).catch(() => ({ searches: [] })),
     ]);
     setPresets(p.presets ?? []);
     setSavedSearches(s.searches ?? []);

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import type { ScoreQueryRow } from './IntentBoard';
 import { ConversationThread } from './conversation';
 import { DefinitionEditor, QueryTextButton, WorkbenchTopBar } from './workbench-shared';
+import { getJSON, postJSON } from './http';
 
 export type SearchMode =
   | { kind: 'new' }
@@ -48,9 +49,8 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
   useEffect(() => {
     if (mode.kind === 'preset') {
       // Instant — read the copied intent ratings, no LLM.
-      fetch(`${base}/baseline/presets?intentId=${mode.intentId}`)
-        .then((r) => r.json())
-        .then((d) => setResults((d.clearlyIn ?? []).map((x: { messageId: number }) => x.messageId)))
+      getJSON<{ clearlyIn?: { messageId: number }[] }>(`${base}/baseline/presets?intentId=${mode.intentId}`)
+        .then((d) => setResults((d.clearlyIn ?? []).map((x) => x.messageId)))
         .catch(() => setResults([]));
     } else if (mode.kind === 'saved') {
       void run(); // cached probe → fast
@@ -65,14 +65,14 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
     try {
       for (let guard = 0; guard < 100; guard++) {
         if (cancelled.current) return;
-        const res = await fetch(`${base}/probe`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ description: definition }),
-        });
-        if (!res.ok) throw new Error((await res.json()).error || 'search_failed');
-        const data = await res.json();
-        setResults((data.clearlyIn ?? []).map((x: { messageId: number }) => x.messageId));
+        const data = await postJSON<{
+          clearlyIn?: { messageId: number }[];
+          rated: number;
+          total: number;
+          remaining: number;
+          ratedThisBatch: number;
+        }>(`${base}/probe`, { description: definition });
+        setResults((data.clearlyIn ?? []).map((x) => x.messageId));
         setProgress({ rated: data.rated, total: data.total });
         if (data.remaining === 0 || data.ratedThisBatch === 0) break;
       }
@@ -86,12 +86,7 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
   async function save() {
     setNote(null);
     try {
-      const res = await fetch(`${base}/baseline/searches`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: definition }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error || 'save_failed');
+      await postJSON(`${base}/baseline/searches`, { description: definition });
       setSaved(true);
       setNote('Saved');
     } catch (e) {
@@ -174,7 +169,8 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
                             onToggleExpand={() =>
                               setExpanded((prev) => {
                                 const next = new Set(prev);
-                                next.has(mid) ? next.delete(mid) : next.add(mid);
+                                if (next.has(mid)) next.delete(mid);
+                                else next.add(mid);
                                 return next;
                               })
                             }

@@ -1366,7 +1366,7 @@ export default function IntentWorkbench({
           </QueryTextButton>
           {showButtons && (
             <span className="flex items-center gap-1 shrink-0">
-              <PinButtons row={r} />
+              {pinButtons(r)}
             </span>
           )}
         </div>
@@ -1376,9 +1376,10 @@ export default function IntentWorkbench({
 
   // The in/out pin pair — shared by list rows and the conversation header so a
   // decision that needed the chatbot's reply is made without leaving the thread.
-  function PinButtons({ row }: { row: RatingRow }) {
-    return (
-      <>
+  // A render HELPER (not a nested component) so React doesn't see a fresh
+  // component type each render and remount the buttons.
+  const pinButtons = (row: RatingRow) => (
+    <>
         <button
           onClick={() => togglePin(row, 'in')}
           className={`px-1.5 py-0.5 rounded text-[11px] font-medium border ${
@@ -1402,8 +1403,7 @@ export default function IntentWorkbench({
           out
         </button>
       </>
-    );
-  }
+  );
 
   // Conversation view for one pane: the clicked question's full thread, with
   // Exit + (Needs-decision pane) the same in/out buttons as the row — the
@@ -1427,7 +1427,7 @@ export default function IntentWorkbench({
               <span className="mr-1 text-[10px] text-[hsl(var(--muted-foreground))]">
                 label this question:
               </span>
-              <PinButtons row={ratingRow} />
+              {pinButtons(ratingRow)}
             </span>
           )}
         </div>

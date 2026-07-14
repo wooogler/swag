@@ -18,6 +18,7 @@ import type { ScoreQueryRow } from './IntentBoard';
 import { WorkbenchTopBar } from './workbench-shared';
 import DiffApproval from './DiffApproval';
 import QueryPicker from './QueryPicker';
+import { getJSON, postJSON } from './http';
 
 interface SetRow {
   messageId: number;
@@ -72,11 +73,7 @@ export default function PromptReviseWorkbench({
 
   async function init() {
     // Seed the review set with the anchor, load it, and preview the anchor.
-    await fetch(`${scoreRoot}/review-set`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, messageIds: [anchor.messageId], source: 'manual' }),
-    });
+    await postJSON(`${scoreRoot}/review-set`, { scope, messageIds: [anchor.messageId], source: 'manual' });
     await loadSet();
     const resp = await previewFor(anchor.messageId, working);
     if (cancelled.current) return;
@@ -86,12 +83,13 @@ export default function PromptReviseWorkbench({
   }
 
   async function loadSet() {
-    const res = await fetch(`${scoreRoot}/review-set?scope=${scope}`);
-    const data = await res.json().catch(() => ({ items: [] }));
+    const data = await getJSON<{ items?: { messageId: number; queryText: string }[] }>(
+      `${scoreRoot}/review-set?scope=${scope}`
+    ).catch(() => ({ items: [] as { messageId: number; queryText: string }[] }));
     if (cancelled.current) return;
     setSetRows((prev) => {
       const byId = new Map(prev.map((r) => [r.messageId, r]));
-      return (data.items ?? []).map((it: { messageId: number; queryText: string }) => ({
+      return (data.items ?? []).map((it) => ({
         messageId: it.messageId,
         queryText: it.queryText,
         response: byId.get(it.messageId)?.response ?? null,
@@ -100,13 +98,12 @@ export default function PromptReviseWorkbench({
   }
 
   async function previewFor(messageId: number, prompt: string): Promise<string> {
-    const res = await fetch(`${base}/preview`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, promptText: prompt }),
-    });
-    const d = await res.json().catch(() => ({}));
-    return res.ok ? d.response : `Error: ${d.error ?? 'preview_failed'}`;
+    try {
+      const d = await postJSON<{ response: string }>(`${base}/preview`, { messageId, promptText: prompt });
+      return d.response;
+    } catch (e) {
+      return `Error: ${e instanceof Error ? e.message : e}`;
+    }
   }
 
   async function rowPreview(messageId: number) {
@@ -127,23 +124,20 @@ export default function PromptReviseWorkbench({
   }
 
   async function addIds(ids: number[], source: 'manual' | 'similar') {
-    await fetch(`${scoreRoot}/review-set`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, messageIds: ids, source }),
-    });
+    await postJSON(`${scoreRoot}/review-set`, { scope, messageIds: ids, source });
     await loadSet();
   }
 
   async function addSimilar() {
-    const res = await fetch(`${scoreRoot}/similar-log?messageId=${anchor.messageId}&limit=8`);
-    const data = await res.json().catch(() => ({ similar: [] }));
-    const ids = (data.similar ?? []).map((s: { messageId: number }) => s.messageId);
+    const data = await getJSON<{ similar?: { messageId: number }[] }>(
+      `${scoreRoot}/similar-log?messageId=${anchor.messageId}&limit=8`
+    ).catch(() => ({ similar: [] as { messageId: number }[] }));
+    const ids = (data.similar ?? []).map((s) => s.messageId);
     if (ids.length) await addIds(ids, 'similar');
   }
 
   async function removeRow(messageId: number) {
-    await fetch(`${scoreRoot}/review-set?scope=${scope}&messageId=${messageId}`, { method: 'DELETE' });
+    await postJSON(`${scoreRoot}/review-set?scope=${scope}&messageId=${messageId}`, undefined, { method: 'DELETE' });
     setSetRows((rs) => rs.filter((r) => r.messageId !== messageId));
   }
 
@@ -156,13 +150,7 @@ export default function PromptReviseWorkbench({
         mode === 'feedback'
           ? { mode, promptText: working, anchorMessageId: anchor.messageId, feedback, currentResponse: anchorResponse ?? undefined }
           : { mode, promptText: working, anchorMessageId: anchor.messageId, editedResponse, currentResponse: anchorResponse ?? undefined };
-      const res = await fetch(`${base}/revise`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error((await res.json()).error || 'revise_failed');
-      const data = await res.json();
+      const data = await postJSON<{ revisedPrompt: string; rationale: string }>(`${base}/revise`, body);
       setProposal({ revisedPrompt: data.revisedPrompt, rationale: data.rationale });
     } catch (e) {
       setNote(`Proposal failed: ${e instanceof Error ? e.message : e}`);
