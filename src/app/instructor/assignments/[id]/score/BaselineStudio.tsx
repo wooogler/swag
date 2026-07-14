@@ -9,11 +9,12 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Plus, Search, Trash2 } from 'lucide-react';
+import { ChevronLeft, MessageSquare, Play, Plus, Search, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 import type { BaselineLogRow, BaselineState } from '@/lib/study/baseline-store';
 import SearchWorkbench, { type ClearlyInRow } from './SearchWorkbench';
+import TestChat, { type TurnMessage } from './TestChat';
 
 interface Preset { intentId: number; title: string; definition: string }
 interface SavedSearch { id: string; description: string }
@@ -46,6 +47,8 @@ export default function BaselineStudio({
   const [presets, setPresets] = useState<Preset[]>([]);
   const [searches, setSearches] = useState<SavedSearch[]>([]);
   const [wb, setWb] = useState<WorkbenchState | null>(null);
+  const [testChatOpen, setTestChatOpen] = useState(false);
+  const [preview, setPreview] = useState<{ queryText: string; response: string | null } | null>(null);
 
   const scoreRoot = `/api/instructor/assignments/${assignmentId}/score`;
   const base = `${scoreRoot}/baseline`;
@@ -121,6 +124,31 @@ export default function BaselineStudio({
     }
   }
 
+  async function sendTestChat(messages: TurnMessage[]): Promise<string> {
+    const res = await fetch(`${base}/test-chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, promptText: prompt }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'chat_failed');
+    return (await res.json()).response;
+  }
+
+  async function runPreview(row: BaselineLogRow) {
+    setPreview({ queryText: row.queryText, response: null });
+    try {
+      const res = await fetch(`${base}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId: row.messageId, promptText: prompt }),
+      });
+      const data = await res.json();
+      setPreview({ queryText: row.queryText, response: res.ok ? data.response : `오류: ${data.error}` });
+    } catch (e) {
+      setPreview({ queryText: row.queryText, response: `오류: ${e instanceof Error ? e.message : e}` });
+    }
+  }
+
   const grouped = useMemo(() => {
     const m = new Map<string, BaselineLogRow[]>();
     for (const r of log) {
@@ -149,6 +177,9 @@ export default function BaselineStudio({
               </p>
             </div>
             {note && <span className="text-sm text-[hsl(var(--muted-foreground))]">{note}</span>}
+            <Button variant="ghost" className="gap-1.5" onClick={() => setTestChatOpen(true)}>
+              <MessageSquare className="w-4 h-4" /> Test chat
+            </Button>
             <Button variant="outline" onClick={() => persist('save')} disabled={!!busy || !dirty || over}>
               {busy === 'save' ? 'Saving…' : 'Save'}
             </Button>
@@ -223,8 +254,15 @@ export default function BaselineStudio({
                 <div className="px-2 py-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">{token}</div>
                 <ul className="space-y-1">
                   {rows.map((r) => (
-                    <li key={r.messageId} title={r.queryText} className="px-2 py-1.5 rounded text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]/40 line-clamp-2">
-                      {r.queryText}
+                    <li key={r.messageId} className="group flex items-start gap-1 px-2 py-1.5 rounded hover:bg-[hsl(var(--muted))]/40">
+                      <span title={r.queryText} className="flex-1 text-sm text-[hsl(var(--foreground))] line-clamp-2">{r.queryText}</span>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 mt-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                        title="이 질문으로 테스트"
+                        onClick={() => runPreview(r)}
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -279,6 +317,29 @@ export default function BaselineStudio({
           onClose={() => setWb(null)}
           onSavedChange={loadSearchLists}
         />
+      )}
+
+      {testChatOpen && (
+        <TestChat onClose={() => setTestChatOpen(false)} send={sendTestChat} subtitle="Draft prompt — not saved to the student log" />
+      )}
+
+      {preview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPreview(null)}>
+          <div className="w-full max-w-xl max-h-[80vh] flex flex-col rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-[hsl(var(--border))]">
+              <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">이 질문에 대한 응답 (현재 draft 기준)</h3>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3">
+              <div className="rounded-lg bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] px-3 py-2 text-sm whitespace-pre-wrap">{preview.queryText}</div>
+              <div className="rounded-lg bg-[hsl(var(--muted))] text-[hsl(var(--foreground))] px-3 py-2 text-sm whitespace-pre-wrap">
+                {preview.response === null ? '생성 중…' : preview.response}
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex justify-end">
+              <Button variant="outline" onClick={() => setPreview(null)}>닫기</Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

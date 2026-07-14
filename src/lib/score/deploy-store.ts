@@ -37,7 +37,7 @@ export interface ChatDeployIntent {
   title: string;
   definition: string;
   rule: string | null;
-  /** The exact prompt-pin slice frozen at deploy time (selectPromptPins). */
+  /** The intent's pins, in prompt order, frozen at deploy time (selectPromptPins). */
   promptPins: PromptPin[];
 }
 
@@ -284,4 +284,47 @@ export async function resolveDeployedChatPrompt(args: {
     console.error('SCORE deployed-prompt resolution failed (falling back to base):', error);
     return { systemPrompt: basePrompt, applied: null, deployVersion: null };
   }
+}
+
+/**
+ * Resolve the injected prompt for one message against a GIVEN snapshot — used by
+ * the instructor TEST-CHAT to answer under the CURRENT DRAFT (buildChatDeploySnapshot)
+ * rather than the latest deploy. Mirrors resolveDeployedChatPrompt's resolution;
+ * caller handles fail-open. (Kept separate so the student runtime above is untouched.)
+ */
+export async function resolveChatPromptFromSnapshot(args: {
+  snapshot: ChatDeploySnapshot;
+  basePrompt: string;
+  queryText: string;
+  prevQueryText: string | null;
+  prevResponseText: string | null;
+  callOptions?: { timeoutMs: number; maxRetries: number };
+}): Promise<{ systemPrompt: string; applied: DeployedPromptResult['applied'] }> {
+  const { snapshot, basePrompt } = args;
+  const hasRules = snapshot.intents.some((i) => i.rule?.trim());
+  if (!hasRules || snapshot.intents.length === 0) return { systemPrompt: basePrompt, applied: null };
+
+  const rated = snapshot.intents.slice(0, MAX_INTENTS_PER_CALL);
+  const result = await rateMessageIntents({
+    queryText: args.queryText,
+    prevQueryText: args.prevQueryText,
+    prevResponseText: args.prevResponseText,
+    includeDissection: false,
+    dissection: null,
+    intents: rated.map((i) => ({ id: i.id, definition: i.definition, pins: i.promptPins })),
+    model: getDefaultScoreModel(),
+    callOptions: args.callOptions ?? { timeoutMs: 15_000, maxRetries: 0 },
+  });
+
+  const ratings = new Map<number, RatingLevel>();
+  for (const [intentId, r] of result.ratings) ratings.set(intentId, r.rating);
+  const resolution = resolveAssignment(ratings, rated.map((i) => i.id), snapshot.links);
+  if (resolution.kind !== 'assigned') return { systemPrompt: basePrompt, applied: null };
+  const owner = snapshot.intents.find((i) => i.id === resolution.intentId);
+  const rule = owner?.rule?.trim();
+  if (!owner || !rule) return { systemPrompt: basePrompt, applied: null };
+  return {
+    systemPrompt: buildInjectedSystemPrompt(basePrompt, rule),
+    applied: { intentId: owner.id, intentTitle: owner.title, rule },
+  };
 }

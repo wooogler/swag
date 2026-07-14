@@ -4,11 +4,12 @@
  * uses. Mirrors the SCORE deploy-store's fail-open philosophy: any gap → the
  * assignment's live base prompt. DDL lives in store.ts. See spec §5.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   assignments,
+  baselinePreviews,
   baselinePromptVersions,
   baselineSearches,
   chatConversations,
@@ -20,7 +21,45 @@ import {
 } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { intentDefHash } from '@/lib/score/intents';
+import { runChatTurn } from './chat-run';
 import type { StudioView } from './config';
+
+/* ------------------------------------------------------------------ */
+/* Per-query preview under a draft prompt (cached, single-turn)         */
+/* ------------------------------------------------------------------ */
+
+const PREVIEW_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4o';
+
+/** "Test this query": what the chatbot would answer to one logged query under
+ * the given (draft) prompt. Cached by (message, hash(model+prompt)). */
+export async function getOrCreateBaselinePreview(
+  assignmentId: string,
+  messageId: number,
+  promptText: string
+): Promise<string> {
+  const promptHash = createHash('sha256').update(`${PREVIEW_MODEL}\n${promptText}`).digest('hex').slice(0, 40);
+  const cached = await db
+    .select({ response: baselinePreviews.response })
+    .from(baselinePreviews)
+    .where(and(eq(baselinePreviews.messageId, messageId), eq(baselinePreviews.promptHash, promptHash)))
+    .limit(1);
+  if (cached[0]) return cached[0].response;
+
+  const msg = await db
+    .select({ content: chatMessages.content })
+    .from(chatMessages)
+    .where(eq(chatMessages.id, messageId))
+    .limit(1);
+  const queryText = msg[0]?.content;
+  if (!queryText) throw new Error('message_not_found');
+
+  const response = await runChatTurn(promptText, [{ role: 'user', content: queryText }]);
+  await db
+    .insert(baselinePreviews)
+    .values({ assignmentId, messageId, promptHash, response, model: PREVIEW_MODEL, createdAt: new Date() })
+    .onConflictDoUpdate({ target: [baselinePreviews.messageId, baselinePreviews.promptHash], set: { response } });
+  return response;
+}
 
 /* ------------------------------------------------------------------ */
 /* Saved custom searches                                               */
