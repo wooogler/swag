@@ -1,10 +1,21 @@
 /**
- * SCORE v6 — pin-based similarity ordering for the Intent modal (decision
+ * SCORE v6 — pin-based similarity ordering for the intent workbench (decision
  * propagation). GET → { scores: { [messageId]: number } } where
  *   score = max cosine to this intent's IN pins − max cosine to its OUT pins,
  * so undecided boundary questions sort toward the in/out side they most
- * resemble (a nearest-example vote from the instructor's own pins). The client
- * sorts by descending score (in-like on top, out-like at the bottom).
+ * resemble (a nearest-example vote from the instructor's own pins).
+ *
+ * The score is meaningful only as a RANKING — its zero is not the in/out
+ * boundary, since each side is a max() that grows with the number of pins on it.
+ * The client sorts each lean tab by this score directly (IntentWorkbench: the
+ * 'in-like' sort puts the highest scores first, 'out-like' the lowest), so only
+ * the order matters, never the absolute value.
+ *
+ * GET ?anchor=<messageId> switches modes: { scores } then holds the cosine of
+ * every OTHER question to that anchor, so the "Add example" picker can order the
+ * log by distance (farthest first) from the question being viewed and pre-select
+ * the most-different few. Pins are irrelevant there, so it short-circuits before
+ * the pin scoring — the baseline's prompt-holder intent uses it the same way.
  *
  * Embeddings are computed on the request text with material placeholders
  * (embeddings.ts) and cached; degrades to an empty map (client keeps its
@@ -21,7 +32,7 @@ export const maxDuration = 30;
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
 
-export async function GET(_req: Request, { params }: RouteParams) {
+export async function GET(req: Request, { params }: RouteParams) {
   const { id, intentId: intentIdRaw } = await params;
   const auth = await authorizeAssignment(id);
   if ('error' in auth) {
@@ -32,6 +43,30 @@ export async function GET(_req: Request, { params }: RouteParams) {
 
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
   const records = await getQueryRecords(id);
+
+  // ?anchor=<messageId> → cosine of every OTHER question to the anchor, so the
+  // "Add example" picker orders the log by distance (farthest first) from the
+  // question being viewed. Intent-independent (pins don't matter), so it
+  // short-circuits the pin scoring; empty map (client keeps recency) when the
+  // anchor has no embedding or the service is down.
+  const anchorId = Number.parseInt(new URL(req.url).searchParams.get('anchor') ?? '', 10);
+  if (Number.isFinite(anchorId)) {
+    const anchorScores: Record<number, number> = {};
+    try {
+      const embeddings = await getQueryEmbeddings(id, records);
+      const anchorVec = embeddings.get(anchorId);
+      if (anchorVec) {
+        for (const rec of records) {
+          if (rec.messageId === anchorId) continue;
+          const v = embeddings.get(rec.messageId);
+          if (v) anchorScores[rec.messageId] = cosineSimilarity(anchorVec, v);
+        }
+      }
+    } catch (error) {
+      console.error('SCORE anchor-distance embeddings failed (keeping default order):', error);
+    }
+    return NextResponse.json({ scores: anchorScores });
+  }
 
   const scores: Record<number, number> = {};
   let inCount = 0;

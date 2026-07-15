@@ -1499,11 +1499,17 @@ export default function RuleWorkbench({
         />
       )}
 
-      {/* promptMode: pull logged questions in as example tabs (manual review set). */}
+      {/* promptMode: pull logged questions in as example tabs (manual review set).
+          Distance is measured from the active tab, so the picker leads with the
+          questions most different from what you're currently viewing. */}
       {pickerOpen && (
         <QueryPicker
           log={rows}
           excludeIds={new Set(caseIds ?? [row.messageId])}
+          anchorId={activeId}
+          assignmentId={assignmentId}
+          intentId={intent.id}
+          isNirvana={isNirvana}
           onAdd={(ids) => void addExamples(ids)}
           onClose={() => setPickerOpen(false)}
         />
