@@ -43,7 +43,6 @@ import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
-import RuleApplyPreview from './RuleApplyPreview';
 import NewIntentSuggestModal from './NewIntentSuggestModal';
 import QueryPicker from './QueryPicker';
 import { timeAgo } from './IntentWorkbench';
@@ -222,9 +221,6 @@ export default function RuleWorkbench({
   // version's own stored response doesn't cover. Cleared on version switch.
   const [updated, setUpdated] = useState<Record<number, { text: string | null; loading: boolean }>>({});
   const [checking, setChecking] = useState(false);
-  // Apply-preview workbench: the intent's question ids while it is open.
-  const [previewIds, setPreviewIds] = useState<number[] | null>(null);
-  const [applyingPreview, setApplyingPreview] = useState(false);
   // "Make this a new intent" suggestion modal.
   const [suggestOpen, setSuggestOpen] = useState(false);
 
@@ -293,6 +289,9 @@ export default function RuleWorkbench({
         setViewNo(viewVersion.versionNo);
       }
     })();
+    // SCORE: seed the tab strip with the intent's top edge cases by default
+    // (baseline starts at the anchor and adds examples by hand).
+    if (!promptMode) void checkEdgeCases();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -468,7 +467,7 @@ export default function RuleWorkbench({
   useEffect(() => {
     if (!viewed || viewedCoversActive || viewed.source === 'seed') return;
     if (updated[activeId] !== undefined) return;
-    if (simulating || previewIds !== null) return;
+    if (simulating) return;
     void generateUpdated([activeId], ruleParamFor(viewed), genRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewed?.versionNo, activeId, viewedCoversActive]);
@@ -664,22 +663,12 @@ export default function RuleWorkbench({
     }
   }
 
-  /* ---- footer actions ----------------------------------------------------- */
-
-  /** Every question currently in this intent (pins override ratings), anchor first. */
-  function intentQuestionIds(): number[] {
-    const inIntent = rows
-      .filter((r) => {
-        const pin = r.pinnedIntents[intent.id];
-        if (pin) return pin === 'in';
-        return r.intentRatings[intent.id]?.rating === 'clearly_in';
-      })
-      .map((r) => r.messageId);
-    return [row.messageId, ...inIntent.filter((id) => id !== row.messageId)];
-  }
 
   /** Apply the viewed rule to the intent's 3 most-different questions and open
    * them as tabs. One-shot: once tabs exist the footer button disappears. */
+  /** SCORE: seed the tab strip with the intent's 3 most-different questions
+   * (auto, on open). Responses generate lazily when a tab is opened, so opening
+   * stays fast; from any tab you refine with feedback / rewrite, or Add example. */
   async function checkEdgeCases() {
     if (checking || caseIds) return;
     setChecking(true);
@@ -693,14 +682,7 @@ export default function RuleWorkbench({
       if (!res.ok) throw new Error('Edge-case lookup failed.');
       const ids = ((data.cases ?? []) as { messageId: number }[]).map((c) => c.messageId);
       if (!live() || gen !== genRef.current) return;
-      const all = [row.messageId, ...ids];
-      setCaseIds(all);
-      // Seed view = delivered originals for every tab — nothing to generate.
-      const need =
-        viewed?.source === 'seed'
-          ? []
-          : all.filter((id) => updated[id] === undefined && !(viewed?.anchorMessageId === id));
-      await generateUpdated(need, ruleParamFor(viewed), gen);
+      setCaseIds([row.messageId, ...ids]);
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
     } finally {
@@ -718,74 +700,6 @@ export default function RuleWorkbench({
     const gen = genRef.current;
     const need = viewed?.source === 'seed' ? [] : fresh.filter((id) => updated[id] === undefined);
     await generateUpdated(need, ruleParamFor(viewed), gen);
-  }
-
-  /** Open the apply-preview workbench: the change is reviewed on EVERY
-   * question in the intent before anything is saved or stored. */
-  function openApplyPreview() {
-    if (previewIds || proposing || saving || checking || simulating) return;
-    if (boxEdited || !viewingLatest) return; // preview applies the LATEST state
-    setError(null);
-    setPreviewIds(intentQuestionIds());
-  }
-
-  /** Confirm from the preview: Save the rule (if unsaved), then STORE the
-   * exact previewed responses for the major version — no second generation,
-   * so what the instructor reviewed is what the board shows. */
-  async function confirmApplyPreview(responses: Map<number, string>) {
-    if (applyingPreview) return;
-    setApplyingPreview(true);
-    setError(null);
-    try {
-      let version: { versionNo: number } | null = versions?.find((v) => !v.minor) ?? null;
-      if (dirty) {
-        version = await saveVersion();
-        if (!version) throw new Error('Save failed — fix the error above and retry.');
-      }
-      if (!version) throw new Error('No saved rule version to apply — Save first.');
-      const entries = [...responses.entries()];
-      const STORE_BATCH = 50;
-      for (let i = 0; i < entries.length; i += STORE_BATCH) {
-        const batch = entries.slice(i, i + STORE_BATCH);
-        const res = await fetch(
-          `${base}/intents/${intent.id}/rule-versions/${version.versionNo}/apply`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              responses: batch.map(([messageId, response]) => ({ messageId, response })),
-            }),
-            signal: signal(),
-          }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(typeof data?.message === 'string' ? data.message : 'Apply failed.');
-        }
-      }
-      if (!live()) return;
-      savedAnyRef.current = true; // stored responses → board chips changed
-      // Applying is the COMMIT of the revision loop — land back on the board,
-      // where the new version shows up in the viewer dropdown and chips.
-      onClose(true);
-    } catch (e) {
-      if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
-    } finally {
-      if (live()) setApplyingPreview(false);
-    }
-  }
-
-  /** Leave the preview without applying — the generated previews are kept as
-   * this rule's lazy previews (they were produced under the same rule). */
-  function cancelApplyPreview(generated: Map<number, string | null>) {
-    setUpdated((prev) => {
-      const next = { ...prev };
-      for (const [id, text] of generated) {
-        if (next[id]?.text == null) next[id] = { text, loading: false };
-      }
-      return next;
-    });
-    setPreviewIds(null);
   }
 
   /* ---- history accordion --------------------------------------------------- */
@@ -853,7 +767,7 @@ export default function RuleWorkbench({
   const versionEntry = (v: RuleVersion, compact: boolean) => {
     const isNewest = latest !== null && v.versionNo === latest.versionNo;
     const isViewed = viewed !== null && v.versionNo === viewed.versionNo;
-    const busyAny = saving || simulating || proposing || applyingPreview;
+    const busyAny = saving || simulating || proposing;
     return (
       <div
         key={v.versionNo}
@@ -921,45 +835,6 @@ export default function RuleWorkbench({
     );
   };
 
-  // APPLY PREVIEW — replaces the whole workbench while reviewing the change
-  // across the intent's questions (confirm saves + stores; Back keeps the
-  // generated previews).
-  if (previewIds !== null) {
-    const lastMajor = versions?.find((v) => !v.minor) ?? null;
-    const seed = new Map<number, string | null>();
-    for (const [idStr, entry] of Object.entries(updated)) {
-      if (entry.text) seed.set(Number(idStr), entry.text);
-    }
-    if (latest?.anchorMessageId != null && latest.updatedResponse) {
-      seed.set(latest.anchorMessageId, latest.updatedResponse);
-    }
-    return (
-      <RuleApplyPreview
-        assignmentId={assignmentId}
-        intent={intent}
-        rows={rows}
-        queryIds={previewIds}
-        anchorId={row.messageId}
-        beforeRule={lastMajor?.rule ?? null}
-        beforeLabel={
-          lastMajor
-            ? `${versionLabel(lastMajor)}${lastMajor.name ? ` — ${lastMajor.name}` : ''}`
-            : 'v1'
-        }
-        afterRule={latest?.rule ?? null}
-        afterLabel={
-          latest ? `${versionLabel(latest)}${latest.name ? ` — ${latest.name}` : ''}` : ''
-        }
-        isNirvana={isNirvana}
-        seed={seed}
-        applying={applyingPreview}
-        applyError={error}
-        onCancel={cancelApplyPreview}
-        onConfirm={(responses) => void confirmApplyPreview(responses)}
-      />
-    );
-  }
-
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
       {/* TOP BAR */}
@@ -974,9 +849,34 @@ export default function RuleWorkbench({
         <h2 className="text-sm font-semibold truncate">
           {promptMode ? 'Revise the system prompt' : `Revise rule — ${intent.title}`}
         </h2>
-        <span className="ml-auto text-[10px] text-[hsl(var(--muted-foreground))]">
-          Previews are single-turn regenerations with the live chatbot model — indicative, not a guarantee.
-        </span>
+        <div className="ml-auto flex items-center gap-3">
+          {/* Preview (simulate the edited rule) lives by its caption. */}
+          <button
+            onClick={() => {
+              void (async () => {
+                const created = await simulate(ruleText.trim() || null, 'direct');
+                if (created) {
+                  pushChat({ role: 'user', text: 'Edited the rule directly.', versionNo: created.versionNo });
+                }
+              })();
+            }}
+            disabled={proposing || simulating || readOnly || !boxEdited}
+            title={
+              readOnly
+                ? 'Viewing an old step — Revert to make it live, or return to the latest to edit'
+                : boxEdited
+                  ? 'Simulate this rule — regenerates the response and records a minor step'
+                  : 'Edit the rule text to simulate a change'
+            }
+            className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
+          >
+            {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+            Preview
+          </button>
+          <span className="max-w-[340px] text-[10px] text-[hsl(var(--muted-foreground))]">
+            Previews are single-turn regenerations with the live chatbot model — indicative, not a guarantee.
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)_minmax(300px,380px)] gap-4 flex-1 min-h-0">
@@ -1028,32 +928,6 @@ export default function RuleWorkbench({
                 }`}
               />
               <div className="mt-1.5 flex items-center justify-end gap-2">
-                <button
-                  onClick={() => {
-                    void (async () => {
-                      const created = await simulate(ruleText.trim() || null, 'direct');
-                      if (created) {
-                        pushChat({
-                          role: 'user',
-                          text: 'Edited the rule directly.',
-                          versionNo: created.versionNo,
-                        });
-                      }
-                    })();
-                  }}
-                  disabled={proposing || simulating || readOnly || !boxEdited}
-                  title={
-                    readOnly
-                      ? 'Viewing an old step — Revert to make it live, or return to the latest to edit'
-                      : boxEdited
-                        ? 'Simulate this rule — regenerates the response and records a minor step'
-                        : 'Edit the rule text to simulate a change'
-                  }
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
-                >
-                  {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-                  Preview
-                </button>
                 <button
                   onClick={() => void saveVersion()}
                   disabled={!dirty || !viewingLatest || boxEdited || saving || proposing || simulating}
@@ -1143,11 +1017,11 @@ export default function RuleWorkbench({
 
         {/* MIDDLE — the viewed version's Q → response for the active question */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
-          {/* QUESTION TABS — anchor ★ + opened questions. In promptMode the strip
-              always shows (anchor + a manual "Add example" button). */}
-          {(caseIds || promptMode) && (
-            <div className="shrink-0 flex items-center gap-1 overflow-x-auto border-b border-[hsl(var(--border))] px-3 py-1.5">
-              {(caseIds ?? [row.messageId]).map((id) => {
+          {/* QUESTION TABS — always shown (anchor ★ + examples + "Add example").
+              SCORE seeds the intent's top edge cases; baseline starts at the
+              anchor. Both add more from the log with the same picker. */}
+          <div className="shrink-0 flex items-center gap-1 overflow-x-auto border-b border-[hsl(var(--border))] px-3 py-1.5">
+            {(caseIds ?? [row.messageId]).map((id) => {
                 const r0 = rows.find((r) => r.messageId === id);
                 const isActive = id === activeId;
                 const label = `${r0?.participantToken || '—'}${r0 && r0.turnNumber > 0 ? ` · T${r0.turnNumber}` : ''}`;
@@ -1167,17 +1041,14 @@ export default function RuleWorkbench({
                   </button>
                 );
               })}
-              {promptMode && (
-                <button
-                  onClick={() => setPickerOpen(true)}
-                  className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-[11px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-                  title="Pull in more logged questions to try this prompt against"
-                >
-                  <Plus className="w-3 h-3" /> Add example
-                </button>
-              )}
-            </div>
-          )}
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-[11px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+              title="Pull in more logged questions to try the rule against"
+            >
+              <Plus className="w-3 h-3" /> Add example
+            </button>
+          </div>
 
           {convoOpen ? (
             <div className="flex-1 min-h-0 flex flex-col">
@@ -1363,56 +1234,6 @@ export default function RuleWorkbench({
                 );
               })()}
 
-              {/* Footer actions — all intent-only (new-intent escape hatch,
-                  edge-case sweep, apply-to-intent). Hidden in promptMode: the
-                  baseline deploys from the board, and examples are added above. */}
-              {!promptMode && (
-              <div className="shrink-0 px-3 py-2 border-t border-[hsl(var(--border))] flex items-center justify-end gap-2">
-                {/* Escape hatch, next to the testing actions it belongs with:
-                    while trying the rule on questions, one may turn out not to
-                    be this intent at all → carve it into a new intent. */}
-                <HoverTip
-                  tip={`This question isn't really "${intent.title}"? Get three new-intent proposals seeded from it and start one instead of stretching this rule.`}
-                >
-                  <button
-                    onClick={() => setSuggestOpen(true)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded border border-violet-300 text-xs font-medium text-violet-700 hover:bg-violet-50"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Doesn&apos;t fit? New intent
-                  </button>
-                </HoverTip>
-                {!caseIds && (
-                  <HoverTip tip="Open this intent's 3 most-different questions as tabs — see the rule's response to each, and refine it with feedback or rewrite from any tab.">
-                    <button
-                      onClick={checkEdgeCases}
-                      disabled={checking || proposing || simulating || !viewed}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-                    >
-                      {checking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-                      Test more questions
-                    </button>
-                  </HoverTip>
-                )}
-                <button
-                  onClick={openApplyPreview}
-                  disabled={
-                    applyingPreview ||
-                    proposing ||
-                    saving ||
-                    checking ||
-                    simulating ||
-                    boxEdited ||
-                    !viewingLatest ||
-                    versions === null ||
-                    versions.length === 0
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                  title="Review this rule's response for EVERY question in the intent, then apply — nothing changes until you confirm there"
-                >
-                  {dirty ? 'Preview & apply to intent' : 'Preview & re-apply to intent'}
-                </button>
-              </div>
-              )}
             </div>
           )}
         </div>
@@ -1433,6 +1254,20 @@ export default function RuleWorkbench({
                 <HelpCircle className="w-3.5 h-3.5" />
               </button>
             </span>
+            {/* SCORE escape hatch: this question isn't really this intent →
+                carve it into a new one (intent-only). */}
+            {!promptMode && (
+              <HoverTip
+                tip={`This question isn't really "${intent.title}"? Get three new-intent proposals seeded from it and start one instead of stretching this rule.`}
+              >
+                <button
+                  onClick={() => setSuggestOpen(true)}
+                  className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-violet-300 text-[11px] font-medium text-violet-700 hover:bg-violet-50"
+                >
+                  <Plus className="w-3 h-3" /> New intent
+                </button>
+              </HoverTip>
+            )}
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
