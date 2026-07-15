@@ -219,11 +219,21 @@ export async function getOrCreatePromptHolder(
   assignmentId: string
 ): Promise<{ id: number; rule: string | null }> {
   const existing = await db
-    .select({ id: scoreIntents.id, rule: scoreIntents.rule })
+    .select({ id: scoreIntents.id, rule: scoreIntents.rule, archived: scoreIntents.archived })
     .from(scoreIntents)
     .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.title, PROMPT_HOLDER_TITLE)))
     .limit(1);
-  if (existing[0]) return existing[0];
+  if (existing[0]) {
+    // Heal holders created by an earlier archived=true build — the shared
+    // rule-versions endpoints reject archived intents (seed/save would 404).
+    if (existing[0].archived) {
+      await db
+        .update(scoreIntents)
+        .set({ archived: false, updatedAt: new Date() })
+        .where(eq(scoreIntents.id, existing[0].id));
+    }
+    return { id: existing[0].id, rule: existing[0].rule };
+  }
   const seed = await deployedOrBasePrompt(assignmentId);
   const now = new Date();
   const inserted = await db
@@ -307,6 +317,14 @@ export async function deployBaselineVersion(assignmentId: string, prompt: string
     .set({ deployedAt: new Date() })
     .where(and(eq(baselinePromptVersions.assignmentId, assignmentId), eq(baselinePromptVersions.versionNo, versionNo)));
   return versionNo;
+}
+
+/** Publish the prompt-holder's CURRENT rule to students. The holder is the single
+ * source of truth (edited only in Revise), so Deploy takes no client text. */
+export async function deployBaselinePrompt(assignmentId: string): Promise<number> {
+  const holder = await getOrCreatePromptHolder(assignmentId);
+  const prompt = holder.rule ?? (await deployedOrBasePrompt(assignmentId));
+  return deployBaselineVersion(assignmentId, prompt);
 }
 
 /**

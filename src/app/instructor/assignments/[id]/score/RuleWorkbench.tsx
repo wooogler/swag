@@ -900,6 +900,23 @@ export default function RuleWorkbench({
         {!compact && v.note && (
           <p className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">{v.note}</p>
         )}
+        {/* Which logged question this change was made from — lets you trace (and
+            revert) a version back to the query that motivated it. */}
+        {v.anchorMessageId != null &&
+          (() => {
+            const ar = rows.find((r) => r.messageId === v.anchorMessageId);
+            if (!ar) return null;
+            return (
+              <p
+                className="mt-0.5 truncate text-[10px] text-[hsl(var(--muted-foreground))]"
+                title={ar.queryText.replace(/\s+/g, ' ').trim()}
+              >
+                from <span className="font-mono">{ar.participantToken}{ar.turnNumber > 0 ? ` · T${ar.turnNumber}` : ''}</span>
+                {' · '}
+                {ar.queryText.replace(/\s+/g, ' ').trim().slice(0, 48)}
+              </p>
+            );
+          })()}
       </div>
     );
   };

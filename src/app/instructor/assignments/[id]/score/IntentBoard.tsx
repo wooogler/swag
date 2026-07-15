@@ -726,53 +726,12 @@ export default function IntentBoard({
   // BASELINE: the editable monolithic system prompt occupies the Base Prompt
   // slot. Save = new version; Deploy = serve it to students. (condition='score'
   // leaves the Base Prompt read-only, exactly as before.)
+  // Read-only display of the current system prompt (the holder's live rule).
+  // Editing is in Revise; Deploy is in the header. Synced after a Revise save.
   const [promptDraft, setPromptDraft] = useState(baseline?.currentPrompt ?? basePrompt);
-  const [savedPrompt, setSavedPrompt] = useState<string | null>(baseline?.currentPrompt ?? null);
-  const [deployedVersionNo, setDeployedVersionNo] = useState<number | null>(baseline?.deployedVersionNo ?? null);
-  const [promptBusy, setPromptBusy] = useState<null | 'save' | 'deploy'>(null);
-  const [promptNote, setPromptNote] = useState<string | null>(null);
-  const promptChars = promptDraft.length;
-  const promptLimit = baseline?.charLimit ?? 8000;
-  const promptOver = promptChars > promptLimit;
-  const promptDirty = promptDraft !== (savedPrompt ?? baseline?.currentPrompt ?? basePrompt);
-
-  async function persistPrompt(kind: 'save' | 'deploy') {
-    if (promptOver || !baseline) return;
-    setPromptBusy(kind);
-    setPromptNote(null);
-    const root = `/api/instructor/assignments/${assignmentId}/score`;
-    try {
-      if (kind === 'save') {
-        // Save records a MAJOR rule-version on the hidden prompt-holder intent —
-        // the SAME store the Revise workbench uses, so board saves and Revise
-        // versions share one history (v1, v2, …).
-        await postJSON(`${root}/intents/${baseline.promptHolderId}/rule-versions`, {
-          rule: promptDraft,
-          source: 'manual',
-        });
-        setSavedPrompt(promptDraft);
-        setPromptNote('Saved');
-      } else {
-        // Deploy publishes the current prompt to students (unchanged store /
-        // runtime); it also lands as a Saved version so history stays complete.
-        await postJSON(`${root}/intents/${baseline.promptHolderId}/rule-versions`, {
-          rule: promptDraft,
-          source: 'manual',
-        }).catch(() => {});
-        const { versionNo } = await postJSON<{ versionNo: number }>(`${root}/baseline/deploy`, { prompt: promptDraft });
-        setSavedPrompt(promptDraft);
-        setDeployedVersionNo(versionNo);
-        setPromptNote('Deployed to students');
-      }
-    } catch (e) {
-      setPromptNote(`${kind === 'save' ? 'Save' : 'Deploy'} failed: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      setPromptBusy(null);
-    }
-  }
 
   /** After a Revise session (RuleWorkbench on the holder) saved a new rule,
-   * pull the holder's live rule (latest MAJOR) back into the board editor. */
+   * pull the holder's live rule (latest MAJOR) into the board's read-only view. */
   async function syncPromptFromHolder() {
     if (!baseline) return;
     try {
@@ -780,18 +739,15 @@ export default function IntentBoard({
         `/api/instructor/assignments/${assignmentId}/score/intents/${baseline.promptHolderId}/rule-versions`
       );
       const live = (d.versions ?? []).find((v) => !v.minor);
-      if (live) {
-        setPromptDraft(live.rule ?? '');
-        setSavedPrompt(live.rule ?? '');
-      }
+      if (live) setPromptDraft(live.rule ?? '');
     } catch {
       /* ignore — router.refresh will still update the deployed state */
     }
   }
 
   // The prompt-holder as an IntentSummary — RuleWorkbench mounts on it in the
-  // baseline Revise flow. definition '' + archived so no SCORE affordance keyed
-  // to a real intent misfires. rule seeds v1 on the holder's first open.
+  // baseline Revise flow. Empty definition so no SCORE affordance keyed to a real
+  // intent misfires; rule seeds v1 on the holder's first open.
   const promptHolder: IntentSummary | null = useMemo(
     () =>
       baseline
@@ -800,7 +756,7 @@ export default function IntentBoard({
             title: 'System Prompt',
             definition: '',
             rule: baseline.currentPrompt,
-            archived: true,
+            archived: false,
             isTemplate: false,
             pinCount: 0,
             includedCount: 0,
@@ -809,13 +765,6 @@ export default function IntentBoard({
         : null,
     [baseline]
   );
-
-  /** Open Revise on a question. Commit any unsaved board edit first so the
-   * holder's latest rule (what RuleWorkbench opens on) matches the editor. */
-  async function openPromptRevise(row: ScoreQueryRow) {
-    if (baseline && promptDirty && !promptOver) await persistPrompt('save');
-    setPromptReviseTarget(row);
-  }
 
   const [newIntentOpen, setNewIntentOpen] = useState(false);
   const [newIntentSeed, setNewIntentSeed] = useState<{
@@ -1590,43 +1539,27 @@ export default function IntentBoard({
           }`}
         >
           {isBaseline ? (
-            /* BASELINE: editable monolithic system prompt in the original slot. */
+            /* BASELINE: read-only view of the current system prompt (like SCORE's
+               Base Prompt). Editing happens in Revise (RuleWorkbench on the
+               holder); Deploy lives in the header. */
             <div className="shrink-0 border-b border-[hsl(var(--border))] px-3 py-2">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   System Prompt
                 </span>
-                <span className={`text-[10px] ${promptOver ? 'text-red-600 font-medium' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                  {promptChars.toLocaleString()}/{promptLimit.toLocaleString()}
+                <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
+                  {baseline?.deployedVersionNo ? `v${baseline.deployedVersionNo} live` : 'not deployed'}
                 </span>
               </div>
-              <textarea
-                value={promptDraft}
-                onChange={(e) => setPromptDraft(e.target.value)}
-                spellCheck={false}
-                className="w-full h-48 resize-y rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-xs font-mono leading-relaxed focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]"
-                placeholder="Write the chatbot's instructions for how it should talk with students…"
-              />
-              <div className="mt-1.5 flex items-center gap-1.5">
-                <button
-                  onClick={() => persistPrompt('save')}
-                  disabled={!!promptBusy || !promptDirty || promptOver}
-                  className="text-[11px] px-2 py-0.5 rounded border border-[hsl(var(--border))] disabled:opacity-40 hover:bg-[hsl(var(--muted))]/50"
-                >
-                  {promptBusy === 'save' ? 'Saving…' : 'Save'}
-                </button>
-                <button
-                  onClick={() => persistPrompt('deploy')}
-                  disabled={!!promptBusy || promptOver}
-                  className="text-[11px] px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-40"
-                >
-                  {promptBusy === 'deploy' ? 'Deploying…' : 'Deploy'}
-                </button>
-                {promptNote && <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate">{promptNote}</span>}
+              <div className="max-h-40 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20 px-2 py-1.5 text-xs whitespace-pre-wrap leading-relaxed text-[hsl(var(--muted-foreground))]">
+                {promptDraft.trim() ? (
+                  promptDraft
+                ) : (
+                  <span className="italic">No system prompt yet — open a question and Revise to write one.</span>
+                )}
               </div>
               <p className="mt-1 text-[10px] text-[hsl(var(--muted-foreground))]">
-                {deployedVersionNo ? `Students receive v${deployedVersionNo}` : 'Not deployed yet — students get the base prompt'}
-                {promptDirty && <span className="text-[hsl(var(--foreground))]"> · unsaved</span>}
+                Edited in Revise (from a question) · deployed from the top-right.
               </p>
             </div>
           ) : (
@@ -2297,7 +2230,7 @@ export default function IntentBoard({
                     // BASELINE: Revise the whole monolithic prompt from this
                     // question — no owning intent, always available.
                     <button
-                      onClick={() => void openPromptRevise(selectedRow)}
+                      onClick={() => setPromptReviseTarget(selectedRow)}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
                       title="Revise the system prompt from this question"
                     >

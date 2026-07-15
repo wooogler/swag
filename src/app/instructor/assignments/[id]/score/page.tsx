@@ -23,6 +23,7 @@ import {
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { listChatDeploys, type ChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
+import BaselineDeployButton from './BaselineDeployButton';
 import {
   DISSECTION_VERSION,
   isRatingLevel,
@@ -302,7 +303,9 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                   : 'Organize · Revise · Evaluate — instructor intents own the log'}
               </p>
             </div>
-            {!isBaselineView && (
+            {isBaselineView ? (
+              <BaselineDeployButton assignmentId={id} deployedVersionNo={baselineState?.deployedVersionNo ?? null} />
+            ) : (
               <DeployControls
                 assignmentId={id}
                 versions={deployVersions}
