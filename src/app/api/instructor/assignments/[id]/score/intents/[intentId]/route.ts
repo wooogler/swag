@@ -44,15 +44,19 @@ const patchSchema = z
     // rule: null clears it back to "No rule yet → base prompt applies".
     rule: z.string().trim().max(8000).nullable().optional(),
     archived: z.boolean().optional(),
-    // Activate a starter-set template → false (it joins the active set; its
-    // pre-computed ratings are already valid, so it lands instantly).
+    // Register a discovery draft → false (the modal's Save; the draft joins
+    // the active set — its ratings are already valid, so it lands instantly).
+    // Library templates are activated by CLONING (POST fromTemplateId), never
+    // by flipping this on the template row itself.
     isTemplate: z.boolean().optional(),
     // Auto-generate the title from the definition on save (git-commit style).
     // Ignored when an explicit title is sent.
     autoTitle: z.boolean().optional(),
-    // false → update WITHOUT a version entry (the modal's Apply; history only
-    // records explicit Saves). Default true keeps other callers versioned.
+    // false → update WITHOUT a version entry. Default true keeps callers versioned.
     recordVersion: z.boolean().optional(),
+    // Record as a MINOR version (an Apply — revertible but not a Save; the
+    // history accordion folds these under their preceding major).
+    minorVersion: z.boolean().optional(),
     // Version rollback: replace this intent's pins with the set snapshotted in
     // that config version (order preserved so the prompt/defHash reproduce
     // byte-identically → the stored ratings for that spec re-attach instantly).
@@ -165,6 +169,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
       [changed || null, body.provenance ? `via ${body.provenance.via}` : null]
         .filter(Boolean)
         .join(' · ') || undefined,
+    ...(body.minorVersion ? { minor: true } : {}),
     stats: body.stats,
   };
 

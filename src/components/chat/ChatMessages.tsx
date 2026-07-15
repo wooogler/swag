@@ -5,10 +5,10 @@ import { getGlobalValidator } from '@/lib/copy-validator';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
-import { Copy, Check, Globe, Loader2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Copy, Check, Globe, Loader2, Pencil } from 'lucide-react';
 import { renderHighlightedChildren, type ReplayPasteHighlight } from './replayPasteHighlight';
 
-interface Message {
+export interface Message {
   id: string | number;
   role: 'user' | 'assistant';
   content: string;
@@ -31,6 +31,21 @@ interface ChatMessagesProps {
   highlightedMessageId?: number | null;
   replayPasteHighlights?: ReplayPasteHighlight[];
   onReplayPasteClick?: (timestamp: number) => void;
+  /** Render assistant messages as verbatim text instead of markdown — for
+   * imported logs (e.g. NIRVANA) whose raw single-newline breaks CommonMark
+   * would collapse. */
+  rawAssistantText?: boolean;
+  /** Scroll the highlighted message to center on mount/select instead of
+   * auto-following the bottom — for read-only thread views (SCORE) where the
+   * point of interest is mid-conversation, not the latest message. */
+  autoScrollToHighlight?: boolean;
+  /** Override the body of a USER bubble (e.g. SCORE's Material tags — pasted
+   * content collapsed into clickable per-kind chips). Return null to fall back
+   * to the default plain-text rendering for that message. */
+  renderUserContent?: (message: Message) => React.ReactNode | null;
+  /** Replace the assistant Copy action with an Edit action (rule workbench:
+   * editing the reply IS the rewrite affordance). */
+  onEditAssistant?: (message: Message) => void;
 }
 
 export default function ChatMessages({
@@ -43,6 +58,10 @@ export default function ChatMessages({
   highlightedMessageId = null,
   replayPasteHighlights = [],
   onReplayPasteClick,
+  rawAssistantText = false,
+  autoScrollToHighlight = false,
+  renderUserContent,
+  onEditAssistant,
 }: ChatMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -73,10 +92,53 @@ export default function ChatMessages({
     });
   }, [messages, validator]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages (live chat) — read-only thread views
+  // center the highlighted message instead.
   useEffect(() => {
+    if (autoScrollToHighlight) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, autoScrollToHighlight]);
+
+  useEffect(() => {
+    if (!autoScrollToHighlight || highlightedMessageId == null) return;
+    scrollContainerRef.current
+      ?.querySelector(`[data-message-id="${highlightedMessageId}"]`)
+      ?.scrollIntoView({ block: 'center' });
+  }, [autoScrollToHighlight, highlightedMessageId, messages]);
+
+  // Highlighted-message visibility: when the reader scrolls it off-screen, a
+  // floating "back to the question" button appears (thread views only). The
+  // visible window is the intersection of this container and the viewport, so
+  // it also works when an ANCESTOR is the actual scroller; the capturing
+  // scroll listener catches scrolls at any level.
+  const [highlightOffscreen, setHighlightOffscreen] = useState<'up' | 'down' | null>(null);
+  useEffect(() => {
+    if (!autoScrollToHighlight || highlightedMessageId == null) {
+      setHighlightOffscreen(null);
+      return;
+    }
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const update = () => {
+      const el = container.querySelector<HTMLElement>(`[data-message-id="${highlightedMessageId}"]`);
+      if (!el) {
+        setHighlightOffscreen(null);
+        return;
+      }
+      const c = container.getBoundingClientRect();
+      const top = Math.max(c.top, 0);
+      const bottom = Math.min(c.bottom, window.innerHeight);
+      const r = el.getBoundingClientRect();
+      setHighlightOffscreen(r.bottom < top + 8 ? 'up' : r.top > bottom - 8 ? 'down' : null);
+    };
+    update();
+    document.addEventListener('scroll', update, { capture: true, passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      document.removeEventListener('scroll', update, { capture: true });
+      window.removeEventListener('resize', update);
+    };
+  }, [autoScrollToHighlight, highlightedMessageId, messages]);
 
   // When a new replay paste highlight appears, bring that highlight near top for easier scanning.
   useEffect(() => {
@@ -175,10 +237,14 @@ export default function ChatMessages({
         const isStreaming = isLastMessage && isLoading && !isUser;
         const isHighlighted = highlightedMessageId === message.id;
         const messageHighlights = messagePasteHighlightMap.get(String(message.id)) ?? [];
+        // Per-message raw override (metadata.rawText) beats the global flag —
+        // a regenerated (markdown) reply can sit inside a raw-text thread.
+        const rawMessage = (message.metadata?.rawText as boolean | undefined) ?? rawAssistantText;
 
         return (
           <div
             key={message.id}
+            data-message-id={message.id}
             className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
           >
             <div className={`${isUser ? 'max-w-[85%]' : 'w-full'} ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
@@ -196,8 +262,11 @@ export default function ChatMessages({
               >
                 {isUser ? (
                   <p className="text-base whitespace-pre-wrap wrap-break-word">
-                    {renderHighlightedChildren(message.content, messageHighlights, onReplayPasteClick)}
+                    {renderUserContent?.(message) ??
+                      renderHighlightedChildren(message.content, messageHighlights, onReplayPasteClick)}
                   </p>
+                ) : rawMessage ? (
+                  <p className="text-base whitespace-pre-wrap wrap-break-word">{message.content}</p>
                 ) : (
                   <div className="prose prose-base max-w-none dark:prose-invert prose-headings:font-outfit prose-p:leading-relaxed prose-pre:bg-[hsl(var(--muted))] prose-pre:text-[hsl(var(--foreground))] prose-pre:border prose-pre:border-[hsl(var(--border))]">
                     <ReactMarkdown
@@ -286,7 +355,20 @@ export default function ChatMessages({
                   </div>
                 )}
 
-                {!isUser && enableCopy && !isStreaming && (
+                {!isUser && !isStreaming && onEditAssistant ? (
+                  <Button
+                    onClick={() => onEditAssistant(message)}
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto p-0 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-transparent"
+                    title="Edit this response the way you want it — the agent infers the rule change"
+                  >
+                    <span className="flex items-center gap-1">
+                      <Pencil className="w-3 h-3" />
+                      Edit
+                    </span>
+                  </Button>
+                ) : !isUser && enableCopy && !isStreaming ? (
                   <Button
                     onClick={() => copyToClipboard(message.content, message.id)}
                     variant="ghost"
@@ -306,7 +388,7 @@ export default function ChatMessages({
                       </span>
                     )}
                   </Button>
-                )}
+                ) : null}
               </div>
             </div>
           </div>
@@ -321,6 +403,29 @@ export default function ChatMessages({
               <span className="text-sm">Thinking...</span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Floating return-to-question button — sticks to the bottom of the
+          nearest scrollport while the highlighted message is off-screen. */}
+      {autoScrollToHighlight && highlightOffscreen && (
+        <div className="sticky bottom-2 z-10 flex justify-center pointer-events-none">
+          <button
+            onClick={() =>
+              scrollContainerRef.current
+                ?.querySelector(`[data-message-id="${highlightedMessageId}"]`)
+                ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+            }
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--foreground))] shadow-md hover:bg-[hsl(var(--muted))]"
+            title="Scroll back to the question being reviewed"
+          >
+            {highlightOffscreen === 'up' ? (
+              <ArrowUp className="w-3.5 h-3.5" />
+            ) : (
+              <ArrowDown className="w-3.5 h-3.5" />
+            )}
+            Back to the question
+          </button>
         </div>
       )}
 

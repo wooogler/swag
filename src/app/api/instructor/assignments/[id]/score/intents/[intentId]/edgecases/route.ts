@@ -99,6 +99,38 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json({ cases: [] });
   }
 
+  // ?farthest=N → just the N semantically-farthest in-group questions (the
+  // Revise modal's edge-case tabs). Falls back to most-recent N if embeddings
+  // are unavailable — the button never blocks on the embedding service.
+  const farthestN = Number.parseInt(new URL(req.url).searchParams.get('farthest') ?? '', 10);
+  if (Number.isFinite(farthestN) && farthestN > 0) {
+    let chosen = [...candidates]
+      .sort((x, y) => y.queryTimestamp.getTime() - x.queryTimestamp.getTime())
+      .slice(0, farthestN);
+    try {
+      const anchorRec = records.find((r) => r.messageId === anchorId);
+      if (anchorRec) {
+        const embeddings = await getQueryEmbeddings(id, [anchorRec, ...candidates]);
+        const anchorVec = embeddings.get(anchorRec.messageId);
+        if (anchorVec) {
+          chosen = candidates
+            .filter((c) => embeddings.has(c.messageId))
+            .sort(
+              (x, y) =>
+                cosineSimilarity(anchorVec, embeddings.get(x.messageId)!) -
+                cosineSimilarity(anchorVec, embeddings.get(y.messageId)!)
+            )
+            .slice(0, farthestN);
+        }
+      }
+    } catch (error) {
+      console.error('SCORE farthest edge-cases embeddings failed (falling back to recency):', error);
+    }
+    return NextResponse.json({
+      cases: chosen.map((c) => ({ messageId: c.messageId, queryText: c.queryText, reason: 'farthest' as const })),
+    });
+  }
+
   const picked: { messageId: number; queryText: string; reason: EdgeCaseReason }[] = [];
   const taken = new Set<number>();
   const take = (rec: (typeof candidates)[number] | undefined, reason: EdgeCaseReason) => {

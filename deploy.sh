@@ -105,16 +105,22 @@ set +a
 PGOPTIONS="-c client_min_messages=warning" npm run db:migrate
 
 # Step 6: Stop and remove existing container
+# The container runs under root podman (via systemd), so only root podman is
+# used from here on. We no longer build a rootless copy and save/load it into
+# root — that doubled disk usage and was the cause of the out-of-space failures.
 echo "🛑 Stopping existing container..."
-podman stop $CONTAINER_NAME 2>/dev/null || true
-podman rm -f $CONTAINER_NAME 2>/dev/null || true
-# Also try to clean up any root-owned containers with the same name
 sudo podman stop $CONTAINER_NAME 2>/dev/null || true
 sudo podman rm -f $CONTAINER_NAME 2>/dev/null || true
 
-# Step 7: Build Docker image
-echo "🔨 Building Docker image..."
-podman build -t $IMAGE_NAME .
+# Step 7: Prune old build artifacts (root store only) and build the image there
+echo "🧹 Pruning old Podman build artifacts..."
+sudo podman image rm $IMAGE_NAME 2>/dev/null || true
+sudo podman image prune -af 2>/dev/null || true
+sudo podman container prune -f 2>/dev/null || true
+sudo podman volume prune -f 2>/dev/null || true
+
+echo "🔨 Building image directly in the root podman store..."
+sudo podman build -t $IMAGE_NAME .
 
 # Step 8: Create systemd service for auto-restart (using root podman)
 echo "🔧 Setting up systemd service..."
@@ -138,10 +144,6 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# Copy image to root podman
-echo "📦 Copying image to root podman..."
-podman save $IMAGE_NAME | sudo podman load
 
 # Reload systemd and enable service
 sudo systemctl daemon-reload
@@ -277,4 +279,4 @@ echo "📊 Useful commands:"
 echo "   sudo systemctl status swag        # Check service status"
 echo "   sudo systemctl restart swag       # Restart service"
 echo "   sudo journalctl -u swag -f        # View logs (follow mode)"
-echo "   podman logs $CONTAINER_NAME       # View container logs"
+echo "   sudo podman logs $CONTAINER_NAME  # View container logs"

@@ -74,18 +74,11 @@ interface RatingRow {
   dissection: { materialKinds: MaterialKind[]; requests: string[] } | null;
 }
 
-type NdSort = 'attention' | 'pins' | 'newest' | 'oldest';
-
-/** The model's signed lean. clearly_* count as full-strength leans so the
- * attention sort works in the "In this intent" pane too (a clearly-in row
- * whose pins say OUT is exactly what needs a look). 0 = no lean, which in
- * practice means "not rated" — the classifier can no longer emit 'unsure'
- * (intents.ts: PROMPT_RATING_LEVELS), though legacy rows still carry it. */
-function leanOf(rating: RatingLevel | null): number {
-  if (rating === 'clearly_in' || rating === 'probably_in') return 1;
-  if (rating === 'clearly_out' || rating === 'probably_out') return -1;
-  return 0;
-}
+// The two pin-driven orders both rank by the same embedding score (max cosine
+// to the IN pins − max cosine to the OUT pins), just in opposite directions.
+// The lean tabs already split in from out, so no signed cross-lean measure is
+// needed — each tab just picks a direction.
+type NdSort = 'in-like' | 'out-like' | 'newest' | 'oldest';
 
 /** Prompt order: the server's pin index, with optimistic (negative) pins first. */
 function byPinRank(a: RatingRow, b: RatingRow): number {
@@ -366,20 +359,25 @@ export default function IntentWorkbench({
   // Collapse state for the LEFT boundary-example lists.
   const [incOpen, setIncOpen] = useState(true);
   const [excOpen, setExcOpen] = useState(true);
-  // Per-pane query search + sorts. Two pin-driven orderings of Needs decision,
-  // both fed by the same embedding score (max cosine to the IN pins − max
-  // cosine to the OUT pins):
-  //  · 'attention' — the questions where the model's lean and your pins DISAGREE
-  //    (probably-in that looks out, probably-out that looks in). What to think about.
-  //  · 'pins'      — most in-like first, most out-like last. What to bulk-label.
+  // Per-pane query search + sorts. Both pin-driven orders rank by the embedding
+  // score (max cosine to the IN pins − max cosine to the OUT pins); 'in-like'
+  // puts the highest scores first, 'out-like' the lowest.
   const [inSearch, setInSearch] = useState('');
   const [ndSearch, setNdSearch] = useState('');
-  const [inSort, setInSort] = useState<'attention' | 'newest' | 'oldest'>('attention');
-  const [ndSort, setNdSort] = useState<NdSort>('attention');
+  // "In this intent" holds captures that all lean in, so its useful default is
+  // out-like first — the members that look like they don't belong.
+  const [inSort, setInSort] = useState<NdSort>('out-like');
   // Needs-decision lean tab: the probably-in or the probably-out side.
   // Everything without a clear in-lean (probably_out, legacy unsure, not
   // rated) lands on the out side so no row is ever hidden.
   const [ndFilter, setNdFilter] = useState<'in' | 'out'>('in');
+  // One sort per lean tab, so each remembers its own order. Each defaults to the
+  // "surprising" side — the probably-in questions that look OUT-like, and the
+  // probably-out questions that look IN-like: the rows most likely mislabeled.
+  const [ndSortIn, setNdSortIn] = useState<NdSort>('out-like');
+  const [ndSortOut, setNdSortOut] = useState<NdSort>('in-like');
+  const ndSort = ndFilter === 'in' ? ndSortIn : ndSortOut;
+  const setNdSort = ndFilter === 'in' ? setNdSortIn : setNdSortOut;
   const [similarScores, setSimilarScores] = useState<Record<number, number> | null>(null);
   const [similarBusy, setSimilarBusy] = useState(false);
 
@@ -1081,51 +1079,14 @@ export default function IntentWorkbench({
   }
   // Load pin scores lazily when a pin-driven sort is active in EITHER pane;
   // invalidated to null on every pin change so the order reflects the latest pins.
-  const pinSorted = ndSort === 'attention' || ndSort === 'pins' || inSort === 'attention';
+  const isPinSort = (m: NdSort) => m === 'in-like' || m === 'out-like';
+  const pinSorted = isPinSort(ndSort) || isPinSort(inSort);
   useEffect(() => {
     if (pinSorted && data && intentId != null && similarScores === null && !similarBusy) {
       fetchPins();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinSorted, data, intentId, similarScores]);
-
-  // Pin TILT ∈ [−1,+1]: the raw pin score percentile-ranked WITHIN the list
-  // being sorted. The raw score's own zero is NOT the in/out boundary — cosines
-  // live in a narrow band and each side is a max(), which grows with the number
-  // of pins on it, so 10 IN pins against 2 OUT pins shift every score up.
-  // Ranking pins the pivot to the list's median instead, which is what "leans
-  // out relative to its peers" means. Computed over the unfiltered list so the
-  // search box cannot re-rank it.
-  const tiltOf = (list: RatingRow[]): Map<number, number> => {
-    const tilt = new Map<number, number>();
-    if (!similarScores) return tilt;
-    const scored = list
-      .map((r) => ({ id: r.messageId, s: similarScores[r.messageId] }))
-      .filter((x): x is { id: number; s: number } => typeof x.s === 'number')
-      .sort((a, b) => a.s - b.s);
-    scored.forEach((x, i) => tilt.set(x.id, scored.length > 1 ? (2 * i) / (scored.length - 1) - 1 : 0));
-    return tilt;
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const ndTilt = useMemo(() => tiltOf(needsDecision), [needsDecision, similarScores]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const inTilt = useMemo(() => tiltOf(inThisIntent), [inThisIntent, similarScores]);
-
-  // How badly a question wants your attention. The two signals are the model's
-  // lean and your pins; you only need to think where they conflict.
-  //   lean ≠ 0 → −lean × tilt : a rating leaning in that looks out per your
-  //                             pins (and vice versa) → +1. In this intent
-  //                             every row leans in (clearly_in), so the most
-  //                             out-looking captures surface first. Both
-  //                             agreeing → −1, straight to the bottom.
-  //   lean = 0 → 1 − |tilt|   : nobody has an opinion → top; pins settle it → bottom.
-  // A question with no embedding (or an intent with no pins) has tilt 0, landing
-  // between the conflicts and the agreements — unknown outranks confirmed.
-  const attentionOf = (r: RatingRow, tilts: Map<number, number>): number => {
-    const lean = leanOf(r.rating);
-    const tilt = tilts.get(r.messageId) ?? 0;
-    return lean === 0 ? 1 - Math.abs(tilt) : -lean * tilt;
-  };
 
   // Overlapping captures (another intent also owns the question, or it sits in
   // a boundary) float to the top of "In this intent" — they are the pending
@@ -1136,25 +1097,20 @@ export default function IntentWorkbench({
     ...list.filter((r) => !isOverlapRow(r)),
   ];
 
-  // Filter by the pane's search box, then sort by the chosen mode. Both pin
-  // modes hold the incoming order until the scores land (null = still fetching).
-  const sortRows = (
-    rowsIn: RatingRow[],
-    mode2: NdSort,
-    search: string,
-    tilts: Map<number, number>
-  ): RatingRow[] => {
+  // Filter by the pane's search box, then sort by the chosen mode. The pin sorts
+  // hold the incoming order until the scores land (null = still fetching), and
+  // park rows with no embedding at the bottom — they can't sit on the in↔out axis.
+  const sortRows = (rowsIn: RatingRow[], mode2: NdSort, search: string): RatingRow[] => {
     const q = search.trim().toLowerCase();
     const filtered = q ? rowsIn.filter((r) => r.queryText.toLowerCase().includes(q)) : rowsIn;
-    if (mode2 === 'attention') {
+    if (mode2 === 'in-like' || mode2 === 'out-like') {
       if (!similarScores) return filtered;
-      return [...filtered].sort((a, b) => attentionOf(b, tilts) - attentionOf(a, tilts));
-    }
-    if (mode2 === 'pins') {
-      if (!similarScores) return filtered;
-      return [...filtered].sort(
-        (a, b) => (similarScores[b.messageId] ?? -1) - (similarScores[a.messageId] ?? -1)
-      );
+      const scoreOf = (r: RatingRow) => similarScores[r.messageId];
+      const scored = filtered.filter((r) => typeof scoreOf(r) === 'number');
+      const unscored = filtered.filter((r) => typeof scoreOf(r) !== 'number');
+      const dir = mode2 === 'out-like' ? 1 : -1; // out-like: lowest first; in-like: highest first
+      scored.sort((a, b) => dir * (scoreOf(a) - scoreOf(b)));
+      return [...scored, ...unscored];
     }
     const dir = mode2 === 'newest' ? -1 : 1;
     return [...filtered].sort((a, b) => dir * a.queryTimestamp.localeCompare(b.queryTimestamp));
@@ -1868,20 +1824,23 @@ export default function IntentWorkbench({
                       )}
                     </span>
                     <span className="flex items-center gap-1 shrink-0">
-                      {similarBusy && inSort === 'attention' && (
+                      {similarBusy && isPinSort(inSort) && (
                         <Loader2 className="w-3 h-3 animate-spin text-[hsl(var(--muted-foreground))]" />
                       )}
                       <select
                         value={inSort}
-                        onChange={(e) => setInSort(e.target.value as typeof inSort)}
+                        onChange={(e) => setInSort(e.target.value as NdSort)}
                         title={
-                          inSort === 'attention'
+                          inSort === 'out-like'
                             ? 'Sort — captures that look OUT-like next to your pins come first (double-check these)'
-                            : 'Sort'
+                            : inSort === 'in-like'
+                              ? 'Sort — captures closest to your IN pins come first'
+                              : 'Sort'
                         }
                         className="text-[10px] border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
                       >
-                        <option value="attention">Needs attention</option>
+                        <option value="out-like">Most out-like first</option>
+                        <option value="in-like">Most in-like first</option>
                         <option value="newest">Newest</option>
                         <option value="oldest">Oldest</option>
                       </select>
@@ -1959,7 +1918,7 @@ export default function IntentWorkbench({
                     const rest = newlyIn
                       ? inThisIntent.filter((r) => !newlyIn.has(r.messageId))
                       : inThisIntent;
-                    const sorted = overlapsFirst(sortRows(rest, inSort, inSearch, inTilt));
+                    const sorted = overlapsFirst(sortRows(rest, inSort, inSearch));
                     return sorted.length > 0 ? (
                       <ul className="divide-y divide-[hsl(var(--border))]/60">
                         {sorted.map((r) => renderRow(r, 'in'))}
@@ -2006,16 +1965,16 @@ export default function IntentWorkbench({
                         value={ndSort}
                         onChange={(e) => setNdSort(e.target.value as NdSort)}
                         title={
-                          ndSort === 'attention'
-                            ? 'Sort — questions where the model’s lean disagrees with your pins come first'
-                            : ndSort === 'pins'
-                              ? 'Sort — closest to your IN pins first, closest to your OUT pins last'
+                          ndSort === 'in-like'
+                            ? 'Sort — closest to your IN pins first, closest to your OUT pins last'
+                            : ndSort === 'out-like'
+                              ? 'Sort — closest to your OUT pins first, closest to your IN pins last'
                               : 'Sort'
                         }
                         className="text-[10px] border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] normal-case font-normal"
                       >
-                        <option value="attention">Needs attention</option>
-                        <option value="pins">Most in-like first</option>
+                        <option value="in-like">Most in-like first</option>
+                        <option value="out-like">Most out-like first</option>
                         <option value="newest">Newest</option>
                         <option value="oldest">Oldest</option>
                       </select>
@@ -2054,7 +2013,7 @@ export default function IntentWorkbench({
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   {(() => {
-                    const sorted = sortRows(ndFiltered, ndSort, ndSearch, ndTilt);
+                    const sorted = sortRows(ndFiltered, ndSort, ndSearch);
                     return sorted.length > 0 ? (
                       <ul className="divide-y divide-[hsl(var(--border))]/60">
                         {sorted.map((r) => renderRow(r, 'nd'))}

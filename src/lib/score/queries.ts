@@ -26,6 +26,11 @@ export interface QueryRecord {
   /** The chatbot reply that FOLLOWED this query. Kept for human display only —
    *  it is NOT sent to the classifier (it is downstream of the query's intent). */
   responseText: string | null;
+  /** SCORE deploy audit trail off the reply's metadata (/api/chat): which chat
+   *  deploy version served it and which intent's rule was injected — null for
+   *  pre-deploy / imported logs. */
+  responseChatVersion: number | null;
+  responseIntentId: number | null;
   /** Prior context the query is reacting to (sent to the classifier): the
    *  previous student message and the chatbot reply the student had just seen. */
   prevQueryText: string | null;
@@ -176,6 +181,7 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
       sessionId: chatConversations.sessionId,
       role: chatMessages.role,
       content: chatMessages.content,
+      metadata: chatMessages.metadata,
       seq: chatMessages.sequenceNumber,
       ts: chatMessages.timestamp,
     })
@@ -198,12 +204,21 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
     // Find the chatbot response: next assistant message in the same
     // conversation, before the next user message. Kept for human display only.
     let responseText: string | null = null;
+    let responseChatVersion: number | null = null;
+    let responseIntentId: number | null = null;
     for (let j = i + 1; j < rows.length; j++) {
       const next = rows[j];
       if (next.conversationId !== m.conversationId) break;
       if (next.role === 'user') break;
       if (next.role === 'assistant') {
         responseText = next.content;
+        const meta = (next.metadata ?? null) as {
+          chatDeployVersion?: unknown;
+          appliedIntentId?: unknown;
+        } | null;
+        responseChatVersion =
+          typeof meta?.chatDeployVersion === 'number' ? meta.chatDeployVersion : null;
+        responseIntentId = typeof meta?.appliedIntentId === 'number' ? meta.appliedIntentId : null;
         break;
       }
     }
@@ -243,6 +258,8 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
       sessionId: m.sessionId,
       queryText: m.content,
       responseText,
+      responseChatVersion,
+      responseIntentId,
       prevQueryText,
       prevResponseText,
       turnIndex: m.seq,

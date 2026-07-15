@@ -56,7 +56,7 @@ async function createIntentTables(): Promise<void> {
   const existing = await db.execute<{ tablename: string }>(sql`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const has = new Set(existing.map((r) => r.tablename));
   if (!has.has('score_intents')) {
@@ -181,6 +181,40 @@ async function createIntentTables(): Promise<void> {
       )
     `);
   }
+  if (!has.has('score_rule_versions')) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "score_rule_versions" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "assignment_id" text NOT NULL,
+        "intent_id" integer NOT NULL,
+        "version_no" integer NOT NULL,
+        "name" text,
+        "rule" text,
+        "updated_response" text,
+        "anchor_message_id" integer,
+        "source" text NOT NULL,
+        "note" text,
+        "minor" boolean DEFAULT false NOT NULL,
+        "created_by" text,
+        "created_at" timestamp NOT NULL
+      )
+    `);
+  }
+  if (!has.has('score_rule_version_responses')) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "score_rule_version_responses" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "assignment_id" text NOT NULL,
+        "intent_id" integer NOT NULL,
+        "rule_version_id" integer NOT NULL,
+        "version_no" integer NOT NULL,
+        "message_id" integer NOT NULL,
+        "response" text NOT NULL,
+        "model" text,
+        "created_at" timestamp NOT NULL
+      )
+    `);
+  }
 
   // Add columns introduced after the table's original CREATE (existing DBs skip
   // the CREATE above). Pre-check information_schema so an already-present column
@@ -193,6 +227,21 @@ async function createIntentTables(): Promise<void> {
   if (cols.length === 0) {
     await db.execute(
       sql`ALTER TABLE "score_intents" ADD COLUMN "is_template" boolean DEFAULT false NOT NULL`
+    );
+  }
+  // score_rule_versions.name / .minor were added after the table's first CREATE.
+  const ruleVersionCols = await db.execute<{ column_name: string }>(sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'score_rule_versions'
+      AND column_name IN ('name', 'minor')
+  `);
+  const haveRuleCols = new Set(ruleVersionCols.map((r) => r.column_name));
+  if (!haveRuleCols.has('name')) {
+    await db.execute(sql`ALTER TABLE "score_rule_versions" ADD COLUMN "name" text`);
+  }
+  if (!haveRuleCols.has('minor')) {
+    await db.execute(
+      sql`ALTER TABLE "score_rule_versions" ADD COLUMN "minor" boolean DEFAULT false NOT NULL`
     );
   }
 
@@ -235,11 +284,19 @@ async function createIntentTables(): Promise<void> {
       sql`CREATE INDEX IF NOT EXISTS "score_chat_deploys_assignment_idx" ON "score_chat_deploys" USING btree ("assignment_id")`],
     ['score_chat_deploys', 'score_chat_deploys_assignment_version_unique',
       sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_chat_deploys_assignment_version_unique" ON "score_chat_deploys" USING btree ("assignment_id", "version_no")`],
+    ['score_rule_versions', 'score_rule_versions_assignment_idx',
+      sql`CREATE INDEX IF NOT EXISTS "score_rule_versions_assignment_idx" ON "score_rule_versions" USING btree ("assignment_id")`],
+    ['score_rule_versions', 'score_rule_versions_intent_version_unique',
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_rule_versions_intent_version_unique" ON "score_rule_versions" USING btree ("intent_id", "version_no")`],
+    ['score_rule_version_responses', 'score_rule_version_responses_assignment_idx',
+      sql`CREATE INDEX IF NOT EXISTS "score_rule_version_responses_assignment_idx" ON "score_rule_version_responses" USING btree ("assignment_id")`],
+    ['score_rule_version_responses', 'score_rule_version_responses_version_message_unique',
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_rule_version_responses_version_message_unique" ON "score_rule_version_responses" USING btree ("rule_version_id", "message_id")`],
   ];
   const idx = await db.execute<{ indexname: string }>(sql`
     SELECT indexname FROM pg_indexes
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const have = new Set(idx.map((r) => r.indexname));
   // Ratings were re-keyed from (message, intent) to (message, intent, def_hash)
@@ -462,9 +519,24 @@ export interface VersionSummary {
   intentIds?: number[];
   messageId?: number;
   detail?: string;
+  /** MINOR version: an Apply persisted the spec (LLM re-rate — costly, so it
+   * must be revertible) without registering it as a Save. The workbench
+   * history folds minors into an accordion under their preceding major. */
+  minor?: boolean;
   /** Save-time counts from the Intent modal (for the history display):
    * included/excluded = labeled examples, inCount = questions in the intent. */
   stats?: { included: number; excluded: number; inCount: number };
+}
+
+/** Minor entries fold into the workbench-history accordion under their
+ * preceding major, and do NOT advance an intent's displayed version number:
+ * the silent Apply persists (flagged by the client) and the pin-label
+ * bookkeeping. Everything else — Save, create, archive/restore, ownership,
+ * revert — is a major. Old rows carry no flag and read as major (back-compat).
+ * Shared by the versions route (numbering) and the board (the "When vN" count)
+ * so the two can never disagree. */
+export function isMinorVersion(summary: VersionSummary): boolean {
+  return summary.minor === true || summary.action === 'add_pin' || summary.action === 'remove_pin';
 }
 
 /**

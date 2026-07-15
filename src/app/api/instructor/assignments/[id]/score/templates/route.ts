@@ -10,12 +10,13 @@
  * scope the rate run and match them to the taxonomy.
  */
 import { NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { scoreIntents } from '@/db/schema';
+import { scoreIntentRatings, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { ensureIntentTables } from '@/lib/score/intent-store';
+import { intentDefHash } from '@/lib/score/intents';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,25 +53,49 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const now = new Date();
 
   const templates = await db.transaction(async (tx) => {
+    // Dedupe against TEMPLATES only. Live/archived intents sharing a definition
+    // must not block the library: activation clones a template (it never
+    // consumes it), so an active copy of a set is no reason to skip its
+    // template — and an archived copy definitely isn't.
     const existing = await tx
       .select({ definition: scoreIntents.definition })
       .from(scoreIntents)
-      .where(eq(scoreIntents.assignmentId, id));
+      .where(and(eq(scoreIntents.assignmentId, id), eq(scoreIntents.isTemplate, true)));
     const have = new Set(existing.map((r) => r.definition.trim()));
     const toCreate = body.templates.filter((t) => !have.has(t.definition.trim()));
     if (toCreate.length > 0) {
-      await tx.insert(scoreIntents).values(
-        toCreate.map((t) => ({
-          assignmentId: id,
-          title: t.title,
-          definition: t.definition,
-          rule: null,
-          archived: false,
-          isTemplate: true,
-          createdAt: now,
-          updatedAt: now,
-        }))
-      );
+      const created = await tx
+        .insert(scoreIntents)
+        .values(
+          toCreate.map((t) => ({
+            assignmentId: id,
+            title: t.title,
+            definition: t.definition,
+            rule: null,
+            archived: false,
+            isTemplate: true,
+            createdAt: now,
+            updatedAt: now,
+          }))
+        )
+        .returning({ id: scoreIntents.id, definition: scoreIntents.definition });
+      // Repair path: a template re-created after being lost (e.g. consumed by
+      // the old activate-by-flip behavior) can reuse ratings that any sibling
+      // intent already produced for the SAME spec — defHash covers the rating
+      // version + definition + pins (templates have none), so equal hash ⇒
+      // byte-identical prompt. One donor row per message; zero LLM calls.
+      for (const t of created) {
+        const wantedHash = intentDefHash(t.definition, []);
+        await tx.execute(sql`
+          INSERT INTO "score_intent_ratings"
+            ("assignment_id", "message_id", "intent_id", "rating", "rationale", "def_hash", "raw_response", "model", "rated_at")
+          SELECT DISTINCT ON ("message_id")
+            "assignment_id", "message_id", ${t.id}, "rating", "rationale", "def_hash", "raw_response", "model", "rated_at"
+          FROM ${scoreIntentRatings}
+          WHERE "assignment_id" = ${id} AND "def_hash" = ${wantedHash} AND "intent_id" <> ${t.id}
+          ORDER BY "message_id", "rated_at" DESC
+        `);
+      }
     }
     // Return every template intent (existing + just-created) for this assignment.
     return tx

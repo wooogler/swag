@@ -25,6 +25,7 @@ Output: one NDJSON line of {"kind":"seed",...} then one per session
 """
 import csv
 import ast
+import io
 import json
 import re
 import sys
@@ -80,6 +81,23 @@ def norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").lower()).strip()
 
 
+# The published NIRVANA CSVs lost some 3-byte UTF-8 punctuation to U+FFFD
+# replacement-character runs (each run = exactly one lost character; audited by
+# hand across every chat occurrence). Restore the two unambiguous cases:
+# contraction/possessive apostrophes, then everything else as an em-dash.
+# Without this, re-importing reintroduces the mojibake that was repaired in the
+# live DB on 2026-07-11.
+_MOJIBAKE_APOSTROPHE = re.compile("(\\w)�{3}(s|t|re|ll|ve|d|m)\\b")
+_MOJIBAKE_RUN = re.compile("�+")
+
+
+def fix_mojibake(s: str) -> str:
+    if "�" not in s:
+        return s
+    s = _MOJIBAKE_APOSTROPHE.sub("\\1’\\2", s)
+    return _MOJIBAKE_RUN.sub("—", s)
+
+
 def parse_pylit(cell: str):
     """Parse a Python-literal cell (single quotes, lists/dicts). Return None on failure."""
     if cell is None or cell == "":
@@ -133,7 +151,8 @@ def coerce_value(v: str):
 # Load participants
 # ---------------------------------------------------------------------------
 with open(PARTICIPANTS_CSV, newline="") as f:
-    pr = csv.reader(f)
+    # StringIO (not splitlines) so newlines inside quoted cells survive.
+    pr = csv.reader(io.StringIO(fix_mojibake(f.read())))
     pheader = next(pr)
     prows = list(pr)
 
@@ -163,7 +182,8 @@ for row in prows:
 # Load + group raw data by essay
 # ---------------------------------------------------------------------------
 with open(RAW_CSV, newline="") as f:
-    rr = csv.reader(f)
+    # StringIO (not splitlines) so newlines inside quoted cells survive.
+    rr = csv.reader(io.StringIO(fix_mojibake(f.read())))
     rheader = next(rr)
     RIDX = {h: i for i, h in enumerate(rheader) if h}
 

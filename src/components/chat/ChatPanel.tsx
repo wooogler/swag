@@ -18,6 +18,7 @@ interface ChatPanelProps {
   isOpen: boolean;
   onToggle: (isOpen: boolean) => void;
   allowWebSearch?: boolean;
+  strictPasteBlocking?: boolean;
   // Replay mode props
   mode?: 'live' | 'replay';
   replayConversations?: Conversation[];
@@ -42,6 +43,7 @@ function ChatPanel({
   isOpen,
   onToggle,
   allowWebSearch = false,
+  strictPasteBlocking = false,
   mode = 'live',
   replayConversations = [],
   replayMessages = [],
@@ -227,6 +229,18 @@ function ChatPanel({
       }
     };
 
+    const blockExternalPaste = (e: ClipboardEvent) => {
+      e.preventDefault();
+      toast.error('External paste is blocked. You can only paste content from within this system.', {
+        duration: 4000,
+        position: 'top-center',
+        style: {
+          background: '#EF4444',
+          color: '#fff',
+        },
+      });
+    };
+
     const handlePaste = (e: ClipboardEvent) => {
       const pastedContent = e.clipboardData?.getData('text/plain')?.trim() || '';
 
@@ -236,15 +250,10 @@ function ChatPanel({
           targetArea: 'chat',
           matchMethod: 'none',
         });
-        e.preventDefault();
-        toast.error('External paste is blocked. You can only paste content from within this system.', {
-          duration: 4000,
-          position: 'top-center',
-          style: {
-            background: '#EF4444',
-            color: '#fff',
-          },
-        });
+        // In strict mode, non-text clipboard payloads are treated as external content and blocked.
+        if (strictPasteBlocking) {
+          blockExternalPaste(e);
+        }
         return;
       }
 
@@ -256,16 +265,10 @@ function ChatPanel({
       });
 
       if (!classification.isInternal) {
-        // Block external paste
-        e.preventDefault();
-        toast.error('External paste is blocked. You can only paste content from within this system.', {
-          duration: 4000,
-          position: 'top-center',
-          style: {
-            background: '#EF4444',
-            color: '#fff',
-          },
-        });
+        // Allow external paste when strict blocking is disabled. Logs are still recorded.
+        if (strictPasteBlocking) {
+          blockExternalPaste(e);
+        }
       } else {
         // Clear the copy buffer after successful paste
         validator.clearCopyBuffer();
@@ -279,7 +282,7 @@ function ChatPanel({
       inputElement.removeEventListener('copy', handleCopy);
       inputElement.removeEventListener('paste', handlePaste as EventListener);
     };
-  }, [validator, isReplayMode, tracker]);
+  }, [validator, isReplayMode, tracker, strictPasteBlocking]);
 
   useEffect(() => {
     if (!isReplayMode) return;

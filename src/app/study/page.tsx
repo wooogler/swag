@@ -6,6 +6,8 @@ import { studyParticipants } from '@/db/schema';
 import { ensureStudyTables } from '@/lib/study/store';
 import StudyAccessForm from '@/components/study/StudyAccessForm';
 
+export const dynamic = 'force-dynamic';
+
 export const metadata = {
   title: 'SCORE Study Access',
 };

@@ -18,7 +18,6 @@
  */
 import {
   MATERIAL_KINDS,
-  MAX_PINS_IN_PROMPT,
   pinPromptText,
   PROMPT_RATING_LEVELS,
   type PromptPin,
@@ -27,7 +26,7 @@ import {
 export interface PromptIntent {
   id: number;
   definition: string;
-  /** Pins actually sent — pass through selectPromptPins() first. */
+  /** Pins actually sent, in prompt order — pass through selectPromptPins(). */
   pins: PromptPin[];
 }
 
@@ -168,5 +167,3 @@ export function buildIntentSchema(intentIds: number[], includeDissection: boolea
 /** Sanity cap: keep a single call's intent list from blowing up the prompt.
  * v6 assumes a small intent space (~dozens); warn-level guard only. */
 export const MAX_INTENTS_PER_CALL = 40;
-
-export { MAX_PINS_IN_PROMPT };

@@ -136,6 +136,12 @@ export async function GET(req: Request, { params }: RouteParams) {
   const byMessage = pickDisplayRatings(ratingRows, wantedHash);
 
   const pinByMessage = new Map(pinRows.map((p) => [p.messageId, p.verdict as 'in' | 'out']));
+  // pinRows is already in the canonical prompt order (live: newest pin first,
+  // per listPins; checkout: the snapshot's stored array order). Ship that index
+  // so the client can reproduce selectPromptPins EXACTLY — its own row order is
+  // by rating strength, which would pick a different, weaker-rated set of pins
+  // than the classifier actually saw (preview = runtime, §1.9).
+  const pinRankByMessage = new Map(pinRows.map((p, i) => [p.messageId, i]));
 
   const overlapCounts = new Map<number, number>();
   const rows = records.map((rec) => {
@@ -183,6 +189,8 @@ export async function GET(req: Request, { params }: RouteParams) {
       rationale: mineRow?.rationale ?? null,
       stale: !!mineRow && !mineFresh,
       pinned: pinByMessage.get(rec.messageId) ?? null,
+      /** Position among this intent's pins in prompt order; null when unpinned. */
+      pinRank: pinRankByMessage.get(rec.messageId) ?? null,
       prior:
         prior.kind === 'assigned'
           ? { kind: 'assigned' as const, intentId: prior.intentId }

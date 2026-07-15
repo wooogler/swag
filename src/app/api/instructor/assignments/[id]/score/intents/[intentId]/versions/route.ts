@@ -13,13 +13,16 @@ import { scoreConfigVersions } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import {
   ensureIntentTables,
+  isMinorVersion,
   type IntentConfigSnapshot,
   type VersionSummary,
 } from '@/lib/score/intent-store';
 
 export const dynamic = 'force-dynamic';
 
-const LIMIT = 12;
+// Full-ish history: numbering needs every row (a LIMIT slice would misnumber
+// the majors), and the workbench accordion keeps long lists compact anyway.
+const LIMIT = 200;
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
 
@@ -41,33 +44,45 @@ export async function GET(_req: Request, { params }: RouteParams) {
     eq(scoreConfigVersions.assignmentId, id),
     sql`${scoreConfigVersions.summary}->'intentIds' @> ${JSON.stringify([intentId])}::jsonb`
   );
-  const [rows, [{ total }]] = await Promise.all([
-    db
-      .select({
-        versionNo: scoreConfigVersions.versionNo,
-        snapshot: scoreConfigVersions.snapshot,
-        summary: scoreConfigVersions.summary,
-        createdAt: scoreConfigVersions.createdAt,
-      })
-      .from(scoreConfigVersions)
-      .where(touchesIntent)
-      .orderBy(desc(scoreConfigVersions.versionNo))
-      .limit(LIMIT),
-    // Total count → per-INTENT version numbers (this intent's own v1, v2, …),
-    // independent of the global config version sequence. History is append-only,
-    // so the display-time ranking is stable.
-    db.select({ total: sql<number>`count(*)::int` }).from(scoreConfigVersions).where(touchesIntent),
-  ]);
+  const rows = await db
+    .select({
+      versionNo: scoreConfigVersions.versionNo,
+      snapshot: scoreConfigVersions.snapshot,
+      summary: scoreConfigVersions.summary,
+      createdAt: scoreConfigVersions.createdAt,
+    })
+    .from(scoreConfigVersions)
+    .where(touchesIntent)
+    .orderBy(desc(scoreConfigVersions.versionNo))
+    .limit(LIMIT);
 
-  const versions = rows.map((row, i) => {
-    const intentVersion = total - i;
-    const snapshot = row.snapshot as IntentConfigSnapshot;
+  // Per-INTENT numbering (independent of the global config sequence): majors
+  // count this intent's v1, v2, …; each minor gets {preceding major}.{k}
+  // (v2.1, v2.2, … — v0.x while still an unsaved draft). Number ascending so
+  // history stays append-only and the display ranking stable.
+  let majorNo = 0;
+  let minorNo = 0;
+  const numbered = [...rows].reverse().map((row) => {
     const summary = row.summary as VersionSummary;
+    const minor = isMinorVersion(summary);
+    if (minor) {
+      minorNo += 1;
+    } else {
+      majorNo += 1;
+      minorNo = 0;
+    }
+    return { row, summary, minor, intentVersion: majorNo, minorNo: minor ? minorNo : null };
+  });
+
+  const versions = numbered.reverse().map(({ row, summary, minor, intentVersion, minorNo: mNo }) => {
+    const snapshot = row.snapshot as IntentConfigSnapshot;
     const intent = snapshot.intents?.find((i) => i.id === intentId) ?? null;
     const pins = (snapshot.pins ?? []).filter((p) => p.intentId === intentId);
     return {
       versionNo: row.versionNo,
       intentVersion,
+      minor,
+      minorNo: mNo,
       createdAt: row.createdAt.toISOString(),
       action: summary.action,
       detail: summary.detail ?? null,

@@ -120,12 +120,6 @@ export const INTENT_RATING_VERSION = 2;
  *     supersedes the LLM guess, so every v2 row is recomputed. */
 export const DISSECTION_VERSION = 3;
 
-/** Max boundary examples (pins) injected per intent into the rating prompt.
- * v6 targets top-4 nearest-by-embedding; until the embedding layer lands (P3)
- * we use a FIXED per-intent selection (latest, in/out balanced) so the prompt
- * — and therefore the def hash — is identical for every question. */
-export const MAX_PINS_IN_PROMPT = 4;
-
 /** Chars of pinned question text quoted in the prompt (headTail-style cap
  * is unnecessary; pins are short student requests). */
 export const PIN_TEXT_LIMIT = 300;
@@ -148,21 +142,24 @@ export function pinPromptText(text: string): string {
 }
 
 /**
- * Pick the pins actually sent to the classifier for one intent: the most
- * recent MAX_PINS_IN_PROMPT, balanced across in/out (up to 2 each, remaining
- * slots filled from whichever side has more). `pins` must be sorted newest
- * first by the caller.
+ * The pins actually sent to the classifier for one intent: EVERY one of them,
+ * grouped in-then-out, each group in the caller's order (newest pin first).
+ *
+ * There is deliberately no cap. An instructor labels a boundary case in order
+ * to teach the classifier; dropping the 5th label would make the Included/
+ * Excluded lists — and the prompt preview built from them — quietly untrue.
+ * A pin is one student request capped at PIN_TEXT_LIMIT, and the system prompt
+ * it lives in is prompt-cached across a rating batch, so carrying every label
+ * costs little. Retire the labels the definition has absorbed (refine) rather
+ * than relying on a hidden cap to forget them.
+ *
+ * Grouping (not interleaving) keeps this a no-op for intents that never had
+ * more pins than the old cap: their promptPins array — and therefore their
+ * intentDefHash — is byte-identical, so removing the cap re-rates only the
+ * intents that were actually being truncated.
  */
 export function selectPromptPins(pins: PromptPin[]): PromptPin[] {
-  const ins = pins.filter((p) => p.verdict === 'in');
-  const outs = pins.filter((p) => p.verdict === 'out');
-  const half = MAX_PINS_IN_PROMPT / 2;
-  const picked = [...ins.slice(0, half), ...outs.slice(0, half)];
-  if (picked.length < MAX_PINS_IN_PROMPT) {
-    const rest = [...ins.slice(half), ...outs.slice(half)];
-    picked.push(...rest.slice(0, MAX_PINS_IN_PROMPT - picked.length));
-  }
-  return picked;
+  return [...pins.filter((p) => p.verdict === 'in'), ...pins.filter((p) => p.verdict === 'out')];
 }
 
 /**

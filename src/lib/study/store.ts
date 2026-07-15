@@ -16,6 +16,10 @@ let ensured: Promise<void> | null = null;
 
 /** Idempotently create/upgrade the study tables. */
 export async function ensureStudyTables(): Promise<void> {
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return;
+  }
+
   if (!ensured) {
     ensured = (async () => {
       await db.execute(sql`

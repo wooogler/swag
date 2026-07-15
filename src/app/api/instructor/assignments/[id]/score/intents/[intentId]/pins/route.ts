@@ -2,14 +2,17 @@
  * SCORE v6 — Boundary Examples (pins) for one intent.
  *
  * POST   {messageId, verdict} → pin an in/out verdict (upsert; re-pinning
- *        flips the verdict and refreshes recency, which promotes the pin in
- *        the prompt's latest-first selection).
+ *        flips the verdict and refreshes recency, which moves the pin to the
+ *        head of the prompt's latest-first listing).
  * DELETE ?messageId=N → unpin.
+ * DELETE ?all=1       → retire every label of this intent (post-refine).
  *
- * Pins change what the rating prompt contains, so the intent's defHash moves
- * and its ratings read as stale automatically — the UI offers a re-rate.
- * Pins are NOT versioned — the version history only records Apply/Save (spec
- * commits), not each incremental in/out.
+ * EVERY pin goes into the rating prompt (no cap — selectPromptPins), so any pin
+ * change moves the intent's defHash and its ratings read as stale — the UI
+ * offers a re-rate.
+ * Each pin change records a MINOR config version (§1.11, same transaction) —
+ * labels are spec changes the instructor may want to step back through; the
+ * workbench history folds them into the accordion under the last save.
  */
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
@@ -17,7 +20,17 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentPins, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
-import { ensureIntentTables, getAssignmentMessageText } from '@/lib/score/intent-store';
+import {
+  ensureIntentTables,
+  getAssignmentMessageText,
+  recordConfigVersion,
+} from '@/lib/score/intent-store';
+
+/** Short verbatim head of the pinned question for the history line. */
+function snippet(text: string): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length > 60 ? `${t.slice(0, 60)}…` : t;
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -74,13 +87,22 @@ export async function POST(req: Request, { params }: RouteParams) {
     source: body.source ?? 'manual',
     createdAt: now, // refresh recency so re-pinned examples lead the prompt
   };
-  await db
-    .insert(scoreIntentPins)
-    .values({ assignmentId: id, intentId: intent.id, messageId: body.messageId, ...set })
-    .onConflictDoUpdate({
-      target: [scoreIntentPins.intentId, scoreIntentPins.messageId],
-      set,
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(scoreIntentPins)
+      .values({ assignmentId: id, intentId: intent.id, messageId: body.messageId, ...set })
+      .onConflictDoUpdate({
+        target: [scoreIntentPins.intentId, scoreIntentPins.messageId],
+        set,
+      });
+    await recordConfigVersion(tx, id, auth.instructor.id, {
+      action: 'add_pin',
+      intentIds: [intent.id],
+      messageId: body.messageId,
+      detail: `${body.verdict} · “${snippet(queryText)}”`,
+      minor: true,
     });
+  });
 
   return NextResponse.json({ verdict: body.verdict, messageId: body.messageId });
 }
@@ -95,15 +117,51 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   const intent = await resolveIntent(id, intentIdRaw);
   if (!intent) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
-  const messageId = Number.parseInt(new URL(req.url).searchParams.get('messageId') ?? '', 10);
+  // ?all=1 → retire EVERY label of this intent at once. Used after the
+  // definition has been rewritten from them (refine): the boundary knowledge now
+  // lives in the definition text, and dropping the examples re-rates the log
+  // against that definition alone — which is what proves it stands on its own.
+  const params_ = new URL(req.url).searchParams;
+  if (params_.get('all') === '1') {
+    const removed = await db.transaction(async (tx) => {
+      const rows = await tx
+        .delete(scoreIntentPins)
+        .where(eq(scoreIntentPins.intentId, intent.id))
+        .returning({ id: scoreIntentPins.id });
+      if (rows.length > 0) {
+        await recordConfigVersion(tx, id, auth.instructor.id, {
+          action: 'remove_pin',
+          intentIds: [intent.id],
+          detail: `retired all ${rows.length} label(s)`,
+          minor: true,
+        });
+      }
+      return rows;
+    });
+    return NextResponse.json({ removed: removed.length });
+  }
+
+  const messageId = Number.parseInt(params_.get('messageId') ?? '', 10);
   if (!Number.isFinite(messageId)) {
     return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
   }
 
-  const removed = await db
-    .delete(scoreIntentPins)
-    .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, messageId)))
-    .returning({ id: scoreIntentPins.id });
+  const removed = await db.transaction(async (tx) => {
+    const rows = await tx
+      .delete(scoreIntentPins)
+      .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, messageId)))
+      .returning({ queryText: scoreIntentPins.queryText });
+    if (rows.length > 0) {
+      await recordConfigVersion(tx, id, auth.instructor.id, {
+        action: 'remove_pin',
+        intentIds: [intent.id],
+        messageId,
+        detail: `“${snippet(rows[0].queryText)}”`,
+        minor: true,
+      });
+    }
+    return rows;
+  });
 
   return NextResponse.json({ removed: removed.length > 0, messageId });
 }

@@ -391,6 +391,7 @@ export default function EditorClient({
               isOpen={isChatOpen}
               onToggle={setChatOpen}
               allowWebSearch={allowWebSearch}
+              strictPasteBlocking={strictPasteBlocking}
             />
           </div>
         )}

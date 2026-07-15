@@ -73,9 +73,12 @@ async function main() {
   // exactly as the batch rate route now does (fix #1). Set SCORE_NO_DISSECTION=1
   // to reproduce the pre-fix behaviour for an A/B baseline.
   const feedDissection = process.env.SCORE_NO_DISSECTION !== '1';
-  const dissByMsg = feedDissection
-    ? await computeDissections(NIRVANA_ASSIGNMENT, new Set(sample.map((q) => q.messageId)))
-    : new Map();
+  // Always COMPUTE (so every arm records materialKinds for the comparison);
+  // only FEED it to the judge when this arm calls for it.
+  const dissByMsg = await computeDissections(
+    NIRVANA_ASSIGNMENT,
+    new Set(sample.map((q) => q.messageId))
+  );
 
   console.error(
     `[stability] model=${model} intents=${intents.length} queries=${sample.length} repeats=${REPEATS} ` +
@@ -263,8 +266,15 @@ async function main() {
       numQueries: sample.length,
       repeats: REPEATS,
       totalCalls,
+      arm: process.env.SCORE_ARM ?? (feedDissection ? 'full' : 'no-dissection'),
+      fedDissection: feedDissection,
       intents: intents.map((i) => ({ id: i.id, code: i.code, label: i.label, typeKey: i.typeKey })),
     },
+    /** materialKinds per sampled message (deterministic dissector) — lets the
+     * comparison split cells by whether the fix could possibly apply. */
+    material: Object.fromEntries(
+      sample.map((q) => [q.messageId, (dissByMsg.get(q.messageId)?.materialKinds ?? []) as string[]])
+    ),
     summary,
     byIntent,
     byQuery,

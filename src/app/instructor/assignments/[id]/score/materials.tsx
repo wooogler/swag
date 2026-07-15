@@ -8,7 +8,6 @@
  * (IntentBoard) and the Intent modal's expand view.
  */
 import { useMemo, useState } from 'react';
-import { FileText } from 'lucide-react';
 import { MATERIAL_LABELS, type MaterialKind } from '@/lib/score/intents';
 
 export interface Dissection {
@@ -16,18 +15,31 @@ export interface Dissection {
   requests: string[];
 }
 
-/** Per-kind colors so each Material tag reads distinctly. `chip` styles the
- * collapsed placeholder; `hl` tints the revealed verbatim text.
+/** Per-kind colors so each Material tag reads distinctly. `tag` colors the
+ * collapsed [PLACEHOLDER] text; `hl` tints the revealed verbatim text.
  * Assignment-prompt keeps the old violet for continuity. */
-const MATERIAL_STYLE: Record<MaterialKind, { chip: string; hl: string }> = {
-  assignment_prompt: { chip: 'bg-violet-50 text-violet-700 border-violet-200', hl: 'bg-violet-100 text-violet-900' },
-  student_draft: { chip: 'bg-amber-50 text-amber-700 border-amber-200', hl: 'bg-amber-100 text-amber-900' },
-  prior_bot_reply: { chip: 'bg-sky-50 text-sky-700 border-sky-200', hl: 'bg-sky-100 text-sky-900' },
-  other: { chip: 'bg-teal-50 text-teal-700 border-teal-200', hl: 'bg-teal-100 text-teal-900' },
+const MATERIAL_STYLE: Record<MaterialKind, { tag: string; hl: string }> = {
+  assignment_prompt: { tag: 'bg-violet-50 text-violet-700', hl: 'bg-violet-100 text-violet-900' },
+  student_draft: { tag: 'bg-amber-50 text-amber-700', hl: 'bg-amber-100 text-amber-900' },
+  prior_bot_reply: { tag: 'bg-sky-50 text-sky-700', hl: 'bg-sky-100 text-sky-900' },
+  other: { tag: 'bg-teal-50 text-teal-700', hl: 'bg-teal-100 text-teal-900' },
 };
 /** Fallback when a message mixes several material kinds — per-segment kind is
- * not stored, so the exact tag can't be attributed; render it neutral. */
-const MATERIAL_MIXED = { chip: 'bg-slate-50 text-slate-600 border-slate-200', hl: 'bg-slate-200/70 text-slate-900' };
+ * not stored, so the exact tag can't be attributed. Pink: visible (the old
+ * slate read as disabled text) and clearly apart from all four kind colors
+ * (orange collided with own-draft amber). */
+const MATERIAL_MIXED = { tag: 'bg-pink-50 text-pink-700', hl: 'bg-pink-100 text-pink-900' };
+
+/** The collapsed placeholder text: reads like redacted-source markers rather
+ * than UI chips — "[OWN DRAFT]", "[BOT REPLY]". A message mixing several
+ * material kinds can't attribute the segment (per-segment kind isn't stored),
+ * so the tag lists the candidates: "[OWN DRAFT / BOT REPLY]" = this pasted
+ * block is one of these. */
+function tagText(mk: MaterialKind | null, kinds: MaterialKind[]): string {
+  if (mk) return `[${MATERIAL_LABELS[mk].toUpperCase()}]`;
+  const names = kinds.map((k) => MATERIAL_LABELS[k].toUpperCase());
+  return `[${names.length > 1 ? names.join(' / ') : 'PASTED MATERIAL'}]`;
+}
 
 export function materialStyle(mk: MaterialKind | null) {
   return mk ? MATERIAL_STYLE[mk] : MATERIAL_MIXED;
@@ -95,16 +107,14 @@ export function segmentForMaterials(text: string, requests: string[], kinds: Mat
  * reveal the verbatim text (highlighted in the same color), click to collapse.
  * Interactive parts are `<span role="button">` (not `<button>`) so the whole
  * thing stays valid inside an outer row-toggle button (Intent modal), with
- * stopPropagation so a tag click doesn't collapse the row. `compact` shrinks
- * the tag for dense list contexts. */
+ * stopPropagation so a tag click doesn't collapse the row. The [TAG] inherits
+ * the surrounding font size, so it fits dense and roomy contexts alike. */
 export function MaterialSegments({
   text,
   dissection,
-  compact = false,
 }: {
   text: string;
   dissection: Dissection | null;
-  compact?: boolean;
 }) {
   const [open, setOpen] = useState<Set<number>>(() => new Set());
   const segs = useMemo(
@@ -150,11 +160,9 @@ export function MaterialSegments({
             tabIndex={0}
             onClick={onClick}
             title={`${label} — click to reveal`}
-            className={`mx-0.5 inline-flex cursor-pointer items-center rounded border align-baseline font-medium ${
-              compact ? 'gap-0.5 px-1 py-px text-[10px]' : 'gap-1 px-1.5 py-0.5 text-[11px]'
-            } ${style.chip}`}
+            className={`mx-0.5 cursor-pointer whitespace-nowrap rounded-[2px] px-0.5 font-medium hover:underline ${style.tag}`}
           >
-            <FileText className={compact ? 'w-2.5 h-2.5' : 'w-3 h-3'} /> {label}
+            {tagText(s.mk, dissection?.materialKinds ?? [])}
           </span>
         );
       })}
@@ -170,6 +178,24 @@ export function StudentMessage({ text, dissection }: { text: string; dissection:
       <MaterialSegments text={text} dissection={dissection} />
     </p>
   );
+}
+
+/** Whether QuerySnippet would actually truncate this message at `max` — the
+ * SAME budget rules (material segments collapse to tags and cost nothing), so
+ * an expand affordance can be offered exactly when there is hidden text. */
+export function snippetOverflows(text: string, dissection: Dissection | null, max: number): boolean {
+  const segs = segmentForMaterials(text, dissection?.requests ?? [], dissection?.materialKinds ?? []);
+  let used = 0;
+  for (const s of segs) {
+    if (used >= max) return true;
+    if (s.kind === 'material') continue;
+    let clean = s.text.replace(/\s+/g, ' ');
+    if (used === 0) clean = clean.trimStart();
+    if (!clean) continue;
+    if (clean.length > max - used) return true;
+    used += clean.length;
+  }
+  return false;
 }
 
 /** Compact one-line preview for question lists: plain text is collapsed to
@@ -198,14 +224,12 @@ export function QuerySnippet({
       }
       if (s.kind === 'material') {
         const style = materialStyle(s.mk);
-        const label = s.mk ? MATERIAL_LABELS[s.mk] : 'pasted material';
         out.push(
           <span
             key={key++}
-            className={`mx-0.5 inline-flex items-center gap-0.5 rounded border px-1 py-px align-baseline text-[10px] font-medium ${style.chip}`}
+            className={`mx-0.5 whitespace-nowrap rounded-[2px] px-0.5 font-medium ${style.tag}`}
           >
-            <FileText className="w-2.5 h-2.5" />
-            {label}
+            {tagText(s.mk, dissection?.materialKinds ?? [])}
           </span>
         );
         continue;

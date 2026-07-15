@@ -6,9 +6,11 @@
  *    (callers fall back to a definition-head title on failure).
  *  · refineDefinition — rewrite the definition FROM the instructor's labeled
  *    examples (Included/Excluded pins), so the boundary knowledge moves INTO
- *    the definition text instead of being injected as examples. Uses the
- *    stronger refine model with high reasoning effort; the prompt forces the
- *    model to reason example-by-example BEFORE committing to a rewrite.
+ *    the definition text. The pins are ALSO injected into the rating prompt
+ *    (intent-prompts.ts), so the rewrite is what lets the instructor retire
+ *    them afterwards — until then the two teach the boundary in parallel. Uses
+ *    the stronger refine model with high reasoning effort; the prompt forces
+ *    the model to reason example-by-example BEFORE committing to a rewrite.
  */
 import { callModel, extractJsonObject } from './classifier';
 import { pinPromptText } from './intents';
@@ -52,7 +54,7 @@ export async function generateIntentTitle(definition: string): Promise<string | 
   }
 }
 
-const REFINE_SYSTEM = `You maintain the intent definitions of SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT DEFINITION describes a category of student requests ("asks to ..."). A classifier later rates every student message against the definition ALONE — so all boundary knowledge must live in the definition text itself.
+const REFINE_SYSTEM = `You maintain the intent definitions of SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT DEFINITION describes a category of student requests ("asks to ..."). The labeled examples below are currently handed to the classifier alongside the definition, and the instructor RETIRES them once your rewrite lands — from then on the classifier sees the definition ALONE. So every boundary those labels teach must survive inside the definition text itself.
 
 The instructor reviewed real student questions and hand-labeled them:
 - INCLUDED: belongs to this intent.
