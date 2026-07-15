@@ -387,6 +387,20 @@ export default function RuleWorkbench({
     [rows, activeRow.conversationId]
   );
 
+  // "Add example" candidate scope: baseline draws from the WHOLE log (the prompt
+  // applies to everything); SCORE limits it to THIS intent's questions (its
+  // clearly-in members, pins overriding) — examples belong to the intent.
+  const pickerLog = useMemo(
+    () =>
+      promptMode
+        ? rows
+        : rows.filter((r) => {
+            const pin = r.pinnedIntents[intent.id];
+            return pin ? pin === 'in' : r.intentRatings[intent.id]?.rating === 'clearly_in';
+          }),
+    [promptMode, rows, intent.id]
+  );
+
   // The response the pane shows for the active tab under the VIEWED version:
   // the version's own stored response when it anchors this tab; for the SEED
   // (the baseline = what was actually deployed) EVERY question's response is
@@ -1504,7 +1518,7 @@ export default function RuleWorkbench({
           questions most different from what you're currently viewing. */}
       {pickerOpen && (
         <QueryPicker
-          log={rows}
+          log={pickerLog}
           excludeIds={new Set(caseIds ?? [row.messageId])}
           anchorId={activeId}
           assignmentId={assignmentId}
