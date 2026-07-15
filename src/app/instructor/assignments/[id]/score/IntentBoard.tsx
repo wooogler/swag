@@ -47,7 +47,6 @@ import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
 import DecideOwnershipModal from './DecideOwnershipModal';
 import RuleWorkbench from './RuleWorkbench';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
-import PromptReviseWorkbench from './PromptReviseWorkbench';
 import { getJSON, postJSON } from './http';
 import { runShardedRate } from './rate-runner';
 
@@ -144,8 +143,9 @@ interface IntentBoardProps {
    * prompt. Everything else (query list, colours, Run all, conversation) is
    * shared. Undefined = 'score' (the normal SCORE board). */
   condition?: 'score' | 'baseline';
-  /** Baseline only: monolithic prompt state (seed + deployed version). */
-  baseline?: { currentPrompt: string; deployedVersionNo: number | null; charLimit: number };
+  /** Baseline only: monolithic prompt state (seed + deployed version) + the
+   * hidden prompt-holder intent the Revise flow mounts RuleWorkbench on. */
+  baseline?: { currentPrompt: string; deployedVersionNo: number | null; charLimit: number; promptHolderId: number };
   openaiConfigured: boolean;
   /** Jelson taxonomy subtypes → fuzzy suggestions in the New Intent modal. */
   jelsonSuggestions: JelsonSuggestion[];
@@ -737,20 +737,84 @@ export default function IntentBoard({
   const promptDirty = promptDraft !== (savedPrompt ?? baseline?.currentPrompt ?? basePrompt);
 
   async function persistPrompt(kind: 'save' | 'deploy') {
-    if (promptOver) return;
+    if (promptOver || !baseline) return;
     setPromptBusy(kind);
     setPromptNote(null);
+    const root = `/api/instructor/assignments/${assignmentId}/score`;
     try {
-      const url = `/api/instructor/assignments/${assignmentId}/score/baseline/${kind === 'save' ? 'versions' : 'deploy'}`;
-      const { versionNo } = await postJSON<{ versionNo: number }>(url, { prompt: promptDraft });
-      setSavedPrompt(promptDraft);
-      if (kind === 'deploy') setDeployedVersionNo(versionNo);
-      setPromptNote(`${kind === 'save' ? 'Saved' : 'Deployed'} · v${versionNo}`);
+      if (kind === 'save') {
+        // Save records a MAJOR rule-version on the hidden prompt-holder intent —
+        // the SAME store the Revise workbench uses, so board saves and Revise
+        // versions share one history (v1, v2, …).
+        await postJSON(`${root}/intents/${baseline.promptHolderId}/rule-versions`, {
+          rule: promptDraft,
+          source: 'manual',
+        });
+        setSavedPrompt(promptDraft);
+        setPromptNote('Saved');
+      } else {
+        // Deploy publishes the current prompt to students (unchanged store /
+        // runtime); it also lands as a Saved version so history stays complete.
+        await postJSON(`${root}/intents/${baseline.promptHolderId}/rule-versions`, {
+          rule: promptDraft,
+          source: 'manual',
+        }).catch(() => {});
+        const { versionNo } = await postJSON<{ versionNo: number }>(`${root}/baseline/deploy`, { prompt: promptDraft });
+        setSavedPrompt(promptDraft);
+        setDeployedVersionNo(versionNo);
+        setPromptNote('Deployed to students');
+      }
     } catch (e) {
       setPromptNote(`${kind === 'save' ? 'Save' : 'Deploy'} failed: ${e instanceof Error ? e.message : e}`);
     } finally {
       setPromptBusy(null);
     }
+  }
+
+  /** After a Revise session (RuleWorkbench on the holder) saved a new rule,
+   * pull the holder's live rule (latest MAJOR) back into the board editor. */
+  async function syncPromptFromHolder() {
+    if (!baseline) return;
+    try {
+      const d = await getJSON<{ versions?: { rule: string | null; minor: boolean }[] }>(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${baseline.promptHolderId}/rule-versions`
+      );
+      const live = (d.versions ?? []).find((v) => !v.minor);
+      if (live) {
+        setPromptDraft(live.rule ?? '');
+        setSavedPrompt(live.rule ?? '');
+      }
+    } catch {
+      /* ignore — router.refresh will still update the deployed state */
+    }
+  }
+
+  // The prompt-holder as an IntentSummary — RuleWorkbench mounts on it in the
+  // baseline Revise flow. definition '' + archived so no SCORE affordance keyed
+  // to a real intent misfires. rule seeds v1 on the holder's first open.
+  const promptHolder: IntentSummary | null = useMemo(
+    () =>
+      baseline
+        ? {
+            id: baseline.promptHolderId,
+            title: 'System Prompt',
+            definition: '',
+            rule: baseline.currentPrompt,
+            archived: true,
+            isTemplate: false,
+            pinCount: 0,
+            includedCount: 0,
+            excludedCount: 0,
+          }
+        : null,
+    [baseline]
+  );
+
+  /** Open Revise on a question. Commit any unsaved board edit first so the
+   * holder's latest rule (what RuleWorkbench opens on) matches the editor. */
+  async function openPromptRevise(row: ScoreQueryRow) {
+    if (baseline && promptDirty && !promptOver) await persistPrompt('save');
+    setPromptReviseTarget(row);
   }
 
   const [newIntentOpen, setNewIntentOpen] = useState(false);
@@ -813,7 +877,7 @@ export default function IntentBoard({
     viewVersion: ViewerRuleVersion | null;
   } | null>(null);
   // BASELINE: Revise targets the whole monolithic prompt (no owning intent) —
-  // opens the inline PromptReviseWorkbench from the anchor question.
+  // opens RuleWorkbench (promptMode) on the prompt-holder from the anchor question.
   const [promptReviseTarget, setPromptReviseTarget] = useState<ScoreQueryRow | null>(null);
 
   // Full conversation is a per-question opt-in expansion of the viewer; the
@@ -1473,17 +1537,27 @@ export default function IntentBoard({
             void reloadSearches();
           }}
         />
-      ) : isBaseline && promptReviseTarget ? (
-        <PromptReviseWorkbench
-          key={`revise-${promptReviseTarget.messageId}`}
+      ) : isBaseline && promptReviseTarget && promptHolder ? (
+        // Baseline Revise = the SCORE RuleWorkbench mounted on the hidden
+        // prompt-holder intent (promptMode hides the intent-only affordances),
+        // so version history (v1 seed, minors, checkout, revert) is reused verbatim.
+        <RuleWorkbench
+          key={`prompt-revise-${promptReviseTarget.messageId}`}
           assignmentId={assignmentId}
           rows={rows}
-          anchor={promptReviseTarget}
-          promptText={promptDraft}
-          onClose={(revised) => {
+          row={promptReviseTarget}
+          intent={promptHolder}
+          basePrompt={basePrompt}
+          isNirvana={isNirvana}
+          promptMode
+          onClose={(changed) => {
             setPromptReviseTarget(null);
-            if (revised !== null) setPromptDraft(revised);
+            if (changed) {
+              void syncPromptFromHolder();
+              router.refresh();
+            }
           }}
+          onCreateInstead={() => setPromptReviseTarget(null)}
         />
       ) : workbenchMode ? (
         <IntentWorkbench
@@ -2223,7 +2297,7 @@ export default function IntentBoard({
                     // BASELINE: Revise the whole monolithic prompt from this
                     // question — no owning intent, always available.
                     <button
-                      onClick={() => setPromptReviseTarget(selectedRow)}
+                      onClick={() => void openPromptRevise(selectedRow)}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
                       title="Revise the system prompt from this question"
                     >

@@ -15,6 +15,7 @@ import {
   chatConversations,
   chatMessages,
   reviewSetItems,
+  scoreIntents,
   studentSessions,
   studyClones,
   type BaselineSearch,
@@ -179,29 +180,91 @@ export async function getCloneCondition(assignmentId: string): Promise<StudioVie
 }
 
 export interface BaselineState {
-  /** Editor seed: latest saved version's prompt, else the live base prompt. */
+  /** Editor seed: the prompt-holder intent's LIVE rule (the working prompt). */
   currentPrompt: string;
   hasSavedVersion: boolean;
   deployedVersionNo: number | null;
   versions: { versionNo: number; deployed: boolean; createdAt: Date }[];
+  /** The hidden per-clone intent whose RULE is this prompt — the Revise flow
+   * mounts the SCORE RuleWorkbench on it, so version history reuses
+   * score_rule_versions (v1 seed, minors, checkout, revert) verbatim. */
+  promptHolderId: number;
+}
+
+/** The prompt to seed a fresh holder from: the latest saved deploy snapshot,
+ * else the assignment's live base prompt. */
+async function deployedOrBasePrompt(assignmentId: string): Promise<string> {
+  const [latest, assignment] = await Promise.all([
+    db
+      .select({ prompt: baselinePromptVersions.prompt })
+      .from(baselinePromptVersions)
+      .where(eq(baselinePromptVersions.assignmentId, assignmentId))
+      .orderBy(desc(baselinePromptVersions.versionNo))
+      .limit(1),
+    db.query.assignments.findFirst({ where: eq(assignments.id, assignmentId) }),
+  ]);
+  return latest[0]?.prompt ?? assignmentBasePrompt(assignment ?? {});
+}
+
+/** Reserved title of the hidden prompt-holder intent (one per baseline clone). */
+export const PROMPT_HOLDER_TITLE = '__system_prompt__';
+
+/**
+ * The baseline monolithic prompt, stored as a hidden intent's RULE so the Revise
+ * flow reuses the SCORE RuleWorkbench verbatim (rich version history). The holder
+ * is archived + has an empty definition → it never shows on the board and is
+ * never rated against the log. Created lazily, seeded from the current prompt.
+ */
+export async function getOrCreatePromptHolder(
+  assignmentId: string
+): Promise<{ id: number; rule: string | null }> {
+  const existing = await db
+    .select({ id: scoreIntents.id, rule: scoreIntents.rule })
+    .from(scoreIntents)
+    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.title, PROMPT_HOLDER_TITLE)))
+    .limit(1);
+  if (existing[0]) return existing[0];
+  const seed = await deployedOrBasePrompt(assignmentId);
+  const now = new Date();
+  const inserted = await db
+    .insert(scoreIntents)
+    .values({
+      assignmentId,
+      title: PROMPT_HOLDER_TITLE,
+      definition: '',
+      rule: seed,
+      // NOT archived: the rule-versions endpoints (shared with SCORE) reject
+      // archived intents. It stays invisible instead by being filtered out of
+      // every board list by its reserved title (page.tsx) — never rated, never
+      // shown. isTemplate stays false so it is not a starter set either.
+      archived: false,
+      isTemplate: false,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning({ id: scoreIntents.id, rule: scoreIntents.rule });
+  return inserted[0];
 }
 
 export async function getBaselineState(assignmentId: string): Promise<BaselineState> {
-  const [rows, assignment] = await Promise.all([
+  const [holder, rows] = await Promise.all([
+    getOrCreatePromptHolder(assignmentId),
     db
       .select()
       .from(baselinePromptVersions)
       .where(eq(baselinePromptVersions.assignmentId, assignmentId))
       .orderBy(desc(baselinePromptVersions.versionNo)),
-    db.query.assignments.findFirst({ where: eq(assignments.id, assignmentId) }),
   ]);
   const latest = rows[0];
   const deployed = rows.filter((r) => r.deployedAt).sort((a, b) => +b.deployedAt! - +a.deployedAt!)[0];
   return {
-    currentPrompt: latest?.prompt ?? assignmentBasePrompt(assignment ?? {}),
+    // The live working prompt is the holder's rule (kept current by board Save /
+    // RuleWorkbench). Fall back to the last deploy snapshot if it is somehow null.
+    currentPrompt: holder.rule ?? latest?.prompt ?? (await deployedOrBasePrompt(assignmentId)),
     hasSavedVersion: !!latest,
     deployedVersionNo: deployed?.versionNo ?? null,
     versions: rows.map((r) => ({ versionNo: r.versionNo, deployed: !!r.deployedAt, createdAt: r.createdAt })),
+    promptHolderId: holder.id,
   };
 }
 

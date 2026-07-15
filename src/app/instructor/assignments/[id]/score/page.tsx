@@ -34,7 +34,7 @@ import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
 import { ensureStudyTables } from '@/lib/study/store';
-import { getBaselineState } from '@/lib/study/baseline-store';
+import { getBaselineState, PROMPT_HOLDER_TITLE } from '@/lib/study/baseline-store';
 import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
 
 interface PageProps {
@@ -256,7 +256,12 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         y.queryTimestamp.localeCompare(x.queryTimestamp) || y.messageId - x.messageId
     );
 
-  const intents: IntentSummary[] = intentState.intents.map((i) => {
+  const intents: IntentSummary[] = intentState.intents
+    // The baseline prompt-holder is a hidden container for the monolithic prompt,
+    // not a real intent — keep it out of every board list (Revise mounts on it
+    // directly via baseline.promptHolderId).
+    .filter((i) => i.title !== PROMPT_HOLDER_TITLE)
+    .map((i) => {
     const pins = intentState.pins.filter((p) => p.intentId === i.id);
     return {
       id: i.id,
@@ -323,6 +328,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                   currentPrompt: baselineState.currentPrompt,
                   deployedVersionNo: baselineState.deployedVersionNo,
                   charLimit: STUDY_PROMPT_CHAR_LIMIT,
+                  promptHolderId: baselineState.promptHolderId,
                 }
               : undefined
           }

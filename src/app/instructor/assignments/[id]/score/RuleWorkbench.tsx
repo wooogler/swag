@@ -45,6 +45,7 @@ import { ConversationThread } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import RuleApplyPreview from './RuleApplyPreview';
 import NewIntentSuggestModal from './NewIntentSuggestModal';
+import QueryPicker from './QueryPicker';
 import { timeAgo } from './IntentWorkbench';
 
 type RuleSource = 'direct' | 'feedback' | 'rewrite' | 'manual' | 'seed';
@@ -179,6 +180,13 @@ interface RuleWorkbenchProps {
    * hands over the picked {title, definition} seed; without one the parent
    * falls back to its raw query-based template. */
   onCreateInstead: (seed?: { title: string; definition: string }) => void;
+  /** BASELINE (ablation): `intent` is the hidden prompt-holder and its rule IS
+   * the whole monolithic system prompt. Hides the intent-only affordances (WHEN,
+   * apply-to-intent, edge-case sweep, "doesn't fit → new intent") and swaps them
+   * for a manual "Add example" set. Everything else — the rich rule-version
+   * history (v1 seed, minors, checkout, revert) + the feedback agent — is reused
+   * verbatim. Default false → the SCORE rule workbench is unchanged. */
+  promptMode?: boolean;
 }
 
 export default function RuleWorkbench({
@@ -191,6 +199,7 @@ export default function RuleWorkbench({
   viewVersion = null,
   onClose,
   onCreateInstead,
+  promptMode = false,
 }: RuleWorkbenchProps) {
   const base = `/api/instructor/assignments/${assignmentId}/score`;
   // Full conversation — replaces the MIDDLE column in place (shared thread view).
@@ -207,6 +216,8 @@ export default function RuleWorkbench({
   // TABS — the anchor plus any opened intent questions (edge cases / apply-all).
   const [caseIds, setCaseIds] = useState<number[] | null>(null);
   const [activeId, setActiveId] = useState(row.messageId);
+  // promptMode: the manual "Add example" picker (no intent question list to sweep).
+  const [pickerOpen, setPickerOpen] = useState(false);
   // Lazily generated previews under the VIEWED rule for tabs the viewed
   // version's own stored response doesn't cover. Cleared on version switch.
   const [updated, setUpdated] = useState<Record<number, { text: string | null; loading: boolean }>>({});
@@ -250,24 +261,26 @@ export default function RuleWorkbench({
   useEffect(() => {
     const controller = abortRef.current;
     // Tailor the feedback starters to this intent (fire-and-forget — the
-    // generic texts stay if it fails or is slow).
-    void (async () => {
-      try {
-        const res = await fetch(`${base}/intents/${intent.id}/feedback-chips`, { signal: signal() });
-        const d = await res.json().catch(() => null);
-        if (res.ok && d?.chips && live()) {
-          setChips((prev) =>
-            prev.map((c) =>
-              typeof d.chips[c.key] === 'string' && d.chips[c.key].trim()
-                ? { ...c, text: d.chips[c.key].trim() }
-                : c
-            )
-          );
+    // generic texts stay if it fails or is slow). Skipped in promptMode: the
+    // holder has no definition, so the generic prompt-authoring starters fit.
+    if (!promptMode)
+      void (async () => {
+        try {
+          const res = await fetch(`${base}/intents/${intent.id}/feedback-chips`, { signal: signal() });
+          const d = await res.json().catch(() => null);
+          if (res.ok && d?.chips && live()) {
+            setChips((prev) =>
+              prev.map((c) =>
+                typeof d.chips[c.key] === 'string' && d.chips[c.key].trim()
+                  ? { ...c, text: d.chips[c.key].trim() }
+                  : c
+              )
+            );
+          }
+        } catch {
+          /* generic templates remain */
         }
-      } catch {
-        /* generic templates remain */
-      }
-    })();
+      })();
     void (async () => {
       const list = await loadVersions();
       if (!live()) return;
@@ -695,6 +708,18 @@ export default function RuleWorkbench({
     }
   }
 
+  /** promptMode: append manually-picked questions as tabs (the ablation's
+   * hand-built review set), generating each one's response under the viewed rule. */
+  async function addExamples(ids: number[]) {
+    const existing = caseIds ?? [row.messageId];
+    const fresh = ids.filter((id) => id !== row.messageId && !existing.includes(id));
+    if (!fresh.length) return;
+    setCaseIds([...existing, ...fresh]);
+    const gen = genRef.current;
+    const need = viewed?.source === 'seed' ? [] : fresh.filter((id) => updated[id] === undefined);
+    await generateUpdated(need, ruleParamFor(viewed), gen);
+  }
+
   /** Open the apply-preview workbench: the change is reviewed on EVERY
    * question in the intent before anything is saved or stored. */
   function openApplyPreview() {
@@ -929,7 +954,9 @@ export default function RuleWorkbench({
         >
           <ArrowLeft className="w-3.5 h-3.5" /> Board
         </button>
-        <h2 className="text-sm font-semibold truncate">Revise rule — {intent.title}</h2>
+        <h2 className="text-sm font-semibold truncate">
+          {promptMode ? 'Revise the system prompt' : `Revise rule — ${intent.title}`}
+        </h2>
         <span className="ml-auto text-[10px] text-[hsl(var(--muted-foreground))]">
           Previews are single-turn regenerations with the live chatbot model — indicative, not a guarantee.
         </span>
@@ -939,19 +966,24 @@ export default function RuleWorkbench({
         {/* LEFT — WHEN (read-only) · THEN (editable rule) · rule history */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
           <div className="p-4 space-y-3">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                When a student…
-              </p>
-              <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))] whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2">
-                {intent.definition}
-              </p>
-            </div>
+            {/* WHEN — intent-only; the baseline prompt has no trigger condition. */}
+            {!promptMode && (
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  When a student…
+                </p>
+                <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))] whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2">
+                  {intent.definition}
+                </p>
+              </div>
+            )}
 
             <div>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  Then… (rule{viewed ? ` · ${versionLabel(viewed)}` : ''})
+                  {promptMode
+                    ? `System prompt${viewed ? ` · ${versionLabel(viewed)}` : ''}`
+                    : `Then… (rule${viewed ? ` · ${versionLabel(viewed)}` : ''})`}
                 </p>
                 {readOnly ? (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
@@ -1094,10 +1126,11 @@ export default function RuleWorkbench({
 
         {/* MIDDLE — the viewed version's Q → response for the active question */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
-          {/* QUESTION TABS — anchor ★ + opened intent questions. */}
-          {caseIds && (
+          {/* QUESTION TABS — anchor ★ + opened questions. In promptMode the strip
+              always shows (anchor + a manual "Add example" button). */}
+          {(caseIds || promptMode) && (
             <div className="shrink-0 flex items-center gap-1 overflow-x-auto border-b border-[hsl(var(--border))] px-3 py-1.5">
-              {caseIds.map((id) => {
+              {(caseIds ?? [row.messageId]).map((id) => {
                 const r0 = rows.find((r) => r.messageId === id);
                 const isActive = id === activeId;
                 const label = `${r0?.participantToken || '—'}${r0 && r0.turnNumber > 0 ? ` · T${r0.turnNumber}` : ''}`;
@@ -1117,6 +1150,15 @@ export default function RuleWorkbench({
                   </button>
                 );
               })}
+              {promptMode && (
+                <button
+                  onClick={() => setPickerOpen(true)}
+                  className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-[11px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+                  title="Pull in more logged questions to try this prompt against"
+                >
+                  <Plus className="w-3 h-3" /> Add example
+                </button>
+              )}
             </div>
           )}
 
@@ -1304,7 +1346,10 @@ export default function RuleWorkbench({
                 );
               })()}
 
-              {/* Footer actions for the rule as a whole. */}
+              {/* Footer actions — all intent-only (new-intent escape hatch,
+                  edge-case sweep, apply-to-intent). Hidden in promptMode: the
+                  baseline deploys from the board, and examples are added above. */}
+              {!promptMode && (
               <div className="shrink-0 px-3 py-2 border-t border-[hsl(var(--border))] flex items-center justify-end gap-2">
                 {/* Escape hatch, next to the testing actions it belongs with:
                     while trying the rule on questions, one may turn out not to
@@ -1350,6 +1395,7 @@ export default function RuleWorkbench({
                   {dirty ? 'Preview & apply to intent' : 'Preview & re-apply to intent'}
                 </button>
               </div>
+              )}
             </div>
           )}
         </div>
@@ -1537,6 +1583,16 @@ export default function RuleWorkbench({
             setSuggestOpen(false);
             onCreateInstead(seed);
           }}
+        />
+      )}
+
+      {/* promptMode: pull logged questions in as example tabs (manual review set). */}
+      {pickerOpen && (
+        <QueryPicker
+          log={rows}
+          excludeIds={new Set(caseIds ?? [row.messageId])}
+          onAdd={(ids) => void addExamples(ids)}
+          onClose={() => setPickerOpen(false)}
         />
       )}
     </div>
