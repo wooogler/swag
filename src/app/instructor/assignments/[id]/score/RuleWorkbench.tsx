@@ -174,6 +174,10 @@ interface RuleWorkbenchProps {
   basePrompt: string;
   /** NIRVANA import → render the delivered response as raw text. */
   isNirvana: boolean;
+  /** The rule students CURRENTLY receive (deployed). The cross-query Preview
+   * compares the working rule against THIS, so a fresh Save isn't compared to
+   * itself. Null = nothing deployed yet (base-prompt fallback). */
+  deployedRule?: string | null;
   /** Set when the viewer had a rule VERSION selected — open checked out on it. */
   viewVersion?: { versionNo: number; name: string | null; rule: string | null; response: string | null } | null;
   onClose: (changed: boolean) => void;
@@ -197,6 +201,7 @@ export default function RuleWorkbench({
   intent,
   basePrompt,
   isNirvana,
+  deployedRule = null,
   viewVersion = null,
   onClose,
   onCreateInstead,
@@ -852,7 +857,6 @@ export default function RuleWorkbench({
           })
           .map((r) => r.messageId);
     const previewIds = [row.messageId, ...inScope.filter((id) => id !== row.messageId)];
-    const lastMajor = versions?.find((v) => !v.minor) ?? null;
     const seed = new Map<number, string | null>();
     for (const [idStr, entry] of Object.entries(updated)) {
       if (entry.text) seed.set(Number(idStr), entry.text);
@@ -866,8 +870,10 @@ export default function RuleWorkbench({
         rows={rows}
         queryIds={previewIds}
         anchorId={row.messageId}
-        beforeRule={lastMajor?.rule ?? null}
-        beforeLabel={lastMajor ? `${versionLabel(lastMajor)}${lastMajor.name ? ` — ${lastMajor.name}` : ''}` : 'v1'}
+        // Compare the working rule against what students CURRENTLY get (deployed),
+        // not against the just-saved version (which would be identical).
+        beforeRule={deployedRule}
+        beforeLabel={deployedRule != null ? 'deployed' : 'not deployed'}
         afterRule={latest?.rule ?? null}
         afterLabel={latest ? `${versionLabel(latest)}${latest.name ? ` — ${latest.name}` : ''}` : ''}
         isNirvana={isNirvana}

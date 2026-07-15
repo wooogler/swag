@@ -146,7 +146,16 @@ interface IntentBoardProps {
   condition?: 'score' | 'baseline';
   /** Baseline only: monolithic prompt state (seed + deployed version) + the
    * hidden prompt-holder intent the Revise flow mounts RuleWorkbench on. */
-  baseline?: { currentPrompt: string; deployedVersionNo: number | null; charLimit: number; promptHolderId: number };
+  baseline?: {
+    currentPrompt: string;
+    deployedVersionNo: number | null;
+    deployedPrompt: string | null;
+    charLimit: number;
+    promptHolderId: number;
+  };
+  /** The rule each intent currently deploys to students (latest chat deploy) —
+   * the Revise Preview compares the working rule against this. */
+  deployedRules?: { id: number; rule: string | null }[];
   openaiConfigured: boolean;
   /** Jelson taxonomy subtypes → fuzzy suggestions in the New Intent modal. */
   jelsonSuggestions: JelsonSuggestion[];
@@ -702,9 +711,15 @@ export default function IntentBoard({
   jelsonSuggestions,
   isNirvana,
   deployView,
+  deployedRules,
 }: IntentBoardProps) {
   const router = useRouter();
   const isBaseline = condition === 'baseline';
+  // intentId → the rule currently deployed to students (latest chat deploy).
+  const deployedRuleByIntent = useMemo(
+    () => new Map((deployedRules ?? []).map((d) => [d.id, d.rule])),
+    [deployedRules]
+  );
   // Active = owns the log. Templates (pre-built starter sets, rated in advance)
   // and archived are excluded from the active set.
   const activeIntents = useMemo(
@@ -1428,6 +1443,7 @@ export default function IntentBoard({
           intent={reviseTarget.intent}
           basePrompt={basePrompt}
           isNirvana={isNirvana}
+          deployedRule={deployedRuleByIntent.get(reviseTarget.intent.id) ?? null}
           viewVersion={reviseTarget.viewVersion}
           onClose={(changed) => {
             setReviseTarget(null);
@@ -1475,6 +1491,7 @@ export default function IntentBoard({
           intent={promptHolder}
           basePrompt={basePrompt}
           isNirvana={isNirvana}
+          deployedRule={baseline?.deployedPrompt ?? null}
           promptMode
           onClose={(changed) => {
             setPromptReviseTarget(null);

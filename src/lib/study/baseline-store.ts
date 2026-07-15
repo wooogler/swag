@@ -184,6 +184,9 @@ export interface BaselineState {
   currentPrompt: string;
   hasSavedVersion: boolean;
   deployedVersionNo: number | null;
+  /** The prompt students CURRENTLY receive (the deployed version's text) — the
+   * Preview workbench compares the working prompt against this. Null = not deployed. */
+  deployedPrompt: string | null;
   versions: { versionNo: number; deployed: boolean; createdAt: Date }[];
   /** The hidden per-clone intent whose RULE is this prompt — the Revise flow
    * mounts the SCORE RuleWorkbench on it, so version history reuses
@@ -273,6 +276,7 @@ export async function getBaselineState(assignmentId: string): Promise<BaselineSt
     currentPrompt: holder.rule ?? latest?.prompt ?? (await deployedOrBasePrompt(assignmentId)),
     hasSavedVersion: !!latest,
     deployedVersionNo: deployed?.versionNo ?? null,
+    deployedPrompt: deployed?.prompt ?? null,
     versions: rows.map((r) => ({ versionNo: r.versionNo, deployed: !!r.deployedAt, createdAt: r.createdAt })),
     promptHolderId: holder.id,
   };

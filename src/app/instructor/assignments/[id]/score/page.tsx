@@ -129,6 +129,11 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       }
     : null;
 
+  // The rule each intent CURRENTLY deploys to students (latest chat deploy) — the
+  // Revise Preview compares the working rule against this, not against itself.
+  const latestDeploy = (chatDeploys[0]?.snapshot as ChatDeploySnapshot | undefined) ?? null;
+  const deployedRules = latestDeploy ? latestDeploy.intents.map((i) => ({ id: i.id, rule: i.rule })) : [];
+
   const tokenBySession = new Map(sessions.map((s) => [s.id, s.participantToken]));
 
   // The Jelson taxonomy is kept only as the New Intent fuzzy-suggestion source.
@@ -330,11 +335,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               ? {
                   currentPrompt: baselineState.currentPrompt,
                   deployedVersionNo: baselineState.deployedVersionNo,
+                  deployedPrompt: baselineState.deployedPrompt,
                   charLimit: STUDY_PROMPT_CHAR_LIMIT,
                   promptHolderId: baselineState.promptHolderId,
                 }
               : undefined
           }
+          deployedRules={deployedRules}
           openaiConfigured={isOpenAIConfigured()}
           jelsonSuggestions={jelsonSuggestions}
           // NIRVANA responses are raw GPT text (single-newline line breaks that
