@@ -90,6 +90,9 @@ export async function GET(_req: Request, { params }: RouteParams) {
       definition: intent?.definition ?? null,
       included: pins.filter((p) => p.verdict === 'in').length,
       excluded: pins.filter((p) => p.verdict === 'out').length,
+      // The labeled questions in effect at this version — powers the Apply
+      // entry's hover tooltip (which queries it re-rated against).
+      labeled: pins.map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText })),
       stats: summary.stats ?? null,
     };
   });

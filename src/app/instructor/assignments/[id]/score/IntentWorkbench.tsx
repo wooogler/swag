@@ -110,6 +110,8 @@ interface IntentVersion {
   definition: string | null;
   included: number;
   excluded: number;
+  /** The labeled questions in effect at this version — the Apply entry's tooltip. */
+  labeled: { verdict: 'in' | 'out'; text: string }[];
   stats: { included: number; excluded: number; inCount: number } | null;
 }
 
@@ -136,6 +138,14 @@ function versionLabel(v: IntentVersion): string {
 function versionAction(v: IntentVersion): string {
   if (v.minor && (v.action === 'update_intent' || v.action === 'create_intent')) return 'applied';
   return ACTION_LABELS[v.action] ?? v.action.replace(/_/g, ' ');
+}
+
+/** The labeled questions at this version, one per line — the count's hover tooltip. */
+function labeledTooltip(v: IntentVersion): string | undefined {
+  if (!v.labeled?.length) return undefined;
+  return v.labeled
+    .map((l) => `${l.verdict === 'in' ? 'in  · ' : 'out · '}${l.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`)
+    .join('\n');
 }
 
 /** Compact relative time ("10 minutes ago") — the exact stamp goes in a tooltip. */
@@ -531,7 +541,8 @@ export default function IntentWorkbench({
   async function persist(
     signal?: AbortSignal,
     force = false,
-    specOverride?: { title: string; definition: string; createNew?: boolean }
+    specOverride?: { title: string; definition: string; createNew?: boolean },
+    opts?: { silent?: boolean }
   ): Promise<number | null> {
     // Checkout-rollback must always PATCH (pins need restoring) even when the
     // definition happens to match the live one.
@@ -551,10 +562,11 @@ export default function IntentWorkbench({
       title: autoTitle ? undefined : titleText,
       definition: defText,
       autoTitle,
-      // Save records a MAJOR version; Apply records a MINOR one — an Apply
-      // costs an LLM re-rate, so it must be revertible from History too.
-      recordVersion: true,
-      ...(force ? {} : { minorVersion: true }),
+      // Save records a MAJOR version; Apply records a MINOR one — an Apply costs
+      // an LLM re-rate, so it must be revertible from History too. `silent`
+      // persists the spec with NO version (used by Retire labels, which folds the
+      // just-refined definition in before dropping the labels).
+      ...(opts?.silent ? { recordVersion: false } : { recordVersion: true, ...(force ? {} : { minorVersion: true }) }),
       stats,
       // Creates start as unregistered drafts; Save activates (registers).
       ...(isCreate ? { isTemplate: true } : force ? { isTemplate: false } : {}),
@@ -645,13 +657,13 @@ export default function IntentWorkbench({
    * definition standing alone — if the same questions come back, it absorbed
    * them; if they don't, the definition still needs work.
    *
-   * Gated on a clean spec: pins are persisted the moment you click, the
-   * definition draft is not, so retiring first would drop the labels and leave
-   * the OLD definition behind.
+   * A dirty definition (e.g. just-refined by Update from labels) is persisted
+   * FIRST — silently, no version — so retiring the labels keeps the new
+   * definition instead of leaving the old one behind.
    */
   async function retireLabels() {
     if (intentId === null || retiring || busy || saving || checkout !== null) return;
-    if (pinCount === 0 || specDirty()) return;
+    if (pinCount === 0) return;
     if (
       !window.confirm(
         `Retire all ${pinCount} label(s)?\n\nThe definition keeps what it learned from them. ` +
@@ -666,6 +678,12 @@ export default function IntentWorkbench({
     abortRef.current?.abort();
     abortRef.current = controller;
     try {
+      // Fold the current (possibly just-refined) definition into the live intent
+      // before dropping its labels — silent, so no version is recorded here.
+      if (specDirty()) {
+        const id = await persist(controller.signal, false, undefined, { silent: true });
+        if (id === null || !live(controller.signal)) return;
+      }
       const res = await fetch(
         `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/pins?all=1`,
         { method: 'DELETE', signal: controller.signal }
@@ -676,7 +694,6 @@ export default function IntentWorkbench({
         setPinsDirty(true); // shown ratings still carry the retired pins → re-Apply
         setSimilarScores(null); // no pins left → the pin-driven sorts are moot
         setRefineReasoning(null);
-        loadVersions(intentId); // the bulk retire recorded a minor version
       }
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live(controller.signal)) {
@@ -838,8 +855,8 @@ export default function IntentWorkbench({
         const d = await res.json().catch(() => ({}));
         throw new Error(typeof d?.error === 'string' ? `Pin failed: ${d.error}` : 'Failed to update the pin.');
       }
-      // Each pin records a minor version server-side — refresh the accordion.
-      loadVersions(intentId);
+      // Labeling no longer records a version — the label set is captured on the
+      // next Apply, so there is nothing to refresh in the history here.
     } catch (e) {
       if (mountedRef.current) {
         setPinned(row.pinned, row.pinRank); // revert the optimistic flip
@@ -1206,6 +1223,16 @@ export default function IntentWorkbench({
             {v.detail}
           </p>
         )}
+        {/* An Apply's label summary: just the count, with the labeled questions
+            on hover (they no longer clutter the history as one entry each). */}
+        {compact && v.included + v.excluded > 0 && (
+          <p className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]" title={labeledTooltip(v)}>
+            {v.included + v.excluded} label{v.included + v.excluded === 1 ? '' : 's'} ·{' '}
+            <span className="text-emerald-700">{v.included} in</span>
+            {' · '}
+            <span className="text-rose-700">{v.excluded} out</span>
+          </p>
+        )}
         {!compact && (
           <>
             {v.definition && (
@@ -1214,7 +1241,7 @@ export default function IntentWorkbench({
                 {v.definition.length > 90 ? `${v.definition.slice(0, 90)}…` : v.definition}
               </p>
             )}
-            <p className="mt-0.5 text-[hsl(var(--muted-foreground))]">
+            <p className="mt-0.5 text-[hsl(var(--muted-foreground))]" title={labeledTooltip(v)}>
               <span className="text-emerald-700">included {v.included}</span>
               {' · '}
               <span className="text-rose-700">excluded {v.excluded}</span>
@@ -1534,24 +1561,19 @@ export default function IntentWorkbench({
                 </details>
                 {/* Close the loop: the definition now carries the labels, so
                     the labels can go. Retiring them re-rates against the
-                    definition ALONE — the only real test that it absorbed
-                    them. Blocked while the proposal is unsaved, since pins
-                    are already persisted and the draft definition is not. */}
+                    definition ALONE — the only real test that it absorbed them.
+                    A just-refined (unsaved) definition is folded in first. */}
                 {pinCount > 0 && checkout === null && (
                   <div className="flex items-center justify-between gap-2 border-t border-[hsl(var(--border))] px-2 py-1.5">
                     <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
                       {specDirty()
-                        ? `Save the definition to retire its ${pinCount} label(s).`
+                        ? `Retire the ${pinCount} label(s) — the proposed definition is saved first.`
                         : `The definition carries these ${pinCount} label(s) now — retire them to test it alone.`}
                     </p>
                     <button
                       onClick={retireLabels}
-                      disabled={retiring || busy || saving || specDirty()}
-                      title={
-                        specDirty()
-                          ? 'Save the proposed definition first — pins are already persisted, the draft is not'
-                          : 'Delete the labels; the next Apply re-rates the log against the definition alone'
-                      }
+                      disabled={retiring || busy || saving}
+                      title="Drop the labels; the next Apply re-rates the log against the definition alone (the proposed definition is saved first)"
                       className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
                     >
                       {retiring ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
