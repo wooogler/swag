@@ -27,6 +27,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowUp,
+  Eye,
   HelpCircle,
   Loader2,
   Maximize2,
@@ -44,6 +45,7 @@ import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import NewIntentSuggestModal from './NewIntentSuggestModal';
+import RuleApplyPreview from './RuleApplyPreview';
 import QueryPicker from './QueryPicker';
 import { timeAgo } from './IntentWorkbench';
 
@@ -221,6 +223,8 @@ export default function RuleWorkbench({
   // version's own stored response doesn't cover. Cleared on version switch.
   const [updated, setUpdated] = useState<Record<number, { text: string | null; loading: boolean }>>({});
   const [checking, setChecking] = useState(false);
+  // Cross-query preview workbench (review the saved rule across questions).
+  const [previewOpen, setPreviewOpen] = useState(false);
   // "Make this a new intent" suggestion modal.
   const [suggestOpen, setSuggestOpen] = useState(false);
 
@@ -835,6 +839,44 @@ export default function RuleWorkbench({
     );
   };
 
+  // CROSS-QUERY PREVIEW — replaces the workbench while reviewing the saved rule's
+  // response across questions. SCORE: the intent's questions; baseline: the whole
+  // log (RuleApplyPreview paginates 10 at a time). Review-only — Back to return.
+  if (previewOpen) {
+    const inScope = promptMode
+      ? rows.map((r) => r.messageId)
+      : rows
+          .filter((r) => {
+            const pin = r.pinnedIntents[intent.id];
+            return pin ? pin === 'in' : r.intentRatings[intent.id]?.rating === 'clearly_in';
+          })
+          .map((r) => r.messageId);
+    const previewIds = [row.messageId, ...inScope.filter((id) => id !== row.messageId)];
+    const lastMajor = versions?.find((v) => !v.minor) ?? null;
+    const seed = new Map<number, string | null>();
+    for (const [idStr, entry] of Object.entries(updated)) {
+      if (entry.text) seed.set(Number(idStr), entry.text);
+    }
+    if (latest?.anchorMessageId != null && latest.updatedResponse) seed.set(latest.anchorMessageId, latest.updatedResponse);
+    return (
+      <RuleApplyPreview
+        assignmentId={assignmentId}
+        intent={intent}
+        promptMode={promptMode}
+        rows={rows}
+        queryIds={previewIds}
+        anchorId={row.messageId}
+        beforeRule={lastMajor?.rule ?? null}
+        beforeLabel={lastMajor ? `${versionLabel(lastMajor)}${lastMajor.name ? ` — ${lastMajor.name}` : ''}` : 'v1'}
+        afterRule={latest?.rule ?? null}
+        afterLabel={latest ? `${versionLabel(latest)}${latest.name ? ` — ${latest.name}` : ''}` : ''}
+        isNirvana={isNirvana}
+        seed={seed}
+        onClose={() => setPreviewOpen(false)}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
       {/* TOP BAR */}
@@ -849,34 +891,23 @@ export default function RuleWorkbench({
         <h2 className="text-sm font-semibold truncate">
           {promptMode ? 'Revise the system prompt' : `Revise rule — ${intent.title}`}
         </h2>
-        <div className="ml-auto flex items-center gap-3">
-          {/* Preview (simulate the edited rule) lives by its caption. */}
-          <button
-            onClick={() => {
-              void (async () => {
-                const created = await simulate(ruleText.trim() || null, 'direct');
-                if (created) {
-                  pushChat({ role: 'user', text: 'Edited the rule directly.', versionNo: created.versionNo });
-                }
-              })();
-            }}
-            disabled={proposing || simulating || readOnly || !boxEdited}
-            title={
-              readOnly
-                ? 'Viewing an old step — Revert to make it live, or return to the latest to edit'
-                : boxEdited
-                  ? 'Simulate this rule — regenerates the response and records a minor step'
-                  : 'Edit the rule text to simulate a change'
-            }
-            className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
-          >
-            {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-            Preview
-          </button>
-          <span className="max-w-[340px] text-[10px] text-[hsl(var(--muted-foreground))]">
-            Previews are single-turn regenerations with the live chatbot model — indicative, not a guarantee.
-          </span>
-        </div>
+        {/* Preview the SAVED rule across many questions before deploying —
+            SCORE across the intent's questions, baseline across the whole log
+            (10 at a time). Review-only; edits happen on the left, deploy on the board. */}
+        <button
+          onClick={() => setPreviewOpen(true)}
+          disabled={boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving}
+          className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+          title={
+            boxEdited
+              ? 'Apply your edit first, then Preview'
+              : promptMode
+                ? 'Preview this prompt across the log (10 questions at a time)'
+                : "Preview this rule across the intent's questions"
+          }
+        >
+          <Eye className="w-3.5 h-3.5" /> Preview
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)_minmax(300px,380px)] gap-4 flex-1 min-h-0">
@@ -928,18 +959,42 @@ export default function RuleWorkbench({
                 }`}
               />
               <div className="mt-1.5 flex items-center justify-end gap-2">
+                {/* Apply the rule you edited directly — regenerates the active
+                    question's response and records a simulated step. */}
+                <button
+                  onClick={() => {
+                    void (async () => {
+                      const created = await simulate(ruleText.trim() || null, 'direct');
+                      if (created) {
+                        pushChat({ role: 'user', text: 'Edited the rule directly.', versionNo: created.versionNo });
+                      }
+                    })();
+                  }}
+                  disabled={proposing || simulating || readOnly || !boxEdited}
+                  title={
+                    readOnly
+                      ? 'Viewing an old step — Revert to make it live, or return to the latest to edit'
+                      : boxEdited
+                        ? 'Apply this edit — regenerates the response and records a step'
+                        : 'Edit the rule text to apply a change'
+                  }
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
+                >
+                  {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                  Apply edit
+                </button>
                 <button
                   onClick={() => void saveVersion()}
                   disabled={!dirty || !viewingLatest || boxEdited || saving || proposing || simulating}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
                   title={
                     boxEdited
-                      ? 'Preview the edited rule first, then Save'
+                      ? 'Apply the edited rule first, then Save'
                       : !viewingLatest
                         ? 'Viewing an old step — Revert to make it live instead'
                         : dirty
                           ? 'Record a major version and apply it to the live intent'
-                          : 'Nothing to save — simulate a change first'
+                          : 'Nothing to save — apply a change first'
                   }
                 >
                   {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
