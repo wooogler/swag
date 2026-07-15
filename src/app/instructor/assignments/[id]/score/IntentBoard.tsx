@@ -48,6 +48,7 @@ import DecideOwnershipModal from './DecideOwnershipModal';
 import RuleWorkbench from './RuleWorkbench';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
 import { getJSON, postJSON } from './http';
+import { SortSelect, sortQueryRows, type QuerySortMode } from './query-list';
 import { runShardedRate } from './rate-runner';
 
 /** One student message, with its per-intent ratings/pins and dissection. Built
@@ -716,9 +717,7 @@ export default function IntentBoard({
   const [selection, setSelection] = useState<IntentSelection>({ kind: 'all' });
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState<
-    'recent' | 'oldest' | 'participant-asc' | 'participant-desc'
-  >('recent');
+  const [sortMode, setSortMode] = useState<QuerySortMode>('recent');
   // Rating model is fixed (picker removed) — 5.4-mini.
   const selectedModel = SCORE_RATING_MODEL;
   const [basePromptOpen, setBasePromptOpen] = useState(false);
@@ -1266,29 +1265,7 @@ export default function IntentBoard({
     return r.intentRatings[selection.id]?.rating ?? null;
   };
 
-  const sortedRows = useMemo(() => {
-    const ts = (r: ScoreQueryRow) => new Date(r.queryTimestamp).getTime();
-    const pc = (a: ScoreQueryRow, b: ScoreQueryRow) =>
-      a.participantToken.localeCompare(b.participantToken, undefined, {
-        numeric: true,
-        sensitivity: 'base',
-      });
-    const arr = searchedRows.slice();
-    switch (sortMode) {
-      case 'oldest':
-        arr.sort((a, b) => ts(a) - ts(b));
-        break;
-      case 'participant-asc':
-        arr.sort((a, b) => pc(a, b) || ts(b) - ts(a));
-        break;
-      case 'participant-desc':
-        arr.sort((a, b) => pc(b, a) || ts(b) - ts(a));
-        break;
-      default:
-        arr.sort((a, b) => ts(b) - ts(a));
-    }
-    return arr;
-  }, [searchedRows, sortMode]);
+  const sortedRows = useMemo(() => sortQueryRows(searchedRows, sortMode), [searchedRows, sortMode]);
 
   const selectedRow = useMemo(
     () => rows.find((r) => r.messageId === selectedMessageId) ?? null,
@@ -2062,16 +2039,7 @@ export default function IntentBoard({
                   </button>
                 )}
               </div>
-              <select
-                value={sortMode}
-                onChange={(e) => setSortMode(e.target.value as typeof sortMode)}
-                className="text-xs border border-[hsl(var(--border))] rounded px-1.5 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
-              >
-                <option value="recent">Newest</option>
-                <option value="oldest">Oldest</option>
-                <option value="participant-asc">PID ↑</option>
-                <option value="participant-desc">PID ↓</option>
-              </select>
+              <SortSelect value={sortMode} onChange={setSortMode} />
             </div>
           </div>
           {sortedRows.length === 0 ? (
