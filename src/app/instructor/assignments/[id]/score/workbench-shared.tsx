@@ -25,13 +25,13 @@ export function WorkbenchTopBar({
     <div className="shrink-0 flex items-center gap-3">
       <button
         onClick={onBack}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
         title={backTitle ?? 'Back to the board'}
       >
         <ArrowLeft className="w-3.5 h-3.5" /> Board
       </button>
       <h2 className="text-sm font-semibold truncate">{title}</h2>
-      {note && <span className="text-[11px] text-[hsl(var(--muted-foreground))]">{note}</span>}
+      {note && <span className="text-xs text-[hsl(var(--muted-foreground))]">{note}</span>}
     </div>
   );
 }
@@ -55,7 +55,7 @@ export function DefinitionEditor({
   action?: React.ReactNode;
 }) {
   return (
-    <label className="block text-xs">
+    <label className="block text-sm">
       <span className="flex items-center justify-between gap-2">
         <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">{label}</span>
         {action}
@@ -113,7 +113,7 @@ export function QueryTextButton({
               e.stopPropagation();
               onToggleExpand();
             }}
-            className="ml-1 inline-flex items-center gap-0.5 align-baseline text-[10px] font-medium text-[hsl(var(--primary))] hover:underline"
+            className="ml-1 inline-flex items-center gap-0.5 align-baseline text-xs font-medium text-[hsl(var(--primary))] hover:underline"
           >
             {isExpanded ? (
               <>

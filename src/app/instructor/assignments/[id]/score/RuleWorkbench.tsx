@@ -115,7 +115,7 @@ function HoverTip({ tip, children }: { tip: string; children: React.ReactNode })
       {pos && (
         <span
           style={{ top: pos.top, right: pos.right }}
-          className="pointer-events-none fixed z-50 w-80 -translate-y-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 text-xs font-normal leading-relaxed text-[hsl(var(--foreground))] shadow-xl"
+          className="pointer-events-none fixed z-50 w-80 -translate-y-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 text-sm font-normal leading-relaxed text-[hsl(var(--foreground))] shadow-xl"
         >
           {tip}
         </span>
@@ -764,7 +764,7 @@ export default function RuleWorkbench({
     if (!v) {
       return (
         <span
-          className="shrink-0 rounded border border-[hsl(var(--border))] px-1 py-0.5 text-[10px] text-[hsl(var(--muted-foreground))] line-through"
+          className="shrink-0 rounded border border-[hsl(var(--border))] px-1 py-0.5 text-xs text-[hsl(var(--muted-foreground))] line-through"
           title="This step was deleted by a revert"
         >
           removed
@@ -776,7 +776,7 @@ export default function RuleWorkbench({
       <button
         onClick={() => jumpToVersion(versionNo)}
         title="Open this step in History (its rule and response load in place)"
-        className={`shrink-0 rounded border px-1 py-0.5 font-mono text-[10px] font-medium ${
+        className={`shrink-0 rounded border px-1 py-0.5 font-mono text-xs font-medium ${
           isViewed
             ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
             : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
@@ -807,7 +807,7 @@ export default function RuleWorkbench({
             ? 'The current working state — click to return to it'
             : 'View this step — its rule and response load instantly'
         }
-        className={`w-full cursor-pointer text-left rounded border text-[11px] ${
+        className={`w-full cursor-pointer text-left rounded border text-xs ${
           compact ? 'px-2 py-1' : 'px-2 py-1.5'
         } ${
           isViewed
@@ -819,7 +819,7 @@ export default function RuleWorkbench({
           <span className="shrink-0 font-mono">
             {versionLabel(v)}
             {isNewest && viewNo === null && (
-              <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 py-px font-sans text-[9px] font-semibold text-[hsl(var(--primary))]">
+              <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 py-px font-sans text-[11px] font-semibold text-[hsl(var(--primary))]">
                 current
               </span>
             )}
@@ -828,14 +828,14 @@ export default function RuleWorkbench({
             {v.name || (v.rule ? 'Untitled rule' : 'No rule')}
           </span>
           <span className="shrink-0 flex items-center gap-1.5">
-            <span className="rounded bg-[hsl(var(--muted))] px-1 py-0.5 text-[10px]">
+            <span className="rounded bg-[hsl(var(--muted))] px-1 py-0.5 text-xs">
               {SOURCE_LABEL[v.source]}
             </span>
             <span title={new Date(v.createdAt).toLocaleString()}>{timeAgo(v.createdAt)}</span>
           </span>
         </div>
         {!compact && v.note && (
-          <p className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">{v.note}</p>
+          <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">{v.note}</p>
         )}
         {/* Which logged question this change was made from — lets you trace (and
             revert) a version back to the query that motivated it. */}
@@ -845,7 +845,7 @@ export default function RuleWorkbench({
             if (!ar) return null;
             return (
               <p
-                className="mt-0.5 truncate text-[10px] text-[hsl(var(--muted-foreground))]"
+                className="mt-0.5 truncate text-xs text-[hsl(var(--muted-foreground))]"
                 title={ar.queryText.replace(/\s+/g, ' ').trim()}
               >
                 from <span className="font-mono">{ar.participantToken}{ar.turnNumber > 0 ? ` · T${ar.turnNumber}` : ''}</span>
@@ -903,7 +903,7 @@ export default function RuleWorkbench({
       <div className="shrink-0 flex items-center gap-3">
         <button
           onClick={() => onClose(savedAnyRef.current)}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
           title="Back to the board"
         >
           <ArrowLeft className="w-3.5 h-3.5" /> Board
@@ -917,7 +917,7 @@ export default function RuleWorkbench({
         <button
           onClick={() => setPreviewOpen(true)}
           disabled={boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving}
-          className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+          className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
           title={
             boxEdited
               ? 'Apply your edit first, then Preview'
@@ -937,10 +937,10 @@ export default function RuleWorkbench({
             {/* WHEN — intent-only; the baseline prompt has no trigger condition. */}
             {!promptMode && (
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   When a student…
                 </p>
-                <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))] whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2">
+                <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))] whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2">
                   {intent.definition}
                 </p>
               </div>
@@ -948,17 +948,17 @@ export default function RuleWorkbench({
 
             <div>
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   {promptMode
                     ? `System prompt${viewed ? ` · ${versionLabel(viewed)}` : ''}`
                     : `Then… (rule${viewed ? ` · ${versionLabel(viewed)}` : ''})`}
                 </p>
                 {readOnly ? (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
                     read-only — viewing {viewed ? versionLabel(viewed) : 'an old step'}
                   </span>
                 ) : dirty ? (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
                     not saved yet
                   </span>
                 ) : null}
@@ -974,7 +974,7 @@ export default function RuleWorkbench({
                     : 'Empty — no rule and no base prompt: the chatbot answers with no system prompt at all.'
                 }
                 title={readOnly ? 'Viewing an old step — Revert to make it live, or click the newest step to edit' : undefined}
-                className={`mt-1 w-full text-xs leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
+                className={`mt-1 w-full text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
                   readOnly ? 'bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--background))]'
                 }`}
               />
@@ -998,7 +998,7 @@ export default function RuleWorkbench({
                         ? 'Apply this edit — regenerates the response and records a step'
                         : 'Edit the rule text to apply a change'
                   }
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
                 >
                   {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                   Apply edit
@@ -1006,7 +1006,7 @@ export default function RuleWorkbench({
                 <button
                   onClick={() => void saveVersion()}
                   disabled={!dirty || !viewingLatest || boxEdited || saving || proposing || simulating}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
                   title={
                     boxEdited
                       ? 'Apply the edited rule first, then Save'
@@ -1027,7 +1027,7 @@ export default function RuleWorkbench({
                 (accordion, same mental model as the intent workbench). */}
             <div className="space-y-1.5 border-t border-[hsl(var(--border))] pt-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   History
                   {viewed && !viewingLatest && (
                     <span className="ml-1.5 normal-case font-normal text-amber-700">
@@ -1040,18 +1040,18 @@ export default function RuleWorkbench({
                     onClick={revertToViewed}
                     disabled={saving || simulating || proposing}
                     title="Make this step the live rule and delete the later steps (asks first)"
-                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-[10px] font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
+                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
                   >
                     <RotateCcw className="w-3 h-3" /> Revert to {versionLabel(viewed)}
                   </button>
                 )}
               </div>
               {versions === null ? (
-                <p className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+                <p className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
                   <Loader2 className="w-3 h-3 animate-spin" /> Loading history…
                 </p>
               ) : versionGroups.length === 0 ? (
-                <p className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                <p className="text-xs text-[hsl(var(--muted-foreground))]">
                   No versions yet — the first simulation records one.
                 </p>
               ) : (
@@ -1064,7 +1064,7 @@ export default function RuleWorkbench({
                         {g.major ? (
                           versionEntry(g.major, false)
                         ) : (
-                          <p className="px-1 text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+                          <p className="px-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
                             Simulated steps — not saved yet
                           </p>
                         )}
@@ -1072,7 +1072,7 @@ export default function RuleWorkbench({
                           <div className="ml-3 border-l border-[hsl(var(--border))] pl-2 space-y-1">
                             <button
                               onClick={() => setGroupToggles((t) => ({ ...t, [g.key]: !open }))}
-                              className="inline-flex items-center gap-1 text-[10px] font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
                               title="Simulated steps on top of this version"
                             >
                               {open ? '▾' : '▸'} {g.minors.length} step{g.minors.length === 1 ? '' : 's'}
@@ -1105,7 +1105,7 @@ export default function RuleWorkbench({
                     key={id}
                     onClick={() => selectTab(id)}
                     title={r0 ? r0.queryText.replace(/\s+/g, ' ').trim().slice(0, 140) : undefined}
-                    className={`shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium border ${
+                    className={`shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium border ${
                       isActive
                         ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
                         : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
@@ -1118,7 +1118,7 @@ export default function RuleWorkbench({
               })}
             <button
               onClick={() => setPickerOpen(true)}
-              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-[11px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
               title="Pull in more logged questions to try the rule against"
             >
               <Plus className="w-3 h-3" /> Add example
@@ -1130,14 +1130,14 @@ export default function RuleWorkbench({
               <div className="shrink-0 px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
                 <button
                   onClick={() => setConvoOpen(false)}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[11px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
                 >
                   <Minimize2 className="w-3.5 h-3.5" /> Exit
                 </button>
                 {/* The point of this view: the prior conversation as context,
                     with the VIEWED step's response in place of the original. */}
                 {displayedResponse && viewed && (
-                  <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
+                  <span className="text-xs text-[hsl(var(--muted-foreground))]">
                     showing the{' '}
                     <span className="font-medium text-emerald-700">{versionLabel(viewed)} response</span>{' '}
                     in place of the original
@@ -1159,7 +1159,7 @@ export default function RuleWorkbench({
             <div className="flex-1 min-h-0 flex flex-col">
               {/* Pane header — which version's response is on screen. */}
               <div className="shrink-0 px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2 flex-wrap">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   Response{' '}
                   {viewed && (
                     <span className="font-normal normal-case">
@@ -1175,7 +1175,7 @@ export default function RuleWorkbench({
                         setRewriteText(displayedResponse);
                         setRewriteOpen(true);
                       }}
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
                       title="Rewrite this response the way you want it — the agent infers the rule change"
                     >
                       <Pencil className="w-2.5 h-2.5" /> Rewrite instead
@@ -1184,7 +1184,7 @@ export default function RuleWorkbench({
                   {threadLength > 1 && (
                     <button
                       onClick={() => setConvoOpen(true)}
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
                       title="See this step's response inside the prior conversation (the earlier turns stay as delivered)"
                     >
                       <Maximize2 className="w-2.5 h-2.5" /> View in context
@@ -1250,12 +1250,12 @@ export default function RuleWorkbench({
                             value={rewriteText}
                             onChange={(e) => setRewriteText(e.target.value)}
                             rows={14}
-                            className="w-full resize-y text-xs leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
+                            className="w-full resize-y text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
                           />
                           <div className="flex items-center justify-end gap-2">
                             <button
                               onClick={() => setRewriteOpen(false)}
-                              className="px-2.5 py-1 rounded text-[11px] font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+                              className="px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
                             >
                               Cancel
                             </button>
@@ -1275,7 +1275,7 @@ export default function RuleWorkbench({
                                 );
                               }}
                               disabled={proposing || simulating || !rewriteText.trim()}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
                             >
                               {proposing || simulating ? (
                                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -1287,20 +1287,20 @@ export default function RuleWorkbench({
                           </div>
                         </div>
                       ) : loading ? (
-                        <p className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+                        <p className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           {simulating ? 'Simulating under the revised rule…' : 'Generating this step’s response…'}
                         </p>
                       ) : !displayedResponse && (viewedIsSeed || viewedCoversActive) ? (
-                        <p className="text-xs italic text-[hsl(var(--muted-foreground))]">
+                        <p className="text-sm italic text-[hsl(var(--muted-foreground))]">
                           No chatbot response was recorded for this question.
                         </p>
                       ) : !displayedResponse && activeEntry ? (
-                        <p className="text-xs italic text-[hsl(var(--muted-foreground))]">
+                        <p className="text-sm italic text-[hsl(var(--muted-foreground))]">
                           Preview failed to generate.
                         </p>
                       ) : !displayedResponse ? (
-                        <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                        <p className="text-sm text-[hsl(var(--muted-foreground))]">
                           The response for this step loads in a moment…
                         </p>
                       ) : null}
@@ -1317,7 +1317,7 @@ export default function RuleWorkbench({
             at the bottom. */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
           <div className="shrink-0 px-3 py-2 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
               <Sparkles className="w-3.5 h-3.5" /> Feedback
               <button
                 onClick={() => setGuideOpen((v) => !(v ?? chat.length === 0))}
@@ -1337,7 +1337,7 @@ export default function RuleWorkbench({
               >
                 <button
                   onClick={() => setSuggestOpen(true)}
-                  className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-violet-300 text-[11px] font-medium text-violet-700 hover:bg-violet-50"
+                  className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-violet-300 text-xs font-medium text-violet-700 hover:bg-violet-50"
                 >
                   <Plus className="w-3 h-3" /> New intent
                 </button>
@@ -1347,15 +1347,15 @@ export default function RuleWorkbench({
 
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
             {(guideOpen ?? chat.length === 0) && (
-              <div className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">
+              <div className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
                 {/* Rule-authoring guide — the five elements strong classroom
                     AI-dialogue rules cover (Liu et al. 2026; see FEEDBACK_CHIPS).
                     Auto-shown while fresh; the header ? re-opens it anytime. */}
                 <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 space-y-1.5">
-                  <p className="text-[11px] font-semibold text-[hsl(var(--foreground))]">
+                  <p className="text-xs font-semibold text-[hsl(var(--foreground))]">
                     Not sure what to ask for? A strong rule covers five things:
                   </p>
-                  <ul className="space-y-1 text-[11px]">
+                  <ul className="space-y-1 text-xs">
                     <li>
                       <span className="font-medium text-[hsl(var(--foreground))]">Finish line</span> — what
                       &quot;done&quot; looks like (&quot;stop after two evidence-backed points&quot;).{' '}
@@ -1386,13 +1386,13 @@ export default function RuleWorkbench({
             {chat.map((m) =>
               m.role === 'user' ? (
                 <div key={m.id} className="flex flex-col items-end gap-1">
-                  <p className="max-w-[90%] rounded-2xl rounded-tr-sm bg-[hsl(var(--muted))] px-3 py-2 text-xs whitespace-pre-wrap">
+                  <p className="max-w-[90%] rounded-2xl rounded-tr-sm bg-[hsl(var(--muted))] px-3 py-2 text-sm whitespace-pre-wrap">
                     {m.text}
                   </p>
                   {m.versionNo !== undefined && versionChip(m.versionNo)}
                 </div>
               ) : (
-                <div key={m.id} className="text-xs">
+                <div key={m.id} className="text-sm">
                   <p className="flex items-center gap-1.5 font-medium text-[hsl(var(--foreground))]">
                     <Sparkles className="w-3 h-3 shrink-0 text-[hsl(var(--primary))]" />
                     <span className="min-w-0 truncate">{m.name}</span>
@@ -1404,7 +1404,7 @@ export default function RuleWorkbench({
                   {/* The rule this exchange produced — the feedback panel reads
                       as a self-contained changelog. */}
                   {m.rule !== undefined && (
-                    <div className="mt-1 max-h-40 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 text-[11px] leading-relaxed whitespace-pre-wrap text-[hsl(var(--foreground))]">
+                    <div className="mt-1 max-h-40 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 text-xs leading-relaxed whitespace-pre-wrap text-[hsl(var(--foreground))]">
                       {m.rule ?? <span className="italic">(no rule — base prompt only)</span>}
                     </div>
                   )}
@@ -1412,7 +1412,7 @@ export default function RuleWorkbench({
               )
             )}
             {(proposing || simulating) && (
-              <p className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+              <p className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 {proposing ? 'Revising the rule…' : 'Simulating the response…'}
               </p>
@@ -1432,7 +1432,7 @@ export default function RuleWorkbench({
                   }
                   disabled={proposing || simulating}
                   title={c.text}
-                  className="rounded-full border border-[hsl(var(--border))] px-2 py-0.5 text-[10px] font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
+                  className="rounded-full border border-[hsl(var(--border))] px-2 py-0.5 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
                 >
                   {c.label}
                 </button>
@@ -1442,7 +1442,7 @@ export default function RuleWorkbench({
 
           <div className="shrink-0 border-t border-[hsl(var(--border))] p-2.5 space-y-1.5">
             {error && (
-              <p className="flex items-center gap-1 text-[11px] text-red-600">
+              <p className="flex items-center gap-1 text-xs text-red-600">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {error}
                 <button onClick={() => setError(null)} className="ml-auto p-0.5" aria-label="Dismiss">
                   <X className="w-3 h-3" />
@@ -1451,7 +1451,7 @@ export default function RuleWorkbench({
             )}
             {/* WHAT the feedback critiques — the response on screen right now. */}
             {viewed && !readOnly && (
-              <p className="flex flex-wrap items-center gap-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+              <p className="flex flex-wrap items-center gap-1 text-xs text-[hsl(var(--muted-foreground))]">
                 Feedback on:
                 <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 font-medium text-emerald-700">
                   {versionLabel(viewed)} response
@@ -1479,7 +1479,7 @@ export default function RuleWorkbench({
                     ? `Viewing ${viewed ? versionLabel(viewed) : 'an old step'} (read-only) — Revert to make it live, or click the newest step to continue.`
                     : "What's wrong with this response? (Enter to send, Shift+Enter for a new line)"
                 }
-                className="w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2.5 py-2 pr-10 text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:bg-[hsl(var(--muted))]/40"
+                className="w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2.5 py-2 pr-10 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:bg-[hsl(var(--muted))]/40"
               />
               <button
                 onClick={sendFeedback}

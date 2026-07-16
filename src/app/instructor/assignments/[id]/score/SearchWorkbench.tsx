@@ -122,9 +122,9 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
               <Button size="sm" variant="outline" onClick={save} disabled={running || !definition.trim() || (saved && !dirty)}>
                 {saved && !dirty ? 'Saved' : 'Save search'}
               </Button>
-              {note && <span className="text-xs text-[hsl(var(--muted-foreground))]">{note}</span>}
+              {note && <span className="text-sm text-[hsl(var(--muted-foreground))]">{note}</span>}
             </div>
-            <p className="text-[11px] text-[hsl(var(--muted-foreground))]">
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">
               Finds every logged student question that matches this description. Read them to decide what to write
               in the system prompt.
             </p>
@@ -137,7 +137,7 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
             <>
               <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
                 <Button size="sm" variant="ghost" onClick={() => setConvoId(null)}>← Matches</Button>
-                <span className="text-xs text-[hsl(var(--muted-foreground))]">{convoRow.participantToken}</span>
+                <span className="text-sm text-[hsl(var(--muted-foreground))]">{convoRow.participantToken}</span>
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto">
                 <ConversationThread rows={rows} current={convoRow} isNirvana={isNirvana} />

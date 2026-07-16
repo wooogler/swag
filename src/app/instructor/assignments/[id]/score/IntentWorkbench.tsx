@@ -21,17 +21,13 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  selectPromptPins,
   type MaterialKind,
   type RatingLevel,
 } from '@/lib/score/intents';
-import { buildIntentSystemPrompt } from '@/lib/score/intent-prompts';
-import { buildQueryContent } from '@/lib/score/prompts';
 import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
-  Eye,
   GitCompareArrows,
   Loader2,
   Minimize2,
@@ -148,6 +144,42 @@ function labeledTooltip(v: IntentVersion): string | undefined {
     .join('\n');
 }
 
+/** Hover tooltip anchored to the RIGHT of its trigger. Uses `position: fixed`
+ * (via getBoundingClientRect) so it escapes the workbench panel's overflow clip;
+ * flips to the left near the viewport edge. Used by the taxonomy suggestions,
+ * whose rows show only a title and reveal the description on hover. */
+function HoverTip({ content, children }: { content: React.ReactNode; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  return (
+    <div
+      ref={ref}
+      className="min-w-0 flex-1"
+      onMouseEnter={() => {
+        const r = ref.current?.getBoundingClientRect();
+        if (!r) return;
+        const width = Math.min(320, window.innerWidth * 0.8); // w-80 / max-w-[80vw]
+        const flipLeft = r.right + width + 12 > window.innerWidth;
+        const left = flipLeft ? Math.max(8, r.left - width - 6) : r.right + 6;
+        const top = Math.min(Math.max(12, r.top + r.height / 2), window.innerHeight - 12);
+        setPos({ left, top });
+      }}
+      onMouseLeave={() => setPos(null)}
+    >
+      {children}
+      {pos && (
+        <div
+          role="tooltip"
+          className="fixed z-[60] w-80 max-w-[80vw] rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 shadow-lg pointer-events-none"
+          style={{ left: pos.left, top: pos.top, transform: 'translateY(-50%)' }}
+        >
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Compact relative time ("10 minutes ago") — the exact stamp goes in a tooltip. */
 export function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -216,8 +248,6 @@ export default function IntentWorkbench({
   // registered intent (is_template stays true) and is purged if the workbench
   // is left without Save. Library templates themselves are never mutated here.
   const draftIdRef = useRef<number | null>(null);
-  // "Prompt preview" overlay: the exact classifier input for this intent.
-  const [promptPreviewOpen, setPromptPreviewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refining, setRefining] = useState(false);
@@ -265,7 +295,7 @@ export default function IntentWorkbench({
   // Create-mode only: fuzzy-match what they've typed against the Jelson taxonomy.
   const jelsonMatches = useMemo(() => {
     if (isEdit || !jelsonSuggestions?.length) return [];
-    return suggestJelson(definition, jelsonSuggestions, 5);
+    return suggestJelson(definition, jelsonSuggestions, 3);
   }, [isEdit, jelsonSuggestions, definition]);
 
   // Discard the unsaved discovery draft (fire-and-forget purge). Called when
@@ -544,11 +574,12 @@ export default function IntentWorkbench({
     specOverride?: { title: string; definition: string; createNew?: boolean },
     opts?: { silent?: boolean }
   ): Promise<number | null> {
-    // Checkout-rollback must always PATCH (pins need restoring) even when the
-    // definition happens to match the live one.
-    if (!force && !specOverride && checkout === null && intentId !== null && !specDirty()) {
-      return intentId;
-    }
+    // Every Apply persists (and records a minor version), even when only the
+    // labels changed and the definition matches the live one: since labels
+    // stopped self-versioning, Apply is what snapshots the current label set
+    // into History. The Apply button is disabled once `applied` is true, so a
+    // true no-op (definition AND labels clean) never reaches here — no
+    // redundant versions. A `silent` persist (Retire labels) still records none.
     const titleText = (specOverride?.title ?? title).trim();
     const defText = (specOverride?.definition ?? definition).trim();
     const autoTitle = specOverride ? !titleText : !titleDirty || !title.trim();
@@ -1044,27 +1075,6 @@ export default function IntentWorkbench({
   // defaults open (its minors are the work since the last save).
   const [groupToggles, setGroupToggles] = useState<Record<string, boolean>>({});
 
-  // Rebuild the EXACT classifier input from the current draft (intent-prompts
-  // is client-safe by design — preview = runtime, §1.9). The user message is a
-  // per-question template, shown with placeholders.
-  const promptPreview = useMemo(() => {
-    if (!promptPreviewOpen) return null;
-    const pins = selectPromptPins([
-      ...pinnedIn.map((r) => ({ verdict: 'in' as const, text: r.queryText })),
-      ...pinnedOut.map((r) => ({ verdict: 'out' as const, text: r.queryText })),
-    ]);
-    return {
-      system: buildIntentSystemPrompt(
-        [{ id: intentId ?? 0, definition: definition.trim() || '<definition>', pins }],
-        true
-      ),
-      user: buildQueryContent(
-        '<the student question being rated>',
-        '<the previous student message, when present>',
-        '<the chatbot reply the student was responding to, when present>'
-      ),
-    };
-  }, [promptPreviewOpen, pinnedIn, pinnedOut, definition, intentId]);
   const ndProbablyIn = needsDecision.filter((r) => r.rating === 'probably_in').length;
   const ndProbablyOut = needsDecision.length - ndProbablyIn;
   // The rows the active lean tab shows (sorting/search apply on top of this).
@@ -1165,7 +1175,7 @@ export default function IntentWorkbench({
               : 'Diff base — click to compare against the latest version again'
             : 'Show diff — compare the current "In this intent" set against this version'
         }
-        className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[10px] font-medium ${
+        className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-xs font-medium ${
           isDiffBase
             ? 'border-sky-300 bg-sky-100 text-sky-800'
             : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
@@ -1193,7 +1203,7 @@ export default function IntentWorkbench({
               ? `${v.definition ?? ''}\n\n${absoluteTime} — click to view this state`
               : 'View this version — its definition, labels, and results load instantly'
         }
-        className={`w-full cursor-pointer text-left rounded border text-[11px] ${
+        className={`w-full cursor-pointer text-left rounded border text-xs ${
           compact ? 'px-2 py-1' : 'px-2 py-1.5'
         } ${
           highlighted
@@ -1205,7 +1215,7 @@ export default function IntentWorkbench({
           <span className="shrink-0 font-mono" title={`config v${v.versionNo}`}>
             {versionLabel(v)}
             {isNewest && checkout === null && (
-              <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 py-px font-sans text-[9px] font-semibold text-[hsl(var(--primary))]">
+              <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 py-px font-sans text-[11px] font-semibold text-[hsl(var(--primary))]">
                 current
               </span>
             )}
@@ -1219,14 +1229,14 @@ export default function IntentWorkbench({
         {compact && v.detail && (
           // What the step actually did — full text, wrapping (a truncated
           // "label removed “that concl…" is impossible to act on).
-          <p className="mt-0.5 whitespace-pre-wrap break-words text-[10px] text-[hsl(var(--muted-foreground))]">
+          <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-[hsl(var(--muted-foreground))]">
             {v.detail}
           </p>
         )}
         {/* An Apply's label summary: just the count, with the labeled questions
             on hover (they no longer clutter the history as one entry each). */}
         {compact && v.included + v.excluded > 0 && (
-          <p className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]" title={labeledTooltip(v)}>
+          <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]" title={labeledTooltip(v)}>
             {v.included + v.excluded} label{v.included + v.excluded === 1 ? '' : 's'} ·{' '}
             <span className="text-emerald-700">{v.included} in</span>
             {' · '}
@@ -1320,10 +1330,10 @@ export default function IntentWorkbench({
             onOpen={() => setConvo({ messageId: r.messageId, pane })}
           >
             {(r.rationale || drift || overlapChip) && (
-              <p className="mt-1 flex flex-wrap items-baseline gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+              <p className="mt-1 flex flex-wrap items-baseline gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
                 {overlapChip && (
                   <span
-                    className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[10px] font-medium text-amber-700"
+                    className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-xs font-medium text-amber-700"
                     title={overlapChip.title}
                   >
                     {overlapChip.label}
@@ -1331,7 +1341,7 @@ export default function IntentWorkbench({
                 )}
                 {drift && (
                   <span
-                    className={`shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium ${drift.cls}`}
+                    className={`shrink-0 rounded border px-1 py-0.5 text-xs font-medium ${drift.cls}`}
                     title={drift.title}
                   >
                     {drift.label}
@@ -1341,7 +1351,7 @@ export default function IntentWorkbench({
               </p>
             )}
             {(priorLabel || r.stale) && (
-              <span className="mt-0.5 block text-[11px] text-[hsl(var(--muted-foreground))]">
+              <span className="mt-0.5 block text-xs text-[hsl(var(--muted-foreground))]">
                 {priorLabel}
                 {r.stale ? `${priorLabel ? ' · ' : ''}stale rating` : ''}
               </span>
@@ -1365,7 +1375,7 @@ export default function IntentWorkbench({
     <>
         <button
           onClick={() => togglePin(row, 'in')}
-          className={`px-1.5 py-0.5 rounded text-[11px] font-medium border ${
+          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
             row.pinned === 'in'
               ? 'bg-emerald-600 text-white border-emerald-600'
               : 'border-[hsl(var(--border))] text-emerald-700 hover:bg-emerald-50'
@@ -1376,7 +1386,7 @@ export default function IntentWorkbench({
         </button>
         <button
           onClick={() => togglePin(row, 'out')}
-          className={`px-1.5 py-0.5 rounded text-[11px] font-medium border ${
+          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
             row.pinned === 'out'
               ? 'bg-rose-600 text-white border-rose-600'
               : 'border-[hsl(var(--border))] text-rose-700 hover:bg-rose-50'
@@ -1400,14 +1410,14 @@ export default function IntentWorkbench({
         <div className="shrink-0 px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
           <button
             onClick={() => setConvo(null)}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[11px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
             title="Back to the list"
           >
             <Minimize2 className="w-3.5 h-3.5" /> Exit conversation
           </button>
           {ratingRow && checkout === null && (
             <span className="flex items-center gap-1 shrink-0">
-              <span className="mr-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+              <span className="mr-1 text-xs text-[hsl(var(--muted-foreground))]">
                 label this question:
               </span>
               {pinButtons(ratingRow)}
@@ -1419,7 +1429,7 @@ export default function IntentWorkbench({
           // thread scrolls inside the pane under the sticky Exit header.
           <ConversationThread rows={rows} current={boardRow} isNirvana={isNirvana} />
         ) : (
-          <p className="p-4 text-xs text-[hsl(var(--muted-foreground))]">
+          <p className="p-4 text-sm text-[hsl(var(--muted-foreground))]">
             The conversation for this question is not available.
           </p>
         )}
@@ -1430,7 +1440,7 @@ export default function IntentWorkbench({
   const applied = !!data && !specDirty() && !pinsDirty && (data?.staleCount ?? 0) === 0;
 
   return (
-    <div className="flex flex-col gap-3 flex-1 min-h-0">
+    <div className="flex flex-col gap-2 flex-1 min-h-0">
       {/* TOP BAR — leave the workbench; unsaved drafts are discarded. */}
       <WorkbenchTopBar
         title={`${isEdit ? 'Edit intent' : 'New Intent'}${title.trim() ? ` — ${title.trim()}` : ''}`}
@@ -1447,7 +1457,7 @@ export default function IntentWorkbench({
         {/* LEFT — the spec: definition, labeled examples, actions, history */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
           <div className="p-4 space-y-3">
-            <label className="block text-xs">
+            <label className="block text-sm">
               <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                 Title <span className="font-normal normal-case">(auto-named on save unless you type one)</span>
               </span>
@@ -1468,24 +1478,188 @@ export default function IntentWorkbench({
                 setSuggestDismissed(false);
               }}
               placeholder="e.g. asks the chatbot to write a thesis statement or conclusion for them"
-              action={
-                <button
-                  onClick={(e) => {
-                    e.preventDefault(); // keep the label from focusing the textarea
-                    setPromptPreviewOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium normal-case text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-                  title="See the exact prompt the classifier receives for this intent"
-                >
-                  <Eye className="w-3 h-3" /> Prompt preview
-                </button>
-              }
             />
 
-            {/* Create mode: taxonomy suggestions fuzzy-matched as they type. */}
+            {refineReasoning && (
+              <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
+                <details className="text-xs text-[hsl(var(--muted-foreground))] px-2 py-1.5">
+                  <summary className="cursor-pointer font-medium text-[hsl(var(--foreground))]">
+                    Definition proposed from your labels — review, then Save or Apply
+                  </summary>
+                  <p className="mt-1 whitespace-pre-wrap">{refineReasoning}</p>
+                </details>
+                {/* Close the loop: the definition now carries the labels, so
+                    the labels can go. Retiring them re-rates against the
+                    definition ALONE — the only real test that it absorbed them.
+                    A just-refined (unsaved) definition is folded in first. */}
+                {pinCount > 0 && checkout === null && (
+                  <div className="flex items-center justify-between gap-2 border-t border-[hsl(var(--border))] px-2 py-1.5">
+                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                      {specDirty()
+                        ? `Retire the ${pinCount} label(s) — the proposed definition is saved first.`
+                        : `The definition carries these ${pinCount} label(s) now — retire them to test it alone.`}
+                    </p>
+                    <button
+                      onClick={retireLabels}
+                      disabled={retiring || busy || saving}
+                      title="Drop the labels; the next Apply re-rates the log against the definition alone (the proposed definition is saved first)"
+                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                    >
+                      {retiring ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                      Retire labels
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Labeled by you — the questions you reviewed and marked in/out.
+                These ARE the Included/Excluded examples injected into the
+                rating prompt, so they live here with the spec. Collapsible;
+                remove with ×. */}
+            {data && (
+              <div className="space-y-2 border-t border-[hsl(var(--border))] pt-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  Labeled by you{' '}
+                  <span className="font-normal normal-case">
+                    — questions you reviewed &amp; marked, injected into the prompt
+                  </span>
+                </p>
+                {(
+                  [
+                    { key: 'in' as const, label: 'Included', rows: pinnedIn, open: incOpen, setOpen: setIncOpen, head: 'text-emerald-700 bg-emerald-50/60 hover:bg-emerald-50' },
+                    { key: 'out' as const, label: 'Excluded', rows: pinnedOut, open: excOpen, setOpen: setExcOpen, head: 'text-rose-700 bg-rose-50/60 hover:bg-rose-50' },
+                  ]
+                ).map((g) => (
+                  <div key={g.key} className="rounded border border-[hsl(var(--border))] overflow-hidden">
+                    <button
+                      onClick={() => g.setOpen((v) => !v)}
+                      className={`w-full flex items-center justify-between px-2 py-1 text-xs font-medium ${g.head}`}
+                    >
+                      <span>
+                        {g.label} · {g.rows.length}
+                      </span>
+                      {g.open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                    </button>
+                    {g.open &&
+                      (g.rows.length > 0 ? (
+                        <ul className="max-h-40 overflow-y-auto divide-y divide-[hsl(var(--border))]/60 border-t border-[hsl(var(--border))]">
+                          {g.rows.map((r) => (
+                            <li key={r.messageId} className="flex items-start gap-1.5 px-2 py-1.5 text-xs">
+                              <span className="min-w-0 flex-1 text-[hsl(var(--foreground))]">
+                                {(() => {
+                                  const c = r.queryText.replace(/\s+/g, ' ').trim();
+                                  return c.length > 120 ? `${c.slice(0, 120)}…` : c;
+                                })()}
+                              </span>
+                              <button
+                                onClick={() => togglePin(r, g.key)}
+                                title="Remove this example"
+                                className="shrink-0 text-[hsl(var(--muted-foreground))] hover:text-red-600"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="px-2 py-1.5 text-xs text-[hsl(var(--muted-foreground))] border-t border-[hsl(var(--border))]">
+                          None yet — pin questions in “Needs decision”.
+                        </p>
+                      ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* actions — Apply (rate silently, nothing registered) · Save
+                (register: version + live intent) · Update from labels */}
+            <div className="space-y-2 border-t border-[hsl(var(--border))] pt-3">
+              {/* "Applied" = the shown ratings exactly reflect the current
+                  definition + labels. Apply is pointless then; Save is the
+                  next step. Anything dirty flips the two. */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={save}
+                  disabled={saving || busy || !definition.trim() || !applied}
+                  title={
+                    !data
+                      ? 'Apply first — Save registers the applied result as a version'
+                      : specDirty()
+                        ? 'Definition changed — Apply it before saving'
+                        : pinsDirty || (data?.staleCount ?? 0) > 0
+                          ? 'Labels changed — Apply to re-rate, then Save'
+                          : isEdit || draftIdRef.current === null
+                            ? 'Save a version of the applied state (definition + your in/out labels)'
+                            : 'Register this intent — record v1 with the applied state'
+                  }
+                  className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SaveIcon className="w-3.5 h-3.5" />}
+                  Save
+                </button>
+                <button
+                  onClick={() => apply()}
+                  disabled={busy || saving || !definition.trim() || !openaiConfigured || applied}
+                  title={
+                    !openaiConfigured
+                      ? 'OPENAI_API_KEY is not configured'
+                      : applied
+                        ? 'Up to date — change the definition or labels to re-apply'
+                        : 'Rate every question in the log against this definition (nothing is registered until Save)'
+                  }
+                  className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-sm font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                >
+                  {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                  Apply
+                </button>
+                <button
+                  onClick={refineFromLabels}
+                  disabled={
+                    refining || busy || saving || intentId === null ||
+                    pinnedIn.length + pinnedOut.length === 0 || !openaiConfigured
+                  }
+                  title={
+                    intentId === null || pinnedIn.length + pinnedOut.length === 0
+                      ? 'Label at least one question in/out first'
+                      : 'Rewrite the definition so it carries your labels by itself (stronger model; result is a draft to review)'
+                  }
+                  className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-sm font-medium border border-[hsl(var(--primary))]/50 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
+                >
+                  {refining ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                  Update from labels
+                </button>
+              </div>
+              {busy && progress && (
+                <div className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+                  <span className="shrink-0">Rating the log</span>
+                  <div className="flex-1 h-1.5 rounded bg-[hsl(var(--muted))] overflow-hidden">
+                    <div
+                      className="h-full bg-[hsl(var(--primary))] transition-all"
+                      style={{
+                        width: `${progress.total ? Math.round((progress.rated / progress.total) * 100) : 0}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="shrink-0 tabular-nums">
+                    {progress.rated}/{progress.total}
+                  </span>
+                </div>
+              )}
+              {error && (
+                <p className="flex items-center gap-1 text-sm text-red-600">
+                  <AlertTriangle className="w-3.5 h-3.5" /> {error}
+                </p>
+              )}
+            </div>
+
+            {/* Create mode: taxonomy suggestions fuzzy-matched as they type.
+                Rendered BELOW the actions so the Save/Apply row stays put as
+                suggestions appear/disappear. Each row shows the Type on top and
+                the title below (two rows); the description reveals on hover. */}
             {!isEdit && !suggestDismissed && jelsonMatches.length > 0 && (
               <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
-                <div className="flex items-center justify-between px-2 py-1 text-[11px] text-[hsl(var(--muted-foreground))]">
+                <div className="flex items-center justify-between px-2 py-1 text-xs text-[hsl(var(--muted-foreground))]">
                   <span className="inline-flex items-center gap-1 font-medium">
                     <Wand2 className="w-3 h-3" /> Suggested starter sets
                   </span>
@@ -1505,29 +1679,29 @@ export default function IntentWorkbench({
                     return (
                       <li key={suggestion.code}>
                         <div className="flex items-center gap-1 pr-2 hover:bg-[hsl(var(--muted))]">
-                          <button
-                            onClick={() => applySuggestion(suggestion)}
-                            className="flex-1 min-w-0 text-left px-2 py-1.5 flex items-start gap-2"
-                            title={`${suggestion.code} · ${suggestion.description}${prepared ? ' — prepared, results load instantly' : ''}`}
-                          >
-                            <span className="mt-0.5 shrink-0 rounded bg-[hsl(var(--background))] border border-[hsl(var(--border))] px-1 text-[10px] font-mono text-[hsl(var(--muted-foreground))]">
-                              {suggestion.typeLabel}
-                            </span>
-                            <span className="min-w-0">
-                              <span className="flex items-center gap-1.5 text-xs font-medium">
-                                <span className="truncate">{suggestion.label}</span>
-                                {prepared && (
-                                  <span
-                                    className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500"
-                                    title="Prepared — results load instantly"
-                                  />
-                                )}
-                              </span>
-                              <span className="block text-[11px] text-[hsl(var(--muted-foreground))] line-clamp-1">
+                          {/* Type on top, title below; description on hover. */}
+                          <HoverTip
+                            content={
+                              <p className="text-sm leading-relaxed text-[hsl(var(--foreground))]">
                                 {suggestion.description}
+                              </p>
+                            }
+                          >
+                            <button
+                              onClick={() => applySuggestion(suggestion)}
+                              className="w-full min-w-0 text-left px-2 py-1.5"
+                              title={
+                                prepared
+                                  ? `${suggestion.code} — prepared, results load instantly`
+                                  : suggestion.code
+                              }
+                            >
+                              <span className="block text-xs font-mono uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                                {suggestion.typeLabel}
                               </span>
-                            </span>
-                          </button>
+                              <span className="block truncate text-sm font-medium">{suggestion.label}</span>
+                            </button>
+                          </HoverTip>
                           <button
                             onClick={() => applySuggestion(suggestion)}
                             disabled={busy || saving}
@@ -1536,7 +1710,7 @@ export default function IntentWorkbench({
                                 ? 'Apply — its questions appear immediately (already rated)'
                                 : 'Apply — rate the log against this set and show its questions'
                             }
-                            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[10px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50"
+                            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50"
                           >
                             <Search className="w-3 h-3" /> Apply
                           </button>
@@ -1545,184 +1719,11 @@ export default function IntentWorkbench({
                     );
                   })}
                 </ul>
-                <p className="px-2 pb-1 text-[10px] text-[hsl(var(--muted-foreground))]">
-                  Apply a set — its matching questions appear immediately (green dot = pre-rated, no
-                  model call).
+                <p className="px-2 pb-1 text-xs text-[hsl(var(--muted-foreground))]">
+                  Apply a set — its matching questions appear immediately.
                 </p>
               </div>
             )}
-            {refineReasoning && (
-              <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
-                <details className="text-[11px] text-[hsl(var(--muted-foreground))] px-2 py-1.5">
-                  <summary className="cursor-pointer font-medium text-[hsl(var(--foreground))]">
-                    Definition proposed from your labels — review, then Save or Apply
-                  </summary>
-                  <p className="mt-1 whitespace-pre-wrap">{refineReasoning}</p>
-                </details>
-                {/* Close the loop: the definition now carries the labels, so
-                    the labels can go. Retiring them re-rates against the
-                    definition ALONE — the only real test that it absorbed them.
-                    A just-refined (unsaved) definition is folded in first. */}
-                {pinCount > 0 && checkout === null && (
-                  <div className="flex items-center justify-between gap-2 border-t border-[hsl(var(--border))] px-2 py-1.5">
-                    <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                      {specDirty()
-                        ? `Retire the ${pinCount} label(s) — the proposed definition is saved first.`
-                        : `The definition carries these ${pinCount} label(s) now — retire them to test it alone.`}
-                    </p>
-                    <button
-                      onClick={retireLabels}
-                      disabled={retiring || busy || saving}
-                      title="Drop the labels; the next Apply re-rates the log against the definition alone (the proposed definition is saved first)"
-                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-                    >
-                      {retiring ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                      Retire labels
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Labeled by you — the questions you reviewed and marked in/out.
-                These ARE the Included/Excluded examples injected into the
-                rating prompt, so they live here with the spec. Collapsible;
-                remove with ×. */}
-            {data && (
-              <div className="space-y-2 border-t border-[hsl(var(--border))] pt-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  Labeled by you{' '}
-                  <span className="font-normal normal-case">
-                    — questions you reviewed &amp; marked, injected into the prompt
-                  </span>
-                </p>
-                {(
-                  [
-                    { key: 'in' as const, label: 'Included', rows: pinnedIn, open: incOpen, setOpen: setIncOpen, head: 'text-emerald-700 bg-emerald-50/60 hover:bg-emerald-50' },
-                    { key: 'out' as const, label: 'Excluded', rows: pinnedOut, open: excOpen, setOpen: setExcOpen, head: 'text-rose-700 bg-rose-50/60 hover:bg-rose-50' },
-                  ]
-                ).map((g) => (
-                  <div key={g.key} className="rounded border border-[hsl(var(--border))] overflow-hidden">
-                    <button
-                      onClick={() => g.setOpen((v) => !v)}
-                      className={`w-full flex items-center justify-between px-2 py-1 text-[11px] font-medium ${g.head}`}
-                    >
-                      <span>
-                        {g.label} · {g.rows.length}
-                      </span>
-                      {g.open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                    </button>
-                    {g.open &&
-                      (g.rows.length > 0 ? (
-                        <ul className="max-h-40 overflow-y-auto divide-y divide-[hsl(var(--border))]/60 border-t border-[hsl(var(--border))]">
-                          {g.rows.map((r) => (
-                            <li key={r.messageId} className="flex items-start gap-1.5 px-2 py-1.5 text-[11px]">
-                              <span className="min-w-0 flex-1 text-[hsl(var(--foreground))]">
-                                {(() => {
-                                  const c = r.queryText.replace(/\s+/g, ' ').trim();
-                                  return c.length > 120 ? `${c.slice(0, 120)}…` : c;
-                                })()}
-                              </span>
-                              <button
-                                onClick={() => togglePin(r, g.key)}
-                                title="Remove this example"
-                                className="shrink-0 text-[hsl(var(--muted-foreground))] hover:text-red-600"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="px-2 py-1.5 text-[11px] text-[hsl(var(--muted-foreground))] border-t border-[hsl(var(--border))]">
-                          None yet — pin questions in “Needs decision”.
-                        </p>
-                      ))}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* actions — Apply (rate silently, nothing registered) · Save
-                (register: version + live intent) · Update from labels */}
-            <div className="space-y-2 border-t border-[hsl(var(--border))] pt-3">
-              {/* "Applied" = the shown ratings exactly reflect the current
-                  definition + labels. Apply is pointless then; Save is the
-                  next step. Anything dirty flips the two. */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={save}
-                  disabled={saving || busy || !definition.trim() || !applied}
-                  title={
-                    !data
-                      ? 'Apply first — Save registers the applied result as a version'
-                      : specDirty()
-                        ? 'Definition changed — Apply it before saving'
-                        : pinsDirty || (data?.staleCount ?? 0) > 0
-                          ? 'Labels changed — Apply to re-rate, then Save'
-                          : isEdit || draftIdRef.current === null
-                            ? 'Save a version of the applied state (definition + your in/out labels)'
-                            : 'Register this intent — record v1 with the applied state'
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-                >
-                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SaveIcon className="w-3.5 h-3.5" />}
-                  Save
-                </button>
-                <button
-                  onClick={() => apply()}
-                  disabled={busy || saving || !definition.trim() || !openaiConfigured || applied}
-                  title={
-                    !openaiConfigured
-                      ? 'OPENAI_API_KEY is not configured'
-                      : applied
-                        ? 'Up to date — change the definition or labels to re-apply'
-                        : 'Rate every question in the log against this definition (nothing is registered until Save)'
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                >
-                  {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                  Apply
-                </button>
-                <button
-                  onClick={refineFromLabels}
-                  disabled={
-                    refining || busy || saving || intentId === null ||
-                    pinnedIn.length + pinnedOut.length === 0 || !openaiConfigured
-                  }
-                  title={
-                    intentId === null || pinnedIn.length + pinnedOut.length === 0
-                      ? 'Label at least one question in/out first'
-                      : 'Rewrite the definition so it carries your labels by itself (stronger model; result is a draft to review)'
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-[hsl(var(--primary))]/50 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
-                >
-                  {refining ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-                  Update from labels
-                </button>
-              </div>
-              {busy && progress && (
-                <div className="flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                  <span className="shrink-0">Rating the log</span>
-                  <div className="flex-1 h-1.5 rounded bg-[hsl(var(--muted))] overflow-hidden">
-                    <div
-                      className="h-full bg-[hsl(var(--primary))] transition-all"
-                      style={{
-                        width: `${progress.total ? Math.round((progress.rated / progress.total) * 100) : 0}%`,
-                      }}
-                    />
-                  </div>
-                  <span className="shrink-0 tabular-nums">
-                    {progress.rated}/{progress.total}
-                  </span>
-                </div>
-              )}
-              {error && (
-                <p className="flex items-center gap-1 text-xs text-red-600">
-                  <AlertTriangle className="w-3.5 h-3.5" /> {error}
-                </p>
-              )}
-            </div>
 
             {/* History — one line per saved version of THIS intent. Clicking
                 a version CHECKS IT OUT (title/definition/labels/ratings load
@@ -1731,7 +1732,7 @@ export default function IntentWorkbench({
             {versions && versions.length > 0 && (
               <div className="space-y-1.5 border-t border-[hsl(var(--border))] pt-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                     History
                     {checkout !== null && (
                       <span className="ml-1.5 normal-case font-normal text-amber-700">
@@ -1751,7 +1752,7 @@ export default function IntentWorkbench({
                       onClick={revertToCheckout}
                       disabled={busy || saving}
                       title="Make this version the live one and delete the later steps (asks first)"
-                      className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-[10px] font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
+                      className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
                     >
                       <RotateCcw className="w-3 h-3" /> Revert to{' '}
                       {(() => {
@@ -1772,7 +1773,7 @@ export default function IntentWorkbench({
                         {g.major ? (
                           versionEntry(g.major, false)
                         ) : (
-                          <p className="px-1 text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+                          <p className="px-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
                             Draft steps — not saved yet
                           </p>
                         )}
@@ -1780,7 +1781,7 @@ export default function IntentWorkbench({
                           <div className="ml-3 border-l border-[hsl(var(--border))] pl-2 space-y-1">
                             <button
                               onClick={() => setGroupToggles((t) => ({ ...t, [g.key]: !open }))}
-                              className="inline-flex items-center gap-1 text-[10px] font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
                               title="Applies and label changes on top of this version"
                             >
                               {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -1803,7 +1804,7 @@ export default function IntentWorkbench({
                 <button
                   onClick={archive}
                   disabled={busy}
-                  className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline disabled:opacity-50"
+                  className="inline-flex items-center gap-1 text-sm text-red-600 hover:underline disabled:opacity-50"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Archive intent
                 </button>
@@ -1827,7 +1828,7 @@ export default function IntentWorkbench({
               <>
                 <div className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
                   <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/60 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <span>In this intent · {inThisIntent.length}</span>
                       {baseline && (
                         <span
@@ -1859,7 +1860,7 @@ export default function IntentWorkbench({
                               ? 'Sort — captures closest to your IN pins come first'
                               : 'Sort'
                         }
-                        className="text-[10px] border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                        className="text-xs border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
                       >
                         <option value="out-like">Most out-like first</option>
                         <option value="in-like">Most in-like first</option>
@@ -1871,7 +1872,7 @@ export default function IntentWorkbench({
                   <div className="px-3 py-1.5 space-y-1.5">
                     <PaneSearch value={inSearch} onChange={setInSearch} />
                     {data.overlaps.length > 0 && (
-                      <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 flex items-start gap-1.5">
+                      <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800 flex items-start gap-1.5">
                         <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                         <span>
                           Overlaps:{' '}
@@ -1895,7 +1896,7 @@ export default function IntentWorkbench({
                     <div className="border-b border-emerald-200 bg-emerald-50/40">
                       <button
                         onClick={() => setNewOpen((v) => !v)}
-                        className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-semibold text-emerald-700"
+                        className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-semibold text-emerald-700"
                         title={`Not in this intent at ${diffBaseLabel} — entered since; expand to review`}
                       >
                         <span>
@@ -1918,7 +1919,7 @@ export default function IntentWorkbench({
                     <div className="border-b border-rose-200 bg-rose-50/40">
                       <button
                         onClick={() => setLeftOpen((v) => !v)}
-                        className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-semibold text-rose-700"
+                        className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-semibold text-rose-700"
                         title={`In this intent at ${diffBaseLabel}, not anymore — expand to review`}
                       >
                         <span>
@@ -1946,7 +1947,7 @@ export default function IntentWorkbench({
                         {sorted.map((r) => renderRow(r, 'in'))}
                       </ul>
                     ) : (
-                      <p className="p-4 text-xs text-[hsl(var(--muted-foreground))]">
+                      <p className="p-4 text-sm text-[hsl(var(--muted-foreground))]">
                         {inSearch
                           ? 'No matching question.'
                           : busy
@@ -1976,7 +1977,7 @@ export default function IntentWorkbench({
               <>
                 <div className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
                   <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                       Needs decision · {needsDecision.length}
                     </span>
                     <span className="flex items-center gap-1 shrink-0">
@@ -1993,7 +1994,7 @@ export default function IntentWorkbench({
                               ? 'Sort — closest to your OUT pins first, closest to your IN pins last'
                               : 'Sort'
                         }
-                        className="text-[10px] border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] normal-case font-normal"
+                        className="text-xs border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] normal-case font-normal"
                       >
                         <option value="in-like">Most in-like first</option>
                         <option value="out-like">Most out-like first</option>
@@ -2015,7 +2016,7 @@ export default function IntentWorkbench({
                         <button
                           key={t.key}
                           onClick={() => setNdFilter(t.key)}
-                          className={`px-2 py-1 text-[10px] font-medium whitespace-nowrap ${
+                          className={`px-2 py-1 text-xs font-medium whitespace-nowrap ${
                             i > 0 ? 'border-l border-[hsl(var(--border))]' : ''
                           } ${ndFilter === t.key ? t.on : `${t.off} hover:bg-[hsl(var(--muted))]/50`}`}
                           title={
@@ -2041,7 +2042,7 @@ export default function IntentWorkbench({
                         {sorted.map((r) => renderRow(r, 'nd'))}
                       </ul>
                     ) : (
-                      <p className="p-4 text-xs text-[hsl(var(--muted-foreground))]">
+                      <p className="p-4 text-sm text-[hsl(var(--muted-foreground))]">
                         {ndSearch
                           ? 'No matching question.'
                           : busy
@@ -2059,55 +2060,6 @@ export default function IntentWorkbench({
         </div>
       </div>
 
-      {/* PROMPT PREVIEW — the exact classifier input for this intent. */}
-      {promptPreviewOpen && promptPreview && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setPromptPreviewOpen(false)}
-        >
-          <div
-            className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="shrink-0 px-4 py-3 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold flex items-center gap-1.5">
-                <Eye className="w-4 h-4" /> Prompt preview — what the classifier receives
-              </h2>
-              <button
-                onClick={() => setPromptPreviewOpen(false)}
-                className="p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                aria-label="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 text-xs">
-              <section>
-                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  System prompt — shared by every question in a run (prompt-cached)
-                </p>
-                <pre className="whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 font-mono text-[11px] leading-relaxed">
-                  {promptPreview.system}
-                </pre>
-              </section>
-              <section>
-                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  User message — one per question (placeholders shown)
-                </p>
-                <pre className="whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 font-mono text-[11px] leading-relaxed">
-                  {promptPreview.user}
-                </pre>
-              </section>
-              <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                A rating run sends one call per question: this system prompt (also covering the other
-                stale intents in the same run) + that question&apos;s user message. Included/Excluded
-                carry <strong>every</strong> label you have made, newest first — exactly as shown. The
-                model answers in JSON: a ≤10-word rationale, then a rating, per intent.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -2121,7 +2073,7 @@ function PaneSearch({ value, onChange }: { value: string; onChange: (v: string) 
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="Search query text…"
-        className="w-full pl-7 pr-7 py-1 text-xs border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+        className="w-full pl-7 pr-7 py-1 text-sm border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
       />
       {value && (
         <button

@@ -169,9 +169,9 @@ export const DEFAULT_SCORE_CONFIG: ScoreConfig = {
     {
       key: 'All',
       letter: 'A',
-      label: 'All',
+      label: 'Drafting',
       description:
-        'Spanning all three processes at once — generating a whole essay or a portion, or reworking ChatGPT-generated text.',
+        'Generating a full essay or large portions of one — writing introductions, body sections, and conclusions, or reworking AI-generated text.',
       subtypes: [
         {
           code: 'AL01',

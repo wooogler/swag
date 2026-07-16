@@ -215,14 +215,38 @@ type StarterGroup = {
 };
 type StarterCounts = { perSet: Map<number, number>; perType: Map<string, number> };
 
+/** A starter-tree row label. The row stays a single tight line; its description
+ * (Type or Sub type) is hidden and surfaces as a right-hand tooltip on hover, so
+ * the tree reads as structure rather than a wall of text. */
+function RowLabel({
+  description,
+  children,
+}: {
+  description?: string;
+  children: React.ReactNode;
+}) {
+  const desc = description?.trim();
+  if (!desc) return <div className="min-w-0 flex-1">{children}</div>;
+  return (
+    <HoverReveal
+      placement="right"
+      className="min-w-0 flex-1"
+      content={<p className="text-sm leading-relaxed text-[hsl(var(--foreground))]">{desc}</p>}
+    >
+      {children}
+    </HoverReveal>
+  );
+}
+
 /**
- * The pre-built starter-set browse tree: Type headers, each with its sub-type
- * sets, showing the clearly-in count and filtering the question list on click
- * (setSelection → kind:'starter'). SCORE also renders the activation affordances
- * (Add a set/Type as a live intent, Added/Adding chips). The BASELINE reuses the
- * SAME tree with `showActivation={false}`, so a "Search" (starter set) just shows
- * its matching questions — Type + Sub type + count, no workbench. Single source
- * of truth for both conditions.
+ * The pre-built starter-set browse tree: Type headers, each an accordion over
+ * its sub-type sets (a chevron collapses the children; the sub-types sit under a
+ * guide line so the Type→Sub type dependency is visible). Clicking a Type or set
+ * filters the question list to its clearly-in count (setSelection → kind:'starter').
+ * SCORE also renders the activation affordances (Add a set/Type as a live intent,
+ * Added/Adding chips). The BASELINE reuses the SAME tree with `showActivation={false}`,
+ * so a "Search" (starter set) just shows its matching questions — Type + Sub type
+ * + count, no workbench. Single source of truth for both conditions.
  */
 function StarterSetTree({
   groups,
@@ -245,6 +269,17 @@ function StarterSetTree({
   activateType?: (g: StarterGroup) => void;
   activateStarterSet?: (s: StarterGroup['sets'][number]) => void;
 }) {
+  // Accordion: every Type starts expanded; the chevron collapses one to hide its
+  // sub-types. We track the collapsed set (empty = all open) so the default view
+  // shows the full tree.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   return (
     <div className="pb-1">
       {groups.map((g) => {
@@ -255,48 +290,45 @@ function StarterSetTree({
         const groupIds = g.typeTemplateId !== null ? [g.typeTemplateId] : preparedSetIds;
         const groupKey = `type:${g.typeKey}`;
         const groupActive = selection.kind === 'starter' && selection.key === groupKey;
+        const open = !collapsed.has(g.typeKey);
         return (
           <div key={g.typeKey}>
-            {/* Type header — click to browse; hover Add turns the whole Type
-                into ONE intent (SCORE only). */}
+            {/* Type header — the chevron expands/collapses its sub-types; the
+                label browses (SCORE hover Add turns the whole Type into ONE
+                intent). The Type description shows as a right-hand tooltip. */}
             <div
               className={`group flex items-center gap-1 pr-3 ${
                 groupActive ? 'bg-[hsl(var(--muted))]' : 'bg-[hsl(var(--muted))]/30 hover:bg-[hsl(var(--muted))]/60'
               }`}
             >
               <button
-                onClick={() =>
-                  groupIds.length > 0 &&
-                  setSelection(
-                    groupActive ? { kind: 'all' } : { kind: 'starter', key: groupKey, ids: groupIds, label: g.typeLabel }
-                  )
-                }
-                disabled={groupIds.length === 0}
-                title={
-                  groupIds.length > 0
-                    ? `${g.typeDescription} — click to see this Type's questions`
-                    : `${g.typeDescription} — Run all first to rate these sets`
-                }
-                className={`min-w-0 flex-1 text-left px-3 py-1 flex items-start gap-2 ${
-                  groupIds.length === 0 ? 'cursor-default' : ''
-                }`}
+                onClick={() => toggle(g.typeKey)}
+                className="shrink-0 self-stretch pl-2 pr-0.5 flex items-center text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                title={open ? 'Collapse' : 'Expand'}
+                aria-expanded={open}
+                aria-label={open ? `Collapse ${g.typeLabel}` : `Expand ${g.typeLabel}`}
               >
-                <span className={`mt-1 w-2 h-2 shrink-0 rounded-full ${TYPE_DOT[g.typeKey] ?? 'bg-gray-400'}`} />
-                <span className="min-w-0">
-                  <span className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${groupActive ? 'font-semibold text-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                    {g.typeLabel} ({g.sets.length})
-                    {showActivation && g.typeTemplateId !== null && (
-                      <span
-                        className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500"
-                        title="Prepared — the one-intent Add is instant"
-                      />
-                    )}
-                  </span>
-                  <span className="block text-[10px] normal-case text-[hsl(var(--muted-foreground))] truncate">
-                    {g.typeDescription}
-                  </span>
-                </span>
+                <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
               </button>
+              <RowLabel description={g.typeDescription}>
+                <button
+                  onClick={() =>
+                    groupIds.length > 0 &&
+                    setSelection(
+                      groupActive ? { kind: 'all' } : { kind: 'starter', key: groupKey, ids: groupIds, label: g.typeLabel }
+                    )
+                  }
+                  disabled={groupIds.length === 0}
+                  className={`w-full min-w-0 text-left py-1 pr-1 flex items-center gap-2 ${
+                    groupIds.length === 0 ? 'cursor-default' : ''
+                  }`}
+                >
+                  <span className={`w-2 h-2 shrink-0 rounded-full ${TYPE_DOT[g.typeKey] ?? 'bg-gray-400'}`} />
+                  <span className={`min-w-0 truncate text-xs uppercase tracking-wide ${groupActive ? 'font-semibold text-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
+                    {g.typeLabel} ({g.sets.length})
+                  </span>
+                </button>
+              </RowLabel>
               {showActivation &&
                 (g.typeActive ? (
                   <span
@@ -324,81 +356,78 @@ function StarterSetTree({
                 </span>
               )}
             </div>
-            {g.sets.map((s) => {
-              const setKey = `set:${s.code}`;
-              const setActive = selection.kind === 'starter' && selection.key === setKey;
-              const browsable = s.templateId !== null;
-              return (
-                <div
-                  key={s.code}
-                  className={`group flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[hsl(var(--border))]/40 ${
-                    setActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
-                  }`}
-                >
-                  {/* Click the set → browse its clearly-in questions (prepared
-                      sets only — unprepared have no ratings). */}
-                  <button
-                    onClick={() =>
-                      browsable &&
-                      setSelection(
-                        setActive
-                          ? { kind: 'all' }
-                          : { kind: 'starter', key: setKey, ids: [s.templateId as number], label: s.title }
-                      )
-                    }
-                    title={
-                      browsable
-                        ? `${s.definition} — click to see its questions`
-                        : `${s.definition} — Run all first to rate this set`
-                    }
-                    className={`min-w-0 flex-1 text-left ${browsable ? '' : 'cursor-default'}`}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <span className={`text-xs truncate ${setActive ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
-                        {s.title}
-                      </span>
-                      {showActivation && browsable && (
-                        <span
-                          className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500"
-                          title="Prepared — rated; click to browse, Add is instant"
-                        />
+            {/* Sub-types — the Type's children, indented under a vertical guide
+                line with a per-row connector so the dependency reads at a glance.
+                Collapsed away by the chevron above. */}
+            {open && (
+              <div className="ml-4 border-l border-[hsl(var(--border))]">
+                {g.sets.map((s) => {
+                  const setKey = `set:${s.code}`;
+                  const setActive = selection.kind === 'starter' && selection.key === setKey;
+                  const browsable = s.templateId !== null;
+                  return (
+                    <div
+                      key={s.code}
+                      className={`group relative flex items-center gap-2 pl-4 pr-3 py-1.5 border-b border-[hsl(var(--border))]/40 before:content-[''] before:absolute before:left-0 before:top-1/2 before:h-px before:w-2.5 before:bg-[hsl(var(--border))] ${
+                        setActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
+                      }`}
+                    >
+                      {/* Click the set → browse its clearly-in questions (prepared
+                          sets only — unprepared have no ratings). The Sub type
+                          description shows as a right-hand tooltip. */}
+                      <RowLabel description={s.desc}>
+                        <button
+                          onClick={() =>
+                            browsable &&
+                            setSelection(
+                              setActive
+                                ? { kind: 'all' }
+                                : { kind: 'starter', key: setKey, ids: [s.templateId as number], label: s.title }
+                            )
+                          }
+                          disabled={!browsable}
+                          className={`w-full min-w-0 text-left ${browsable ? '' : 'cursor-default'}`}
+                        >
+                          <span className={`block text-sm truncate ${setActive ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
+                            {s.title}
+                          </span>
+                        </button>
+                      </RowLabel>
+                      {showActivation &&
+                        (s.active ? (
+                          <span
+                            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
+                            title="Already a live intent — the library keeps this set for later re-use"
+                          >
+                            <Check className="w-3 h-3" /> Added
+                          </span>
+                        ) : activatingCode === s.code ? (
+                          <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+                            <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
+                          </span>
+                        ) : libraryBusy ? null : (
+                          <button
+                            onClick={() => activateStarterSet?.(s)}
+                            className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[11px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+                            title={
+                              s.templateId !== null
+                                ? 'Activate — a copy of the prepared set becomes a live intent, instantly'
+                                : 'Add as an intent and rate the log against it'
+                            }
+                          >
+                            <Plus className="w-3 h-3" /> Add
+                          </button>
+                        ))}
+                      {browsable && (
+                        <span className="shrink-0">
+                          <Badge n={counts.perSet.get(s.templateId as number) ?? 0} />
+                        </span>
                       )}
-                    </span>
-                    <span className="block text-[10px] text-[hsl(var(--muted-foreground))] truncate">{s.desc}</span>
-                  </button>
-                  {showActivation &&
-                    (s.active ? (
-                      <span
-                        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
-                        title="Already a live intent — the library keeps this set for later re-use"
-                      >
-                        <Check className="w-3 h-3" /> Added
-                      </span>
-                    ) : activatingCode === s.code ? (
-                      <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
-                        <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
-                      </span>
-                    ) : libraryBusy ? null : (
-                      <button
-                        onClick={() => activateStarterSet?.(s)}
-                        className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[11px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                        title={
-                          s.templateId !== null
-                            ? 'Activate — a copy of the prepared set becomes a live intent, instantly'
-                            : 'Add as an intent and rate the log against it'
-                        }
-                      >
-                        <Plus className="w-3 h-3" /> Add
-                      </button>
-                    ))}
-                  {browsable && (
-                    <span className="shrink-0">
-                      <Badge n={counts.perSet.get(s.templateId as number) ?? 0} />
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })}
@@ -457,24 +486,46 @@ function IntentChip({
 /** Hover reveal: shows `content` in a floating panel while the trigger is
  * hovered. Positioned with `position: fixed` (via getBoundingClientRect) so it
  * escapes the intents panel's overflow clip — a CSS/absolute tooltip would be
- * cut off by the scroll container. */
-function HoverReveal({ content, children }: { content: React.ReactNode; children: React.ReactNode }) {
+ * cut off by the scroll container. `placement="right"` anchors the panel to the
+ * trigger's right edge (flipping left near the viewport border) — used by the
+ * starter tree, whose rows hide their description and reveal it sideways. */
+function HoverReveal({
+  content,
+  children,
+  placement = 'bottom',
+  className,
+}: {
+  content: React.ReactNode;
+  children: React.ReactNode;
+  placement?: 'bottom' | 'right';
+  className?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; above: boolean } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; transform?: string } | null>(null);
   return (
     <div
       ref={ref}
+      className={className}
       onMouseEnter={() => {
         const r = ref.current?.getBoundingClientRect();
         if (!r) return;
+        const width = Math.min(320, window.innerWidth * 0.8); // w-80 / max-w-[80vw]
+        if (placement === 'right') {
+          // Prefer the trigger's right; flip to its left when the panel would
+          // run off the viewport. Vertically centred on the row, clamped in.
+          const flipLeft = r.right + width + 12 > window.innerWidth;
+          const left = flipLeft ? Math.max(8, r.left - width - 6) : r.right + 6;
+          const top = Math.min(Math.max(12, r.top + r.height / 2), window.innerHeight - 12);
+          setPos({ left, top, transform: 'translateY(-50%)' });
+          return;
+        }
         // Flip above when there isn't room below (near the viewport bottom),
         // and clamp horizontally so the fixed-width panel never runs off the
         // right edge (anchors near the viewport border, e.g. the viewer's
         // Revise button).
         const above = window.innerHeight - r.bottom < 240;
-        const width = Math.min(320, window.innerWidth * 0.8); // w-80 / max-w-[80vw]
         const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
-        setPos({ left, top: above ? r.top - 6 : r.bottom + 6, above });
+        setPos({ left, top: above ? r.top - 6 : r.bottom + 6, transform: above ? 'translateY(-100%)' : undefined });
       }}
       onMouseLeave={() => setPos(null)}
     >
@@ -483,7 +534,7 @@ function HoverReveal({ content, children }: { content: React.ReactNode; children
         <div
           role="tooltip"
           className="fixed z-[60] w-80 max-w-[80vw] rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 shadow-lg pointer-events-none"
-          style={{ left: pos.left, top: pos.top, transform: pos.above ? 'translateY(-100%)' : undefined }}
+          style={{ left: pos.left, top: pos.top, transform: pos.transform }}
         >
           {content}
         </div>
@@ -1538,7 +1589,7 @@ export default function IntentBoard({
                holder); Deploy lives in the header. */
             <div className="shrink-0 border-b border-[hsl(var(--border))] px-3 py-2">
               <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   System Prompt
                 </span>
                 <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
@@ -1563,7 +1614,7 @@ export default function IntentBoard({
                 onClick={() => setBasePromptOpen((v) => !v)}
                 className="w-full text-left flex items-center justify-between gap-2"
               >
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   Base Prompt
                 </span>
                 <ChevronRight
@@ -1592,14 +1643,14 @@ export default function IntentBoard({
               are tagged and sorted first. */}
           {!isBaseline && counts.boundaryList.length > 0 && (
             <div className="border-b border-[hsl(var(--border))] bg-amber-50/60 px-3 py-2 space-y-1">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
                 <AlertTriangle className="w-3.5 h-3.5" /> Overlaps
               </div>
               {counts.boundaryList.map((b) => (
                 <button
                   key={b.key}
                   onClick={() => setSelection({ kind: 'boundary', key: b.key })}
-                  className={`w-full rounded text-left px-2 py-1.5 text-xs flex items-center justify-between gap-2 ${
+                  className={`w-full rounded text-left px-2 py-1.5 text-sm flex items-center justify-between gap-2 ${
                     selection.kind === 'boundary' && selection.key === b.key
                       ? 'bg-amber-100 font-medium'
                       : 'hover:bg-amber-100/60'
@@ -1622,12 +1673,12 @@ export default function IntentBoard({
               the baseline (shrink-0 is inert in SCORE's non-flex panel). */}
           <div className="shrink-0 px-3 pt-2 pb-1 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+              <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                 {isBaseline ? 'Searches' : 'Intents'}
               </span>
               <button
                 onClick={() => setSelection({ kind: 'all' })}
-                className={`text-[11px] px-1.5 py-0.5 rounded ${
+                className={`text-xs px-1.5 py-0.5 rounded ${
                   selection.kind === 'all' ? 'bg-[hsl(var(--muted))] font-medium' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/50'
                 }`}
               >
@@ -1636,7 +1687,7 @@ export default function IntentBoard({
             </div>
             <button
               onClick={() => (isBaseline ? setSearchMode({ kind: 'new' }) : setNewIntentOpen(true))}
-              className="inline-flex items-center gap-1 shrink-0 text-[11px] px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+              className="inline-flex items-center gap-1 shrink-0 text-xs px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
               title={isBaseline ? 'Create a new search' : 'Create a new intent'}
             >
               <Plus className="w-3 h-3" /> New
@@ -1652,7 +1703,7 @@ export default function IntentBoard({
             <div className="flex-1 min-h-0 overflow-y-auto pb-1">
               {savedSearches.length > 0 && (
                 <>
-                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  <div className="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                     Saved
                   </div>
                   <ul>
@@ -1668,7 +1719,7 @@ export default function IntentBoard({
                             }`}
                             title={s.description}
                           >
-                            <span className={`min-w-0 truncate text-xs ${active ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
+                            <span className={`min-w-0 truncate text-sm ${active ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
                               {s.description}
                             </span>
                             {openingSearchId === s.id && (
@@ -1873,15 +1924,15 @@ export default function IntentBoard({
               <div className="flex items-center hover:bg-[hsl(var(--muted))]/50">
                 <button
                   onClick={() => setArchivedOpen((o) => !o)}
-                  className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[hsl(var(--muted-foreground))]"
+                  className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]"
                 >
-                  <ChevronRight className={`w-3 h-3 transition-transform ${archivedOpen ? 'rotate-90' : ''}`} />
-                  <Archive className="w-3 h-3" /> Archived ({archivedIntents.length})
+                  <ChevronRight className={`w-3.5 h-3.5 transition-transform ${archivedOpen ? 'rotate-90' : ''}`} />
+                  <Archive className="w-3.5 h-3.5" /> Archived ({archivedIntents.length})
                 </button>
                 <button
                   onClick={() => setPurgeTarget({ intents: archivedIntents, all: true })}
                   disabled={purgeBusy}
-                  className="shrink-0 inline-flex items-center gap-1 px-2 pr-3 py-1.5 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-red-600 disabled:opacity-50"
+                  className="shrink-0 inline-flex items-center gap-1 px-2 pr-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))] hover:text-red-600 disabled:opacity-50"
                   title="Delete every archived intent permanently"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Delete all
@@ -1895,7 +1946,7 @@ export default function IntentBoard({
                       className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[hsl(var(--border))]/40"
                     >
                       <span
-                        className="text-xs truncate text-[hsl(var(--muted-foreground))]"
+                        className="text-sm truncate text-[hsl(var(--muted-foreground))]"
                         title={intent.definition}
                       >
                         {intent.title}
@@ -1963,10 +2014,10 @@ export default function IntentBoard({
                 >
                   <button
                     onClick={() => setStarterOpen((o) => !o)}
-                    className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[hsl(var(--muted-foreground))]"
+                    className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]"
                   >
-                    <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ${starterOpen ? 'rotate-90' : ''}`} />
-                    <Sparkles className="w-3 h-3 shrink-0" /> Starter sets ({starterCount})
+                    <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${starterOpen ? 'rotate-90' : ''}`} />
+                    <Sparkles className="w-3.5 h-3.5 shrink-0" /> Starter sets ({starterCount})
                   </button>
                   {preparing && runProgress ? (
                     // Run all in progress → the button slot becomes its bar.
@@ -1994,7 +2045,7 @@ export default function IntentBoard({
                         !openaiConfigured ||
                         (unpreparedCount === 0 && staleTemplateCount === 0)
                       }
-                      className="shrink-0 inline-flex items-center gap-1 px-2 pr-3 py-1.5 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
+                      className="shrink-0 inline-flex items-center gap-1 px-2 pr-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
                       title={
                         !openaiConfigured
                           ? 'OPENAI_API_KEY is not configured'
