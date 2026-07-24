@@ -1239,7 +1239,6 @@ export default function ReplayPlayer({
     }
 
     const visible = chatMessages.slice(0, visibleCount);
-    console.count('[dbg] set-visibleMessages'); // TEMP-DEBUG
     setVisibleMessages(visible);
 
     // Highlight newly added message
@@ -1261,14 +1260,7 @@ export default function ReplayPlayer({
       return;
     }
 
-    // TEMP-DEBUG: detect whether the animate EFFECT itself re-runs every render
-    console.count('[dbg] animate-effect-setup');
-    console.log('[dbg] animate-effect deps', {
-      isPlaying, speed, endTime, endTimeIsNaN: Number.isNaN(endTime), startTime, currentTime,
-    });
-
     const animate = (frameTime: number) => {
-      console.count('[dbg] animate-frame'); // TEMP-DEBUG
       if (lastFrameTimeRef.current === 0) {
         lastFrameTimeRef.current = frameTime;
       }
@@ -1313,16 +1305,13 @@ export default function ReplayPlayer({
 
   useEffect(() => {
     if (isPlaying && currentTime >= endTime) {
-      console.log('[dbg] endcheck -> setIsPlaying(false)', { currentTime, endTime }); // TEMP-DEBUG
       setIsPlaying(false);
     }
   }, [isPlaying, currentTime, endTime]);
 
   // Update content when current time changes
   useEffect(() => {
-    console.count('[dbg] effect-content'); // TEMP-DEBUG
     const content = rebuildContent(currentTime);
-    console.count('[dbg] set-editorDocument'); // TEMP-DEBUG
     setEditorDocument(content);
     const snapshot = findNearestSnapshot(currentTime);
     const snapshotTimestamp = snapshot?.timestamp ?? startTime;
@@ -1338,7 +1327,6 @@ export default function ReplayPlayer({
     const frameKey = `${snapshot?.id ?? 'none'}:${latestTypingSeq}`;
     if (frameKey !== lastReplayFrameKeyRef.current) {
       lastReplayFrameKeyRef.current = frameKey;
-      console.count('[dbg] set-baseSnapshot+typingOps'); // TEMP-DEBUG
       setReplayBaseSnapshotId(snapshot?.id ?? null);
       setReplayTypingOps(typingOpsUntilNow);
     }
@@ -1435,19 +1423,6 @@ export default function ReplayPlayer({
       const shouldResetBase =
         snapshotKey !== lastAppliedTypingSnapshotKeyRef.current ||
         isRewind;
-
-      // TEMP-DEBUG
-      console.count('[dbg] effect-replaceBlocks');
-      console.log('[dbg] replaceBlocks state', {
-        currentTime,
-        lastProcessed: lastProcessedReplayTimeRef.current,
-        isRewind,
-        shouldResetBase,
-        snapshotKey,
-        lastAppliedKey: lastAppliedTypingSnapshotKeyRef.current,
-        replayBaseSnapshotId,
-        editorDocLen: editorDocument.length,
-      });
 
       if (shouldResetBase) {
         editor.replaceBlocks(editor.document, editorDocument);
@@ -2130,7 +2105,6 @@ export default function ReplayPlayer({
     }
 
     prevVisibleReplayPasteHighlightCountRef.current = visibleCount;
-    console.count('[dbg] set-pasteHighlights'); // TEMP-DEBUG
     setVisibleReplayPasteHighlights(replayPasteHighlights.slice(0, visibleCount));
   }, [replayPasteHighlights, currentTime]);
 

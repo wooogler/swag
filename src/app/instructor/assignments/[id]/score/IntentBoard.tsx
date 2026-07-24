@@ -1572,6 +1572,17 @@ export default function IntentBoard({
             setEditIntent(null);
             router.refresh();
           }}
+          // The overlap chips' shortcut: jump straight into the overlapping
+          // intent's editor (re-keys this workbench onto it). Only while editing
+          // an existing intent — a create draft has nothing to swap away from.
+          onEditIntent={
+            editIntent
+              ? (iid) => {
+                  const target = intentById.get(iid);
+                  if (target && !target.archived) setEditIntent(target);
+                }
+              : undefined
+          }
         />
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 flex-1 min-h-0">
@@ -2212,15 +2223,15 @@ export default function IntentBoard({
         </div>
 
         {/* RIGHT — conversation viewer (read-only) */}
-        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
+        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden">
           {!selectedRow ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-8 text-[hsl(var(--muted-foreground))]">
               <MessageSquare className="w-8 h-8 mb-3 opacity-50" />
               <p className="text-sm">Select a question to view the conversation.</p>
             </div>
           ) : (
-            <div className="p-4 space-y-4">
-              <div className="space-y-1.5 text-xs text-[hsl(var(--muted-foreground))]">
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="shrink-0 px-4 pt-4 pb-2 space-y-1.5 text-xs text-[hsl(var(--muted-foreground))]">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center flex-wrap gap-1.5">
                   <span className="font-mono">
@@ -2362,6 +2373,10 @@ export default function IntentBoard({
               )}
               </div>
 
+              {/* Scrolls under the shrink-0 header above, so Exit / Full-
+                  conversation toggle stays reachable and the thread's own
+                  "Back to the question" button anchors correctly. */}
+              <div className="flex-1 min-h-0 flex flex-col">
               {convoOpen ? (
                 // Full thread — the selected version's response overrides the
                 // current turn's reply, so the styling matches the single view.
@@ -2429,6 +2444,7 @@ export default function IntentBoard({
                   renderUserContent={renderSelectedUser}
                 />
               )}
+              </div>
             </div>
           )}
         </div>

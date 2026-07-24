@@ -84,9 +84,8 @@ export async function GET(req: Request, { params }: RouteParams) {
   // Effective spec for THIS intent: live, or the checked-out version's.
   let specTitle = intent.title;
   let specDefinition = intent.definition;
-  let pinRows: { messageId: number; verdict: string; queryText: string }[] = state.pins.filter(
-    (p) => p.intentId === intentId
-  );
+  let pinRows: { messageId: number; verdict: string; queryText: string; reason?: string | null }[] =
+    state.pins.filter((p) => p.intentId === intentId);
   if (checkoutNo !== null) {
     if (!Number.isFinite(checkoutNo)) {
       return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
@@ -109,7 +108,7 @@ export async function GET(req: Request, { params }: RouteParams) {
   const titleById = new Map(state.intents.map((i) => [i.id, i.title]));
   const specHash = intentDefHash(
     specDefinition,
-    selectPromptPins(pinRows.map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText })))
+    selectPromptPins(pinRows.map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText, reason: p.reason })))
   );
   // Message dissection (Material vs Request) so the viewer can, on expand, show
   // the request(s) verbatim and collapse pasted material into a placeholder.
@@ -136,6 +135,7 @@ export async function GET(req: Request, { params }: RouteParams) {
   const byMessage = pickDisplayRatings(ratingRows, wantedHash);
 
   const pinByMessage = new Map(pinRows.map((p) => [p.messageId, p.verdict as 'in' | 'out']));
+  const reasonByMessage = new Map(pinRows.map((p) => [p.messageId, p.reason ?? null]));
   // pinRows is already in the canonical prompt order (live: newest pin first,
   // per listPins; checkout: the snapshot's stored array order). Ship that index
   // so the client can reproduce selectPromptPins EXACTLY — its own row order is
@@ -189,6 +189,8 @@ export async function GET(req: Request, { params }: RouteParams) {
       rationale: mineRow?.rationale ?? null,
       stale: !!mineRow && !mineFresh,
       pinned: pinByMessage.get(rec.messageId) ?? null,
+      /** Instructor's out-reason for this pin (out pins only; null otherwise). */
+      reason: reasonByMessage.get(rec.messageId) ?? null,
       /** Position among this intent's pins in prompt order; null when unpinned. */
       pinRank: pinRankByMessage.get(rec.messageId) ?? null,
       prior:

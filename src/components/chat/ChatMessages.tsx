@@ -406,10 +406,16 @@ export default function ChatMessages({
         </div>
       )}
 
-      {/* Floating return-to-question button — sticks to the bottom of the
-          nearest scrollport while the highlighted message is off-screen. */}
+      {/* Floating return-to-question button — sticks to the edge of the nearest
+          scrollport on the side the highlighted message went off: the TOP when
+          it is scrolled above, the BOTTOM when below, so it always points the
+          shortest way back. */}
       {autoScrollToHighlight && highlightOffscreen && (
-        <div className="sticky bottom-2 z-10 flex justify-center pointer-events-none">
+        <div
+          className={`sticky z-10 flex justify-center pointer-events-none ${
+            highlightOffscreen === 'up' ? 'top-2' : 'bottom-2'
+          }`}
+        >
           <button
             onClick={() =>
               scrollContainerRef.current

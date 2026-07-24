@@ -44,6 +44,7 @@ import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
+import { FEEDBACK_CHIPS } from '@/lib/score/feedback-chips';
 import NewIntentSuggestModal from './NewIntentSuggestModal';
 import RuleApplyPreview from './RuleApplyPreview';
 import QueryPicker from './QueryPicker';
@@ -126,42 +127,6 @@ function HoverTip({ tip, children }: { tip: string; children: React.ReactNode })
 
 /** Batch cap of the preview/apply endpoints (MAX_PREVIEW_MESSAGES mirror). */
 const APPLY_BATCH = 6;
-
-/**
- * One-click feedback starters for the five rule elements teachers reach for
- * when authoring AI-dialogue prompts (Liu et al. 2026, arXiv:2604.16738 —
- * 16 teachers, 1,479 student-AI conversations). Ordered by measured impact:
- * explicit finish lines cut the rigor gap by 0.22 DOK levels (p<.001) and
- * "no direct answers" halved AI answer-giving, yet both were among the least
- * used elements. Clicking inserts the text into the feedback box for editing.
- */
-export const FEEDBACK_CHIPS: { key: string; label: string; text: string }[] = [
-  {
-    key: 'finish_line',
-    label: 'Set a finish line',
-    text: 'Add an explicit finish line: tell the student up front what "done" looks like (e.g., two evidence-backed points), and wrap up once they reach it.',
-  },
-  {
-    key: 'no_direct_answers',
-    label: 'No direct answers',
-    text: 'Never give the final answer or write the text for the student — even when asked directly. Redirect with a hint or a question instead.',
-  },
-  {
-    key: 'short_turns',
-    label: 'Short turns, one question',
-    text: 'Keep replies to 1–2 sentences, ask exactly one question per turn, and always end with a concrete next step the student can act on.',
-  },
-  {
-    key: 'attempt_first',
-    label: 'Attempt before help',
-    text: 'Require the student to try first: no hints until they have made an attempt, then escalate help gradually.',
-  },
-  {
-    key: 'ask_evidence',
-    label: 'Ask for evidence',
-    text: 'Whenever the student makes a claim, ask them to support it with evidence from the text or a worked step.',
-  },
-];
 
 interface RuleWorkbenchProps {
   assignmentId: string;
@@ -1321,7 +1286,7 @@ export default function RuleWorkbench({
               <Sparkles className="w-3.5 h-3.5" /> Feedback
               <button
                 onClick={() => setGuideOpen((v) => !(v ?? chat.length === 0))}
-                title="What makes a strong rule — the five elements"
+                title="What makes a strong rule: the six elements"
                 className={`inline-flex items-center p-0.5 rounded hover:text-[hsl(var(--foreground))] ${
                   (guideOpen ?? chat.length === 0) ? 'text-[hsl(var(--primary))]' : ''
                 }`}
@@ -1348,36 +1313,38 @@ export default function RuleWorkbench({
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
             {(guideOpen ?? chat.length === 0) && (
               <div className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
-                {/* Rule-authoring guide — the five elements strong classroom
-                    AI-dialogue rules cover (Liu et al. 2026; see FEEDBACK_CHIPS).
-                    Auto-shown while fresh; the header ? re-opens it anytime. */}
+                {/* Rule-authoring guide: the six elements a strong rule sets,
+                    one-to-one with the feedback chips (see
+                    @/lib/score/feedback-chips). Auto-shown while fresh; the
+                    header ? re-opens it anytime. */}
                 <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 space-y-1.5">
                   <p className="text-xs font-semibold text-[hsl(var(--foreground))]">
-                    Not sure what to ask for? A strong rule covers five things:
+                    Not sure what to ask for? A strong rule usually sets these six:
                   </p>
                   <ul className="space-y-1 text-xs">
                     <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Finish line</span> — what
-                      &quot;done&quot; looks like (&quot;stop after two evidence-backed points&quot;).{' '}
-                      <span className="text-emerald-700">The single highest-impact element.</span>
+                      <span className="font-medium text-[hsl(var(--foreground))]">Role.</span> The stance
+                      the AI takes, like a coach that draws out thinking rather than an answer engine.
                     </li>
                     <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Role</span> — the stance
-                      (&quot;act as a coach, not an answer engine&quot;).
+                      <span className="font-medium text-[hsl(var(--foreground))]">No direct answers.</span>{' '}
+                      What it must not hand over, even when the student pushes for it.
                     </li>
                     <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Moves</span> — how it
-                      interacts (&quot;one question at a time; hints only after an attempt&quot;).
+                      <span className="font-medium text-[hsl(var(--foreground))]">Attempt first.</span> Have
+                      the student try before the AI steps in.
                     </li>
                     <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Load</span> — pacing
-                      (&quot;1–2 sentences; end with an actionable next step&quot; — verbose replies are the
-                      top reason students disengage).
+                      <span className="font-medium text-[hsl(var(--foreground))]">One thing at a time.</span> A
+                      single question or step per turn, not a wall of them.
                     </li>
                     <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Guardrails</span> — what
-                      it must not do (&quot;no direct answers, even under pressure&quot; — students asking
-                      directly raises AI answer-giving unless the rule forbids it).
+                      <span className="font-medium text-[hsl(var(--foreground))]">Brief, with a next step.</span>{' '}
+                      Short replies that end with something concrete to do.
+                    </li>
+                    <li>
+                      <span className="font-medium text-[hsl(var(--foreground))]">Ask for evidence.</span> Have
+                      the student back a claim with a reason or evidence.
                     </li>
                   </ul>
                 </div>

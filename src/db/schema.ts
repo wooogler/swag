@@ -239,6 +239,10 @@ export const scoreIntentPins = pgTable('score_intent_pins', {
   messageId: integer('message_id').notNull().references(() => chatMessages.id),
   verdict: text('verdict').notNull(), // 'in' | 'out'
   queryText: text('query_text').notNull(),
+  // Optional instructor-written reason a question is OUT — shown in the Excluded
+  // list and injected into the rating prompt so the classifier learns the
+  // boundary rationale, not just the example. Null for 'in' pins / legacy rows.
+  reason: text('reason'),
   source: text('source').notNull().default('manual'), // 'manual' | 'ownership' | …
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({

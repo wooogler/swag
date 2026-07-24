@@ -33,6 +33,7 @@ import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import {
   DISSECTION_VERSION,
   INTENT_RATING_VERSION,
+  PROMPT_HOLDER_TITLE,
   intentDefHash,
   selectPromptPins,
   type PromptPin,
@@ -98,6 +99,7 @@ async function createIntentTables(): Promise<void> {
         "message_id" integer NOT NULL,
         "verdict" text NOT NULL,
         "query_text" text NOT NULL,
+        "reason" text,
         "source" text DEFAULT 'manual' NOT NULL,
         "created_at" timestamp NOT NULL
       )
@@ -244,6 +246,14 @@ async function createIntentTables(): Promise<void> {
       sql`ALTER TABLE "score_rule_versions" ADD COLUMN "minor" boolean DEFAULT false NOT NULL`
     );
   }
+  // score_intent_pins.reason — an optional out-pin rationale added after v6.
+  const pinCols = await db.execute<{ column_name: string }>(sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'score_intent_pins' AND column_name = 'reason'
+  `);
+  if (pinCols.length === 0) {
+    await db.execute(sql`ALTER TABLE "score_intent_pins" ADD COLUMN "reason" text`);
+  }
 
   // Ensure indexes even when tables pre-exist (crash between CREATE TABLE and
   // CREATE INDEX must not strand a table whose unique index upserts target —
@@ -374,12 +384,18 @@ export function buildPromptReadyIntents(
   pinsNewestFirst: ScoreIntentPin[]
 ): PromptReadyIntent[] {
   return intents
-    .filter((i) => !i.archived)
+    // The baseline prompt-holder is a container for the monolithic system
+    // prompt, not a classification intent — it is never rated, so leaving it in
+    // would make resolveAssignment return `pending` for every message (its
+    // rating is always missing). Exclude it here so every promptReady consumer
+    // (staleness, exclusive assignment, the workbench overlap panel, deploy) is
+    // consistent with the board's own PROMPT_HOLDER_TITLE filter (page.tsx).
+    .filter((i) => !i.archived && i.title !== PROMPT_HOLDER_TITLE)
     .map((intent) => {
       const promptPins = selectPromptPins(
         pinsNewestFirst
           .filter((p) => p.intentId === intent.id)
-          .map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText }))
+          .map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText, reason: p.reason }))
       );
       return { intent, promptPins, defHash: intentDefHash(intent.definition, promptPins) };
     });
@@ -492,6 +508,7 @@ export interface IntentConfigSnapshot {
     messageId: number;
     verdict: string;
     queryText: string;
+    reason?: string | null;
     source: string;
   }[];
   links: { fromIntentId: number; toIntentId: number }[];
@@ -581,6 +598,7 @@ export async function recordConfigVersion(
       messageId: p.messageId,
       verdict: p.verdict,
       queryText: p.queryText,
+      reason: p.reason,
       source: p.source,
     })),
     links: links.map((l) => ({ fromIntentId: l.fromIntentId, toIntentId: l.toIntentId })),

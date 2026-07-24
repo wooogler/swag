@@ -57,7 +57,12 @@ function intentBlock(intent: PromptIntent): string {
   }
   if (outs.length > 0) {
     lines.push('Excluded examples (instructor-confirmed as NOT this intent):');
-    for (const p of outs) lines.push(`- ${quote(p.text)}`);
+    for (const p of outs) {
+      // The instructor's reason (when given) follows the quote — matches the
+      // trimmed form intentDefHash hashes, so prompt and hash stay byte-identical.
+      const reason = p.reason?.trim();
+      lines.push(reason ? `- ${quote(p.text)} — why not: ${reason}` : `- ${quote(p.text)}`);
+    }
   }
   return lines.join('\n');
 }

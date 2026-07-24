@@ -21,7 +21,7 @@ import {
   type BaselineSearch,
 } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
-import { intentDefHash } from '@/lib/score/intents';
+import { intentDefHash, PROMPT_HOLDER_TITLE } from '@/lib/score/intents';
 import { runChatTurn } from './chat-run';
 import type { StudioView } from './config';
 
@@ -209,8 +209,11 @@ async function deployedOrBasePrompt(assignmentId: string): Promise<string> {
   return latest[0]?.prompt ?? assignmentBasePrompt(assignment ?? {});
 }
 
-/** Reserved title of the hidden prompt-holder intent (one per baseline clone). */
-export const PROMPT_HOLDER_TITLE = '__system_prompt__';
+/** Reserved title of the hidden prompt-holder intent (one per baseline clone).
+ * Canonical definition now lives in lib/score/intents (the score loaders must
+ * exclude it from the classification/assignment set); re-exported here so
+ * existing baseline importers keep resolving it from baseline-store. */
+export { PROMPT_HOLDER_TITLE };
 
 /**
  * The baseline monolithic prompt, stored as a hidden intent's RULE so the Revise

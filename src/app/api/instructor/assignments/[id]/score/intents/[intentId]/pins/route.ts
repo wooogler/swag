@@ -27,6 +27,9 @@ const postSchema = z.object({
   messageId: z.number().int().positive(),
   verdict: z.enum(['in', 'out']),
   source: z.enum(['manual', 'ownership']).optional(),
+  /** Optional out-pin rationale — stored and injected into the rating prompt.
+   * Ignored for 'in' pins. */
+  reason: z.string().trim().max(400).optional(),
 });
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
@@ -73,6 +76,9 @@ export async function POST(req: Request, { params }: RouteParams) {
   const set = {
     verdict: body.verdict,
     queryText,
+    // A reason only makes sense for an OUT example; clear it on an 'in' pin so a
+    // question flipped in→out→in never carries a stale rationale.
+    reason: body.verdict === 'out' ? body.reason?.trim() || null : null,
     source: body.source ?? 'manual',
     createdAt: now, // refresh recency so re-pinned examples lead the prompt
   };

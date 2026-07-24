@@ -20,6 +20,23 @@
 import { stableHash } from './config';
 
 /* ------------------------------------------------------------------ */
+/* Reserved intents                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Title of the baseline condition's hidden prompt-holder intent (one per
+ * baseline clone; see baseline-store). It stores the monolithic system prompt
+ * as its RULE and is NEVER rated or classified, so it must be kept out of the
+ * "prompt-ready" set that backs staleness, exclusive assignment, and the
+ * overlap computation: resolveAssignment treats a missing rating as `pending`,
+ * so an unrated holder left in the active set would make EVERY message resolve
+ * `pending` (silently killing the Needs-Decision/overlap surfaces). Defined
+ * here in the client-safe core so the score loaders and the study layer share
+ * one source of truth; baseline-store re-exports it for its existing importers.
+ */
+export const PROMPT_HOLDER_TITLE = '__system_prompt__';
+
+/* ------------------------------------------------------------------ */
 /* Ratings                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -128,6 +145,10 @@ export interface PromptPin {
   verdict: 'in' | 'out';
   /** Snapshot of the pinned question's text (taken at pin time). */
   text: string;
+  /** Optional instructor reason this example is OUT — injected into the prompt
+   * after the quoted text so the classifier learns WHY it doesn't belong. Only
+   * meaningful for 'out' pins; null/absent for 'in' pins and legacy rows. */
+  reason?: string | null;
 }
 
 /**
@@ -174,7 +195,13 @@ export function intentDefHash(definition: string, promptPins: PromptPin[]): stri
   const canonical = JSON.stringify([
     `r${INTENT_RATING_VERSION}`,
     definition,
-    promptPins.map((p) => [p.verdict, pinPromptText(p.text)]),
+    // A reason is ADDITIVE: a pin without one hashes as the original 2-tuple, so
+    // existing ratings never go stale just because this field was introduced;
+    // only a pin that actually carries a reason changes the hash (→ re-rate).
+    promptPins.map((p) => {
+      const reason = p.reason?.trim();
+      return reason ? [p.verdict, pinPromptText(p.text), reason] : [p.verdict, pinPromptText(p.text)];
+    }),
   ]);
   return stableHash(canonical);
 }

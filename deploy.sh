@@ -8,7 +8,9 @@ set -e
 # Configuration
 CONTAINER_NAME="swag"
 IMAGE_NAME="swag:latest"
-DOMAIN="${1:-}"
+# This server is permanently assigned swag.cs.vt.edu, so default to it.
+# Pass a different domain as the first argument to override.
+DOMAIN="${1:-swag.cs.vt.edu}"
 CONTAINER_PORT="3000"
 HOST_PORT="127.0.0.1:3000"
 
@@ -26,6 +28,21 @@ if [ -z "$DOMAIN" ]; then
 fi
 
 echo "🚀 Starting deployment for $DOMAIN..."
+
+# Keep sudo credentials fresh for the whole deploy.
+# The image build (podman build) can take longer than sudo's default
+# credential-cache timeout (~5 min), which otherwise forces a SECOND password
+# prompt partway through — easy to miss while it builds. Authenticate once up
+# front, then refresh the timestamp in the background until this script exits.
+echo "🔑 Caching sudo credentials (asked once)..."
+sudo -v
+while true; do
+    sudo -n true
+    sleep 60
+    kill -0 "$$" 2>/dev/null || exit
+done 2>/dev/null &
+SUDO_KEEPALIVE_PID=$!
+trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
 
 # Step 1: Check if PostgreSQL is installed
 echo "📊 Checking PostgreSQL..."

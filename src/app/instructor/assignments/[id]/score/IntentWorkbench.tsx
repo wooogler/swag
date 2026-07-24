@@ -31,6 +31,7 @@ import {
   GitCompareArrows,
   Loader2,
   Minimize2,
+  Pencil,
   RotateCcw,
   Save as SaveIcon,
   Search,
@@ -59,6 +60,9 @@ interface RatingRow {
   rationale: string | null;
   stale: boolean;
   pinned: 'in' | 'out' | null;
+  /** Instructor's reason this example is OUT (out pins only) — shown in the
+   * Excluded list and injected into the rating prompt. Null otherwise. */
+  reason: string | null;
   /** Position among this intent's pins in PROMPT order (0 = first listed), null
    * when unpinned. Optimistic local pins use negative ranks so a just-pinned
    * example leads, exactly as the server's newest-first order would place it. */
@@ -180,6 +184,36 @@ function HoverTip({ content, children }: { content: React.ReactNode; children: R
   );
 }
 
+/** The free-text "Other" row of the out-reason picker. Keeps its own input
+ * state so typing doesn't re-render the whole workbench; submit pins out with
+ * the typed reason. */
+function OutReasonOther({ onSubmit }: { onSubmit: (v: string) => void }) {
+  const [v, setV] = useState('');
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (v.trim()) onSubmit(v);
+      }}
+      className="flex items-center gap-1 pt-0.5"
+    >
+      <input
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        placeholder="Other reason…"
+        className="min-w-0 flex-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]"
+      />
+      <button
+        type="submit"
+        disabled={!v.trim()}
+        className="shrink-0 px-2 py-1 rounded text-xs font-medium bg-rose-600 text-white disabled:opacity-40"
+      >
+        Out
+      </button>
+    </form>
+  );
+}
+
 /** Compact relative time ("10 minutes ago") — the exact stamp goes in a tooltip. */
 export function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -213,6 +247,10 @@ interface IntentWorkbenchProps {
   templates?: { id: number; title: string; definition: string }[];
   /** Leave the workbench (unsaved drafts are purged) — board refreshes. */
   onExit: () => void;
+  /** Jump to editing ANOTHER intent (the overlap chips' shortcut): the parent
+   * swaps `editIntent`, re-keying this workbench onto the target. Absent in
+   * create/prompt-holder mounts, where the amber chip stays a static tag. */
+  onEditIntent?: (intentId: number) => void;
 }
 
 export default function IntentWorkbench({
@@ -225,6 +263,7 @@ export default function IntentWorkbench({
   jelsonSuggestions,
   templates,
   onExit,
+  onEditIntent,
 }: IntentWorkbenchProps) {
   const isEdit = mode.kind === 'edit';
   const intent = isEdit ? mode.intent : null;
@@ -239,6 +278,17 @@ export default function IntentWorkbench({
   // Create-mode taxonomy suggestions: hidden once a suggestion is picked, until
   // the instructor edits the definition again.
   const [suggestDismissed, setSuggestDismissed] = useState(false);
+  // "Out" reason picker: opened under the clicked out button, it offers three
+  // LLM-suggested reasons (why this message isn't the intent) + a free-text
+  // "Other", then pins out with the chosen reason. `anchor` positions it fixed
+  // so it escapes the column's scroll clip. null = closed.
+  const [outPicker, setOutPicker] = useState<{
+    messageId: number;
+    anchor: { left: number; top: number; bottom: number; width: number };
+    loading: boolean;
+    reasons: string[];
+    error: string | null;
+  } | null>(null);
   // Labels changed since the last Apply — the shown ratings no longer reflect
   // the prompt the pins produce, so Save (commit) is gated until re-Apply.
   const [pinsDirty, setPinsDirty] = useState(false);
@@ -846,7 +896,7 @@ export default function IntentWorkbench({
   // Optimistic: flip the pin immediately (no spinner/disable), fire the write,
   // and revert only if the server rejects it. Pins are boundary examples that
   // refine WHICH questions this intent captures on the next re-rate.
-  async function togglePin(row: RatingRow, verdict: 'in' | 'out') {
+  async function togglePin(row: RatingRow, verdict: 'in' | 'out', reason?: string) {
     // Checkout is a read-only view of a past version — pins mutate the LIVE
     // spec, so labeling is disabled until Apply (rollback) or Back to latest.
     if (intentId === null || checkout !== null) return;
@@ -856,18 +906,20 @@ export default function IntentWorkbench({
     // next fetch supplies the real indices — otherwise the preview would show
     // this example last, or drop it, right after you added it.
     const nextRank = next === null ? null : --optimisticPinRankRef.current;
-    const setPinned = (pinned: 'in' | 'out' | null, pinRank: number | null) =>
+    // A reason only rides an OUT pin; clear it when pinning in or unpinning.
+    const nextReason = next === 'out' ? reason?.trim() || null : null;
+    const setPinned = (pinned: 'in' | 'out' | null, pinRank: number | null, rsn: string | null) =>
       setData((prev) =>
         prev
           ? {
               ...prev,
-              rows: prev.rows.map((r) =>
-                r.messageId === row.messageId ? { ...r, pinned, pinRank } : r
+              rows: prev.rows.map((pr) =>
+                pr.messageId === row.messageId ? { ...pr, pinned, pinRank, reason: rsn } : pr
               ),
             }
           : prev
       );
-    setPinned(next, nextRank);
+    setPinned(next, nextRank, nextReason);
     setPinsDirty(true); // ratings no longer reflect the pins → re-Apply before Save
     setSimilarScores(null); // pins changed → pin-sort scores are stale, refetch
     try {
@@ -880,7 +932,7 @@ export default function IntentWorkbench({
           : await fetch(`/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/pins`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ messageId: row.messageId, verdict }),
+              body: JSON.stringify({ messageId: row.messageId, verdict, ...(nextReason ? { reason: nextReason } : {}) }),
             });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -890,10 +942,52 @@ export default function IntentWorkbench({
       // next Apply, so there is nothing to refresh in the history here.
     } catch (e) {
       if (mountedRef.current) {
-        setPinned(row.pinned, row.pinRank); // revert the optimistic flip
+        setPinned(row.pinned, row.pinRank, row.reason); // revert the optimistic flip
         setError((e as Error).message);
       }
     }
+  }
+
+  // Open the out-reason picker under the clicked button and fetch three
+  // LLM-suggested reasons in the background. NOTHING is pinned until the
+  // instructor picks or writes one (pickOutReason) — closing cancels the out.
+  async function openOutPicker(row: RatingRow, btn: DOMRect) {
+    if (intentId === null || checkout !== null) return;
+    setOutPicker({
+      messageId: row.messageId,
+      anchor: { left: btn.left, top: btn.top, bottom: btn.bottom, width: btn.width },
+      loading: true,
+      reasons: [],
+      error: null,
+    });
+    try {
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/exclusion-reasons`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messageId: row.messageId, ...(row.rationale ? { rationale: row.rationale } : {}) }),
+        }
+      );
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof d?.message === 'string' ? d.message : 'Could not suggest reasons.');
+      const reasons = Array.isArray(d.reasons)
+        ? d.reasons.filter((r: unknown): r is string => typeof r === 'string')
+        : [];
+      setOutPicker((p) => (p && p.messageId === row.messageId ? { ...p, loading: false, reasons } : p));
+    } catch (e) {
+      setOutPicker((p) =>
+        p && p.messageId === row.messageId ? { ...p, loading: false, error: (e as Error).message } : p
+      );
+    }
+  }
+
+  // Commit the out pin with the chosen/typed reason (blank = out, no reason).
+  function pickOutReason(reason: string) {
+    if (!outPicker) return;
+    const row = data?.rows.find((r) => r.messageId === outPicker.messageId);
+    setOutPicker(null);
+    if (row) togglePin(row, 'out', reason.trim() || undefined);
   }
 
   // Edit mode only: archive (soft-delete) the intent; its questions fall back
@@ -1294,14 +1388,22 @@ export default function IntentWorkbench({
     // Overlap = ANOTHER intent also owns this question (or it sits in a
     // boundary). In this intent → a visible amber tag (these rows also sort to
     // the top); Needs decision keeps the quieter text note.
-    const overlapChip =
+    const overlapChip: { intentId: number | null; label: string; title: string } | null =
       pane === 'in' && r.prior.kind === 'assigned'
         ? {
+            // The single overlapping owner — the chip becomes a shortcut into
+            // editing it (sharpen its WHEN so this question gets one owner).
+            intentId: r.prior.intentId,
             label: `overlap · ${r.priorTitle ?? 'another intent'}`,
-            title: `Also captured by “${r.priorTitle ?? 'another intent'}” — decide ownership on the board`,
+            title: onEditIntent
+              ? `Also captured by “${r.priorTitle ?? 'another intent'}” — click to edit that intent and sharpen its definition`
+              : `Also captured by “${r.priorTitle ?? 'another intent'}” — decide ownership on the board`,
           }
         : pane === 'in' && r.prior.kind === 'boundary'
           ? {
+              // A boundary spans several intents at once — no single target, so
+              // this stays a static tag (resolve it on the board).
+              intentId: null,
               label: 'overlap — decide ownership',
               title: 'Clearly-in for several intents at once — decide ownership on the board',
             }
@@ -1313,8 +1415,8 @@ export default function IntentWorkbench({
           ? 'in an overlap — decide ownership'
           : '';
     return (
-      <li key={r.messageId} className="px-3 py-2 hover:bg-[hsl(var(--muted))]/40">
-        <div className="flex items-start justify-between gap-2">
+      <li key={r.messageId} className="group relative px-3 py-2 hover:bg-[hsl(var(--muted))]/40">
+        <div className="flex items-start gap-2">
           <QueryTextButton
             queryText={r.queryText}
             dissection={r.dissection}
@@ -1331,14 +1433,38 @@ export default function IntentWorkbench({
           >
             {(r.rationale || drift || overlapChip) && (
               <p className="mt-1 flex flex-wrap items-baseline gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
-                {overlapChip && (
-                  <span
-                    className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-xs font-medium text-amber-700"
-                    title={overlapChip.title}
-                  >
-                    {overlapChip.label}
-                  </span>
-                )}
+                {overlapChip &&
+                  (overlapChip.intentId != null && onEditIntent ? (
+                    // Shortcut INTO the overlapping intent's editor. role=button
+                    // span (+ stopPropagation), NOT a <button> — this lives inside
+                    // QueryTextButton, which is itself a <button>.
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEditIntent(overlapChip.intentId!);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onEditIntent(overlapChip.intentId!);
+                      }}
+                      title={overlapChip.title}
+                      className="group/chip shrink-0 inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 hover:border-amber-300"
+                    >
+                      {overlapChip.label}
+                      <Pencil className="w-2.5 h-2.5 opacity-0 group-hover/chip:opacity-100" />
+                    </span>
+                  ) : (
+                    <span
+                      className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-xs font-medium text-amber-700"
+                      title={overlapChip.title}
+                    >
+                      {overlapChip.label}
+                    </span>
+                  ))}
                 {drift && (
                   <span
                     className={`shrink-0 rounded border px-1 py-0.5 text-xs font-medium ${drift.cls}`}
@@ -1357,12 +1483,19 @@ export default function IntentWorkbench({
               </span>
             )}
           </QueryTextButton>
-          {showButtons && (
-            <span className="flex items-center gap-1 shrink-0">
-              {pinButtons(r)}
-            </span>
-          )}
         </div>
+        {/* in/out sit in a hover overlay so the list stays uncluttered and the
+            row never reflows when they appear. A pinned row keeps them shown so
+            its verdict is always visible; so does an open reason picker. */}
+        {showButtons && (
+          <span
+            className={`absolute right-2 top-1.5 z-10 flex items-center gap-1 rounded-md bg-[hsl(var(--card))] px-1 py-0.5 shadow-sm ring-1 ring-[hsl(var(--border))] transition-opacity focus-within:opacity-100 group-hover:opacity-100 ${
+              r.pinned || outPicker?.messageId === r.messageId ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {pinButtons(r)}
+          </span>
+        )}
       </li>
     );
   };
@@ -1385,13 +1518,17 @@ export default function IntentWorkbench({
           in
         </button>
         <button
-          onClick={() => togglePin(row, 'out')}
-          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
+          onClick={(e) =>
             row.pinned === 'out'
+              ? togglePin(row, 'out') // already out → unpin
+              : openOutPicker(row, e.currentTarget.getBoundingClientRect()) // pick a reason first
+          }
+          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
+            row.pinned === 'out' || outPicker?.messageId === row.messageId
               ? 'bg-rose-600 text-white border-rose-600'
               : 'border-[hsl(var(--border))] text-rose-700 hover:bg-rose-50'
           }`}
-          title="Pin: this question does NOT belong to the intent"
+          title="Pin: this question does NOT belong to the intent — pick a reason"
         >
           out
         </button>
@@ -1546,11 +1683,19 @@ export default function IntentWorkbench({
                         <ul className="max-h-40 overflow-y-auto divide-y divide-[hsl(var(--border))]/60 border-t border-[hsl(var(--border))]">
                           {g.rows.map((r) => (
                             <li key={r.messageId} className="flex items-start gap-1.5 px-2 py-1.5 text-xs">
-                              <span className="min-w-0 flex-1 text-[hsl(var(--foreground))]">
-                                {(() => {
-                                  const c = r.queryText.replace(/\s+/g, ' ').trim();
-                                  return c.length > 120 ? `${c.slice(0, 120)}…` : c;
-                                })()}
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-[hsl(var(--foreground))]">
+                                  {(() => {
+                                    const c = r.queryText.replace(/\s+/g, ' ').trim();
+                                    return c.length > 120 ? `${c.slice(0, 120)}…` : c;
+                                  })()}
+                                </span>
+                                {/* The out-reason, injected into the rating prompt. */}
+                                {g.key === 'out' && r.reason && (
+                                  <span className="mt-0.5 block text-xs italic text-rose-700">
+                                    why not: {r.reason}
+                                  </span>
+                                )}
                               </span>
                               <button
                                 onClick={() => togglePin(r, g.key)}
@@ -2060,6 +2205,74 @@ export default function IntentWorkbench({
         </div>
       </div>
 
+      {/* OUT-REASON PICKER — opens under the clicked "out" button: three
+          LLM-suggested reasons + a free-text "Other". Fixed-positioned so it
+          escapes the column's scroll clip; the backdrop cancels the out. */}
+      {outPicker &&
+        (() => {
+          const PW = 280;
+          const M = 8; // viewport margin
+          const a = outPicker.anchor;
+          const left = Math.max(M, Math.min(a.left, window.innerWidth - PW - M));
+          // Flip ABOVE the button when there isn't room below and there's more
+          // above; either way, cap the height to the space on that side (with
+          // internal scroll) so the picker is NEVER clipped by the viewport.
+          const roomBelow = window.innerHeight - a.bottom - M;
+          const roomAbove = a.top - M;
+          const flipUp = roomBelow < 220 && roomAbove > roomBelow;
+          const maxHeight = Math.max(140, (flipUp ? roomAbove : roomBelow) - 4);
+          const pos = flipUp
+            ? { left, bottom: window.innerHeight - a.top + 4, width: PW, maxHeight }
+            : { left, top: a.bottom + 4, width: PW, maxHeight };
+          return (
+            <>
+              <div className="fixed inset-0 z-[59]" onClick={() => setOutPicker(null)} />
+              <div
+                className="fixed z-[60] overflow-y-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg p-2 space-y-1.5"
+                style={pos}
+              >
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-rose-700">
+                    Why is this out?
+                  </span>
+                  <button
+                    onClick={() => setOutPicker(null)}
+                    className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                    aria-label="Cancel"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {outPicker.loading ? (
+                  <p className="flex items-center gap-1.5 px-1 py-1 text-xs text-[hsl(var(--muted-foreground))]">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Suggesting reasons…
+                  </p>
+                ) : outPicker.reasons.length > 0 ? (
+                  outPicker.reasons.map((rsn, i) => (
+                    <button
+                      key={i}
+                      onClick={() => pickOutReason(rsn)}
+                      className="w-full text-left px-2 py-1.5 rounded text-xs text-[hsl(var(--foreground))] border border-[hsl(var(--border))] hover:bg-rose-50 hover:border-rose-200"
+                    >
+                      {rsn}
+                    </button>
+                  ))
+                ) : (
+                  <p className="px-1 text-xs text-[hsl(var(--muted-foreground))]">
+                    {outPicker.error ?? 'No suggestions — type your own below.'}
+                  </p>
+                )}
+                <OutReasonOther onSubmit={pickOutReason} />
+                <button
+                  onClick={() => pickOutReason('')}
+                  className="w-full text-center px-2 py-0.5 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                >
+                  Exclude without a reason
+                </button>
+              </div>
+            </>
+          );
+        })()}
     </div>
   );
 }
