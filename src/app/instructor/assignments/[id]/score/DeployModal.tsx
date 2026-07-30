@@ -153,7 +153,7 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
                 ) : (
                   <>
                     <span className="font-semibold">Not deployed yet</span>{' '}
-                    <span className="text-[hsl(var(--muted-foreground))]">— students get the base prompt only.</span>
+                    <span className="text-[hsl(var(--muted-foreground))]">— students get the chatbot as it is today.</span>
                   </>
                 )}{' '}
                 <span className={status.dirty ? 'text-amber-700' : 'text-[hsl(var(--muted-foreground))]'}>
@@ -173,7 +173,7 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
               </p>
               {status?.live.intents.length === 0 && (
                 <p className="px-3 py-2 text-xs text-[hsl(var(--muted-foreground))]">
-                  No active intents — students would get the base prompt only.
+                  No active intents — students would get the chatbot as it is today.
                 </p>
               )}
               {/* Same item shape as the board's intents panel: title + short
@@ -194,16 +194,14 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
                   </span>
                   <span className="mt-0.5 block text-[11px] text-[hsl(var(--muted-foreground))] line-clamp-1">
                     <span className="font-semibold">Then</span>{' '}
-                    {i.rule?.trim() ? (
-                      i.latestRuleVersion ? (
-                        `v${i.latestRuleVersion.versionNo}${
-                          i.latestRuleVersion.name ? ` ${i.latestRuleVersion.name}` : ''
-                        }`
-                      ) : (
-                        i.rule
-                      )
+                    {i.latestRuleVersion ? (
+                      `v${i.latestRuleVersion.versionNo}${
+                        i.latestRuleVersion.name ? ` ${i.latestRuleVersion.name}` : ''
+                      }`
+                    ) : i.rule?.trim() ? (
+                      i.rule
                     ) : (
-                      <span className="italic">No rule yet — base prompt applies</span>
+                      <span className="italic">No rule yet</span>
                     )}
                   </span>
                 </button>
@@ -296,7 +294,7 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
                       </p>
                     ) : (
                       <p className="italic text-[hsl(var(--muted-foreground))]">
-                        No rule — this intent answers with the base prompt.
+                        No rule yet — this intent adds nothing to the chatbot.
                       </p>
                     )}
                   </div>
@@ -337,7 +335,7 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
               </button>
             </div>
             <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
-              A deploy freezes the intents&apos; definitions, labels, rules, and exception links. Students always get
+              A deploy freezes the intents&apos; definitions, labels, rules, and tie-breakers. Students always get
               the latest version; board edits stay invisible until the next deploy.
             </p>
           </div>

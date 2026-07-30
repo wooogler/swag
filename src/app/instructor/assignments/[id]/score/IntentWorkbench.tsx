@@ -1659,7 +1659,7 @@ export default function IntentWorkbench({
                 <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   Labeled by you{' '}
                   <span className="font-normal normal-case">
-                    — questions you reviewed &amp; marked, injected into the prompt
+                    — questions you reviewed &amp; marked, used when matching new questions
                   </span>
                 </p>
                 {(

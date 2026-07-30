@@ -163,8 +163,8 @@ export default function DecideOwnershipModal({
               {(!intentA.rule || !intentB.rule) && (
                 <span className="text-amber-700">
                   {' '}
-                  {!intentA.rule && `"${intentA.title}" has no rule yet — its side shows the base-prompt response.`}{' '}
-                  {!intentB.rule && `"${intentB.title}" has no rule yet — its side shows the base-prompt response.`}
+                  {!intentA.rule && `"${intentA.title}" has no rule yet — its side shows the unchanged response.`}{' '}
+                  {!intentB.rule && `"${intentB.title}" has no rule yet — its side shows the unchanged response.`}
                 </span>
               )}
             </p>
@@ -261,10 +261,11 @@ export default function DecideOwnershipModal({
                   onClick={() => declareLink(converged)}
                   disabled={committing}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                  title="Declared as an Exception Link — definitions stay untouched; delete the link to undo"
+                  title="Declared as a tie-breaker — definitions stay untouched; remove it to undo"
                 >
                   <Link2 className="w-3.5 h-3.5" />
-                  Declare: {loserOf(converged).title} <span className="font-bold">except</span> {winnerOf(converged).title}
+                  Tie-breaker: {winnerOf(converged).title} <span className="font-bold">wins over</span>{' '}
+                  {loserOf(converged).title}
                 </button>
               )}
               {/* Pins are ALWAYS committable once any A/B decision exists —

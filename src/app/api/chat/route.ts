@@ -147,10 +147,11 @@ export async function POST(req: Request) {
     });
 
     // SCORE rule injection (P5): under the assignment's LATEST DEPLOY, classify
-    // this message against the deployed intents and inject the owning intent's
-    // rule on top of the base prompt. Instructors editing the SCORE board never
-    // affect students until they Deploy. Fail-open: no deploy / no match / any
-    // error → the plain base prompt (deploy-store.resolveDeployedChatPrompt).
+    // this message against the deployed intents and answer with the owning
+    // intent's rule AS the system prompt (one layer, never two — injection.ts).
+    // Instructors editing the SCORE board never affect students until they
+    // Deploy. Fail-open: no deploy / no match / any error → the assignment's
+    // default prompt (deploy-store.resolveDeployedChatPrompt).
     // Prior exchange for the classifier comes from the SERVER's own record
     // (not the client-supplied messages array, which a student could fabricate
     // to steer the classifier): the last stored assistant reply and the user

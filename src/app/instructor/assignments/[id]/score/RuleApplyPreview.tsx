@@ -133,11 +133,11 @@ export default function RuleApplyPreview({
       }`}
     >
       <p className={`text-[10px] font-semibold uppercase tracking-wide ${accent ? 'text-emerald-700' : 'text-[hsl(var(--muted-foreground))]'}`}>
-        {accent ? (promptMode ? 'New prompt' : 'New rule') : promptMode ? 'Deployed prompt' : 'Deployed rule'}{' '}
+        {accent ? (promptMode ? 'New rules' : 'New rule') : promptMode ? 'Deployed rules' : 'Deployed rule'}{' '}
         <span className="font-normal normal-case">· {label}</span>
       </p>
       <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
-        {rule ?? <span className="italic text-[hsl(var(--muted-foreground))]">No rule — base prompt fallback.</span>}
+        {rule ?? <span className="italic text-[hsl(var(--muted-foreground))]">No rule yet.</span>}
       </p>
     </div>
   );

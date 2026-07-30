@@ -2,8 +2,9 @@
  * SCORE v6 intent layer — client-safe core model.
  *
  * An Intent is an instructor-created "WHEN" (a category of student requests)
- * that owns one "Rule" (the THEN — a response guideline injected on top of the
- * assignment's Base Prompt when a question is assigned to that intent).
+ * that owns one "Rule" (the THEN — the COMPLETE system prompt the chatbot
+ * answers with when a question is assigned to that intent; see injection.ts,
+ * one layer never two).
  * Intents are scoped PER ASSIGNMENT — unlike the global Jelson taxonomy in
  * config.ts, which the v6 design demotes to a background tagging/browse layer.
  *
@@ -35,6 +36,24 @@ import { stableHash } from './config';
  * one source of truth; baseline-store re-exports it for its existing importers.
  */
 export const PROMPT_HOLDER_TITLE = '__system_prompt__';
+
+/**
+ * Label for the rule axis's v1 — the rule an intent STARTS from, recorded the
+ * moment the intent is created so the board reads "Then v1 <name>" instead of
+ * dumping the raw text. A brand-new intent is seeded with the assignment's
+ * default, which is empty on NIRVANA — hence two names. "Rule", never
+ * "prompt": instructors are the audience and the board already says
+ * When/Then → rule everywhere else. Fixed strings, not LLM-generated: every
+ * intent on a board starts from the SAME text, so one stable label keeps the
+ * study boards consistent.
+ */
+export function seedRuleVersionName(
+  rule: string | null | undefined,
+  opts?: { plural?: boolean }
+): string {
+  const noun = opts?.plural ? 'rules' : 'rule';
+  return rule?.trim() ? `Starting ${noun}` : `Empty ${noun}`;
+}
 
 /* ------------------------------------------------------------------ */
 /* Ratings                                                             */

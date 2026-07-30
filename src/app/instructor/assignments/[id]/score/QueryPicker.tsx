@@ -175,10 +175,10 @@ export default function QueryPicker({
           )}
           <select value={sortMode} onChange={(e) => setSortMode(e.target.value as PickerSort)} className={SORT_CLASS}>
             <option value="different">Most different</option>
-            <option value="recent">Newest</option>
-            <option value="oldest">Oldest</option>
             <option value="participant-asc">PID ↑</option>
             <option value="participant-desc">PID ↓</option>
+            <option value="recent">Newest</option>
+            <option value="oldest">Oldest</option>
           </select>
         </div>
 

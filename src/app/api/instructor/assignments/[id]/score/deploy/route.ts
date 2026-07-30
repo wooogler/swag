@@ -83,8 +83,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   // Version labels mirror the board's intents panel: both show DISPLAY major
   // numbers (v1, v2, …), NOT raw sequence numbers — seeds and simulated minors
   // occupy the sequence too, so raw counts run ahead.
-  //  · latestRuleVersion = latest applied (non-minor, non-seed) rule version,
-  //    numbered by its major ordinal.
+  //  · latestRuleVersion = latest major (non-minor) rule version, numbered by
+  //    its major ordinal. The v1 seed counts — it is the rule the intent
+  //    starts from, so a never-revised intent still reads "v1 Starting rule".
   //  · intentVersionNo = MAJOR config versions touching the intent (minors —
   //    pin labels, applies — fold into the workbench accordion, per
   //    isMinorVersion, and must not advance "When vN").
@@ -100,8 +101,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     let majorNo = 0;
     let latest: { versionNo: number; name: string | null } | null = null;
     for (const v of asc) {
-      if (!v.minor) majorNo += 1;
-      if (!v.minor && v.source !== 'seed') latest = { versionNo: majorNo, name: v.name };
+      if (!v.minor) {
+        majorNo += 1;
+        latest = { versionNo: majorNo, name: v.name };
+      }
     }
     if (latest) latestRuleByIntent.set(intentId, latest);
   }

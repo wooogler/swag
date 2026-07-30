@@ -15,6 +15,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   applyPinOverrides,
   boundaryKey,
+  isIncludedRating,
   resolveAssignment,
   type AssignmentResolution,
   type MaterialKind,
@@ -139,10 +140,10 @@ interface IntentBoardProps {
   links: IntentLinkSummary[];
   basePrompt: string;
   /** Study condition. 'baseline' turns the SAME board into the ablation: the
-   * Base Prompt slot becomes an editable monolithic prompt, Intents become
-   * saved Searches, the workbench becomes Search, and Revise edits the whole
-   * prompt. Everything else (query list, colours, Run all, conversation) is
-   * shared. Undefined = 'score' (the normal SCORE board). */
+   * left column is topped by ONE monolithic prompt instead of the intent list,
+   * Intents become saved Searches, the workbench becomes Search, and Revise
+   * edits the whole prompt. Everything else (query list, colours, Run all,
+   * conversation) is shared. Undefined = 'score' (the normal SCORE board). */
   condition?: 'score' | 'baseline';
   /** Baseline only: monolithic prompt state (seed + deployed version) + the
    * hidden prompt-holder intent the Revise flow mounts RuleWorkbench on. */
@@ -185,13 +186,57 @@ type IntentSelection =
   // Baseline saved-search browse: the search's clearly-in questions by messageId
   // (from its cached probe). Clicking a saved Search filters the list here — the
   // baseline analogue of clicking a starter set; only +New opens the workbench.
-  | { kind: 'search'; key: string; ids: number[]; label: string };
+  | { kind: 'search'; key: string; ids: number[]; label: string }
+  // The questions ONE tie-breaker settles: both intents claim them, and the
+  // link hands them to `toIntentId`. Browsing is what the chip does now —
+  // removing it is a separate button in the middle column's header.
+  | { kind: 'tiebreak'; key: string; fromIntentId: number; toIntentId: number };
 
 function Badge({ n }: { n: number }) {
   return (
     <span className="text-[11px] tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
       {n}
     </span>
+  );
+}
+
+/**
+ * One segment of the left column's whole-log filter (All / Uncategorized).
+ *
+ * Deliberately a real segmented control on a filled track: "All" used to be an
+ * inline `All · 507` chip in the INTENTS header and read as a count, not a
+ * button, and the uncategorized list sat at the far bottom of the column between
+ * Archived and Starter sets — so the two never looked like one either/or
+ * choice. The raised active pill is the whole point; don't flatten it back into
+ * text buttons.
+ */
+function FilterSegment({
+  label,
+  count,
+  active,
+  onClick,
+  title,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 rounded px-2 py-1 text-xs transition-colors ${
+        active
+          ? 'bg-[hsl(var(--card))] shadow-sm font-medium text-[hsl(var(--foreground))]'
+          : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+      }`}
+    >
+      <span className="truncate">{label}</span>
+      <span className="tabular-nums text-[hsl(var(--muted-foreground))]">{count}</span>
+    </button>
   );
 }
 
@@ -218,19 +263,29 @@ type StarterCounts = { perSet: Map<number, number>; perType: Map<string, number>
 /** A starter-tree row label. The row stays a single tight line; its description
  * (Type or Sub type) is hidden and surfaces as a right-hand tooltip on hover, so
  * the tree reads as structure rather than a wall of text. */
-function RowLabel({
+/**
+ * A starter-tree row that reveals its description on hover.
+ *
+ * The WHOLE ROW is the hover target — including the Add Intent button — so the
+ * description stays up while the pointer travels to it. And it drops BELOW the
+ * row rather than to the right, where it used to sit on top of that very
+ * button.
+ */
+function RowHover({
   description,
+  className,
   children,
 }: {
   description?: string;
+  className: string;
   children: React.ReactNode;
 }) {
   const desc = description?.trim();
-  if (!desc) return <div className="min-w-0 flex-1">{children}</div>;
+  if (!desc) return <div className={className}>{children}</div>;
   return (
     <HoverReveal
-      placement="right"
-      className="min-w-0 flex-1"
+      placement="bottom"
+      className={className}
       content={<p className="text-sm leading-relaxed text-[hsl(var(--foreground))]">{desc}</p>}
     >
       {children}
@@ -269,12 +324,14 @@ function StarterSetTree({
   activateType?: (g: StarterGroup) => void;
   activateStarterSet?: (s: StarterGroup['sets'][number]) => void;
 }) {
-  // Accordion: every Type starts expanded; the chevron collapses one to hide its
-  // sub-types. We track the collapsed set (empty = all open) so the default view
-  // shows the full tree.
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // Accordion: every Type starts COLLAPSED so the library opens as four
+  // headings to unpack one at a time, not 26 sets at once. Tracked as the
+  // EXPANDED set (empty = all closed) rather than a collapsed set seeded from
+  // `groups` — the initializer runs once, so a seeded set would leave any Type
+  // that arrives later (or after a refresh) hanging open.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const toggle = (key: string) =>
-    setCollapsed((prev) => {
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -283,20 +340,29 @@ function StarterSetTree({
   return (
     <div className="pb-1">
       {groups.map((g) => {
+        // SCORE: a set that is already a live intent LEAVES the library. Keeping
+        // the row invited a second Add (its button came back the moment the POST
+        // resolved, before the refresh landed), and two intents with the same
+        // definition overlap on every question — the resolver then assigns
+        // neither, so both read 0. The baseline keeps the full tree: there the
+        // sets are searches, not intents, and nothing is ever "added".
+        const sets = showActivation ? g.sets.filter((s) => !s.active) : g.sets;
+        if (showActivation && sets.length === 0 && g.typeActive) return null;
         // Browse the TYPE template's own questions when prepared (what Add would
         // capture); fall back to the union of its prepared sets. Matches the
-        // badge (counts.perType).
+        // badge (counts.perType) — so it spans ALL sets, added ones included.
         const preparedSetIds = g.sets.map((s) => s.templateId).filter((id): id is number => id !== null);
         const groupIds = g.typeTemplateId !== null ? [g.typeTemplateId] : preparedSetIds;
         const groupKey = `type:${g.typeKey}`;
         const groupActive = selection.kind === 'starter' && selection.key === groupKey;
-        const open = !collapsed.has(g.typeKey);
+        const open = expanded.has(g.typeKey);
         return (
           <div key={g.typeKey}>
             {/* Type header — the chevron expands/collapses its sub-types; the
                 label browses (SCORE hover Add turns the whole Type into ONE
                 intent). The Type description shows as a right-hand tooltip. */}
-            <div
+            <RowHover
+              description={g.typeDescription}
               className={`group flex items-center gap-1 pr-3 ${
                 groupActive ? 'bg-[hsl(var(--muted))]' : 'bg-[hsl(var(--muted))]/30 hover:bg-[hsl(var(--muted))]/60'
               }`}
@@ -310,7 +376,7 @@ function StarterSetTree({
               >
                 <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
               </button>
-              <RowLabel description={g.typeDescription}>
+              <div className="min-w-0 flex-1">
                 <button
                   onClick={() =>
                     groupIds.length > 0 &&
@@ -325,10 +391,10 @@ function StarterSetTree({
                 >
                   <span className={`w-2 h-2 shrink-0 rounded-full ${TYPE_DOT[g.typeKey] ?? 'bg-gray-400'}`} />
                   <span className={`min-w-0 truncate text-xs uppercase tracking-wide ${groupActive ? 'font-semibold text-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                    {g.typeLabel} ({g.sets.length})
+                    {g.typeLabel} ({sets.length})
                   </span>
                 </button>
-              </RowLabel>
+              </div>
               {showActivation &&
                 (g.typeActive ? (
                   <span
@@ -347,7 +413,7 @@ function StarterSetTree({
                     className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[10px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
                     title={`Add "${g.typeLabel}" as ONE intent covering the whole type (subtypes stay in the library)`}
                   >
-                    <Plus className="w-3 h-3" /> Add
+                    <Plus className="w-3 h-3" /> Add Intent
                   </button>
                 ))}
               {groupIds.length > 0 && (
@@ -355,19 +421,20 @@ function StarterSetTree({
                   <Badge n={counts.perType.get(g.typeKey) ?? 0} />
                 </span>
               )}
-            </div>
+            </RowHover>
             {/* Sub-types — the Type's children, indented under a vertical guide
                 line with a per-row connector so the dependency reads at a glance.
                 Collapsed away by the chevron above. */}
             {open && (
               <div className="ml-4 border-l border-[hsl(var(--border))]">
-                {g.sets.map((s) => {
+                {sets.map((s) => {
                   const setKey = `set:${s.code}`;
                   const setActive = selection.kind === 'starter' && selection.key === setKey;
                   const browsable = s.templateId !== null;
                   return (
-                    <div
+                    <RowHover
                       key={s.code}
+                      description={s.desc}
                       className={`group relative flex items-center gap-2 pl-4 pr-3 py-1.5 border-b border-[hsl(var(--border))]/40 before:content-[''] before:absolute before:left-0 before:top-1/2 before:h-px before:w-2.5 before:bg-[hsl(var(--border))] ${
                         setActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
                       }`}
@@ -375,7 +442,7 @@ function StarterSetTree({
                       {/* Click the set → browse its clearly-in questions (prepared
                           sets only — unprepared have no ratings). The Sub type
                           description shows as a right-hand tooltip. */}
-                      <RowLabel description={s.desc}>
+                      <div className="min-w-0 flex-1">
                         <button
                           onClick={() =>
                             browsable &&
@@ -392,16 +459,12 @@ function StarterSetTree({
                             {s.title}
                           </span>
                         </button>
-                      </RowLabel>
+                      </div>
+                      {/* No "Added" chip here: an added set is filtered out of
+                          the tree above, so this row only ever renders for sets
+                          that can still be added. */}
                       {showActivation &&
-                        (s.active ? (
-                          <span
-                            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
-                            title="Already a live intent — the library keeps this set for later re-use"
-                          >
-                            <Check className="w-3 h-3" /> Added
-                          </span>
-                        ) : activatingCode === s.code ? (
+                        (activatingCode === s.code ? (
                           <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
                             <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
                           </span>
@@ -411,11 +474,11 @@ function StarterSetTree({
                             className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[11px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
                             title={
                               s.templateId !== null
-                                ? 'Activate — a copy of the prepared set becomes a live intent, instantly'
-                                : 'Add as an intent and rate the log against it'
+                                ? 'Add as an intent — a copy of the prepared set, instantly. It leaves the starter list.'
+                                : 'Add as an intent and rate the log against it. It leaves the starter list.'
                             }
                           >
-                            <Plus className="w-3 h-3" /> Add
+                            <Plus className="w-3 h-3" /> Add Intent
                           </button>
                         ))}
                       {browsable && (
@@ -423,7 +486,7 @@ function StarterSetTree({
                           <Badge n={counts.perSet.get(s.templateId as number) ?? 0} />
                         </span>
                       )}
-                    </div>
+                    </RowHover>
                   );
                 })}
               </div>
@@ -432,6 +495,80 @@ function StarterSetTree({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A 2-line clamp with its own expander, for the middle column's header.
+ *
+ * The header has to stay short enough that the question list is still the page,
+ * but a rule is now a whole system prompt and an instructor must be able to read
+ * what is actually in force without leaving the board. The expander only appears
+ * when the text is long enough to be cut — no dead control on a one-liner.
+ */
+function ClampedText({ text, muted = false }: { text: string; muted?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="min-w-0 flex-1">
+      <span
+        className={`block whitespace-pre-wrap text-[11px] leading-relaxed ${open ? '' : 'line-clamp-2'} ${
+          muted ? 'text-[hsl(var(--muted-foreground))]' : 'text-[hsl(var(--foreground))]'
+        }`}
+      >
+        {text}
+      </span>
+      {text.trim().length > 110 && (
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="mt-0.5 text-[10px] font-medium text-[hsl(var(--primary))] hover:underline"
+        >
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </span>
+  );
+}
+
+/** The header's label gutter — "When" / "Then" / "Set", one fixed column so the
+ * texts beside them line up. */
+function DetailLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="shrink-0 w-10 pt-px text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+      {children}
+    </span>
+  );
+}
+
+/**
+ * A header action — Edit Intent / Edit Rule / Add Intent.
+ *
+ * ALWAYS VISIBLE, with its label spelled out. These used to be pencils that
+ * faded in on card hover, which meant the two main entry points of the whole
+ * loop were invisible until you happened to hover the right row.
+ */
+function HeaderAction({
+  onClick,
+  disabled,
+  title,
+  icon,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="shrink-0 self-start inline-flex items-center gap-1 rounded border border-[hsl(var(--primary))] px-2 py-1 text-[11px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))] disabled:cursor-not-allowed disabled:hover:bg-transparent"
+    >
+      {icon}
+      {children}
+    </button>
   );
 }
 
@@ -636,7 +773,7 @@ function DeployVersionBoard({
                       </p>
                       <p className="whitespace-pre-wrap">
                         <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">Then</span>{' '}
-                        {i.rule ?? <span className="italic">No rule — base prompt applies</span>}
+                        {i.rule ?? <span className="italic">No rule yet</span>}
                       </p>
                     </div>
                   }
@@ -646,13 +783,13 @@ function DeployVersionBoard({
                   </p>
                   <p className="mt-0.5 text-[11px] text-[hsl(var(--muted-foreground))] line-clamp-1">
                     <span className="font-semibold">Then</span>{' '}
-                    {i.rule ?? <span className="italic">No rule — base prompt applies</span>}
+                    {i.rule ?? <span className="italic">No rule yet</span>}
                   </p>
                 </HoverReveal>
               </div>
             );
           })}
-          {/* Replies the deploy answered with the base prompt alone. */}
+          {/* Replies no intent rule covered (no match / fail-open). */}
           <button
             onClick={() => setSel('base')}
             className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between border-t border-[hsl(var(--border))] ${
@@ -660,7 +797,7 @@ function DeployVersionBoard({
             }`}
             title="Replies where no intent rule was injected (no match / fail-open)"
           >
-            <span className="text-[hsl(var(--muted-foreground))]">Base prompt only</span>
+            <span className="text-[hsl(var(--muted-foreground))]">No intent matched</span>
             <Badge n={baseCount} />
           </button>
         </div>
@@ -783,14 +920,16 @@ export default function IntentBoard({
   const [selection, setSelection] = useState<IntentSelection>({ kind: 'all' });
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState<QuerySortMode>('recent');
+  // PID ascending by default: the log is a finished class's archive, so
+  // "newest" orders it by an axis that means nothing to the instructor, while
+  // PID groups each student's turns in the order they happened — and gives
+  // every study participant the identical starting sequence.
+  const [sortMode, setSortMode] = useState<QuerySortMode>('participant-asc');
   // Rating model is fixed (picker removed) — 5.4-mini.
   const selectedModel = SCORE_RATING_MODEL;
-  const [basePromptOpen, setBasePromptOpen] = useState(false);
-
-  // BASELINE: the editable monolithic system prompt occupies the Base Prompt
-  // slot. Save = new version; Deploy = serve it to students. (condition='score'
-  // leaves the Base Prompt read-only, exactly as before.)
+  // BASELINE: the monolithic system prompt sits at the top of the left column;
+  // SCORE has nothing there (each intent's rule IS its whole prompt, shown on
+  // the intent itself — there is no separate base layer to display).
   // Read-only display of the current system prompt (the holder's live rule).
   // Editing is in Revise; Deploy is in the header. Synced after a Revise save.
   const [promptDraft, setPromptDraft] = useState(baseline?.currentPrompt ?? basePrompt);
@@ -818,7 +957,7 @@ export default function IntentBoard({
       baseline
         ? {
             id: baseline.promptHolderId,
-            title: 'System Prompt',
+            title: 'Rules',
             definition: '',
             rule: baseline.currentPrompt,
             archived: false,
@@ -830,6 +969,69 @@ export default function IntentBoard({
         : null,
     [baseline]
   );
+
+  /**
+   * Overlap resolution, the short way: "these questions are not THAT intent".
+   *
+   * Declares an exception link (from → to), which the deterministic resolver
+   * applies at read time: `from` is dropped whenever `to` also claims the
+   * question. So the moment one claimant is left the boundary resolves into a
+   * normal assignment and disappears from the queue — no LLM call, and no pin,
+   * which would move the intent's defHash and mark all of its ratings stale.
+   * Undo lives on the intent card (the "except …" chip) and in the version
+   * history, since the links route records a config version.
+   */
+  const [droppingIntentId, setDroppingIntentId] = useState<number | null>(null);
+  const [removingTieBreaker, setRemovingTieBreaker] = useState(false);
+  /** Undo a tie-breaker: both intents claim those questions again, so they go
+   * back to the overlap queue. Deliberately NOT on the chip — see the chip. */
+  async function removeTieBreaker(fromIntentId: number, toIntentId: number) {
+    if (removingTieBreaker) return;
+    setRemovingTieBreaker(true);
+    try {
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/links?from=${fromIntentId}&to=${toIntentId}`,
+        { method: 'DELETE' }
+      );
+      if (!res.ok) {
+        window.alert('Failed to remove the tie-breaker.');
+        setRemovingTieBreaker(false);
+        return;
+      }
+      router.refresh();
+    } catch {
+      window.alert('Failed to remove the tie-breaker — network error.');
+      setRemovingTieBreaker(false);
+    }
+  }
+  useEffect(() => setRemovingTieBreaker(false), [links]);
+  // Busy state clears when the new links land, not when the POST returns —
+  // router.refresh() is fire-and-forget, and until it repaints the overlap is
+  // still on screen with live buttons.
+  useEffect(() => setDroppingIntentId(null), [links]);
+  async function dropFromOverlap(fromIntentId: number, otherIds: number[]) {
+    const toIntentId = otherIds[0];
+    if (toIntentId === undefined || droppingIntentId !== null) return;
+    setDroppingIntentId(fromIntentId);
+    try {
+      const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/links`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromIntentId, toIntentId }),
+      });
+      // 409 = the link (or its reverse) is already declared — the overlap is
+      // resolved either way, so refresh rather than shout at the instructor.
+      if (!res.ok && res.status !== 409) {
+        window.alert('Failed to take that intent off these questions.');
+        setDroppingIntentId(null);
+        return;
+      }
+      router.refresh();
+    } catch {
+      window.alert('Failed to take that intent off these questions.');
+      setDroppingIntentId(null);
+    }
+  }
 
   const [newIntentOpen, setNewIntentOpen] = useState(false);
   const [newIntentSeed, setNewIntentSeed] = useState<{
@@ -961,16 +1163,34 @@ export default function IntentBoard({
 
   // ---- Starter sets: the Jelson taxonomy as a PERMANENT library of pre-built
   // intents. The library is a catalog — activating a set CLONES its template
-  // into a live intent (ratings copied, so it's instant); the template and its
-  // library entry stay put. Already-active sets show an "Added" state instead
-  // of disappearing.
-  const [starterOpen, setStarterOpen] = useState(false);
+  // into a live intent (ratings copied, so it's instant); the TEMPLATE row in
+  // the database stays put — the prepared library is never consumed — but the
+  // set disappears from this tree, so the same starter cannot be added twice.
+  // Open by default: the section costs four Type headings, and seeing that a
+  // prepared library exists is the point. The TYPES stay collapsed, so it is
+  // still unpacked one at a time (StarterSetTree's `expanded`).
+  const [starterOpen, setStarterOpen] = useState(true);
   const [activatingCode, setActivatingCode] = useState<string | null>(null);
+  /** Definitions added since the last server render — see starterGroups. */
+  const [justAddedDefs, setJustAddedDefs] = useState<Set<string>>(() => new Set());
+  const markJustAdded = (definition: string) =>
+    setJustAddedDefs((prev) => new Set(prev).add(definition.trim()));
+  // A fresh server render supersedes the optimistic overlay: whatever it says
+  // about live intents is now the truth (added, or archived again since).
+  useEffect(() => {
+    setJustAddedDefs((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [intents]);
   const starterGroups = useMemo(() => {
     // A live (unarchived, non-template) intent with this definition exists.
     const activeDefs = new Set(
       intents.filter((i) => !i.archived && !i.isTemplate).map((i) => i.definition.trim())
     );
+    // …plus what was added THIS render cycle. router.refresh() is fire-and-
+    // forget, so between the POST resolving and the server render landing the
+    // starter row (and its Add button) would otherwise come back and take a
+    // second click. justAddedDefs is cleared as soon as any fresh server render
+    // arrives, so an intent archived right after adding puts its set back.
+    for (const d of justAddedDefs) activeDefs.add(d);
     // Prepared templates (rated in advance) by definition → id for instant activate.
     const templateByDef = new Map(
       intents.filter((i) => i.isTemplate).map((i) => [i.definition.trim(), i.id])
@@ -1024,8 +1244,9 @@ export default function IntentBoard({
       });
     }
     return groups;
-  }, [jelsonSuggestions, intents]);
-  const starterCount = starterGroups.reduce((n, g) => n + g.sets.length, 0);
+  }, [jelsonSuggestions, intents, justAddedDefs]);
+  // Only what is still addable — the header count must match the rows inside.
+  const starterCount = starterGroups.reduce((n, g) => n + g.sets.filter((s) => !s.active).length, 0);
   // Unprepared work for "Run all": every set/Type without a template — active
   // ones included, so a template lost to the legacy consume-on-activate
   // behavior gets rebuilt (the server reuses same-spec ratings, no LLM cost).
@@ -1107,10 +1328,14 @@ export default function IntentBoard({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ fromTemplateId: set.templateId, autoTitle: false }),
         });
-        if (!res.ok) {
+        // 409 = the server's one-live-intent-per-set guard already has it (a
+        // stale tab, a replayed click). Not an error to the instructor: mark it
+        // added so the row leaves the library, exactly as a fresh add would.
+        if (!res.ok && res.status !== 409) {
           window.alert('Failed to activate the starter set.');
           return;
         }
+        markJustAdded(set.definition);
         router.refresh();
         return;
       }
@@ -1129,6 +1354,7 @@ export default function IntentBoard({
       const created = (await res.json().catch(() => null)) as { intent?: { id?: number } } | null;
       const newId = created?.intent?.id;
       if (!newId) return;
+      markJustAdded(set.definition);
       setRunning(true);
       setRunProgress({ rated: 0, total: rows.length, failed: 0 });
       await runShardedRate({
@@ -1248,6 +1474,31 @@ export default function IntentBoard({
     return map;
   }, [rows, activeIds, links]);
 
+  /**
+   * Which active intents claim each question BEFORE exception links settle it.
+   *
+   * `resolutions` above is the post-link picture, where the intent a tie-breaker
+   * dropped has simply vanished — so it cannot answer "which questions does this
+   * tie-breaker actually decide?". This is the same computation minus the link
+   * pass; a tie-breaker applies wherever both of its intents appear here.
+   */
+  const claimants = useMemo(() => {
+    const map = new Map<number, number[]>();
+    for (const r of rows) {
+      const ratings = new Map<number, RatingLevel>();
+      for (const [idStr, v] of Object.entries(r.intentRatings)) ratings.set(Number(idStr), v.rating);
+      const pins = new Map<number, 'in' | 'out'>(
+        Object.entries(r.pinnedIntents).map(([k, v]) => [Number(k), v])
+      );
+      const effective = applyPinOverrides(ratings, pins);
+      map.set(
+        r.messageId,
+        activeIds.filter((id) => isIncludedRating(effective.get(id)))
+      );
+    }
+    return map;
+  }, [rows, activeIds]);
+
   const counts = useMemo(() => {
     const perIntent = new Map<number, number>();
     let unassigned = 0;
@@ -1283,9 +1534,14 @@ export default function IntentBoard({
       (selection.kind === 'pending' && counts.pending === 0) ||
       // A browsed template can leave the library (activated → live intent).
       (selection.kind === 'starter' &&
-        !selection.ids.some((tid) => intentById.get(tid)?.isTemplate));
+        !selection.ids.some((tid) => intentById.get(tid)?.isTemplate)) ||
+      // The tie-breaker was removed (here or from the intent card).
+      (selection.kind === 'tiebreak' &&
+        !links.some(
+          (l) => l.fromIntentId === selection.fromIntentId && l.toIntentId === selection.toIntentId
+        ));
     if (gone) setSelection({ kind: 'all' });
-  }, [selection, activeIntents, counts, intentById]);
+  }, [selection, activeIntents, counts, intentById, links]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
@@ -1312,9 +1568,14 @@ export default function IntentBoard({
         case 'search':
           // A baseline saved search: its cached clearly-in messageIds.
           return selection.ids.includes(r.messageId);
+        case 'tiebreak': {
+          // Both intents claim it → this is a question the tie-breaker decides.
+          const c = claimants.get(r.messageId);
+          return !!c && c.includes(selection.fromIntentId) && c.includes(selection.toIntentId);
+        }
       }
     });
-  }, [rows, resolutions, selection]);
+  }, [rows, resolutions, selection, claimants]);
 
   const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1428,7 +1689,7 @@ export default function IntentBoard({
       case 'intent':
         return titleOf(selection.id);
       case 'unassigned':
-        return 'Uncovered questions';
+        return 'Uncategorized questions';
       case 'pending':
         return 'Not yet rated';
       case 'boundary':
@@ -1437,6 +1698,8 @@ export default function IntentBoard({
         return `Starter set · ${selection.label}`;
       case 'search':
         return `Search · ${selection.label}`;
+      case 'tiebreak':
+        return `Tie-breaker · ${titleOf(selection.toIntentId)} wins`;
     }
   })();
 
@@ -1586,22 +1849,23 @@ export default function IntentBoard({
         />
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 flex-1 min-h-0">
-        {/* LEFT — Base prompt · Intents · Needs decision · Unassigned. In the
-            baseline the System Prompt is pinned at the top and only the Searches
-            list below it scrolls (flex column); SCORE scrolls as one panel. */}
+        {/* LEFT — Intents · Needs decision · Unassigned. In the baseline the
+            Rules panel is pinned at the top and only the Searches list below
+            it scrolls (flex column); SCORE scrolls as one panel. */}
         <div
           className={`rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] ${
             isBaseline ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'
           }`}
         >
           {isBaseline ? (
-            /* BASELINE: read-only view of the current system prompt (like SCORE's
-               Base Prompt). Editing happens in Revise (RuleWorkbench on the
-               holder); Deploy lives in the header. */
+            /* BASELINE: read-only view of the current system prompt — the
+               participant's own artifact, the counterpart of the per-intent
+               rules SCORE shows on each intent row. Editing happens in Revise
+               (RuleWorkbench on the holder); Deploy lives in the header. */
             <div className="shrink-0 border-b border-[hsl(var(--border))] px-3 py-2">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  System Prompt
+                  Rules
                 </span>
                 <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
                   {baseline?.deployedVersionNo ? `v${baseline.deployedVersionNo} live` : 'not deployed'}
@@ -1611,41 +1875,14 @@ export default function IntentBoard({
                 {promptDraft.trim() ? (
                   promptDraft
                 ) : (
-                  <span className="italic">No system prompt yet — open a question and Revise to write one.</span>
+                  <span className="italic">No rules yet — open a question and Revise to write them.</span>
                 )}
               </div>
               <p className="mt-1 text-[10px] text-[hsl(var(--muted-foreground))]">
                 Edited in Revise (from a question) · deployed from the top-right.
               </p>
             </div>
-          ) : (
-            /* BASE PROMPT (read-only, managed in assignment settings) */
-            <div className="border-b border-[hsl(var(--border))] px-3 py-2">
-              <button
-                onClick={() => setBasePromptOpen((v) => !v)}
-                className="w-full text-left flex items-center justify-between gap-2"
-              >
-                <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  Base Prompt
-                </span>
-                <ChevronRight
-                  className={`w-3.5 h-3.5 text-[hsl(var(--muted-foreground))] transition-transform ${basePromptOpen ? 'rotate-90' : ''}`}
-                />
-              </button>
-              <p
-                className={`mt-1 text-xs whitespace-pre-wrap ${basePrompt.trim() ? 'text-[hsl(var(--muted-foreground))]' : 'italic text-[hsl(var(--muted-foreground))]'} ${basePromptOpen ? '' : 'line-clamp-2'}`}
-              >
-                {basePrompt.trim()
-                  ? basePrompt
-                  : 'No base prompt — the chatbot starts with no system guidance. Intents build on top of this empty baseline.'}
-              </p>
-              {basePromptOpen && (
-                <p className="mt-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
-                  Always applied. Managed in assignment settings — not edited in the SCORE loop.
-                </p>
-              )}
-            </div>
-          )}
+          ) : null}
 
           {/* OVERLAPS — only when boundaries exist. The per-pair "Decide"
               comparison flow is PARKED for now (DecideOwnershipModal stays in
@@ -1674,35 +1911,50 @@ export default function IntentBoard({
                 </button>
               ))}
               <p className="text-[11px] text-amber-700/80">
-                Answered with the base prompt until resolved — refine the intents in{' '}
+                Answered without an intent rule until resolved — refine the intents in{' '}
                 <span className="font-medium">Edit intent</span>.
               </p>
             </div>
           )}
 
-          {/* INTENTS (score) / SEARCHES (baseline) — the header stays fixed in
-              the baseline (shrink-0 is inert in SCORE's non-flex panel). */}
-          <div className="shrink-0 px-3 pt-2 pb-1 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
+          {/* INTENTS (score) / SEARCHES (baseline) + the whole-log filters.
+              Sticky: in the baseline the panel is a flex column and this block
+              is shrink-0, and in SCORE the panel scrolls as one — so All /
+              Uncategorized would otherwise scroll away behind a long intent list. */}
+          <div className="shrink-0 sticky top-0 z-10 bg-[hsl(var(--card))]">
+            <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                 {isBaseline ? 'Searches' : 'Intents'}
               </span>
               <button
-                onClick={() => setSelection({ kind: 'all' })}
-                className={`text-xs px-1.5 py-0.5 rounded ${
-                  selection.kind === 'all' ? 'bg-[hsl(var(--muted))] font-medium' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/50'
-                }`}
+                onClick={() => (isBaseline ? setSearchMode({ kind: 'new' }) : setNewIntentOpen(true))}
+                className="inline-flex items-center gap-1 shrink-0 text-xs px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+                title={isBaseline ? 'Create a new search' : 'Create a new intent'}
               >
-                All · {rows.length}
+                <Plus className="w-3 h-3" /> New
               </button>
             </div>
-            <button
-              onClick={() => (isBaseline ? setSearchMode({ kind: 'new' }) : setNewIntentOpen(true))}
-              className="inline-flex items-center gap-1 shrink-0 text-xs px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-              title={isBaseline ? 'Create a new search' : 'Create a new intent'}
-            >
-              <Plus className="w-3 h-3" /> New
-            </button>
+            {/* The two views of the WHOLE log, as one either/or control. The
+                baseline has no intents, so it gets All alone (a full-width
+                "clear the search filter" button). */}
+            <div className="mx-3 mb-2 flex items-stretch gap-1 rounded-md bg-[hsl(var(--muted))] p-0.5">
+              <FilterSegment
+                label="All"
+                count={rows.length}
+                active={selection.kind === 'all'}
+                onClick={() => setSelection({ kind: 'all' })}
+                title="Every logged question"
+              />
+              {!isBaseline && (
+                <FilterSegment
+                  label="Uncategorized"
+                  count={counts.unassigned}
+                  active={selection.kind === 'unassigned'}
+                  onClick={() => setSelection({ kind: 'unassigned' })}
+                  title="No intent captures these yet — no intent rule is applied."
+                />
+              )}
+            </div>
           </div>
 
           {isBaseline && (
@@ -1780,12 +2032,13 @@ export default function IntentBoard({
                     }`}
                     onClick={() => setSelection({ kind: 'intent', id: intent.id })}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium truncate">{intent.title}</span>
-                      <Badge n={counts.perIntent.get(intent.id) ?? 0} />
-                    </div>
-                    {/* When/Then as short version labels — hovering anywhere on
-                        this block reveals BOTH full texts in one tooltip. */}
+                    {/* Navigation only: the title and how many questions it
+                        holds. The definition, the rule and their edit actions
+                        moved to the middle column's header, where the SELECTED
+                        intent gets full width and real buttons instead of two
+                        truncated version labels repeated down the whole list.
+                        Hover still reveals both texts, so intents can be
+                        compared without changing the selection. */}
                     <HoverReveal
                       content={
                         <div className="space-y-1.5 text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
@@ -1807,120 +2060,57 @@ export default function IntentBoard({
                             <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                               Then
                             </span>{' '}
-                            {intent.rule ?? <span className="italic">No rule yet — base prompt applies</span>}
+                            {intent.rule ?? <span className="italic">No rule yet</span>}
                           </p>
                         </div>
                       }
                     >
-                      {/* Each line carries ITS OWN edit affordance, flowing
-                          INLINE right after the text (after the ellipsis when
-                          truncated): pencil on card hover, label expands on
-                          button hover — When → Edit intent, Then → Edit rule. */}
-                      <div className="mt-0.5 flex items-center text-[11px] text-[hsl(var(--muted-foreground))]">
-                        <p className="min-w-0 truncate">
-                          <span className="font-semibold">When</span>{' '}
-                          {(intent.intentVersionNo ?? 0) > 0 ? `v${intent.intentVersionNo} ` : ''}
-                          {intent.title}
-                        </p>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditIntent(intent);
-                          }}
-                          className="group/edit ml-1 shrink-0 inline-flex items-center gap-0.5 rounded px-0.5 py-px opacity-0 group-hover:opacity-100 hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
-                          title="Edit intent — which student questions it captures"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span className="hidden text-[10px] font-medium group-hover/edit:inline">
-                            Edit intent
-                          </span>
-                        </button>
-                      </div>
-                      <div className="mt-0.5 flex items-center text-[11px] text-[hsl(var(--muted-foreground))]">
-                        <p className="min-w-0 truncate">
-                          <span className="font-semibold">Then</span>{' '}
-                          {intent.rule ? (
-                            intent.latestRuleVersion ? (
-                              `v${intent.latestRuleVersion.versionNo}${
-                                intent.latestRuleVersion.name ? ` ${intent.latestRuleVersion.name}` : ''
-                              }`
-                            ) : (
-                              intent.rule
-                            )
-                          ) : (
-                            <span className="italic">No rule yet — base prompt applies</span>
-                          )}
-                        </p>
-                        {(() => {
-                          // Rule editing needs an anchor question — use the
-                          // intent's most recent capture (pins override).
-                          const anchor = rows.find((r) => {
-                            const pin = r.pinnedIntents[intent.id];
-                            if (pin) return pin === 'in';
-                            return r.intentRatings[intent.id]?.rating === 'clearly_in';
-                          });
-                          return (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (!anchor) return;
-                                setReviseTarget({ row: anchor, intent, viewVersion: null });
-                              }}
-                              disabled={!anchor}
-                              className={`group/edit ml-1 shrink-0 inline-flex items-center gap-0.5 rounded px-0.5 py-px ${
-                                anchor
-                                  ? 'opacity-0 group-hover:opacity-100 hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]'
-                                  : 'opacity-0 group-hover:opacity-30 cursor-not-allowed'
-                              }`}
-                              title={
-                                anchor
-                                  ? 'Edit rule — how the chatbot responds to these questions'
-                                  : 'Edit rule — needs at least one question in this intent first'
-                              }
-                            >
-                              <Pencil className="w-3 h-3" />
-                              <span className="hidden text-[10px] font-medium group-hover/edit:inline">
-                                Edit rule
-                              </span>
-                            </button>
-                          );
-                        })()}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium truncate">{intent.title}</span>
+                        <Badge n={counts.perIntent.get(intent.id) ?? 0} />
                       </div>
                     </HoverReveal>
+                    {/* TIE-BREAKERS this intent yields to. The chip BROWSES —
+                        it filters the list to the questions this tie-breaker
+                        actually decides. Removing it is a deliberate second
+                        step in the middle column's header, so a stray click
+                        can't undo a decision and hand a pile of questions back
+                        to Needs Decision. */}
                     {exceptLinks.length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {exceptLinks.map((l) => (
-                          <button
-                            key={l.toIntentId}
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              if (
-                                !window.confirm(
-                                  `Remove the exception link "${intent.title} except ${titleOf(l.toIntentId)}"? Overlapping questions go back to Needs Decision.`
-                                )
-                              )
-                                return;
-                              try {
-                                const res = await fetch(
-                                  `/api/instructor/assignments/${assignmentId}/score/links?from=${l.fromIntentId}&to=${l.toIntentId}`,
-                                  { method: 'DELETE' }
+                        {exceptLinks.map((l) => {
+                          const key = `tb:${l.fromIntentId}->${l.toIntentId}`;
+                          const active = selection.kind === 'tiebreak' && selection.key === key;
+                          return (
+                            <button
+                              key={l.toIntentId}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelection(
+                                  active
+                                    ? { kind: 'all' }
+                                    : {
+                                        kind: 'tiebreak',
+                                        key,
+                                        fromIntentId: l.fromIntentId,
+                                        toIntentId: l.toIntentId,
+                                      }
                                 );
-                                if (!res.ok) {
-                                  window.alert('Failed to remove the exception link.');
-                                  return;
+                              }}
+                              title={`Tie-breaker — when both match, “${titleOf(l.toIntentId)}” takes the question. Click to see which questions.`}
+                            >
+                              <SmallChip
+                                className={
+                                  active
+                                    ? 'bg-sky-100 text-sky-800 border-sky-300'
+                                    : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
                                 }
-                                router.refresh();
-                              } catch {
-                                window.alert('Failed to remove the exception link — network error.');
-                              }
-                            }}
-                            title="Exception link — click to remove (undo restores the overlap to Needs Decision)"
-                          >
-                            <SmallChip className="bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100">
-                              <Link2 className="w-3 h-3" /> except → {titleOf(l.toIntentId)}
-                            </SmallChip>
-                          </button>
-                        ))}
+                              >
+                                <Link2 className="w-3 h-3" /> yields to {titleOf(l.toIntentId)}
+                              </SmallChip>
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1986,8 +2176,11 @@ export default function IntentBoard({
             </div>
           )}
 
-          {/* PENDING + UNASSIGNED + STARTER SETS — intent-only. Baseline shows
-              its own Searches section (above) instead of this whole block. */}
+          {/* PENDING + STARTER SETS — intent-only. Baseline shows its own
+              Searches section (above) instead of this whole block. Uncategorized
+              lives in the sticky filter control at the top of the column now:
+              it is a view of the whole log, not a library/management row like
+              Archived and Starter sets. */}
           {!isBaseline && (
           <div className="mt-auto border-t border-[hsl(var(--border))]">
             {counts.pending > 0 && (
@@ -2002,17 +2195,6 @@ export default function IntentBoard({
                 <Badge n={counts.pending} />
               </button>
             )}
-            <button
-              onClick={() => setSelection({ kind: 'unassigned' })}
-              className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between ${
-                selection.kind === 'unassigned' ? 'bg-[hsl(var(--muted))] font-medium' : 'hover:bg-[hsl(var(--muted))]/50'
-              }`}
-              title="No intent covers these yet — the base prompt alone applies."
-            >
-              <span className="text-[hsl(var(--muted-foreground))]">Uncovered questions</span>
-              <Badge n={counts.unassigned} />
-            </button>
-
             {/* STARTER SETS — pre-built intent templates (the Jelson taxonomy),
                 grouped by Type. "Run all" pre-rates every set so activation is
                 instant; the hover Add turns one into a live intent. */}
@@ -2063,7 +2245,7 @@ export default function IntentBoard({
                           : unpreparedCount === 0 && staleTemplateCount === 0
                             ? 'Every starter set is prepared and up to date'
                             : unpreparedCount === 0
-                              ? `Run all — ${staleTemplateCount} set(s) carry stale ratings (the rating prompt changed); refresh them`
+                              ? `Run all — ${staleTemplateCount} set(s) carry stale ratings (the matching method changed); refresh them`
                               : 'Run all — pre-rate every starter set so activating is instant'
                       }
                     >
@@ -2092,7 +2274,8 @@ export default function IntentBoard({
 
         {/* MIDDLE — question group */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
-          <div className="sticky top-0 z-10 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))] px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
+          <div className="sticky top-0 z-10 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
+          <div className="px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] truncate">
                 {selectionLabel}
@@ -2120,6 +2303,243 @@ export default function IntentBoard({
               </div>
               <SortSelect value={sortMode} onChange={setSortMode} />
             </div>
+          </div>
+          {/* SELECTION DETAIL — what the current selection IS, and what can be
+              done to it. The left column is navigation; this is the inspector,
+              so it only ever describes ONE thing and can afford full width. */}
+          {(() => {
+            if (selection.kind === 'intent') {
+              const intent = intentById.get(selection.id);
+              if (!intent) return null;
+              // Rule editing opens on an anchor question — the intent's most
+              // recent capture (pins override the classifier).
+              const anchor = rows.find((r) => {
+                const pin = r.pinnedIntents[intent.id];
+                if (pin) return pin === 'in';
+                return r.intentRatings[intent.id]?.rating === 'clearly_in';
+              });
+              return (
+                <div className="px-3 py-2 space-y-1.5 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
+                  <div className="flex items-start gap-2">
+                    <DetailLabel>When</DetailLabel>
+                    <ClampedText text={intent.definition} />
+                    <HeaderAction
+                      onClick={() => setEditIntent(intent)}
+                      title="Edit intent — which student questions it captures"
+                      icon={<Pencil className="w-3 h-3" />}
+                    >
+                      Edit Intent
+                    </HeaderAction>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <DetailLabel>Then</DetailLabel>
+                    {intent.rule?.trim() ? (
+                      <ClampedText text={intent.rule} />
+                    ) : (
+                      <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
+                        No rule yet
+                      </span>
+                    )}
+                    <HeaderAction
+                      onClick={() => anchor && setReviseTarget({ row: anchor, intent, viewVersion: null })}
+                      disabled={!anchor}
+                      title={
+                        anchor
+                          ? 'Edit rule — how the chatbot responds to these questions'
+                          : 'Edit rule — this intent has to capture at least one question first'
+                      }
+                      icon={<Pencil className="w-3 h-3" />}
+                    >
+                      Edit Rule
+                    </HeaderAction>
+                  </div>
+                </div>
+              );
+            }
+            if (selection.kind === 'starter' && !isBaseline) {
+              // The browsed starter, found back from the selection key so the
+              // header offers the SAME activation the library tree does.
+              const isType = selection.key.startsWith('type:');
+              const g = isType
+                ? starterGroups.find((x) => `type:${x.typeKey}` === selection.key)
+                : starterGroups.find((x) => x.sets.some((s) => `set:${s.code}` === selection.key));
+              if (!g) return null;
+              const set = isType ? null : g.sets.find((s) => `set:${s.code}` === selection.key) ?? null;
+              const added = isType ? g.typeActive : set?.active ?? false;
+              const desc = isType ? g.typeDescription : set?.desc ?? '';
+              const adding = activatingCode === (isType ? `type:${g.typeKey}` : set?.code);
+              return (
+                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
+                  <div className="flex items-start gap-2">
+                    <DetailLabel>Set</DetailLabel>
+                    <ClampedText text={desc} muted />
+                    {added ? (
+                      <span className="shrink-0 self-start inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
+                        <Check className="w-3 h-3" /> Added
+                      </span>
+                    ) : adding ? (
+                      <span className="shrink-0 self-start inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-1 text-[11px] font-medium text-[hsl(var(--muted-foreground))]">
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
+                      </span>
+                    ) : (
+                      <HeaderAction
+                        onClick={() =>
+                          isType
+                            ? activateType(g)
+                            : set && void activateStarterSet(set)
+                        }
+                        disabled={running || preparing || !!activatingCode}
+                        title="Add as an intent — it leaves the starter list"
+                        icon={<Plus className="w-3 h-3" />}
+                      >
+                        Add Intent
+                      </HeaderAction>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            if (selection.kind === 'boundary') {
+              // Overlaps are resolved by tightening the colliding intents, so
+              // the header hands you straight into each one's editor.
+              const ids = selection.key.split('+').map(Number).filter((n) => Number.isFinite(n));
+              if (ids.length === 0) return null;
+              return (
+                /* Stacked, not side-by-side: the colliding intents are a LIST
+                   of things to go fix, however many there are, and putting them
+                   beside the explanation squeezed it into a 7-line ribbon. */
+                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-amber-50/40">
+                  <div className="flex items-start gap-2">
+                    <DetailLabel>Both</DetailLabel>
+                    <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-amber-900">
+                      These questions match every intent below. Take off the ones they don&apos;t belong
+                      to — when one is left, it takes them and this overlap is gone.
+                    </span>
+                  </div>
+                  {/* Each colliding intent with its WHEN in full — the overlap
+                      is a disagreement between two definitions, so the two
+                      definitions are the thing to read, side by side is not
+                      possible in this width but stacked is. An overlap bucket
+                      holds few questions, so the extra header height is cheap;
+                      max-h keeps a pathological definition from taking over. */}
+                  <div className="mt-1.5 pl-12 space-y-2 max-h-56 overflow-y-auto">
+                    {ids.map((iid) => {
+                      const target = intentById.get(iid);
+                      return (
+                        <div key={iid} className="flex items-start gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-semibold text-amber-900">{titleOf(iid)}</p>
+                            <p className="mt-0.5 whitespace-pre-wrap text-[11px] leading-relaxed text-amber-900/80">
+                              {target?.definition ?? ''}
+                            </p>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-1">
+                            <HeaderAction
+                              onClick={() => void dropFromOverlap(iid, ids.filter((x) => x !== iid))}
+                              disabled={droppingIntentId !== null || !target}
+                              title={`These questions are not “${titleOf(iid)}” — hand them to the other intent`}
+                              icon={
+                                droppingIntentId === iid ? (
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <X className="w-3 h-3" />
+                                )
+                              }
+                            >
+                              Not this one
+                            </HeaderAction>
+                            {/* The pencil stays for the instructor who would
+                                rather fix the definition than call this one
+                                question set. Icon-only: taking the intent off
+                                is the fast path, editing is the considered one. */}
+                            <button
+                              onClick={() => target && setEditIntent(target)}
+                              disabled={!target}
+                              aria-label={`Edit ${titleOf(iid)}`}
+                              title={`Edit “${titleOf(iid)}” — sharpen its definition instead`}
+                              className="shrink-0 self-start rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+            if (selection.kind === 'tiebreak') {
+              return (
+                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-sky-50/50">
+                  {/* Remove sits with the sentence it undoes — it is THE action
+                      of this panel and takes a fixed, short label. */}
+                  <div className="flex items-start gap-2">
+                    <DetailLabel>Tie</DetailLabel>
+                    <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-sky-900">
+                      Both <span className="font-semibold">{titleOf(selection.fromIntentId)}</span> and{' '}
+                      <span className="font-semibold">{titleOf(selection.toIntentId)}</span> claim the
+                      questions below, and{' '}
+                      <span className="font-semibold">{titleOf(selection.toIntentId)}</span> takes them.
+                      Removing this puts them back in the overlap queue.
+                    </span>
+                    <HeaderAction
+                      onClick={() => void removeTieBreaker(selection.fromIntentId, selection.toIntentId)}
+                      disabled={removingTieBreaker}
+                      title="Remove this tie-breaker — both intents claim these questions again"
+                      icon={
+                        removingTieBreaker ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <X className="w-3 h-3" />
+                        )
+                      }
+                    >
+                      Remove tie-breaker
+                    </HeaderAction>
+                  </div>
+                  {/* The edit buttons get their own line: their labels carry
+                      intent titles, so two of them never fit beside anything.
+                      Each NAMES its intent — a bare pencil gave no clue which
+                      of the two it would open. */}
+                  <div className="mt-1.5 pl-12 flex flex-wrap items-center gap-1">
+                    {[selection.fromIntentId, selection.toIntentId].map((iid) => {
+                      const target = intentById.get(iid);
+                      return (
+                        <HeaderAction
+                          key={iid}
+                          onClick={() => target && setEditIntent(target)}
+                          disabled={!target}
+                          title={`Edit “${titleOf(iid)}” — sharpen its definition instead`}
+                          icon={<Pencil className="w-3 h-3" />}
+                        >
+                          Edit {titleOf(iid)}
+                        </HeaderAction>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+            if (selection.kind === 'search' && isBaseline) {
+              const saved = savedSearches.find((s) => `search:${s.id}` === selection.key);
+              if (!saved) return null;
+              return (
+                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20 flex items-start gap-2">
+                  <DetailLabel>Finds</DetailLabel>
+                  <ClampedText text={saved.description} muted />
+                  <HeaderAction
+                    onClick={() => setSearchMode({ kind: 'saved', searchId: saved.id, definition: saved.description })}
+                    title="Edit this search — change what it looks for"
+                    icon={<Pencil className="w-3 h-3" />}
+                  >
+                    Edit Search
+                  </HeaderAction>
+                </div>
+              );
+            }
+            return null;
+          })()}
           </div>
           {sortedRows.length === 0 ? (
             <p className="p-6 text-sm text-[hsl(var(--muted-foreground))]">
@@ -2189,14 +2609,19 @@ export default function IntentBoard({
                               />
                             );
                           })}
-                        {/* Baseline hides this: it's an intent-membership tag
-                            AND a shortcut into Edit intent — both intent-mechanism
-                            leakage the ablation must not expose. */}
+                        {/* Which intent captured this question, and a shortcut
+                            into its editor. ONLY in the All view: there it is
+                            live coverage feedback. Not in the Starter set view —
+                            once that starter is a live intent every row repeats
+                            the heading above the list, which is no information
+                            at all. (Uncategorized/Not-yet-rated can't reach here
+                            anyway: those views filter to fallback/pending rows,
+                            and this needs an assigned one.) Baseline hides it
+                            outright: an intent-membership tag AND a way into
+                            Edit intent are both mechanism the ablation must not
+                            expose. */}
                         {!isBaseline &&
-                          (selection.kind === 'unassigned' ||
-                            selection.kind === 'all' ||
-                            selection.kind === 'pending' ||
-                            selection.kind === 'starter') &&
+                          selection.kind === 'all' &&
                           res?.kind === 'assigned' &&
                           (() => {
                             const target = intentById.get(res.intentId);
@@ -2274,14 +2699,14 @@ export default function IntentBoard({
                     )}
                   </button>
                   {isBaseline ? (
-                    // BASELINE: Revise the whole monolithic prompt from this
+                    // BASELINE: Revise the one shared rules document from this
                     // question — no owning intent, always available.
                     <button
                       onClick={() => setPromptReviseTarget(selectedRow)}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-                      title="Revise the system prompt from this question"
+                      title="Revise the rules from this question"
                     >
-                      Revise prompt <ChevronRight className="w-3.5 h-3.5" />
+                      Revise rules <ChevronRight className="w-3.5 h-3.5" />
                     </button>
                   ) : (() => {
                     const res = resolutions.get(selectedRow.messageId);
@@ -2527,7 +2952,7 @@ export default function IntentBoard({
                       return pins > 0 ? ` (${pins})` : '';
                     })()}
                   </li>
-                  <li>exception links to and from {purgeTarget.all ? 'them' : 'it'}</li>
+                  <li>tie-breakers to and from {purgeTarget.all ? 'them' : 'it'}</li>
                   <li>cached rule previews</li>
                   <li>{purgeTarget.all ? 'their' : 'this intent’s'} own version history</li>
                 </ul>

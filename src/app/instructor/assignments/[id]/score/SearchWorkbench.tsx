@@ -126,7 +126,7 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
             </div>
             <p className="text-xs text-[hsl(var(--muted-foreground))]">
               Finds every logged student question that matches this description. Read them to decide what to write
-              in the system prompt.
+              in your rules.
             </p>
           </div>
         </div>

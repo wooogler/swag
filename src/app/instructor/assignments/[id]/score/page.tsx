@@ -184,11 +184,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
 
   // Latest saved RULE version per intent (the intents panel's "Then vN name").
   // The board must show the DISPLAY major number (v1, v2, …), NOT the raw
-  // per-intent versionNo — the seed and simulated minors also occupy the
-  // sequence, so raw versionNo runs ahead (e.g. seed=1, minor=2, applied=3
-  // must read as "v2"). Walk each intent's versions ascending, count majors
-  // (minor=false, seed included, mirroring the rule-versions route), and keep
-  // the latest APPLIED (non-minor, non-seed) version with its major ordinal.
+  // per-intent versionNo — the simulated minors also occupy the sequence, so
+  // raw versionNo runs ahead (e.g. seed=1, minor=2, applied=3 must read as
+  // "v2"). Walk each intent's versions ascending, count majors (minor=false,
+  // mirroring the rule-versions route), and keep the latest major with its
+  // ordinal. The v1 seed COUNTS: it is the rule the intent starts from, so a
+  // never-revised intent reads "Then v1 Starting rule" rather than dumping the
+  // raw text.
   const rulesByIntent = new Map<number, typeof ruleVersionRows>();
   for (const v of ruleVersionRows) {
     const list = rulesByIntent.get(v.intentId) ?? [];
@@ -201,8 +203,10 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     let majorNo = 0;
     let latest: { versionNo: number; name: string | null } | null = null;
     for (const v of asc) {
-      if (!v.minor) majorNo += 1;
-      if (!v.minor && v.source !== 'seed') latest = { versionNo: majorNo, name: v.name };
+      if (!v.minor) {
+        majorNo += 1;
+        latest = { versionNo: majorNo, name: v.name };
+      }
     }
     if (latest) latestRuleByIntent.set(intentId, latest);
   }

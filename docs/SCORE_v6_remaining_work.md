@@ -30,6 +30,11 @@
 
 1. **preview = runtime**: base prompt는 어디서나 `assignmentBasePrompt()`(assignment-ai.ts)로,
    주입은 `buildInjectedSystemPrompt()`로. `/api/chat`·compare·preview·스냅샷이 이미 공유 중.
+   **레이어는 항상 하나** (2026-07 교수 피드백): rule이 곧 그 intent의 시스템 프롬프트 전문이고,
+   base prompt는 (a) 새 intent의 rule 시드 (b) 미매칭·미배포 fallback 두 역할만 한다. 합성 문구
+   ("Additional guideline for this reply…")는 제거됐고, UI에는 Base Prompt라는 개념이 노출되지 않는다.
+   *`PREVIEW_VERSION`은 범프하지 않았다* — 해시가 이미 **합성 결과 문자열**을 담고 있어서 출력이 바뀌는
+   경우(base≠빈 값)에만 자동 무효화되고, NIRVANA(base=빈 값)의 기존 캐시는 여전히 정확하다.
 2. **스테일니스 = 해시 비교**: 판정 행의 `def_hash` vs `intentDefHash(definition, selectPromptPins(pins))`.
    정의·핀이 바뀌면 자동 스테일 — 명시적 무효화 쓰기는 force 전용(`def_hash=''`).
 3. **배정은 저장하지 않는다**: 항상 `applyPinOverrides` → `resolveAssignment`로 파생

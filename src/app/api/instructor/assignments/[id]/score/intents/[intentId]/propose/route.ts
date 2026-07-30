@@ -70,15 +70,15 @@ const PROPOSAL_SCHEMA = {
 
 function buildSystemPrompt(): string {
   return [
-    'You revise response RULES for a writing-support chatbot that students use for school assignments.',
-    'An instructor groups student requests into "intents". Each intent has ONE rule: an imperative response guideline injected on top of the chatbot\'s base prompt whenever a student request matches that intent.',
-    'You will get: the base prompt (context only — NEVER duplicate it in the rule), the intent definition, the current rule (possibly none), one anchor question with the response it produced, and the instructor\'s input.',
-    'Write the REVISED RULE:',
-    '- Keep everything in the current rule that still applies; change only what the instructor\'s input demands.',
-    '- FEEDBACK mode: the input is a complaint about the response — fold it into the rule as a durable guideline.',
+    'You revise the SYSTEM PROMPT of a writing-support chatbot that students use for school assignments.',
+    'An instructor groups student requests into "intents". Each intent owns a COMPLETE system prompt (its "rule"): whenever a student request matches that intent, the chatbot answers with that prompt and nothing else stacked underneath.',
+    "You will get: the intent definition, the intent's current prompt, one anchor question with the response it produced, and the instructor's input.",
+    'Return the REVISED FULL PROMPT for this intent:',
+    "- MINIMAL EDIT: change only what the instructor's input demands; preserve everything else verbatim and do not restate unchanged parts differently.",
+    '- FEEDBACK mode: the input is a complaint about the response — fold it into the prompt as a durable instruction to the chatbot.',
     '- REWRITE mode: the input is the response rewritten the way the instructor wants it — infer the GENERALIZABLE change in behavior (tone, structure, what to withhold or ask), never the anchor-specific content.',
-    '- Imperative voice, addressed to the chatbot, scoped to this intent\'s requests. Self-contained. Under 120 words.',
-    '- Also give a short TITLE naming this rule: at most 5 words, git-commit-subject style, no trailing period (e.g. "Scaffold, don\'t write").',
+    "- The prompt only ever runs on requests matching this intent's definition, so it may speak directly to that kind of request. Imperative voice, addressed to the chatbot, coherent and self-contained; do not bloat it.",
+    '- Also give a short TITLE naming this revision: at most 5 words, git-commit-subject style, no trailing period (e.g. "Scaffold, don\'t write").',
     '- The note is one sentence for the instructor: what you changed and why.',
     'Answer in the required JSON shape.',
   ].join('\n');
@@ -132,19 +132,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // hardening an unapplied proposal, else the saved rule. An empty-string
   // draft means "no rule" — same as null.
   const baseRule = body.draftRule !== undefined ? body.draftRule || null : intent.rule;
+  // Exactly what the runtime would send for this intent (buildInjectedSystemPrompt):
+  // the rule, or the assignment default when the rule is empty.
+  const currentPrompt = baseRule?.trim() || assignmentBasePrompt(auth.assignment).trim();
   const parts = [
-    `BASE PROMPT (context only — do not duplicate):\n${assignmentBasePrompt(auth.assignment)}`,
     `INTENT DEFINITION (when a student…): ${intent.definition}`,
-    `CURRENT RULE:\n${baseRule ?? '(none yet — the base prompt alone applies)'}`,
+    `CURRENT PROMPT FOR THIS INTENT:\n${
+      currentPrompt || '(empty — the chatbot currently answers these requests with no system prompt at all)'
+    }`,
     `ANCHOR QUESTION:\n${anchor.queryText}`,
   ];
   if (body.currentResponse) {
     parts.push(`RESPONSE THE INSTRUCTOR IS LOOKING AT:\n${body.currentResponse}`);
   }
   if (body.mode === 'feedback') {
-    parts.push(`INSTRUCTOR FEEDBACK (fold into the rule):\n${body.feedback}`);
+    parts.push(`INSTRUCTOR FEEDBACK (fold into the prompt):\n${body.feedback}`);
   } else {
-    parts.push(`RESPONSE AS THE INSTRUCTOR REWROTE IT (infer the generalizable rule change):\n${body.editedResponse}`);
+    parts.push(`RESPONSE AS THE INSTRUCTOR REWROTE IT (infer the generalizable prompt change):\n${body.editedResponse}`);
   }
 
   try {

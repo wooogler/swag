@@ -12,8 +12,8 @@
  *          agent, input pinned at the bottom
  *
  * Version model (mirrors the intent workbench so the two feel the same):
- *  - v1 is auto-seeded on first open: the intent's current rule — usually
- *    null, i.e. "Base prompt (fallback)" — with the anchor's DELIVERED
+ *  - v1 is auto-seeded on first open: the intent's current rule — the prompt
+ *    it started from, so labelled "Original" — with the anchor's DELIVERED
  *    response as its response. The original is just v1; no separate switcher.
  *  - EVERY simulation (direct edit Preview / feedback / rewrite) records a
  *    MINOR version with its regenerated response — costly LLM output never
@@ -45,6 +45,7 @@ import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import { FEEDBACK_CHIPS } from '@/lib/score/feedback-chips';
+import { seedRuleVersionName } from '@/lib/score/intents';
 import NewIntentSuggestModal from './NewIntentSuggestModal';
 import RuleApplyPreview from './RuleApplyPreview';
 import QueryPicker from './QueryPicker';
@@ -134,14 +135,15 @@ interface RuleWorkbenchProps {
   rows: ScoreQueryRow[];
   row: ScoreQueryRow; // anchor question (assigned to `intent`)
   intent: IntentSummary;
-  /** The fallback system prompt — shown as the rule box's placeholder so
-   * "empty rule" reads as what it actually means. */
+  /** The assignment's default prompt — the text a fresh intent's rule is
+   * seeded with. Used only to tell "still the starting prompt" from "edited"
+   * when seeding v1; never rendered. */
   basePrompt: string;
   /** NIRVANA import → render the delivered response as raw text. */
   isNirvana: boolean;
   /** The rule students CURRENTLY receive (deployed). The cross-query Preview
    * compares the working rule against THIS, so a fresh Save isn't compared to
-   * itself. Null = nothing deployed yet (base-prompt fallback). */
+   * itself. Null = nothing deployed yet. */
   deployedRule?: string | null;
   /** Set when the viewer had a rule VERSION selected — open checked out on it. */
   viewVersion?: { versionNo: number; name: string | null; rule: string | null; response: string | null } | null;
@@ -255,9 +257,9 @@ export default function RuleWorkbench({
       const list = await loadVersions();
       if (!live()) return;
       if (list && list.length === 0) {
-        // First open for this intent → seed v1: the CURRENT rule (usually null
-        // = "Base prompt (fallback)") with the anchor's delivered response as
-        // its response — the "original" is simply v1.
+        // First open for this intent → seed v1: the CURRENT rule, with the
+        // anchor's delivered response as its response — the "original" is
+        // simply v1.
         await seedV1();
       } else if (viewVersion && list?.some((v) => v.versionNo === viewVersion.versionNo)) {
         setViewNo(viewVersion.versionNo);
@@ -320,17 +322,21 @@ export default function RuleWorkbench({
   }
 
   async function seedV1() {
+    // While the prompt is still the one this intent STARTED from — the
+    // assignment's default (a fresh intent is seeded with it), or nothing at all
+    // (NIRVANA) — the anchor's delivered response is exactly what that prompt
+    // produced, so v1 keeps it verbatim. Once edited, v1's response regenerates
+    // lazily like any other step.
+    const untouched = !intent.rule?.trim() || intent.rule.trim() === basePrompt.trim();
     try {
       const res = await fetch(`${base}/intents/${intent.id}/rule-versions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rule: intent.rule, // usually null → "no rule, base prompt fallback"
-          ...(intent.rule ? {} : { name: 'Base prompt' }),
+          rule: intent.rule,
+          ...(untouched ? { name: seedRuleVersionName(intent.rule, { plural: promptMode }) } : {}),
           source: 'seed',
-          // The delivered response IS what this state produced for the anchor
-          // (rule-less intents; a pre-existing rule regenerates lazily instead).
-          updatedResponse: intent.rule ? null : row.responseText?.trim() || null,
+          updatedResponse: untouched ? row.responseText?.trim() || null : null,
           anchorMessageId: row.messageId,
         }),
         signal: signal(),
@@ -369,7 +375,7 @@ export default function RuleWorkbench({
   // The response the pane shows for the active tab under the VIEWED version:
   // the version's own stored response when it anchors this tab; for the SEED
   // (the baseline = what was actually deployed) EVERY question's response is
-  // simply its delivered original — never regenerate under the base prompt;
+  // simply its delivered original — never regenerate the starting prompt;
   // anything else falls back to the lazily generated preview.
   const viewedCoversActive = viewed !== null && viewed.anchorMessageId === activeId;
   const viewedIsSeed = viewed?.source === 'seed';
@@ -887,7 +893,7 @@ export default function RuleWorkbench({
             boxEdited
               ? 'Apply your edit first, then Preview'
               : promptMode
-                ? 'Preview this prompt across the log (10 questions at a time)'
+                ? 'Preview these rules across the log (10 questions at a time)'
                 : "Preview this rule across the intent's questions"
           }
         >
@@ -899,7 +905,7 @@ export default function RuleWorkbench({
         {/* LEFT — WHEN (read-only) · THEN (editable rule) · rule history */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
           <div className="p-4 space-y-3">
-            {/* WHEN — intent-only; the baseline prompt has no trigger condition. */}
+            {/* WHEN — intent-only; the baseline's rules have no trigger condition. */}
             {!promptMode && (
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
@@ -915,7 +921,7 @@ export default function RuleWorkbench({
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   {promptMode
-                    ? `System prompt${viewed ? ` · ${versionLabel(viewed)}` : ''}`
+                    ? `Rules${viewed ? ` · ${versionLabel(viewed)}` : ''}`
                     : `Then… (rule${viewed ? ` · ${versionLabel(viewed)}` : ''})`}
                 </p>
                 {readOnly ? (
@@ -934,9 +940,9 @@ export default function RuleWorkbench({
                 readOnly={readOnly}
                 rows={9}
                 placeholder={
-                  basePrompt.trim()
-                    ? `Empty — the base prompt is the fallback:\n\n${basePrompt}`
-                    : 'Empty — no rule and no base prompt: the chatbot answers with no system prompt at all.'
+                  promptMode
+                    ? 'Empty — the chatbot answers with no rules at all.'
+                    : 'Empty — this intent has no rule of its own yet.'
                 }
                 title={readOnly ? 'Viewing an old step — Revert to make it live, or click the newest step to edit' : undefined}
                 className={`mt-1 w-full text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
@@ -1372,7 +1378,7 @@ export default function RuleWorkbench({
                       as a self-contained changelog. */}
                   {m.rule !== undefined && (
                     <div className="mt-1 max-h-40 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 text-xs leading-relaxed whitespace-pre-wrap text-[hsl(var(--foreground))]">
-                      {m.rule ?? <span className="italic">(no rule — base prompt only)</span>}
+                      {m.rule ?? <span className="italic">(no rule yet)</span>}
                     </div>
                   )}
                 </div>

@@ -68,7 +68,7 @@ export default function DeployControls({ assignmentId, versions, selectedVersion
         title={
           latestNo !== null
             ? `Students are on chat v${latestNo}${dirty ? ' — undeployed changes' : ''}`
-            : 'Not deployed — students get the base prompt only'
+            : 'Not deployed — students get the chatbot as it is today'
         }
       >
         <Rocket className="w-3.5 h-3.5" />

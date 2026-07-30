@@ -54,7 +54,7 @@ export default function BaselineDeployButton({
         onClick={deploy}
         disabled={busy}
         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-        title="Publish the current system prompt to the student chat"
+        title="Publish the current rules to the student chat"
       >
         {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />}
         Deploy

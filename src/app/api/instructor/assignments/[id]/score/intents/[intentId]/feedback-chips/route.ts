@@ -74,7 +74,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
   try {
     const user = [
       `INTENT (when a student…): ${intent.definition}`,
-      `CURRENT RULE: ${intent.rule ?? '(none, base prompt fallback)'}`,
+      `CURRENT RULE: ${intent.rule ?? '(none — the chatbot answers these with no guidance of its own)'}`,
       'CANONICAL TEMPLATES:',
       ...CHIP_KEYS.map((k) => `${k}: ${CANONICAL_CHIP_TEXT[k]}`),
     ].join('\n\n');
