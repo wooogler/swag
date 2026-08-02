@@ -19,17 +19,28 @@ import { NextResponse } from 'next/server';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { scoreDissections, scoreIntentRatings, scoreQueryEmbeddings } from '@/db/schema';
+import {
+  scoreDissections,
+  scoreIntentRatings,
+  scoreQueryEmbeddings,
+  scoreQueryTypes,
+} from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
+import { classifyMessageType } from '@/lib/score/type-classifier';
 import { computeDissections } from '@/lib/score/dissect';
 import {
   ensureIntentTables,
   loadIntentState,
   type PromptReadyIntent,
 } from '@/lib/score/intent-store';
-import { DISSECTION_VERSION, type DissectionResult, type MaterialKind } from '@/lib/score/intents';
+import {
+  DISSECTION_VERSION,
+  TYPE_CLASSIFIER_VERSION,
+  type DissectionResult,
+  type MaterialKind,
+} from '@/lib/score/intents';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import { ensureScoreTable, getQueryRecords, type QueryRecord } from '@/lib/score/queries';
@@ -76,14 +87,22 @@ interface MessageJob {
   record: QueryRecord;
   staleIntents: PromptReadyIntent[];
   needsDissection: boolean;
+  /** v7: no score_query_types row yet (or one below TYPE_CLASSIFIER_VERSION). */
+  needsType: boolean;
 }
 
 /**
  * Pending work per message against the CURRENT intent config. A rating row is
  * stale when missing or its stored def_hash ≠ the intent's current defHash;
- * a dissection is stale when missing or below DISSECTION_VERSION. Dissection
+ * a dissection is stale when missing or below DISSECTION_VERSION; a type
+ * judgment is stale when missing or below TYPE_CLASSIFIER_VERSION. Dissection
  * piggybacks on intent-scoped runs only when the message is already being
  * rated (the modal loop should not re-dissect the whole log).
+ *
+ * The type pass is intent-INDEPENDENT: it must run even on a board with zero
+ * intents, because the v7 entry experience is browsing the log by type BEFORE
+ * any intent exists. So it is computed outside the "no intents in scope" guard
+ * that suppresses rating/dissection work.
  */
 async function loadRateStatus(
   assignmentId: string,
@@ -100,26 +119,29 @@ async function loadRateStatus(
   const wanted = scopedIntentIds
     ? promptReady.filter((p) => scopedIntentIds.includes(p.intent.id))
     : promptReady;
+  // No intents in scope → no RATING work (and no dissection-only sweep, which
+  // would churn the whole log for a viewer nicety). Type work still applies.
+  const noIntents = wanted.length === 0;
 
-  // No intents in scope → no work. (Without this, dissection-only jobs would
-  // be counted here but refused by POST — a lying "remaining".)
-  if (wanted.length === 0) {
-    return { jobs: [], total: records.length, remaining: 0, rated: records.length };
-  }
-
-  const [ratingRows, dissectionRows] = await Promise.all([
-    db
-      .select({
-        messageId: scoreIntentRatings.messageId,
-        intentId: scoreIntentRatings.intentId,
-        defHash: scoreIntentRatings.defHash,
-      })
-      .from(scoreIntentRatings)
-      .where(eq(scoreIntentRatings.assignmentId, assignmentId)),
+  const [ratingRows, dissectionRows, typeRows] = await Promise.all([
+    noIntents
+      ? Promise.resolve([])
+      : db
+          .select({
+            messageId: scoreIntentRatings.messageId,
+            intentId: scoreIntentRatings.intentId,
+            defHash: scoreIntentRatings.defHash,
+          })
+          .from(scoreIntentRatings)
+          .where(eq(scoreIntentRatings.assignmentId, assignmentId)),
     db
       .select({ messageId: scoreDissections.messageId, version: scoreDissections.version })
       .from(scoreDissections)
       .where(eq(scoreDissections.assignmentId, assignmentId)),
+    db
+      .select({ messageId: scoreQueryTypes.messageId, version: scoreQueryTypes.version })
+      .from(scoreQueryTypes)
+      .where(eq(scoreQueryTypes.assignmentId, assignmentId)),
   ]);
 
   // Hash-keyed history: a (message, intent) can hold rows for several specs.
@@ -136,17 +158,30 @@ async function loadRateStatus(
   const dissectionFresh = new Set(
     dissectionRows.filter((d) => d.version >= DISSECTION_VERSION).map((d) => d.messageId)
   );
+  const typeFresh = new Set(
+    typeRows.filter((t) => t.version >= TYPE_CLASSIFIER_VERSION).map((t) => t.messageId)
+  );
 
   const jobs: MessageJob[] = [];
   for (const record of records) {
     const have = hashesByMessage.get(record.messageId);
-    const staleIntents = wanted.filter(
-      (p) => !have?.has(`${p.intent.id}:${p.defHash}`)
-    );
+    const staleIntents = noIntents
+      ? []
+      : wanted.filter((p) => !have?.has(`${p.intent.id}:${p.defHash}`));
+    // Same piggyback policy as dissection: an intent-scoped run (the workbench
+    // Apply loop) types only the messages it is already rating, so applying one
+    // intent never silently sweeps the whole log.
+    const needsType =
+      !typeFresh.has(record.messageId) && (scopedIntentIds ? staleIntents.length > 0 : true);
     const dissectionStale = !dissectionFresh.has(record.messageId);
-    const needsDissection = dissectionStale && (scopedIntentIds ? staleIntents.length > 0 : true);
-    if (staleIntents.length > 0 || needsDissection) {
-      jobs.push({ record, staleIntents, needsDissection });
+    // A message being typed gets its dissection first: the split is deterministic
+    // (no LLM cost) and it materially steers the type call, whose verdict is then
+    // cached for the message's lifetime.
+    const needsDissection =
+      dissectionStale &&
+      (needsType || (!noIntents && (scopedIntentIds ? staleIntents.length > 0 : true)));
+    if (staleIntents.length > 0 || needsDissection || needsType) {
+      jobs.push({ record, staleIntents, needsDissection, needsType });
     }
   }
 
@@ -219,14 +254,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
   const state = await loadIntentState(id);
   const scoped = body.intentIds ?? null;
-  if (state.promptReady.length === 0) {
-    // No active intents → nothing to rate (dissection-only sweeps would burn
-    // the whole log for a viewer nicety; they ride along once intents exist).
-    return NextResponse.json({
-      processed: 0, succeeded: 0, failed: 0, total: 0, rated: 0, remaining: 0,
-      model: getDefaultScoreModel(),
-    });
-  }
+  // NOTE: there is deliberately no "no active intents → return" guard here any
+  // more. Rating and dissection work is still suppressed in that state (see
+  // loadRateStatus), but the v7 type pass must be able to run on a board that
+  // has no intents yet — browsing the log by type is what precedes creating the
+  // first one.
 
   if (body.force) {
     // Ratings are hash-keyed history now — force must NOT rewrite hashes (that
@@ -311,14 +343,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .delete(scoreQueryEmbeddings)
       .where(inArray(scoreQueryEmbeddings.messageId, [...dissections.keys()]));
   }
+  // Progress is tracked per MESSAGE: a job counts as succeeded when at least one
+  // of its pending items (dissection / type / ratings) actually wrote. That keeps
+  // the client's `succeeded === 0` stall detector honest now that a job can carry
+  // three kinds of work, while `remaining` (recomputed from the DB below) stays
+  // the authoritative loop condition.
+  const progressed = new Set<number>();
   // Jobs whose ONLY pending work was the (now-done) dissection are complete.
-  const dissectionOnly = batch.filter(
-    (j) => j.needsDissection && j.staleIntents.length === 0
-  ).length;
+  for (const j of batch) {
+    if (j.needsDissection && j.staleIntents.length === 0 && !j.needsType) {
+      progressed.add(j.record.messageId);
+    }
+  }
 
-  // The LLM now handles ONLY the per-intent ratings (no dissection).
+  // The LLM handles the per-intent ratings and — as a SEPARATE call — the type
+  // judgment (see type-classifier.ts: keeping the rating prompt byte-identical
+  // is what avoids an INTENT_RATING_VERSION bump).
   const ratingJobs = batch.filter((j) => j.staleIntents.length > 0);
-  let succeeded = dissectionOnly;
+  const typeJobs = batch.filter((j) => j.needsType);
   let failed = 0;
   const limit = createLimiter(SCORE_CONCURRENCY);
 
@@ -328,8 +370,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // for the messages it covers; for the rest (dissection already fresh) load the
   // stored rows. Missing → null → the reworded no-request rule still applies.
   const dissectionByMsg = new Map<number, DissectionResult>();
-  const ratingMsgIds = ratingJobs.map((j) => j.record.messageId);
-  if (ratingMsgIds.length > 0) {
+  // Type calls need the split just as much as rating calls do — more, even: a
+  // type verdict is cached for the message's lifetime, so classifying it without
+  // the steer bakes in the exact error (pasted material read as a request) the
+  // dissection exists to prevent. Load stored rows for BOTH waves.
+  const needDissectionText = [
+    ...new Set([...ratingJobs, ...typeJobs].map((j) => j.record.messageId)),
+  ];
+  if (needDissectionText.length > 0) {
     const stored = await db
       .select({
         messageId: scoreDissections.messageId,
@@ -338,7 +386,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       })
       .from(scoreDissections)
       .where(
-        and(eq(scoreDissections.assignmentId, id), inArray(scoreDissections.messageId, ratingMsgIds))
+        and(
+          eq(scoreDissections.assignmentId, id),
+          inArray(scoreDissections.messageId, needDissectionText)
+        )
       );
     for (const s of stored) {
       dissectionByMsg.set(s.messageId, {
@@ -349,8 +400,49 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
   for (const [mid, d] of dissections) dissectionByMsg.set(mid, d); // fresh overrides stored
 
-  await Promise.all(
-    ratingJobs.map((job) =>
+  // Type pass — one call per message, sharing the limiter with the rating wave
+  // so total concurrency stays bounded. A message's type is judged ONCE EVER
+  // (content is immutable), so an unusable output must NOT be written: leaving
+  // the row absent retries it next POST, whereas a guessed type would be cached
+  // for good and is unrecoverable downstream (the intent only ever sees its own
+  // type's queries).
+  const typeWave = typeJobs.map((job) =>
+    limit(async () => {
+      const rec = job.record;
+      try {
+        const result = await classifyMessageType({
+          queryText: rec.queryText,
+          prevQueryText: rec.prevQueryText,
+          prevResponseText: rec.prevResponseText,
+          dissection: dissectionByMsg.get(rec.messageId) ?? null,
+          model,
+        });
+        if (!result.type) {
+          console.error(`SCORE type classification produced no usable output for message ${rec.messageId}`);
+          return;
+        }
+        const values = {
+          type: result.type,
+          rationale: result.rationale || null,
+          version: TYPE_CLASSIFIER_VERSION,
+          rawResponse: result.raw,
+          model,
+          createdAt: now,
+        };
+        await db
+          .insert(scoreQueryTypes)
+          .values({ assignmentId: id, messageId: rec.messageId, ...values })
+          .onConflictDoUpdate({ target: scoreQueryTypes.messageId, set: values });
+        progressed.add(rec.messageId);
+      } catch (error) {
+        console.error(`SCORE type classification failed for message ${rec.messageId}:`, error);
+      }
+    })
+  );
+
+  await Promise.all([
+    ...typeWave,
+    ...ratingJobs.map((job) =>
       limit(async () => {
         const rec = job.record;
         try {
@@ -404,22 +496,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             );
           }
           await Promise.all(writes);
-          // A call that produced no usable rating wrote nothing → count as failed
-          // so the client's succeeded===0 stall detector can trip.
+          // A call that produced no usable rating wrote nothing → no progress
+          // from this item (the job may still have progressed via its type call).
           if (ratingWrites > 0) {
-            succeeded += 1;
+            progressed.add(rec.messageId);
           } else {
-            failed += 1;
             console.error(`SCORE intent rating produced no usable output for message ${rec.messageId}`);
           }
         } catch (error) {
-          failed += 1;
           // Log server-side only; never echo raw LLM/DB errors to the client.
           console.error(`SCORE intent rating failed for message ${rec.messageId}:`, error);
         }
       })
-    )
-  );
+    ),
+  ]);
+
+  const succeeded = progressed.size;
+  failed = batch.length - succeeded;
 
   const after = await loadRateStatus(id, state.promptReady, scoped, shard);
   if (batch.length > 0) await logStudyEvent(id, 'rating_run', { condition: 'score', processed: batch.length, intentIds: scoped ?? null });

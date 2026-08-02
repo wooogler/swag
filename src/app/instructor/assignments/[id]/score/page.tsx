@@ -1,5 +1,11 @@
 import { db } from '@/db/db';
-import { assignments, scoreConfigVersions, scoreRuleVersions, studentSessions } from '@/db/schema';
+import {
+  assignments,
+  scoreConfigVersions,
+  scoreQueryTypes,
+  scoreRuleVersions,
+  studentSessions,
+} from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
@@ -27,9 +33,12 @@ import DeployControls from './DeployControls';
 import BaselineDeployButton from './BaselineDeployButton';
 import {
   DISSECTION_VERSION,
+  TYPE_CLASSIFIER_VERSION,
   isRatingLevel,
+  isScoreQueryType,
   type MaterialKind,
   type RatingLevel,
+  type ScoreQueryType,
 } from '@/lib/score/intents';
 import IntentBoard, { type IntentSummary, type ScoreQueryRow } from './IntentBoard';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
@@ -87,8 +96,17 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   // accumulate root rows (they are filtered out of every list either way).
   if (studioView === 'score') await ensureTypeRoots(id);
 
-  const [config, records, sessions, intentState, intentRatingRows, dissectionRows, ruleVersionRows, configVersionRows] =
-    await Promise.all([
+  const [
+    config,
+    records,
+    sessions,
+    intentState,
+    intentRatingRows,
+    dissectionRows,
+    ruleVersionRows,
+    configVersionRows,
+    queryTypeRows,
+  ] = await Promise.all([
       getScoreConfig(),
       getQueryRecords(id),
       db
@@ -112,6 +130,14 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         .select({ summary: scoreConfigVersions.summary })
         .from(scoreConfigVersions)
         .where(eq(scoreConfigVersions.assignmentId, id)),
+      db
+        .select({
+          messageId: scoreQueryTypes.messageId,
+          type: scoreQueryTypes.type,
+          version: scoreQueryTypes.version,
+        })
+        .from(scoreQueryTypes)
+        .where(eq(scoreQueryTypes.assignmentId, id)),
     ]);
 
   // Chat deploy versions — the header dropdown, and (?chatv=N) the read-only
@@ -176,6 +202,16 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       },
     ])
   );
+
+  // v7 type layer: which of the 4 fixed types each message was classified into.
+  // Rows below TYPE_CLASSIFIER_VERSION are treated as absent (they will be
+  // re-classified on the next run) rather than shown against a prompt that no
+  // longer exists.
+  const queryTypeByMessage = new Map<number, ScoreQueryType>();
+  for (const t of queryTypeRows) {
+    if (t.version < TYPE_CLASSIFIER_VERSION) continue;
+    if (isScoreQueryType(t.type)) queryTypeByMessage.set(t.messageId, t.type);
+  }
 
   // Pin verdicts per (message, intent) — instructor decisions that override
   // the classifier for the pinned question itself (applyPinOverrides).
@@ -266,6 +302,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         dissection: dissection
           ? { materialKinds: dissection.materialKinds, requests: dissection.requests }
           : null,
+        queryType: queryTypeByMessage.get(rec.messageId) ?? null,
       };
     })
     .sort(
@@ -294,6 +331,9 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       excludedCount: pins.filter((p) => p.verdict === 'out').length,
       latestRuleVersion: latestRuleByIntent.get(i.id) ?? null,
       intentVersionNo: intentVersionCount.get(i.id) ?? 0,
+      type: isScoreQueryType(i.type) ? i.type : null,
+      parentIntentId: i.parentIntentId,
+      position: i.position,
     };
   });
   const links = intentState.links.map((l) => ({

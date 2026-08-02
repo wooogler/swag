@@ -20,6 +20,7 @@ import {
   type AssignmentResolution,
   type MaterialKind,
   type RatingLevel,
+  type ScoreQueryType,
 } from '@/lib/score/intents';
 import { SCORE_RATING_MODEL } from '@/lib/score/models';
 import {
@@ -79,6 +80,10 @@ export interface ScoreQueryRow {
   /** The intent whose rule the runtime injected for this reply (audit trail). */
   appliedIntentId: number | null;
   dissection: { materialKinds: MaterialKind[]; requests: string[] } | null;
+  /** v7: which of the 4 fixed query types this message was classified into.
+   * Null = not yet typed (or typed below TYPE_CLASSIFIER_VERSION) — such a
+   * message has no chain to walk, so routing treats it as pending. */
+  queryType: ScoreQueryType | null;
 }
 
 /** One rule version as the viewer's dropdown consumes it (rule-versions GET
@@ -118,6 +123,12 @@ export interface IntentSummary {
   /** This intent's own definition-version count (config versions touching it) —
    * the intents panel shows "When vN title" with the definition on hover. */
   intentVersionNo?: number;
+  /** v7 tree placement. `type` scopes which queries this intent is judged
+   * against; parent/position place it in that type's first-match chain. Null
+   * type = not yet back-filled (judged whole-log, unroutable until typed). */
+  type: ScoreQueryType | null;
+  parentIntentId: number | null;
+  position: number | null;
 }
 
 export interface IntentLinkSummary {
@@ -965,6 +976,11 @@ export default function IntentBoard({
             pinCount: 0,
             includedCount: 0,
             excludedCount: 0,
+            // The holder is not a routable node — it has no place in any type's
+            // chain (baseline never classifies at all).
+            type: null,
+            parentIntentId: null,
+            position: null,
           }
         : null,
     [baseline]
