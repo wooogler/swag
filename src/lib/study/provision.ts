@@ -150,6 +150,11 @@ async function cloneStarterSet(
   //    map (serial ids), then materialize it for the bulk child remaps. Clearing
   //    the rule does NOT change intentDefHash (definition + pins only), so the
   //    copied ratings stay valid.
+  //    The is_template filter is deliberate and load-bearing for v7: the 4 type
+  //    roots and the baseline prompt-holder are NOT cloned. Each clone grows its
+  //    own lazily (ensureTypeRoots / getOrCreatePromptHolder), seeded from the
+  //    clone's own base prompt — so a master's edited else-rules never leak into
+  //    a participant's board (D12), and rule:null below can't erase them.
   const srcIntents = await tx
     .select()
     .from(scoreIntents)
@@ -166,6 +171,15 @@ async function cloneStarterSet(
         rule: null,
         archived: false,
         isTemplate: true,
+        // v7 tree fields ride along. This .values() list is explicit (no
+        // SELECT *), so any new score_intents column MUST be added here or
+        // clones silently lose it. parent_intent_id still holds the SOURCE id
+        // at this point — remapped in the post-pass below, once _intent_map is
+        // complete (insertion order does not guarantee parents come first).
+        kind: it.kind,
+        type: it.type,
+        parentIntentId: it.parentIntentId,
+        position: it.position,
         createdAt: it.createdAt,
         updatedAt: it.updatedAt,
       })
@@ -179,6 +193,15 @@ async function cloneStarterSet(
       sql`, `
     );
     await tx.execute(sql`INSERT INTO _intent_map (old_id, new_id) VALUES ${values}`);
+    // Remap parent pointers old→new. A parent outside the copied set (e.g. a
+    // template nested under a live intent, which is not cloned) becomes NULL —
+    // a top-level node in the clone — rather than a dangling cross-assignment
+    // pointer.
+    await tx.execute(sql`
+      UPDATE score_intents i
+      SET parent_intent_id = (SELECT im.new_id FROM _intent_map im WHERE im.old_id = i.parent_intent_id)
+      WHERE i.assignment_id = ${newAssignmentId} AND i.parent_intent_id IS NOT NULL
+    `);
   }
   counts.score_intents = intentPairs.length;
 
@@ -225,6 +248,21 @@ async function cloneStarterSet(
     WHERE d.assignment_id = ${sourceAssignmentId}
   `);
   counts.score_dissections = await assignmentCount(tx, 'score_dissections', newAssignmentId);
+
+  // 10b) score_query_types — message-scoped (v7 type layer). Copied, never
+  //      recomputed: message content is immutable, so the master's judgment is
+  //      valid for the clone verbatim, and provisioning stays zero-LLM. The
+  //      version column carries over as-is so a later TYPE_CLASSIFIER_VERSION
+  //      bump correctly marks cloned rows stale.
+  await tx.execute(sql`
+    INSERT INTO score_query_types
+      (assignment_id, message_id, type, rationale, version, raw_response, model, created_at)
+    SELECT ${newAssignmentId}, mm.new_id, t.type, t.rationale, t.version, t.raw_response,
+           t.model, t.created_at
+    FROM score_query_types t JOIN _msg_map mm ON mm.old_id = t.message_id
+    WHERE t.assignment_id = ${sourceAssignmentId}
+  `);
+  counts.score_query_types = await assignmentCount(tx, 'score_query_types', newAssignmentId);
 
   // 11) score_query_embeddings — message-scoped.
   await tx.execute(sql`

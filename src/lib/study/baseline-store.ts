@@ -5,7 +5,7 @@
  * assignment's live base prompt. DDL lives in store.ts. See spec §5.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, or, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   assignments,
@@ -224,10 +224,18 @@ export { PROMPT_HOLDER_TITLE };
 export async function getOrCreatePromptHolder(
   assignmentId: string
 ): Promise<{ id: number; rule: string | null }> {
+  // Match on kind OR the legacy reserved title: clones provisioned before the
+  // v7 kind backfill still carry kind='intent' until ensureIntentTables runs
+  // against their database, and a holder resolved twice would be created twice.
   const existing = await db
     .select({ id: scoreIntents.id, rule: scoreIntents.rule, archived: scoreIntents.archived })
     .from(scoreIntents)
-    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.title, PROMPT_HOLDER_TITLE)))
+    .where(
+      and(
+        eq(scoreIntents.assignmentId, assignmentId),
+        or(eq(scoreIntents.kind, 'prompt_holder'), eq(scoreIntents.title, PROMPT_HOLDER_TITLE))
+      )
+    )
     .limit(1);
   if (existing[0]) {
     // Heal holders created by an earlier archived=true build — the shared
@@ -247,6 +255,9 @@ export async function getOrCreatePromptHolder(
     .values({
       assignmentId,
       title: PROMPT_HOLDER_TITLE,
+      // Not a classification intent: kind keeps it out of the judged set (and
+      // out of the v7 chain) without depending on the title sentinel.
+      kind: 'prompt_holder',
       definition: '',
       rule: seed,
       // NOT archived: the rule-versions endpoints (shared with SCORE) reject

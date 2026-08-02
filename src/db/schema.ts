@@ -1,4 +1,5 @@
-import { pgTable, text, timestamp, boolean, serial, jsonb, index, uniqueIndex, integer } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { pgTable, text, timestamp, boolean, serial, jsonb, index, uniqueIndex, integer, doublePrecision } from 'drizzle-orm/pg-core';
 import { DEFAULT_ASSIGNMENT_AI_GUIDANCE } from '../lib/assignment-ai';
 
 // Instructor table for Phase 2
@@ -195,10 +196,35 @@ export const scoreIntents = pgTable('score_intents', {
   // Pre-built starter-set template: rated in advance (via "Run all") but NOT
   // owning the log — excluded from the active set until activated (→ false).
   isTemplate: boolean('is_template').notNull().default(false),
+  // --- v7 intent tree (see docs/SCORE_v7_intent_tree_design.md) -------------
+  // What this row IS, replacing the PROMPT_HOLDER_TITLE string sentinel:
+  //   'intent'        — an instructor-authored set, judged and routable
+  //   'type_root'     — one of the 4 fixed query types; never judged, its rule
+  //                     is the type's final else (the chain's last stop)
+  //   'prompt_holder' — the baseline condition's monolithic-rule container
+  // Only 'intent' rows enter the judged (promptReady) set.
+  kind: text('kind').notNull().default('intent'),
+  // ScoreQueryType ('planning'|'translating'|'reviewing'|'drafting'). Required
+  // on type_root rows; on 'intent' rows it scopes judgment to that type's
+  // queries. NULL = not yet migrated → treated whole-log (transitional).
+  type: text('type'),
+  // Enclosing set (NULL = direct child of its type root). Deliberately NO
+  // foreign key: runtime DDL creates these tables without FKs, and a parent is
+  // resolved in code by the chain compiler.
+  parentIntentId: integer('parent_intent_id'),
+  // Sibling order key; effective order is (position ?? id, id) so untouched
+  // rows keep creation order. Reorders write fractional midpoints. NEVER part
+  // of intentDefHash — reordering must cost zero LLM calls.
+  position: doublePrecision('position'),
   createdAt: timestamp('created_at').notNull(),
   updatedAt: timestamp('updated_at').notNull(),
 }, (table) => ({
   assignmentIdx: index('score_intents_assignment_idx').on(table.assignmentId),
+  // Exactly one root per (assignment, type) — makes ensureTypeRoots' insert
+  // idempotent under concurrent page loads (ON CONFLICT DO NOTHING).
+  typeRootUnique: uniqueIndex('score_intents_type_root_unique')
+    .on(table.assignmentId, table.type)
+    .where(sql`kind = 'type_root'`),
 }));
 
 // Per-(message, intent, def_hash) 5-level rating + short rationale. Keyed by
@@ -344,6 +370,27 @@ export const scoreDissections = pgTable('score_dissections', {
 }, (table) => ({
   assignmentIdx: index('score_dissections_assignment_idx').on(table.assignmentId),
   messageUnique: uniqueIndex('score_dissections_message_unique').on(table.messageId),
+}));
+
+// v7 type layer: which of the 4 fixed query types a student message belongs to
+// (see docs/SCORE_v7_intent_tree_design.md §3.1). One row per message, and the
+// judgment is made ONCE PER MESSAGE EVER — message content is immutable, so the
+// only invalidation is a TYPE_CLASSIFIER_VERSION bump (rows below it are stale
+// and re-classified on the next rate batch). Shape mirrors score_dissections.
+export const scoreQueryTypes = pgTable('score_query_types', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  type: text('type').notNull(), // ScoreQueryType
+  rationale: text('rationale'), // short, emitted BEFORE the type
+  version: integer('version').notNull(), // TYPE_CLASSIFIER_VERSION at write time
+  rawResponse: text('raw_response'),
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_query_types_assignment_idx').on(table.assignmentId),
+  // Single-column unique: the upsert target (chat_messages ids are global).
+  messageUnique: uniqueIndex('score_query_types_message_unique').on(table.messageId),
 }));
 
 // Chatbot DEPLOY versions: each Deploy freezes the assignment's intent→rule
@@ -592,6 +639,9 @@ export type NewScoreConfigVersion = typeof scoreConfigVersions.$inferInsert;
 
 export type ScoreDissection = typeof scoreDissections.$inferSelect;
 export type NewScoreDissection = typeof scoreDissections.$inferInsert;
+
+export type ScoreQueryTypeRow = typeof scoreQueryTypes.$inferSelect;
+export type NewScoreQueryTypeRow = typeof scoreQueryTypes.$inferInsert;
 
 export type ScoreRulePreview = typeof scoreRulePreviews.$inferSelect;
 export type NewScoreRulePreview = typeof scoreRulePreviews.$inferInsert;

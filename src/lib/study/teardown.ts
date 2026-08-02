@@ -27,6 +27,7 @@ const SCORE_TABLES_BY_ASSIGNMENT = [
   'score_intent_links',
   'score_intent_ratings',
   'score_dissections',
+  'score_query_types',
   'score_query_embeddings',
   'score_subtype_scores',
   'score_classifications',

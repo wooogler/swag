@@ -24,6 +24,7 @@ import {
   scoreIntentPins,
   scoreIntentRatings,
   scoreIntents,
+  scoreRuleVersions,
   studentSessions,
   type ScoreIntent,
   type ScoreIntentLink,
@@ -34,7 +35,11 @@ import {
   DISSECTION_VERSION,
   INTENT_RATING_VERSION,
   PROMPT_HOLDER_TITLE,
+  QUERY_TYPE_LABELS,
+  SCORE_QUERY_TYPES,
+  TYPE_CLASSIFIER_VERSION,
   intentDefHash,
+  seedRuleVersionName,
   selectPromptPins,
   type PromptPin,
 } from './intents';
@@ -57,7 +62,7 @@ async function createIntentTables(): Promise<void> {
   const existing = await db.execute<{ tablename: string }>(sql`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const has = new Set(existing.map((r) => r.tablename));
   if (!has.has('score_intents')) {
@@ -137,6 +142,21 @@ async function createIntentTables(): Promise<void> {
         "message_id" integer NOT NULL,
         "material_kinds" jsonb NOT NULL,
         "requests" jsonb NOT NULL,
+        "version" integer NOT NULL,
+        "raw_response" text,
+        "model" text,
+        "created_at" timestamp NOT NULL
+      )
+    `);
+  }
+  if (!has.has('score_query_types')) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "score_query_types" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "assignment_id" text NOT NULL,
+        "message_id" integer NOT NULL,
+        "type" text NOT NULL,
+        "rationale" text,
         "version" integer NOT NULL,
         "raw_response" text,
         "model" text,
@@ -254,6 +274,39 @@ async function createIntentTables(): Promise<void> {
   if (pinCols.length === 0) {
     await db.execute(sql`ALTER TABLE "score_intent_pins" ADD COLUMN "reason" text`);
   }
+  // v7 intent tree: kind / type / parent_intent_id / position on score_intents.
+  // parent_intent_id gets no FK (the runtime CREATEs above declare none either);
+  // position is double precision so a reorder can bisect between two siblings.
+  const treeCols = await db.execute<{ column_name: string }>(sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'score_intents'
+      AND column_name IN ('kind', 'type', 'parent_intent_id', 'position')
+  `);
+  const haveTreeCols = new Set(treeCols.map((r) => r.column_name));
+  if (!haveTreeCols.has('kind')) {
+    await db.execute(
+      sql`ALTER TABLE "score_intents" ADD COLUMN "kind" text DEFAULT 'intent' NOT NULL`
+    );
+  }
+  if (!haveTreeCols.has('type')) {
+    await db.execute(sql`ALTER TABLE "score_intents" ADD COLUMN "type" text`);
+  }
+  if (!haveTreeCols.has('parent_intent_id')) {
+    await db.execute(sql`ALTER TABLE "score_intents" ADD COLUMN "parent_intent_id" integer`);
+  }
+  if (!haveTreeCols.has('position')) {
+    await db.execute(sql`ALTER TABLE "score_intents" ADD COLUMN "position" double precision`);
+  }
+  // Backfill the kind column from the pre-v7 title sentinel. Deliberately NOT
+  // gated on the ALTER above: a crash between adding the column and backfilling
+  // it would otherwise strand old holders as kind='intent' forever (same
+  // reasoning as the per-table CREATE gating). The predicate makes every run
+  // after the first a no-op. PROMPT_HOLDER_TITLE remains the constant of record
+  // so pre-migration clones keep resolving by title too.
+  await db.execute(sql`
+    UPDATE "score_intents" SET "kind" = 'prompt_holder'
+    WHERE "title" = ${PROMPT_HOLDER_TITLE} AND "kind" <> 'prompt_holder'
+  `);
 
   // Ensure indexes even when tables pre-exist (crash between CREATE TABLE and
   // CREATE INDEX must not strand a table whose unique index upserts target —
@@ -262,6 +315,10 @@ async function createIntentTables(): Promise<void> {
   const wanted: [table: string, name: string, ddl: ReturnType<typeof sql>][] = [
     ['score_intents', 'score_intents_assignment_idx',
       sql`CREATE INDEX IF NOT EXISTS "score_intents_assignment_idx" ON "score_intents" USING btree ("assignment_id")`],
+    // Exactly one type root per (assignment, type): makes ensureTypeRoots'
+    // INSERT ... ON CONFLICT DO NOTHING idempotent under concurrent loads.
+    ['score_intents', 'score_intents_type_root_unique',
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_intents_type_root_unique" ON "score_intents" USING btree ("assignment_id", "type") WHERE "kind" = 'type_root'`],
     ['score_intent_ratings', 'score_intent_ratings_assignment_idx',
       sql`CREATE INDEX IF NOT EXISTS "score_intent_ratings_assignment_idx" ON "score_intent_ratings" USING btree ("assignment_id")`],
     ['score_intent_ratings', 'score_intent_ratings_intent_idx',
@@ -282,6 +339,10 @@ async function createIntentTables(): Promise<void> {
       sql`CREATE INDEX IF NOT EXISTS "score_dissections_assignment_idx" ON "score_dissections" USING btree ("assignment_id")`],
     ['score_dissections', 'score_dissections_message_unique',
       sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_dissections_message_unique" ON "score_dissections" USING btree ("message_id")`],
+    ['score_query_types', 'score_query_types_assignment_idx',
+      sql`CREATE INDEX IF NOT EXISTS "score_query_types_assignment_idx" ON "score_query_types" USING btree ("assignment_id")`],
+    ['score_query_types', 'score_query_types_message_unique',
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_query_types_message_unique" ON "score_query_types" USING btree ("message_id")`],
     ['score_rule_previews', 'score_rule_previews_assignment_idx',
       sql`CREATE INDEX IF NOT EXISTS "score_rule_previews_assignment_idx" ON "score_rule_previews" USING btree ("assignment_id")`],
     ['score_rule_previews', 'score_rule_previews_message_intent_unique',
@@ -306,7 +367,7 @@ async function createIntentTables(): Promise<void> {
   const idx = await db.execute<{ indexname: string }>(sql`
     SELECT indexname FROM pg_indexes
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const have = new Set(idx.map((r) => r.indexname));
   // Ratings were re-keyed from (message, intent) to (message, intent, def_hash)
@@ -384,13 +445,16 @@ export function buildPromptReadyIntents(
   pinsNewestFirst: ScoreIntentPin[]
 ): PromptReadyIntent[] {
   return intents
-    // The baseline prompt-holder is a container for the monolithic system
-    // prompt, not a classification intent — it is never rated, so leaving it in
-    // would make resolveAssignment return `pending` for every message (its
-    // rating is always missing). Exclude it here so every promptReady consumer
-    // (staleness, exclusive assignment, the workbench overlap panel, deploy) is
-    // consistent with the board's own PROMPT_HOLDER_TITLE filter (page.tsx).
-    .filter((i) => !i.archived && i.title !== PROMPT_HOLDER_TITLE)
+    // Only 'intent' rows are judged. The other two kinds are containers, not
+    // classification intents, and leaving either in would make the resolver
+    // return `pending` for every message (their rating is always missing):
+    //   - prompt_holder — the baseline condition's monolithic-rule container
+    //   - type_root     — a type's final else; its rule fires when the chain
+    //                     is exhausted, so it is never rated against the log
+    // Every promptReady consumer (staleness, routing, deploy) inherits this.
+    // The title check stays as a belt-and-braces fallback for clones whose
+    // holder predates the kind backfill.
+    .filter((i) => !i.archived && i.kind === 'intent' && i.title !== PROMPT_HOLDER_TITLE)
     .map((intent) => {
       const promptPins = selectPromptPins(
         pinsNewestFirst
@@ -418,6 +482,102 @@ export async function loadIntentState(assignmentId: string): Promise<IntentState
     latestVersionNo(db, assignmentId),
   ]);
   return { intents, pins, links, versionNo, promptReady: buildPromptReadyIntents(intents, pins) };
+}
+
+/**
+ * The 4 fixed type roots for an assignment, creating any that are missing.
+ *
+ * A type root is a score_intents row (kind='type_root') so that editing its
+ * else-rule reuses the whole rule axis — rule versions, Revise, previews — with
+ * no parallel machinery. It is never judged: buildPromptReadyIntents filters it
+ * out, and the chain compiler treats it as the final else rather than a node.
+ *
+ * Idempotent under concurrent page loads: the insert relies on the partial
+ * unique index (assignment_id, type) WHERE kind='type_root', so racing callers
+ * collide on the index instead of creating duplicate roots, then re-select.
+ *
+ * Seeded from the assignment's base prompt — the same text a v6 intent started
+ * from. On NIRVANA that is empty, which is fine: an empty rule means the
+ * chatbot gets no system message at all (injection.ts), exactly as today.
+ *
+ * Call this only for the SCORE studio view: a baseline clone never routes, so
+ * it must not accumulate root rows (D12 — roots are per-assignment, and a clone
+ * lazily grows its own if it is ever opened as SCORE).
+ */
+export async function ensureTypeRoots(assignmentId: string): Promise<ScoreIntent[]> {
+  await ensureIntentTables();
+  const existing = await db
+    .select()
+    .from(scoreIntents)
+    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.kind, 'type_root')));
+  const have = new Set(existing.map((r) => r.type));
+  const missing = SCORE_QUERY_TYPES.filter((t) => !have.has(t));
+  if (missing.length === 0) return existing;
+
+  const assignmentRows = await db
+    .select({
+      customSystemPrompt: assignments.customSystemPrompt,
+      instructions: assignments.instructions,
+      includeInstructionInPrompt: assignments.includeInstructionInPrompt,
+    })
+    .from(assignments)
+    .where(eq(assignments.id, assignmentId));
+  const seed = assignmentBasePrompt(assignmentRows[0] ?? {});
+  const now = new Date();
+
+  await db
+    .insert(scoreIntents)
+    .values(
+      missing.map((type) => ({
+        assignmentId,
+        title: QUERY_TYPE_LABELS[type],
+        // Never rated, so the definition is unused — the type's meaning lives
+        // in the type-classifier prompt (type-prompts.ts), not here.
+        definition: '',
+        rule: seed.trim().length > 0 ? seed : null,
+        archived: false,
+        isTemplate: false,
+        kind: 'type_root' as const,
+        type,
+        parentIntentId: null,
+        position: null,
+        createdAt: now,
+        updatedAt: now,
+      }))
+    )
+    .onConflictDoNothing();
+
+  const roots = await db
+    .select()
+    .from(scoreIntents)
+    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.kind, 'type_root')));
+
+  // Seed v1 on the rule axis for roots that just appeared, mirroring intent
+  // creation: the board reads "Then v1 Starting rule" and Revise opens on a
+  // real v1 instead of an empty history.
+  const seeded = roots.filter((r) => !existing.some((e) => e.id === r.id));
+  if (seeded.length > 0) {
+    await db
+      .insert(scoreRuleVersions)
+      .values(
+        seeded.map((root) => ({
+          assignmentId,
+          intentId: root.id,
+          versionNo: 1,
+          name: seedRuleVersionName(root.rule),
+          rule: root.rule,
+          updatedResponse: null,
+          anchorMessageId: null,
+          source: 'seed',
+          note: null,
+          minor: false,
+          createdBy: null,
+          createdAt: now,
+        }))
+      )
+      .onConflictDoNothing();
+  }
+  return roots;
 }
 
 export async function listIntentRatings(assignmentId: string) {
@@ -502,6 +662,12 @@ export interface IntentConfigSnapshot {
     rule: string | null;
     archived: boolean;
     isTemplate?: boolean;
+    // v7 tree. Optional so snapshots written before the migration still parse:
+    // readers must default (kind → 'intent', the rest → null).
+    kind?: string;
+    type?: string | null;
+    parentIntentId?: number | null;
+    position?: number | null;
   }[];
   pins: {
     intentId: number;
@@ -514,6 +680,8 @@ export interface IntentConfigSnapshot {
   links: { fromIntentId: number; toIntentId: number }[];
   ratingPromptVersion: number;
   dissectionVersion: number;
+  /** TYPE_CLASSIFIER_VERSION at snapshot time. Absent on pre-v7 snapshots. */
+  typeClassifierVersion?: number;
   /** Resolved Base Prompt at snapshot time — reference only (§1.9: the base
    * prompt is managed in SWAG assignment settings, not in the SCORE loop). */
   basePrompt: string;
@@ -532,6 +700,13 @@ export interface VersionSummary {
     // Ownership decision (§2.4) that diverged → per-question contrast pins
     // committed as ONE change (one version, provenance in detail).
     | 'ownership_pins'
+    // v7 tree edits. Both are MAJOR: they change which rule a question gets
+    // (routing is position-sensitive) even though they cost zero LLM calls, so
+    // they must be as visible and revertible as a definition edit.
+    // 'move_intent'    — re-parented into/out of another set
+    // 'reorder_intent' — sibling order changed (writes position)
+    | 'move_intent'
+    | 'reorder_intent'
     | 'revert';
   intentIds?: number[];
   messageId?: number;
@@ -592,6 +767,10 @@ export async function recordConfigVersion(
       rule: i.rule,
       archived: i.archived,
       isTemplate: i.isTemplate,
+      kind: i.kind,
+      type: i.type,
+      parentIntentId: i.parentIntentId,
+      position: i.position,
     })),
     pins: pins.map((p) => ({
       intentId: p.intentId,
@@ -604,6 +783,7 @@ export async function recordConfigVersion(
     links: links.map((l) => ({ fromIntentId: l.fromIntentId, toIntentId: l.toIntentId })),
     ratingPromptVersion: INTENT_RATING_VERSION,
     dissectionVersion: DISSECTION_VERSION,
+    typeClassifierVersion: TYPE_CLASSIFIER_VERSION,
     basePrompt: assignmentBasePrompt(assignmentRows[0] ?? {}),
   };
 

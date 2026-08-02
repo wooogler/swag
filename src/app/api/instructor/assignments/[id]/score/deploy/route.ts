@@ -116,7 +116,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     for (const iid of ids) intentVersionCount.set(iid, (intentVersionCount.get(iid) ?? 0) + 1);
   }
   const liveIntents = state.intents
-    .filter((i) => !i.archived && !i.isTemplate)
+    // kind === 'intent' keeps the v7 type roots (and the baseline prompt-holder)
+    // out of the modal's live list — they are containers, not deployable
+    // intents. The type roots' else-rules join the review pane in P4.
+    .filter((i) => !i.archived && !i.isTemplate && i.kind === 'intent')
     .map((i) => ({
       id: i.id,
       title: i.title,

@@ -156,6 +156,57 @@ export const INTENT_RATING_VERSION = 2;
  *     supersedes the LLM guess, so every v2 row is recomputed. */
 export const DISSECTION_VERSION = 3;
 
+/* ------------------------------------------------------------------ */
+/* v7 type layer                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The four fixed query types every student message is classified into
+ * (docs/SCORE_v7_intent_tree_design.md §3.1). Single-label, no "Other":
+ * off-topic messages still pick the closest type and get that type's rule.
+ *
+ * Canonical keys are lowercase and independent of the legacy Jelson
+ * ScoreTypeKey in config.ts (whose 'All' is this scheme's 'drafting') — the
+ * two only meet at the jelson-suggest edges and in the eval scripts.
+ */
+export const SCORE_QUERY_TYPES = ['planning', 'translating', 'reviewing', 'drafting'] as const;
+
+export type ScoreQueryType = (typeof SCORE_QUERY_TYPES)[number];
+
+export function isScoreQueryType(value: unknown): value is ScoreQueryType {
+  return typeof value === 'string' && (SCORE_QUERY_TYPES as readonly string[]).includes(value);
+}
+
+/** Instructor-facing labels. 'Drafting', never the legacy 'All'. */
+export const QUERY_TYPE_LABELS: Record<ScoreQueryType, string> = {
+  planning: 'Planning',
+  translating: 'Translating',
+  reviewing: 'Reviewing',
+  drafting: 'Drafting',
+};
+
+/**
+ * Version of the type-classification instructions (system prompt + schema).
+ * A message's type is judged ONCE PER MESSAGE EVER — content is immutable, so
+ * unlike intent ratings there is no definition to invalidate against. Bumping
+ * this constant is therefore the ONLY way a stored judgment is recomputed:
+ * change any wording in type-prompts.ts and you MUST bump it here, or every
+ * cached row stays "fresh" against a prompt it never saw.
+ */
+export const TYPE_CLASSIFIER_VERSION = 1;
+
+/**
+ * What a score_intents row IS. Replaces the PROMPT_HOLDER_TITLE string
+ * sentinel: only 'intent' rows are judged and routable.
+ *   - 'intent'        instructor-authored set (a node of the tree)
+ *   - 'type_root'     one of the 4 fixed types; never judged, its rule is the
+ *                     final else of that type's chain
+ *   - 'prompt_holder' the baseline condition's monolithic-rule container
+ */
+export const INTENT_KINDS = ['intent', 'type_root', 'prompt_holder'] as const;
+
+export type IntentKind = (typeof INTENT_KINDS)[number];
+
 /** Chars of pinned question text quoted in the prompt (headTail-style cap
  * is unnecessary; pins are short student requests). */
 export const PIN_TEXT_LIMIT = 300;
@@ -307,4 +358,155 @@ export function applyPinOverrides(
     out.set(intentId, verdict === 'in' ? 'clearly_in' : 'clearly_out');
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* v7 routing: tree → first-match chain (deterministic — no LLM)        */
+/* ------------------------------------------------------------------ */
+
+/** The tree fields the chain compiler needs from a score_intents row. */
+export interface ChainNode {
+  id: number;
+  kind: IntentKind;
+  type: string | null;
+  parentIntentId: number | null;
+  position: number | null;
+}
+
+export interface TypeChain {
+  type: ScoreQueryType;
+  /** The type-root row — the chain's final else. Null until ensureTypeRoots
+   * has run for the assignment (then every query of this type is 'pending'
+   * only in the sense that it has nowhere to fall: callers fail open). */
+  rootId: number | null;
+  /** Judged intent ids in evaluation order: every set's subsets come BEFORE
+   * the set itself, sibling subtrees whole and in sibling order. First match
+   * wins. The root is deliberately NOT in here — it is never judged. */
+  order: number[];
+}
+
+/** Effective sibling order key: an explicit position wins, otherwise creation
+ * order (serial id). Ties break by id so the order is always total. */
+function compareSiblings(a: ChainNode, b: ChainNode): number {
+  const ka = a.position ?? a.id;
+  const kb = b.position ?? b.id;
+  if (ka !== kb) return ka - kb;
+  return a.id - b.id;
+}
+
+/**
+ * Compile the intent tree into one first-match chain per type
+ * (docs/SCORE_v7_intent_tree_design.md §3.3):
+ *
+ *     chain(S) = concat(chain(c) for c in S.children) + [S]
+ *
+ * i.e. POST-ORDER DFS — a carved-out subset is always evaluated before the set
+ * it was carved from, and a sibling's whole subtree precedes the next sibling
+ * (`T{A{B}, D{E}}` → `[B, A, E, D]`, then the root as the else). Applying
+ * creation order to a flat list instead would bury every subset behind its
+ * parent forever; that is the one mistake this function exists to prevent.
+ *
+ * Pass ACTIVE rows only (archived rows are not routable). Rows that cannot
+ * route are skipped: 'prompt_holder', and 'intent' rows with no type yet
+ * (pre-backfill) — the latter are still judged whole-log, they just have no
+ * chain to sit in until they are typed.
+ *
+ * Pure and total: unknown/cross-type/cyclic parents degrade to top-level
+ * placement rather than dropping a node out of the chain.
+ */
+export function compileChains(nodes: readonly ChainNode[]): Map<ScoreQueryType, TypeChain> {
+  const rootIdByType = new Map<ScoreQueryType, number>();
+  const membersByType = new Map<ScoreQueryType, ChainNode[]>();
+
+  for (const node of nodes) {
+    if (!isScoreQueryType(node.type)) continue; // untyped: not routable (yet)
+    if (node.kind === 'type_root') {
+      // Lowest id wins if a pre-index database somehow has duplicates.
+      const current = rootIdByType.get(node.type);
+      if (current === undefined || node.id < current) rootIdByType.set(node.type, node.id);
+      continue;
+    }
+    if (node.kind !== 'intent') continue; // prompt_holder never routes
+    const list = membersByType.get(node.type);
+    if (list) list.push(node);
+    else membersByType.set(node.type, [node]);
+  }
+
+  const chains = new Map<ScoreQueryType, TypeChain>();
+  for (const type of SCORE_QUERY_TYPES) {
+    const rootId = rootIdByType.get(type) ?? null;
+    const members = membersByType.get(type) ?? [];
+    const memberIds = new Set(members.map((m) => m.id));
+
+    const childrenOf = new Map<number, ChainNode[]>();
+    const topLevel: ChainNode[] = [];
+    for (const node of members) {
+      const parent = node.parentIntentId;
+      // Top-level when unparented, parented directly AT the type root, or
+      // pointing outside this type's members (orphaned or cross-type — keep it
+      // routable instead of losing it).
+      if (parent === null || parent === rootId || !memberIds.has(parent)) {
+        topLevel.push(node);
+        continue;
+      }
+      const list = childrenOf.get(parent);
+      if (list) list.push(node);
+      else childrenOf.set(parent, [node]);
+    }
+    topLevel.sort(compareSiblings);
+    for (const list of childrenOf.values()) list.sort(compareSiblings);
+
+    const order: number[] = [];
+    const emitted = new Set<number>();
+    const walk = (siblings: ChainNode[]): void => {
+      for (const node of siblings) {
+        if (emitted.has(node.id)) continue; // cycle guard
+        emitted.add(node.id);
+        walk(childrenOf.get(node.id) ?? []); // children before their parent
+        order.push(node.id);
+      }
+    };
+    walk(topLevel);
+    // Nodes stranded by a parent cycle: append in sibling order so they stay
+    // reachable (a malformed tree must not silently disable an intent).
+    for (const node of [...members].sort(compareSiblings)) {
+      if (emitted.has(node.id)) continue;
+      emitted.add(node.id);
+      order.push(node.id);
+    }
+
+    chains.set(type, { type, rootId, order });
+  }
+  return chains;
+}
+
+export type RouteResolution =
+  /** An intent matched — its rule is the whole system prompt. */
+  | { kind: 'matched'; intentId: number }
+  /** No intent matched → the type root's rule is the final else. intentId is
+   * the root row (null only when roots have not been ensured yet). */
+  | { kind: 'type_default'; intentId: number | null }
+  /** A node BEFORE any match has no rating yet — don't guess. */
+  | { kind: 'pending' };
+
+/**
+ * Walk one type's chain and return the single node that owns the query.
+ * `ratings` must already have instructor pins folded in (applyPinOverrides):
+ * pins fix a node's JUDGMENT, never its position in the chain (§3.6).
+ *
+ * Note what 'pending' does and does not cover: an unrated node AFTER the first
+ * match cannot change the outcome, so the walk stops at the match. Only a gap
+ * strictly before the winner is ambiguous — skipping it would silently promote
+ * a later sibling — and that is what becomes 'pending'.
+ */
+export function resolveRoute(
+  chain: TypeChain,
+  ratings: ReadonlyMap<number, RatingLevel>
+): RouteResolution {
+  for (const intentId of chain.order) {
+    const rating = ratings.get(intentId);
+    if (rating === undefined) return { kind: 'pending' };
+    if (isIncludedRating(rating)) return { kind: 'matched', intentId };
+  }
+  return { kind: 'type_default', intentId: chain.rootId };
 }

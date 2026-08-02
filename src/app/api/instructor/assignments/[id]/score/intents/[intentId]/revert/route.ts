@@ -80,11 +80,18 @@ export async function POST(req: Request, { params }: RouteParams) {
     // separate score_rule_versions axis, so restoring the snapshot's stale `rule`
     // here would clobber a rule Saved after this version (the board's "No rule
     // yet" regression). Revert the rule from the RuleWorkbench history instead.
+    // Tree placement is part of the WHEN: where a set sits decides which
+    // questions reach it (routing is order-sensitive), so a revert that left
+    // position/parent alone would restore a definition into a different chain
+    // than it was written for. Snapshots predating v7 carry neither field —
+    // fall back to the row's current placement rather than orphaning it.
     await tx
       .update(scoreIntents)
       .set({
         title: snapIntent.title,
         definition: snapIntent.definition,
+        parentIntentId: snapIntent.parentIntentId ?? intentRows[0].parentIntentId,
+        position: snapIntent.position ?? intentRows[0].position,
         updatedAt: new Date(),
       })
       .where(and(eq(scoreIntents.id, intentId), eq(scoreIntents.assignmentId, id)));
@@ -103,6 +110,11 @@ export async function POST(req: Request, { params }: RouteParams) {
           messageId: p.messageId,
           verdict: p.verdict,
           queryText: p.queryText,
+          // An out-pin's reason is part of the rating prompt AND of
+          // intentDefHash, so dropping it here silently produced a different
+          // hash than the version being restored — the ratings then read stale
+          // and the spec was not actually reproduced.
+          reason: p.reason ?? null,
           source: p.source ?? 'manual',
           createdAt: new Date(base - i * 1000),
         }))

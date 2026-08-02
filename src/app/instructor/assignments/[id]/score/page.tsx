@@ -13,6 +13,7 @@ import { getScoreConfig } from '@/lib/score/config-store';
 import { buildJelsonSuggestions } from '@/lib/score/jelson-suggest';
 import {
   ensureIntentTables,
+  ensureTypeRoots,
   isMinorVersion,
   listDissections,
   listIntentRatings,
@@ -79,6 +80,12 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   const baselineState = isBaselineView ? await getBaselineState(id) : null;
 
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
+  // v7: each of the 4 query types owns an editable else-rule, stored as a
+  // score_intents row (kind='type_root'). Created lazily here so the board can
+  // render the sections, and BEFORE loadIntentState so brand-new roots are in
+  // the loaded state. SCORE only: a baseline clone never routes, so it must not
+  // accumulate root rows (they are filtered out of every list either way).
+  if (studioView === 'score') await ensureTypeRoots(id);
 
   const [config, records, sessions, intentState, intentRatingRows, dissectionRows, ruleVersionRows, configVersionRows] =
     await Promise.all([
@@ -267,10 +274,12 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     );
 
   const intents: IntentSummary[] = intentState.intents
-    // The baseline prompt-holder is a hidden container for the monolithic prompt,
-    // not a real intent — keep it out of every board list (Revise mounts on it
-    // directly via baseline.promptHolderId).
-    .filter((i) => i.title !== PROMPT_HOLDER_TITLE)
+    // Only real intents are board rows. The other kinds are hidden containers:
+    // the baseline prompt-holder (Revise mounts on it directly via
+    // baseline.promptHolderId) and the v7 type roots (the left column renders
+    // them as section headers from their own payload, added in P3). The title
+    // check stays for clones whose holder predates the kind backfill.
+    .filter((i) => i.kind === 'intent' && i.title !== PROMPT_HOLDER_TITLE)
     .map((i) => {
     const pins = intentState.pins.filter((p) => p.intentId === i.id);
     return {
