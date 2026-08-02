@@ -300,17 +300,6 @@ async function cloneStarterSet(
   `);
   counts.score_intent_pins = await assignmentCount(tx, 'score_intent_pins', newAssignmentId);
 
-  // 14) score_intent_links — only links between two TEMPLATE intents.
-  await tx.execute(sql`
-    INSERT INTO score_intent_links (assignment_id, from_intent_id, to_intent_id, created_at)
-    SELECT ${newAssignmentId}, f.new_id, t.new_id, l.created_at
-    FROM score_intent_links l
-    JOIN _intent_map f ON f.old_id = l.from_intent_id
-    JOIN _intent_map t ON t.old_id = l.to_intent_id
-    WHERE l.assignment_id = ${sourceAssignmentId}
-  `);
-  counts.score_intent_links = await assignmentCount(tx, 'score_intent_links', newAssignmentId);
-
   // 15) score_rule_previews — TEMPLATE previews only (cached).
   await tx.execute(sql`
     INSERT INTO score_rule_previews

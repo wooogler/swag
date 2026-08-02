@@ -24,7 +24,6 @@ const SCORE_TABLES_BY_ASSIGNMENT = [
   'score_rule_versions',
   'score_rule_previews',
   'score_intent_pins',
-  'score_intent_links',
   'score_intent_ratings',
   'score_dissections',
   'score_query_types',

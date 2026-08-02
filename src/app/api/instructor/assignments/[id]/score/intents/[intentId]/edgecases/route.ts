@@ -15,14 +15,17 @@
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { scoreIntentRatings, scoreIntents } from '@/db/schema';
+import { scoreIntentRatings, scoreIntents, scoreQueryTypes } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { cosineSimilarity, getQueryEmbeddings } from '@/lib/score/embeddings';
 import { ensureIntentTables, loadIntentState, pickDisplayRatings } from '@/lib/score/intent-store';
 import {
   applyPinOverrides,
+  compileChains,
   isRatingLevel,
-  resolveAssignment,
+  isScoreQueryType,
+  resolveRoute,
+  TYPE_CLASSIFIER_VERSION,
   type RatingLevel,
 } from '@/lib/score/intents';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
@@ -59,8 +62,33 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     getQueryRecords(id),
     db.select().from(scoreIntentRatings).where(eq(scoreIntentRatings.assignmentId, id)),
   ]);
-  // Ownership resolution excludes starter-set templates (rated but not active).
-  const activeIds = state.promptReady.filter((p) => !p.intent.isTemplate).map((p) => p.intent.id);
+  // v7 routing: the chain of this intent's type decides ownership. Starter-set
+  // templates are rated but own nothing, so they are not chain nodes.
+  const chains = compileChains(
+    state.promptReady
+      .filter((p) => !p.intent.isTemplate)
+      .map((p) => ({
+        id: p.intent.id,
+        kind: 'intent' as const,
+        type: p.intent.type,
+        parentIntentId: p.intent.parentIntentId,
+        position: p.intent.position,
+      }))
+  );
+  const intent = intents[0];
+  const myChain = isScoreQueryType(intent.type) ? chains.get(intent.type) ?? null : null;
+  // An untyped intent sits in no chain and owns nothing — the sweep has no
+  // group to draw from, so return early rather than scanning the whole log.
+  if (!myChain) return NextResponse.json({ cases: [] });
+  // Candidates are drawn from this intent's own type only (§3.4): a query of
+  // another type can never reach this chain.
+  const typeRows = await db
+    .select({ messageId: scoreQueryTypes.messageId, type: scoreQueryTypes.type, version: scoreQueryTypes.version })
+    .from(scoreQueryTypes)
+    .where(eq(scoreQueryTypes.assignmentId, id));
+  const typeByMessage = new Map(
+    typeRows.filter((t) => t.version >= TYPE_CLASSIFIER_VERSION).map((t) => [t.messageId, t.type])
+  );
 
   // Questions currently ASSIGNED to this intent (effective, pins applied) —
   // the rule's exact application scope (§4.2 find→fix duality). Ratings are
@@ -86,12 +114,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   const group = records.filter((rec) => {
+    // Out-of-type (or not-yet-typed) messages never walk this chain.
+    if (typeByMessage.get(rec.messageId) !== intent.type) return false;
     const eff = applyPinOverrides(
       ratingsByMessage.get(rec.messageId) ?? new Map(),
       pinsByMessage.get(rec.messageId) ?? new Map()
     );
-    const res = resolveAssignment(eff, activeIds, state.links);
-    return res.kind === 'assigned' && res.intentId === intentId;
+    const res = resolveRoute(myChain, eff);
+    return res.kind === 'matched' && res.intentId === intentId;
   });
 
   const candidates = group.filter((r) => r.messageId !== anchorId);

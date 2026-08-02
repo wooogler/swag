@@ -279,23 +279,6 @@ export const scoreIntentPins = pgTable('score_intent_pins', {
   ),
 }));
 
-// Exception Links — "A except B": when a question is included by both, B owns
-// it. Applied deterministically in the assignment resolver (zero LLM cost);
-// deleting the link restores the previous behavior.
-export const scoreIntentLinks = pgTable('score_intent_links', {
-  id: serial('id').primaryKey(),
-  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
-  fromIntentId: integer('from_intent_id').notNull().references(() => scoreIntents.id),
-  toIntentId: integer('to_intent_id').notNull().references(() => scoreIntents.id),
-  createdAt: timestamp('created_at').notNull(),
-}, (table) => ({
-  assignmentIdx: index('score_intent_links_assignment_idx').on(table.assignmentId),
-  pairUnique: uniqueIndex('score_intent_links_pair_unique').on(
-    table.fromIntentId,
-    table.toIntentId
-  ),
-}));
-
 // Immediate-apply versioning (§1.11): every approved config change writes a
 // FULL snapshot (intents + pins + links + prompt versions + base prompt ref)
 // plus a summary of what changed. Diffs are computed at read time (git-style);
@@ -630,9 +613,6 @@ export type NewScoreIntentRating = typeof scoreIntentRatings.$inferInsert;
 
 export type ScoreIntentPin = typeof scoreIntentPins.$inferSelect;
 export type NewScoreIntentPin = typeof scoreIntentPins.$inferInsert;
-
-export type ScoreIntentLink = typeof scoreIntentLinks.$inferSelect;
-export type NewScoreIntentLink = typeof scoreIntentLinks.$inferInsert;
 
 export type ScoreConfigVersion = typeof scoreConfigVersions.$inferSelect;
 export type NewScoreConfigVersion = typeof scoreConfigVersions.$inferInsert;

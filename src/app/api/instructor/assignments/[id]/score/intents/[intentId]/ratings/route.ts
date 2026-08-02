@@ -26,11 +26,12 @@ import {
 } from '@/lib/score/intent-store';
 import {
   applyPinOverrides,
+  compileChains,
   intentDefHash,
   isIncludedRating,
   isRatingLevel,
+  isScoreQueryType,
   ratingRank,
-  resolveAssignment,
   selectPromptPins,
   type RatingLevel,
 } from '@/lib/score/intents';
@@ -122,12 +123,26 @@ export async function GET(req: Request, { params }: RouteParams) {
     ])
   );
 
-  // Overlap/ownership only concerns ACTIVE intents — starter-set templates are
-  // rated in advance but don't own the log, so exclude them here.
-  const otherReady = state.promptReady.filter(
-    (p) => p.intent.id !== intentId && !p.intent.isTemplate
-  );
-  const otherIds = otherReady.map((p) => p.intent.id);
+  // v7 SHADOWING: with first-match routing, two intents never "overlap" — an
+  // earlier node in the same chain simply takes the question first, silently.
+  // That is what this computes: for each question THIS intent matches, which
+  // earlier chain node captures it instead. Starter-set templates are rated in
+  // advance but own nothing, so they are not part of any chain.
+  const chainNodes = state.promptReady
+    .filter((p) => !p.intent.isTemplate)
+    .map((p) => ({
+      id: p.intent.id,
+      kind: 'intent' as const,
+      type: p.intent.type,
+      parentIntentId: p.intent.parentIntentId,
+      position: p.intent.position,
+    }));
+  const chains = compileChains(chainNodes);
+  // Nodes strictly BEFORE this intent in its own type's chain. An intent with
+  // no type (pre-backfill) sits in no chain and can shadow nothing.
+  const myChain = isScoreQueryType(intent.type) ? chains.get(intent.type) : undefined;
+  const myIndex = myChain ? myChain.order.indexOf(intentId) : -1;
+  const earlierIds = myChain && myIndex > 0 ? myChain.order.slice(0, myIndex) : [];
   // Wanted hash per intent: this intent's effective spec (live or checkout);
   // others their live hash. pickDisplayRatings then dedupes the hash-keyed rows.
   const wantedHash = new Map(state.promptReady.map((p) => [p.intent.id, p.defHash]));
@@ -143,7 +158,7 @@ export async function GET(req: Request, { params }: RouteParams) {
   // than the classifier actually saw (preview = runtime, §1.9).
   const pinRankByMessage = new Map(pinRows.map((p, i) => [p.messageId, i]));
 
-  const overlapCounts = new Map<number, number>();
+  const shadowCounts = new Map<number, number>();
   const rows = records.map((rec) => {
     const ratings = byMessage.get(rec.messageId);
     const minePick = ratings?.get(intentId);
@@ -156,24 +171,27 @@ export async function GET(req: Request, { params }: RouteParams) {
     const mineFresh = !!minePick?.fresh && mineRow !== null;
     const mineRating = mineRow && isRatingLevel(mineRow.rating) ? mineRow.rating : null;
 
-    // Prior resolution: assignment over the OTHER intents only. Stale ratings
-    // still count here (same display philosophy as classify force: show the
-    // previous state until overwritten); instructor pins override (§1.6).
-    const priorMap = new Map<number, RatingLevel>();
-    for (const oid of otherIds) {
+    // Who takes this question BEFORE this intent gets a turn: the first earlier
+    // chain node that matches. Stale ratings still count (same display
+    // philosophy as classify force: show the previous state until overwritten);
+    // instructor pins override the judgment (§1.6) but never the order.
+    const earlierMap = new Map<number, RatingLevel>();
+    for (const oid of earlierIds) {
       const r = ratings?.get(oid);
-      if (r && isRatingLevel(r.row.rating)) priorMap.set(oid, r.row.rating);
+      if (r && isRatingLevel(r.row.rating)) earlierMap.set(oid, r.row.rating);
     }
-    const priorPins = new Map<number, 'in' | 'out'>();
+    const earlierPins = new Map<number, 'in' | 'out'>();
     for (const p of state.pins) {
-      if (p.messageId === rec.messageId && otherIds.includes(p.intentId)) {
-        priorPins.set(p.intentId, p.verdict as 'in' | 'out');
+      if (p.messageId === rec.messageId && earlierIds.includes(p.intentId)) {
+        earlierPins.set(p.intentId, p.verdict as 'in' | 'out');
       }
     }
-    const prior = resolveAssignment(applyPinOverrides(priorMap, priorPins), otherIds, state.links);
+    const effEarlier = applyPinOverrides(earlierMap, earlierPins);
+    const shadowedBy = earlierIds.find((oid) => isIncludedRating(effEarlier.get(oid))) ?? null;
 
-    if (mineRating && isIncludedRating(mineRating) && prior.kind === 'assigned') {
-      overlapCounts.set(prior.intentId, (overlapCounts.get(prior.intentId) ?? 0) + 1);
+    // Only a question this intent would actually claim can BE shadowed.
+    if (mineRating && isIncludedRating(mineRating) && shadowedBy !== null) {
+      shadowCounts.set(shadowedBy, (shadowCounts.get(shadowedBy) ?? 0) + 1);
     }
 
     return {
@@ -193,12 +211,10 @@ export async function GET(req: Request, { params }: RouteParams) {
       reason: reasonByMessage.get(rec.messageId) ?? null,
       /** Position among this intent's pins in prompt order; null when unpinned. */
       pinRank: pinRankByMessage.get(rec.messageId) ?? null,
-      prior:
-        prior.kind === 'assigned'
-          ? { kind: 'assigned' as const, intentId: prior.intentId }
-          : { kind: prior.kind },
-      // Title of the intent that currently owns this question (assigned only).
-      priorTitle: prior.kind === 'assigned' ? titleById.get(prior.intentId) ?? null : null,
+      /** The earlier chain node that takes this question first, if any — the
+       * successor of v6's "prior owner". Null = nothing shadows it here. */
+      shadowedBy,
+      shadowedByTitle: shadowedBy !== null ? titleById.get(shadowedBy) ?? null : null,
       dissection: dissectionByMessage.get(rec.messageId) ?? null,
     };
   });
@@ -223,7 +239,9 @@ export async function GET(req: Request, { params }: RouteParams) {
     ratedCount: rows.filter((r) => r.rating !== null).length,
     staleCount: rows.filter((r) => r.stale).length,
     includedCount: rows.filter((r) => isIncludedRating(r.rating)).length,
-    overlaps: [...overlapCounts.entries()]
+    /** Earlier chain nodes intercepting questions this intent matches, biggest
+     * first. Empty when nothing shadows it (the healthy case). */
+    shadowedBy: [...shadowCounts.entries()]
       .map(([otherId, count]) => ({
         intentId: otherId,
         title: titleById.get(otherId) ?? `Intent ${otherId}`,

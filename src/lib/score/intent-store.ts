@@ -20,14 +20,12 @@ import {
   chatMessages,
   scoreConfigVersions,
   scoreDissections,
-  scoreIntentLinks,
   scoreIntentPins,
   scoreIntentRatings,
   scoreIntents,
   scoreRuleVersions,
   studentSessions,
   type ScoreIntent,
-  type ScoreIntentLink,
   type ScoreIntentPin,
 } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
@@ -62,7 +60,7 @@ async function createIntentTables(): Promise<void> {
   const existing = await db.execute<{ tablename: string }>(sql`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const has = new Set(existing.map((r) => r.tablename));
   if (!has.has('score_intents')) {
@@ -106,17 +104,6 @@ async function createIntentTables(): Promise<void> {
         "query_text" text NOT NULL,
         "reason" text,
         "source" text DEFAULT 'manual' NOT NULL,
-        "created_at" timestamp NOT NULL
-      )
-    `);
-  }
-  if (!has.has('score_intent_links')) {
-    await db.execute(sql`
-      CREATE TABLE IF NOT EXISTS "score_intent_links" (
-        "id" serial PRIMARY KEY NOT NULL,
-        "assignment_id" text NOT NULL,
-        "from_intent_id" integer NOT NULL,
-        "to_intent_id" integer NOT NULL,
         "created_at" timestamp NOT NULL
       )
     `);
@@ -329,10 +316,6 @@ async function createIntentTables(): Promise<void> {
       sql`CREATE INDEX IF NOT EXISTS "score_intent_pins_assignment_idx" ON "score_intent_pins" USING btree ("assignment_id")`],
     ['score_intent_pins', 'score_intent_pins_intent_message_unique',
       sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_intent_pins_intent_message_unique" ON "score_intent_pins" USING btree ("intent_id", "message_id")`],
-    ['score_intent_links', 'score_intent_links_assignment_idx',
-      sql`CREATE INDEX IF NOT EXISTS "score_intent_links_assignment_idx" ON "score_intent_links" USING btree ("assignment_id")`],
-    ['score_intent_links', 'score_intent_links_pair_unique',
-      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_intent_links_pair_unique" ON "score_intent_links" USING btree ("from_intent_id", "to_intent_id")`],
     ['score_config_versions', 'score_config_versions_assignment_version_unique',
       sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_config_versions_assignment_version_unique" ON "score_config_versions" USING btree ("assignment_id", "version_no")`],
     ['score_dissections', 'score_dissections_assignment_idx',
@@ -367,7 +350,7 @@ async function createIntentTables(): Promise<void> {
   const idx = await db.execute<{ indexname: string }>(sql`
     SELECT indexname FROM pg_indexes
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_intent_links','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const have = new Set(idx.map((r) => r.indexname));
   // Ratings were re-keyed from (message, intent) to (message, intent, def_hash)
@@ -410,14 +393,6 @@ export async function listPins(dbx: ScoreDb, assignmentId: string): Promise<Scor
     .from(scoreIntentPins)
     .where(eq(scoreIntentPins.assignmentId, assignmentId))
     .orderBy(desc(scoreIntentPins.createdAt), desc(scoreIntentPins.id));
-}
-
-export async function listLinks(dbx: ScoreDb, assignmentId: string): Promise<ScoreIntentLink[]> {
-  return dbx
-    .select()
-    .from(scoreIntentLinks)
-    .where(eq(scoreIntentLinks.assignmentId, assignmentId))
-    .orderBy(asc(scoreIntentLinks.id));
 }
 
 export async function latestVersionNo(dbx: ScoreDb, assignmentId: string): Promise<number> {
@@ -468,20 +443,18 @@ export function buildPromptReadyIntents(
 export interface IntentState {
   intents: ScoreIntent[]; // includes archived (callers filter for display)
   pins: ScoreIntentPin[]; // newest first
-  links: ScoreIntentLink[];
   versionNo: number;
   promptReady: PromptReadyIntent[]; // active intents only
 }
 
 export async function loadIntentState(assignmentId: string): Promise<IntentState> {
   await ensureIntentTables();
-  const [intents, pins, links, versionNo] = await Promise.all([
+  const [intents, pins, versionNo] = await Promise.all([
     listIntents(db, assignmentId),
     listPins(db, assignmentId),
-    listLinks(db, assignmentId),
     latestVersionNo(db, assignmentId),
   ]);
-  return { intents, pins, links, versionNo, promptReady: buildPromptReadyIntents(intents, pins) };
+  return { intents, pins, versionNo, promptReady: buildPromptReadyIntents(intents, pins) };
 }
 
 /**
@@ -677,7 +650,9 @@ export interface IntentConfigSnapshot {
     reason?: string | null;
     source: string;
   }[];
-  links: { fromIntentId: number; toIntentId: number }[];
+  /** v6 exception links. No longer written (v7 routes by chain order), but
+   * kept optional so snapshots recorded before the cutover still parse. */
+  links?: { fromIntentId: number; toIntentId: number }[];
   ratingPromptVersion: number;
   dissectionVersion: number;
   /** TYPE_CLASSIFIER_VERSION at snapshot time. Absent on pre-v7 snapshots. */
@@ -744,10 +719,9 @@ export async function recordConfigVersion(
   createdBy: string | null,
   summary: VersionSummary
 ): Promise<number> {
-  const [intents, pins, links, current, assignmentRows] = await Promise.all([
+  const [intents, pins, current, assignmentRows] = await Promise.all([
     listIntents(tx, assignmentId),
     listPins(tx, assignmentId),
-    listLinks(tx, assignmentId),
     latestVersionNo(tx, assignmentId),
     tx
       .select({
@@ -780,7 +754,6 @@ export async function recordConfigVersion(
       reason: p.reason,
       source: p.source,
     })),
-    links: links.map((l) => ({ fromIntentId: l.fromIntentId, toIntentId: l.toIntentId })),
     ratingPromptVersion: INTENT_RATING_VERSION,
     dissectionVersion: DISSECTION_VERSION,
     typeClassifierVersion: TYPE_CLASSIFIER_VERSION,

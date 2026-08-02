@@ -69,7 +69,6 @@ export async function buildChatDeploySnapshot(assignmentId: string): Promise<Cha
       .where(eq(assignments.id, assignmentId)),
   ]);
   const active = state.promptReady.filter((p) => !p.intent.isTemplate);
-  const activeIds = new Set(active.map((p) => p.intent.id));
   return {
     intents: active.map((p) => ({
       id: p.intent.id,
@@ -84,9 +83,10 @@ export async function buildChatDeploySnapshot(assignmentId: string): Promise<Cha
         text: pinPromptText(pin.text),
       })),
     })),
-    links: state.links
-      .filter((l) => activeIds.has(l.fromIntentId) && activeIds.has(l.toIntentId))
-      .map((l) => ({ fromIntentId: l.fromIntentId, toIntentId: l.toIntentId })),
+    // v7: exception links are gone (the chain's order decides precedence), so
+    // new snapshots carry none. The field stays in the shape because the
+    // runtime still resolves PRE-v7 snapshots, which have their links inline.
+    links: [],
     ratingPromptVersion: INTENT_RATING_VERSION,
     basePrompt: assignmentBasePrompt(assignmentRows[0] ?? {}),
     configVersionNo: state.versionNo,

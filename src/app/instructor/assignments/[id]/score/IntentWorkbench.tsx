@@ -67,9 +67,10 @@ interface RatingRow {
    * when unpinned. Optimistic local pins use negative ranks so a just-pinned
    * example leads, exactly as the server's newest-first order would place it. */
   pinRank: number | null;
-  prior: { kind: 'assigned'; intentId: number } | { kind: 'fallback' | 'boundary' | 'pending' };
-  /** Title of the intent currently owning this question (assigned only). */
-  priorTitle: string | null;
+  /** An EARLIER node in this intent's chain that takes the question first
+   * (v7 first-match routing) — null when nothing shadows it. */
+  shadowedBy: number | null;
+  shadowedByTitle: string | null;
   /** Message split into Material vs Request(s), for the expand view. */
   dissection: { materialKinds: MaterialKind[]; requests: string[] } | null;
 }
@@ -91,7 +92,8 @@ interface RatingsPayload {
   ratedCount: number;
   staleCount: number;
   includedCount: number;
-  overlaps: { intentId: number; title: string; count: number }[];
+  /** Earlier chain nodes intercepting questions this intent matches. */
+  shadowedBy: { intentId: number; title: string; count: number }[];
   versionNo: number;
 }
 
@@ -1212,10 +1214,10 @@ export default function IntentWorkbench({
   // Overlapping captures (another intent also owns the question, or it sits in
   // a boundary) float to the top of "In this intent" — they are the pending
   // ownership decisions. Stable within each partition.
-  const isOverlapRow = (r: RatingRow) => r.prior.kind === 'assigned' || r.prior.kind === 'boundary';
+  const isShadowedRow = (r: RatingRow) => r.shadowedBy !== null;
   const overlapsFirst = (list: RatingRow[]) => [
-    ...list.filter(isOverlapRow),
-    ...list.filter((r) => !isOverlapRow(r)),
+    ...list.filter(isShadowedRow),
+    ...list.filter((r) => !isShadowedRow(r)),
   ];
 
   // Filter by the pane's search box, then sort by the chosen mode. The pin sorts
@@ -1385,35 +1387,24 @@ export default function IntentWorkbench({
               title: `Clearly out of this intent at ${diffBaseLabel} — rose to undecided since`,
             }
           : null;
-    // Overlap = ANOTHER intent also owns this question (or it sits in a
-    // boundary). In this intent → a visible amber tag (these rows also sort to
-    // the top); Needs decision keeps the quieter text note.
+    // SHADOWED = an earlier node in this intent's chain takes the question
+    // first, so this intent never actually gets it. In this intent → a visible
+    // amber tag (these rows also sort to the top); Needs decision keeps the
+    // quieter text note. The chip is a shortcut into the intercepting intent.
     const overlapChip: { intentId: number | null; label: string; title: string } | null =
-      pane === 'in' && r.prior.kind === 'assigned'
+      pane === 'in' && r.shadowedBy !== null
         ? {
-            // The single overlapping owner — the chip becomes a shortcut into
-            // editing it (sharpen its WHEN so this question gets one owner).
-            intentId: r.prior.intentId,
-            label: `overlap · ${r.priorTitle ?? 'another intent'}`,
+            intentId: r.shadowedBy,
+            label: `taken by · ${r.shadowedByTitle ?? 'an earlier intent'}`,
             title: onEditIntent
-              ? `Also captured by “${r.priorTitle ?? 'another intent'}” — click to edit that intent and sharpen its definition`
-              : `Also captured by “${r.priorTitle ?? 'another intent'}” — decide ownership on the board`,
+              ? `“${r.shadowedByTitle ?? 'An earlier intent'}” comes first in this type and takes this question — click to edit it, or move this intent ahead of it`
+              : `“${r.shadowedByTitle ?? 'An earlier intent'}” comes first in this type and takes this question`,
           }
-        : pane === 'in' && r.prior.kind === 'boundary'
-          ? {
-              // A boundary spans several intents at once — no single target, so
-              // this stays a static tag (resolve it on the board).
-              intentId: null,
-              label: 'overlap — decide ownership',
-              title: 'Clearly-in for several intents at once — decide ownership on the board',
-            }
-          : null;
+        : null;
     const priorLabel =
-      pane === 'nd' && r.prior.kind === 'assigned'
-        ? `currently in “${r.priorTitle ?? 'another intent'}”`
-        : pane === 'nd' && r.prior.kind === 'boundary'
-          ? 'in an overlap — decide ownership'
-          : '';
+      pane === 'nd' && r.shadowedBy !== null
+        ? `taken first by “${r.shadowedByTitle ?? 'an earlier intent'}”`
+        : '';
     return (
       <li key={r.messageId} className="group relative px-3 py-2 hover:bg-[hsl(var(--muted))]/40">
         <div className="flex items-start gap-2">
@@ -2016,19 +2007,19 @@ export default function IntentWorkbench({
                   </div>
                   <div className="px-3 py-1.5 space-y-1.5">
                     <PaneSearch value={inSearch} onChange={setInSearch} />
-                    {data.overlaps.length > 0 && (
+                    {data.shadowedBy.length > 0 && (
                       <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800 flex items-start gap-1.5">
                         <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                         <span>
-                          Overlaps:{' '}
-                          {data.overlaps.map((o, i) => (
+                          Taken first by:{' '}
+                          {data.shadowedBy.map((o, i) => (
                             <span key={o.intentId}>
                               {i > 0 && ' · '}
                               <span className="font-medium">{o.title}</span> ({o.count})
                             </span>
                           ))}{' '}
-                          — tagged below; sharpen the definition or pin them out so each question
-                          has one owner.
+                          — those intents come earlier in this type, so they answer these questions
+                          instead. Narrow them, or move this intent ahead of them.
                         </span>
                       </div>
                     )}

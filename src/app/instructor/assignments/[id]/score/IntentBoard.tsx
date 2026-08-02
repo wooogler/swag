@@ -14,12 +14,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   applyPinOverrides,
-  boundaryKey,
-  isIncludedRating,
-  resolveAssignment,
-  type AssignmentResolution,
+  compileChains,
+  resolveRoute,
   type MaterialKind,
   type RatingLevel,
+  type RouteResolution,
   type ScoreQueryType,
 } from '@/lib/score/intents';
 import { SCORE_RATING_MODEL } from '@/lib/score/models';
@@ -28,7 +27,6 @@ import {
   Archive,
   Check,
   ChevronRight,
-  Link2,
   Maximize2,
   MessageSquare,
   Minimize2,
@@ -46,7 +44,6 @@ import { MaterialSegments, QuerySnippet, StudentMessage } from './materials';
 import { ConversationThread, ResponseBody } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
-import DecideOwnershipModal from './DecideOwnershipModal';
 import RuleWorkbench from './RuleWorkbench';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
 import { getJSON, postJSON } from './http';
@@ -131,11 +128,6 @@ export interface IntentSummary {
   position: number | null;
 }
 
-export interface IntentLinkSummary {
-  fromIntentId: number;
-  toIntentId: number;
-}
-
 /** Type dot colors for the pre-built starter-set library. */
 const TYPE_DOT: Record<string, string> = {
   Planning: 'bg-blue-500',
@@ -148,7 +140,6 @@ interface IntentBoardProps {
   assignmentId: string;
   rows: ScoreQueryRow[];
   intents: IntentSummary[];
-  links: IntentLinkSummary[];
   basePrompt: string;
   /** Study condition. 'baseline' turns the SAME board into the ablation: the
    * left column is topped by ONE monolithic prompt instead of the intent list,
@@ -187,9 +178,10 @@ interface IntentBoardProps {
 type IntentSelection =
   | { kind: 'all' }
   | { kind: 'intent'; id: number }
+  // Queries no intent claimed — answered by their type's own rule. P3 splits
+  // this into a per-type residue row inside each type section.
   | { kind: 'unassigned' }
   | { kind: 'pending' }
-  | { kind: 'boundary'; key: string }
   // Starter-set browse: questions rated clearly-in for one prepared template
   // (`set:CODE`) or for every prepared template of a Type (`type:KEY`).
   // ids = template intent ids; label = display name for the middle header.
@@ -197,11 +189,7 @@ type IntentSelection =
   // Baseline saved-search browse: the search's clearly-in questions by messageId
   // (from its cached probe). Clicking a saved Search filters the list here — the
   // baseline analogue of clicking a starter set; only +New opens the workbench.
-  | { kind: 'search'; key: string; ids: number[]; label: string }
-  // The questions ONE tie-breaker settles: both intents claim them, and the
-  // link hands them to `toIntentId`. Browsing is what the chip does now —
-  // removing it is a separate button in the middle column's header.
-  | { kind: 'tiebreak'; key: string; fromIntentId: number; toIntentId: number };
+  | { kind: 'search'; key: string; ids: number[]; label: string };
 
 function Badge({ n }: { n: number }) {
   return (
@@ -902,7 +890,6 @@ export default function IntentBoard({
   assignmentId,
   rows,
   intents,
-  links,
   basePrompt,
   condition = 'score',
   baseline,
@@ -986,69 +973,6 @@ export default function IntentBoard({
     [baseline]
   );
 
-  /**
-   * Overlap resolution, the short way: "these questions are not THAT intent".
-   *
-   * Declares an exception link (from → to), which the deterministic resolver
-   * applies at read time: `from` is dropped whenever `to` also claims the
-   * question. So the moment one claimant is left the boundary resolves into a
-   * normal assignment and disappears from the queue — no LLM call, and no pin,
-   * which would move the intent's defHash and mark all of its ratings stale.
-   * Undo lives on the intent card (the "except …" chip) and in the version
-   * history, since the links route records a config version.
-   */
-  const [droppingIntentId, setDroppingIntentId] = useState<number | null>(null);
-  const [removingTieBreaker, setRemovingTieBreaker] = useState(false);
-  /** Undo a tie-breaker: both intents claim those questions again, so they go
-   * back to the overlap queue. Deliberately NOT on the chip — see the chip. */
-  async function removeTieBreaker(fromIntentId: number, toIntentId: number) {
-    if (removingTieBreaker) return;
-    setRemovingTieBreaker(true);
-    try {
-      const res = await fetch(
-        `/api/instructor/assignments/${assignmentId}/score/links?from=${fromIntentId}&to=${toIntentId}`,
-        { method: 'DELETE' }
-      );
-      if (!res.ok) {
-        window.alert('Failed to remove the tie-breaker.');
-        setRemovingTieBreaker(false);
-        return;
-      }
-      router.refresh();
-    } catch {
-      window.alert('Failed to remove the tie-breaker — network error.');
-      setRemovingTieBreaker(false);
-    }
-  }
-  useEffect(() => setRemovingTieBreaker(false), [links]);
-  // Busy state clears when the new links land, not when the POST returns —
-  // router.refresh() is fire-and-forget, and until it repaints the overlap is
-  // still on screen with live buttons.
-  useEffect(() => setDroppingIntentId(null), [links]);
-  async function dropFromOverlap(fromIntentId: number, otherIds: number[]) {
-    const toIntentId = otherIds[0];
-    if (toIntentId === undefined || droppingIntentId !== null) return;
-    setDroppingIntentId(fromIntentId);
-    try {
-      const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/links`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fromIntentId, toIntentId }),
-      });
-      // 409 = the link (or its reverse) is already declared — the overlap is
-      // resolved either way, so refresh rather than shout at the instructor.
-      if (!res.ok && res.status !== 409) {
-        window.alert('Failed to take that intent off these questions.');
-        setDroppingIntentId(null);
-        return;
-      }
-      router.refresh();
-    } catch {
-      window.alert('Failed to take that intent off these questions.');
-      setDroppingIntentId(null);
-    }
-  }
-
   const [newIntentOpen, setNewIntentOpen] = useState(false);
   const [newIntentSeed, setNewIntentSeed] = useState<{
     title?: string;
@@ -1097,11 +1021,6 @@ export default function IntentBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignmentId, isBaseline]);
   const [editIntent, setEditIntent] = useState<IntentSummary | null>(null);
-  const [ownershipPair, setOwnershipPair] = useState<{
-    a: IntentSummary;
-    b: IntentSummary;
-    messageIds: number[];
-  } | null>(null);
   const [reviseTarget, setReviseTarget] = useState<{
     row: ScoreQueryRow;
     intent: IntentSummary;
@@ -1470,73 +1389,69 @@ export default function IntentBoard({
     }
   }
 
-  // ---- Exclusive assignment, derived per message -------------------------
-  const activeIds = useMemo(() => activeIntents.map((i) => i.id), [activeIntents]);
-  const resolutions = useMemo(() => {
-    const map = new Map<number, AssignmentResolution>();
-    for (const r of rows) {
-      const ratings = new Map<number, RatingLevel>();
-      for (const [idStr, v] of Object.entries(r.intentRatings)) {
-        // Stale ratings still count for display continuity (same philosophy
-        // as classify force: show the previous state until overwritten).
-        ratings.set(Number(idStr), v.rating);
-      }
-      // Instructor pins settle the pinned question immediately (§1.6).
-      const pins = new Map<number, 'in' | 'out'>(
-        Object.entries(r.pinnedIntents).map(([k, v]) => [Number(k), v])
-      );
-      map.set(r.messageId, resolveAssignment(applyPinOverrides(ratings, pins), activeIds, links));
-    }
-    return map;
-  }, [rows, activeIds, links]);
+  // ---- v7 routing, derived per message ------------------------------------
+  // The intent tree compiles to one first-match chain per query type (subsets
+  // before the set they were carved from, siblings in order); a message walks
+  // the chain of ITS type and the first match owns it. Overlap is structurally
+  // impossible, so there is no boundary/tie-breaker layer to settle any more.
+  const chains = useMemo(
+    () =>
+      compileChains(
+        activeIntents.map((i) => ({
+          id: i.id,
+          kind: 'intent' as const,
+          type: i.type,
+          parentIntentId: i.parentIntentId,
+          position: i.position,
+        }))
+      ),
+    [activeIntents]
+  );
 
-  /**
-   * Which active intents claim each question BEFORE exception links settle it.
-   *
-   * `resolutions` above is the post-link picture, where the intent a tie-breaker
-   * dropped has simply vanished — so it cannot answer "which questions does this
-   * tie-breaker actually decide?". This is the same computation minus the link
-   * pass; a tie-breaker applies wherever both of its intents appear here.
-   */
-  const claimants = useMemo(() => {
-    const map = new Map<number, number[]>();
+  /** Pin-overridden ratings for one row — pins fix a JUDGMENT, never the
+   * routing order (§3.6). Stale ratings still count, for display continuity. */
+  const effectiveRatings = (r: ScoreQueryRow): Map<number, RatingLevel> => {
+    const ratings = new Map<number, RatingLevel>();
+    for (const [idStr, v] of Object.entries(r.intentRatings)) ratings.set(Number(idStr), v.rating);
+    const pins = new Map<number, 'in' | 'out'>(
+      Object.entries(r.pinnedIntents).map(([k, v]) => [Number(k), v])
+    );
+    return applyPinOverrides(ratings, pins);
+  };
+
+  const resolutions = useMemo(() => {
+    const map = new Map<number, RouteResolution>();
     for (const r of rows) {
-      const ratings = new Map<number, RatingLevel>();
-      for (const [idStr, v] of Object.entries(r.intentRatings)) ratings.set(Number(idStr), v.rating);
-      const pins = new Map<number, 'in' | 'out'>(
-        Object.entries(r.pinnedIntents).map(([k, v]) => [Number(k), v])
-      );
-      const effective = applyPinOverrides(ratings, pins);
+      // No type yet → no chain to walk. Don't guess: the message is pending
+      // until the next run types it (D9).
+      const chain = r.queryType ? chains.get(r.queryType) : null;
       map.set(
         r.messageId,
-        activeIds.filter((id) => isIncludedRating(effective.get(id)))
+        chain ? resolveRoute(chain, effectiveRatings(r)) : { kind: 'pending' }
       );
     }
     return map;
-  }, [rows, activeIds]);
+    // effectiveRatings is a pure helper over `rows`; recompute when rows/chains move.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, chains]);
 
   const counts = useMemo(() => {
     const perIntent = new Map<number, number>();
+    // Queries that no intent claimed, per type — each type's own rule answers
+    // them (the chain's final else). Replaces the single "Unassigned" bucket.
+    const residueByType = new Map<ScoreQueryType, number>();
     let unassigned = 0;
     let pending = 0;
-    const boundaries = new Map<string, { intentIds: number[]; count: number }>();
     for (const r of rows) {
       const res = resolutions.get(r.messageId);
       if (!res) continue;
-      if (res.kind === 'assigned') perIntent.set(res.intentId, (perIntent.get(res.intentId) ?? 0) + 1);
-      else if (res.kind === 'fallback') unassigned += 1;
-      else if (res.kind === 'pending') pending += 1;
-      else {
-        const key = boundaryKey(res.intentIds);
-        const e = boundaries.get(key);
-        if (e) e.count += 1;
-        else boundaries.set(key, { intentIds: [...res.intentIds], count: 1 });
-      }
+      if (res.kind === 'matched') perIntent.set(res.intentId, (perIntent.get(res.intentId) ?? 0) + 1);
+      else if (res.kind === 'type_default') {
+        unassigned += 1;
+        if (r.queryType) residueByType.set(r.queryType, (residueByType.get(r.queryType) ?? 0) + 1);
+      } else pending += 1;
     }
-    const boundaryList = [...boundaries.entries()]
-      .map(([key, v]) => ({ key, ...v }))
-      .sort((a, b) => b.count - a.count);
-    return { perIntent, unassigned, pending, boundaryList };
+    return { perIntent, residueByType, unassigned, pending };
   }, [rows, resolutions]);
 
   // ---- Middle column ------------------------------------------------------
@@ -1546,18 +1461,12 @@ export default function IntentBoard({
   useEffect(() => {
     const gone =
       (selection.kind === 'intent' && !activeIntents.some((i) => i.id === selection.id)) ||
-      (selection.kind === 'boundary' && !counts.boundaryList.some((b) => b.key === selection.key)) ||
       (selection.kind === 'pending' && counts.pending === 0) ||
       // A browsed template can leave the library (activated → live intent).
       (selection.kind === 'starter' &&
-        !selection.ids.some((tid) => intentById.get(tid)?.isTemplate)) ||
-      // The tie-breaker was removed (here or from the intent card).
-      (selection.kind === 'tiebreak' &&
-        !links.some(
-          (l) => l.fromIntentId === selection.fromIntentId && l.toIntentId === selection.toIntentId
-        ));
+        !selection.ids.some((tid) => intentById.get(tid)?.isTemplate));
     if (gone) setSelection({ kind: 'all' });
-  }, [selection, activeIntents, counts, intentById, links]);
+  }, [selection, activeIntents, counts, intentById]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
@@ -1567,13 +1476,11 @@ export default function IntentBoard({
         case 'all':
           return true;
         case 'intent':
-          return res.kind === 'assigned' && res.intentId === selection.id;
+          return res.kind === 'matched' && res.intentId === selection.id;
         case 'unassigned':
-          return res.kind === 'fallback';
+          return res.kind === 'type_default';
         case 'pending':
           return res.kind === 'pending';
-        case 'boundary':
-          return res.kind === 'boundary' && boundaryKey(res.intentIds) === selection.key;
         case 'starter':
           // Rated clearly-in for ANY of the browsed templates (pins override).
           return selection.ids.some((tid) => {
@@ -1584,14 +1491,9 @@ export default function IntentBoard({
         case 'search':
           // A baseline saved search: its cached clearly-in messageIds.
           return selection.ids.includes(r.messageId);
-        case 'tiebreak': {
-          // Both intents claim it → this is a question the tie-breaker decides.
-          const c = claimants.get(r.messageId);
-          return !!c && c.includes(selection.fromIntentId) && c.includes(selection.toIntentId);
-        }
       }
     });
-  }, [rows, resolutions, selection, claimants]);
+  }, [rows, resolutions, selection]);
 
   const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1627,7 +1529,10 @@ export default function IntentBoard({
   const selectedOwnerId = useMemo(() => {
     if (selectedMessageId === null) return null;
     const res = resolutions.get(selectedMessageId);
-    return res?.kind === 'assigned' ? res.intentId : null;
+    // Only a matched INTENT owns a rule the viewer can revise here. A query
+    // answered by its type's default rule has an owner too (the type root) —
+    // editing that is the type-section affordance, wired in P3.
+    return res?.kind === 'matched' ? res.intentId : null;
   }, [selectedMessageId, resolutions]);
   useEffect(() => {
     setViewerVersions(null);
@@ -1708,14 +1613,10 @@ export default function IntentBoard({
         return 'Uncategorized questions';
       case 'pending':
         return 'Not yet rated';
-      case 'boundary':
-        return selection.key.split('+').map((s) => titleOf(Number(s))).join(' ↔ ');
       case 'starter':
         return `Starter set · ${selection.label}`;
       case 'search':
         return `Search · ${selection.label}`;
-      case 'tiebreak':
-        return `Tie-breaker · ${titleOf(selection.toIntentId)} wins`;
     }
   })();
 
@@ -1900,39 +1801,6 @@ export default function IntentBoard({
             </div>
           ) : null}
 
-          {/* OVERLAPS — only when boundaries exist. The per-pair "Decide"
-              comparison flow is PARKED for now (DecideOwnershipModal stays in
-              the tree, unreachable): overlaps are resolved by tightening the
-              intents' definitions in Edit intent, where overlapping questions
-              are tagged and sorted first. */}
-          {!isBaseline && counts.boundaryList.length > 0 && (
-            <div className="border-b border-[hsl(var(--border))] bg-amber-50/60 px-3 py-2 space-y-1">
-              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
-                <AlertTriangle className="w-3.5 h-3.5" /> Overlaps
-              </div>
-              {counts.boundaryList.map((b) => (
-                <button
-                  key={b.key}
-                  onClick={() => setSelection({ kind: 'boundary', key: b.key })}
-                  className={`w-full rounded text-left px-2 py-1.5 text-sm flex items-center justify-between gap-2 ${
-                    selection.kind === 'boundary' && selection.key === b.key
-                      ? 'bg-amber-100 font-medium'
-                      : 'hover:bg-amber-100/60'
-                  }`}
-                >
-                  <span className="truncate text-amber-900">
-                    {b.intentIds.map((id) => titleOf(id)).join(' ↔ ')}
-                  </span>
-                  <Badge n={b.count} />
-                </button>
-              ))}
-              <p className="text-[11px] text-amber-700/80">
-                Answered without an intent rule until resolved — refine the intents in{' '}
-                <span className="font-medium">Edit intent</span>.
-              </p>
-            </div>
-          )}
-
           {/* INTENTS (score) / SEARCHES (baseline) + the whole-log filters.
               Sticky: in the baseline the panel is a flex column and this block
               is shrink-0, and in SCORE the panel scrolls as one — so All /
@@ -2039,7 +1907,6 @@ export default function IntentBoard({
             <div className="pb-1">
               {activeIntents.map((intent) => {
                 const active = selection.kind === 'intent' && selection.id === intent.id;
-                const exceptLinks = links.filter((l) => l.fromIntentId === intent.id);
                 return (
                   <div
                     key={intent.id}
@@ -2086,49 +1953,6 @@ export default function IntentBoard({
                         <Badge n={counts.perIntent.get(intent.id) ?? 0} />
                       </div>
                     </HoverReveal>
-                    {/* TIE-BREAKERS this intent yields to. The chip BROWSES —
-                        it filters the list to the questions this tie-breaker
-                        actually decides. Removing it is a deliberate second
-                        step in the middle column's header, so a stray click
-                        can't undo a decision and hand a pile of questions back
-                        to Needs Decision. */}
-                    {exceptLinks.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {exceptLinks.map((l) => {
-                          const key = `tb:${l.fromIntentId}->${l.toIntentId}`;
-                          const active = selection.kind === 'tiebreak' && selection.key === key;
-                          return (
-                            <button
-                              key={l.toIntentId}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelection(
-                                  active
-                                    ? { kind: 'all' }
-                                    : {
-                                        kind: 'tiebreak',
-                                        key,
-                                        fromIntentId: l.fromIntentId,
-                                        toIntentId: l.toIntentId,
-                                      }
-                                );
-                              }}
-                              title={`Tie-breaker — when both match, “${titleOf(l.toIntentId)}” takes the question. Click to see which questions.`}
-                            >
-                              <SmallChip
-                                className={
-                                  active
-                                    ? 'bg-sky-100 text-sky-800 border-sky-300'
-                                    : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
-                                }
-                              >
-                                <Link2 className="w-3 h-3" /> yields to {titleOf(l.toIntentId)}
-                              </SmallChip>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -2415,128 +2239,6 @@ export default function IntentBoard({
                 </div>
               );
             }
-            if (selection.kind === 'boundary') {
-              // Overlaps are resolved by tightening the colliding intents, so
-              // the header hands you straight into each one's editor.
-              const ids = selection.key.split('+').map(Number).filter((n) => Number.isFinite(n));
-              if (ids.length === 0) return null;
-              return (
-                /* Stacked, not side-by-side: the colliding intents are a LIST
-                   of things to go fix, however many there are, and putting them
-                   beside the explanation squeezed it into a 7-line ribbon. */
-                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-amber-50/40">
-                  <div className="flex items-start gap-2">
-                    <DetailLabel>Both</DetailLabel>
-                    <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-amber-900">
-                      These questions match every intent below. Take off the ones they don&apos;t belong
-                      to — when one is left, it takes them and this overlap is gone.
-                    </span>
-                  </div>
-                  {/* Each colliding intent with its WHEN in full — the overlap
-                      is a disagreement between two definitions, so the two
-                      definitions are the thing to read, side by side is not
-                      possible in this width but stacked is. An overlap bucket
-                      holds few questions, so the extra header height is cheap;
-                      max-h keeps a pathological definition from taking over. */}
-                  <div className="mt-1.5 pl-12 space-y-2 max-h-56 overflow-y-auto">
-                    {ids.map((iid) => {
-                      const target = intentById.get(iid);
-                      return (
-                        <div key={iid} className="flex items-start gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-semibold text-amber-900">{titleOf(iid)}</p>
-                            <p className="mt-0.5 whitespace-pre-wrap text-[11px] leading-relaxed text-amber-900/80">
-                              {target?.definition ?? ''}
-                            </p>
-                          </div>
-                          <div className="shrink-0 flex items-center gap-1">
-                            <HeaderAction
-                              onClick={() => void dropFromOverlap(iid, ids.filter((x) => x !== iid))}
-                              disabled={droppingIntentId !== null || !target}
-                              title={`These questions are not “${titleOf(iid)}” — hand them to the other intent`}
-                              icon={
-                                droppingIntentId === iid ? (
-                                  <RefreshCw className="w-3 h-3 animate-spin" />
-                                ) : (
-                                  <X className="w-3 h-3" />
-                                )
-                              }
-                            >
-                              Not this one
-                            </HeaderAction>
-                            {/* The pencil stays for the instructor who would
-                                rather fix the definition than call this one
-                                question set. Icon-only: taking the intent off
-                                is the fast path, editing is the considered one. */}
-                            <button
-                              onClick={() => target && setEditIntent(target)}
-                              disabled={!target}
-                              aria-label={`Edit ${titleOf(iid)}`}
-                              title={`Edit “${titleOf(iid)}” — sharpen its definition instead`}
-                              className="shrink-0 self-start rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
-                            >
-                              <Pencil className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            }
-            if (selection.kind === 'tiebreak') {
-              return (
-                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-sky-50/50">
-                  {/* Remove sits with the sentence it undoes — it is THE action
-                      of this panel and takes a fixed, short label. */}
-                  <div className="flex items-start gap-2">
-                    <DetailLabel>Tie</DetailLabel>
-                    <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-sky-900">
-                      Both <span className="font-semibold">{titleOf(selection.fromIntentId)}</span> and{' '}
-                      <span className="font-semibold">{titleOf(selection.toIntentId)}</span> claim the
-                      questions below, and{' '}
-                      <span className="font-semibold">{titleOf(selection.toIntentId)}</span> takes them.
-                      Removing this puts them back in the overlap queue.
-                    </span>
-                    <HeaderAction
-                      onClick={() => void removeTieBreaker(selection.fromIntentId, selection.toIntentId)}
-                      disabled={removingTieBreaker}
-                      title="Remove this tie-breaker — both intents claim these questions again"
-                      icon={
-                        removingTieBreaker ? (
-                          <RefreshCw className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <X className="w-3 h-3" />
-                        )
-                      }
-                    >
-                      Remove tie-breaker
-                    </HeaderAction>
-                  </div>
-                  {/* The edit buttons get their own line: their labels carry
-                      intent titles, so two of them never fit beside anything.
-                      Each NAMES its intent — a bare pencil gave no clue which
-                      of the two it would open. */}
-                  <div className="mt-1.5 pl-12 flex flex-wrap items-center gap-1">
-                    {[selection.fromIntentId, selection.toIntentId].map((iid) => {
-                      const target = intentById.get(iid);
-                      return (
-                        <HeaderAction
-                          key={iid}
-                          onClick={() => target && setEditIntent(target)}
-                          disabled={!target}
-                          title={`Edit “${titleOf(iid)}” — sharpen its definition instead`}
-                          icon={<Pencil className="w-3 h-3" />}
-                        >
-                          Edit {titleOf(iid)}
-                        </HeaderAction>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            }
             if (selection.kind === 'search' && isBaseline) {
               const saved = savedSearches.find((s) => `search:${s.id}` === selection.key);
               if (!saved) return null;
@@ -2603,28 +2305,6 @@ export default function IntentBoard({
                             pinned
                           </SmallChip>
                         )}
-                        {/* Overlap view: every listed intent is "in" for this
-                            question (that's what makes it an overlap), so the
-                            rating label is pure repetition — show just each
-                            owning intent's title, flagging the ones a pin set.
-                            Each chip is a shortcut INTO that intent's editor
-                            (sharpen its WHEN to drop this question). role=button
-                            span + stopPropagation — the row itself is a button. */}
-                        {selection.kind === 'boundary' &&
-                          res?.kind === 'boundary' &&
-                          res.intentIds.map((iid) => {
-                            const pin = r.pinnedIntents[iid];
-                            const target = intentById.get(iid);
-                            return (
-                              <IntentChip
-                                key={iid}
-                                label={`${titleOf(iid)}${pin ? ' · pinned' : ''}`}
-                                colors="border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:border-amber-300"
-                                title={`Edit “${titleOf(iid)}” — sharpen its definition to resolve this overlap${pin ? ' (set by instructor pin)' : ''}`}
-                                onEdit={() => target && setEditIntent(target)}
-                              />
-                            );
-                          })}
                         {/* Which intent captured this question, and a shortcut
                             into its editor. ONLY in the All view: there it is
                             live coverage feedback. Not in the Starter set view —
@@ -2638,7 +2318,7 @@ export default function IntentBoard({
                             expose. */}
                         {!isBaseline &&
                           selection.kind === 'all' &&
-                          res?.kind === 'assigned' &&
+                          res?.kind === 'matched' &&
                           (() => {
                             const target = intentById.get(res.intentId);
                             return (
@@ -2727,7 +2407,7 @@ export default function IntentBoard({
                   ) : (() => {
                     const res = resolutions.get(selectedRow.messageId);
                     const owner =
-                      res?.kind === 'assigned' ? intentById.get(res.intentId) ?? null : null;
+                      res?.kind === 'matched' ? intentById.get(res.intentId) ?? null : null;
                     const button = (
                       <button
                         disabled={!owner}
@@ -2891,31 +2571,6 @@ export default function IntentBoard({
         </div>
       </div>
       )}
-
-      {ownershipPair && (
-        <DecideOwnershipModal
-          assignmentId={assignmentId}
-          intentA={ownershipPair.a}
-          intentB={ownershipPair.b}
-          messageIds={ownershipPair.messageIds}
-          onClose={(changed) => {
-            setOwnershipPair(null);
-            if (changed) router.refresh();
-          }}
-          onCreateNew={() => {
-            // C-intent flow (§1.7): the overlap region deserves its own
-            // response — seed a new intent scoped to exactly that region.
-            const { a, b } = ownershipPair;
-            setOwnershipPair(null);
-            setNewIntentSeed({
-              title: '',
-              definition: `asks for something that matches both "${a.title}" and "${b.title}" at the same time — <describe the specific combined situation this intent owns>`,
-            });
-            setNewIntentOpen(true);
-          }}
-        />
-      )}
-
 
       {/* HARD DELETE — irreversible; one confirm click executes (no typing). */}
       {purgeTarget && (

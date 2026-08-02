@@ -139,7 +139,11 @@ async function loadRateStatus(
       .from(scoreDissections)
       .where(eq(scoreDissections.assignmentId, assignmentId)),
     db
-      .select({ messageId: scoreQueryTypes.messageId, version: scoreQueryTypes.version })
+      .select({
+        messageId: scoreQueryTypes.messageId,
+        type: scoreQueryTypes.type,
+        version: scoreQueryTypes.version,
+      })
       .from(scoreQueryTypes)
       .where(eq(scoreQueryTypes.assignmentId, assignmentId)),
   ]);
@@ -161,18 +165,47 @@ async function loadRateStatus(
   const typeFresh = new Set(
     typeRows.filter((t) => t.version >= TYPE_CLASSIFIER_VERSION).map((t) => t.messageId)
   );
+  const typeByMessage = new Map(
+    typeRows.filter((t) => t.version >= TYPE_CLASSIFIER_VERSION).map((t) => [t.messageId, t.type])
+  );
+
+  /**
+   * v7 scoping (plan invariant 4): an intent that carries a `type` is judged
+   * ONLY against that type's queries — the tree is per-type, so a rating for a
+   * query of another type could never be routed anywhere and would be pure
+   * spend. Type-LESS rows stay whole-log: starter/preset templates back the
+   * baseline condition's searches (which sweep the entire log by definition),
+   * and pre-backfill intents must keep behaving exactly as they did.
+   *
+   * Deliberately NOT keyed on isTemplate: a create-flow draft is isTemplate
+   * until Save yet already carries its type, and rating it against the whole
+   * log would cost ~4x for judgments the chain can never use.
+   */
+  const isNeeded = (p: PromptReadyIntent, messageType: string | undefined): boolean => {
+    if (!p.intent.type) return true; // type-less → whole-log (templates, legacy)
+    return p.intent.type === messageType;
+  };
+  /** Any wanted intent whose scope depends on knowing the message's type. */
+  const wantedNeedsTypes = wanted.some((p) => !!p.intent.type);
 
   const jobs: MessageJob[] = [];
   for (const record of records) {
     const have = hashesByMessage.get(record.messageId);
+    const messageType = typeByMessage.get(record.messageId);
     const staleIntents = noIntents
       ? []
-      : wanted.filter((p) => !have?.has(`${p.intent.id}:${p.defHash}`));
-    // Same piggyback policy as dissection: an intent-scoped run (the workbench
-    // Apply loop) types only the messages it is already rating, so applying one
-    // intent never silently sweeps the whole log.
+      : wanted.filter(
+          (p) => isNeeded(p, messageType) && !have?.has(`${p.intent.id}:${p.defHash}`)
+        );
+    // An intent-scoped run (the workbench Apply loop) types a message when it
+    // must: a TYPED intent's scope is undecidable until the message has a type,
+    // so without this an untyped message would yield neither a type job nor a
+    // rating job and the intent would silently never see it. When every wanted
+    // intent is type-less (a template), the old piggyback policy stands and the
+    // Apply does not sweep the log.
     const needsType =
-      !typeFresh.has(record.messageId) && (scopedIntentIds ? staleIntents.length > 0 : true);
+      !typeFresh.has(record.messageId) &&
+      (scopedIntentIds ? wantedNeedsTypes || staleIntents.length > 0 : true);
     const dissectionStale = !dissectionFresh.has(record.messageId);
     // A message being typed gets its dissection first: the split is deterministic
     // (no LLM cost) and it materially steers the type call, whose verdict is then
@@ -185,6 +218,11 @@ async function loadRateStatus(
     }
   }
 
+  // `total` stays the shard's message count and `rated` = messages with no
+  // pending work — the same meaning as before type scoping. A run scoped to a
+  // typed intent therefore STARTS at a high rated count, because out-of-type
+  // messages genuinely need no work; the bar fills the rest. Client and server
+  // denominators still agree (both are the log size), so progress is honest.
   const total = records.length;
   const remaining = jobs.length;
   return { jobs, total, remaining, rated: total - remaining };

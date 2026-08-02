@@ -297,10 +297,11 @@ export type AssignmentResolution =
   | { kind: 'pending' };
 
 /**
- * The v6 배타 배정 rule. `ratings` maps intentId → its rating for this
- * question (missing/stale entries simply absent). Pure and deterministic so
- * the exact same function can back the viewer, the batch pipeline, and the
- * future runtime injection step.
+ * The v6 exclusive-assignment rule. SUPERSEDED by resolveRoute (v7 first-match
+ * chain) everywhere except one place: the student runtime still has to answer
+ * correctly for deploy snapshots frozen BEFORE the cutover, which carry no
+ * tree fields and may carry exception links. Retired with the runtime rewrite;
+ * do not wire anything new to it.
  */
 export function resolveAssignment(
   ratings: ReadonlyMap<number, RatingLevel>,
@@ -335,11 +336,6 @@ export function resolveAssignment(
   }
 
   return { kind: 'boundary', intentIds: [...included].sort((a, b) => a - b) };
-}
-
-/** Stable key for a boundary's intent set — groups the Needs Decision queue. */
-export function boundaryKey(intentIds: readonly number[]): string {
-  return [...intentIds].sort((a, b) => a - b).join('+');
 }
 
 /**

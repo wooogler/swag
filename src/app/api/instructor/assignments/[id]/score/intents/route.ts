@@ -73,7 +73,6 @@ function serializeState(state: Awaited<ReturnType<typeof loadIntentState>>) {
       pinCount: state.pins.filter((p) => p.intentId === i.id).length,
       updatedAt: i.updatedAt.toISOString(),
     })),
-    links: state.links.map((l) => ({ fromIntentId: l.fromIntentId, toIntentId: l.toIntentId })),
     versionNo: state.versionNo,
   };
 }

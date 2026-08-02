@@ -178,16 +178,36 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   // deterministic resolver so link/pin edits re-derive without reload logic.
   // Ratings are hash-keyed history — pick one display row per (message, intent):
   // the current-hash row when present, else the latest (marked stale).
+  // v7 type layer: which of the 4 fixed types each message was classified into.
+  // Rows below TYPE_CLASSIFIER_VERSION are treated as absent (they will be
+  // re-classified on the next run) rather than shown against a prompt that no
+  // longer exists.
+  const queryTypeByMessage = new Map<number, ScoreQueryType>();
+  for (const t of queryTypeRows) {
+    if (t.version < TYPE_CLASSIFIER_VERSION) continue;
+    if (isScoreQueryType(t.type)) queryTypeByMessage.set(t.messageId, t.type);
+  }
+
   const currentIntentHash = new Map(intentState.promptReady.map((p) => [p.intent.id, p.defHash]));
   const displayRatings = pickDisplayRatings(intentRatingRows, currentIntentHash);
   const intentRatingsByMessage = new Map<
     number,
     Record<number, { rating: RatingLevel; rationale: string | null; stale: boolean }>
   >();
+  // v7 scoping (D9): a TYPED intent only ever judges its own type's queries, so
+  // shipping its ratings for other types would show judgments the chain can
+  // never act on. Type-LESS intents (starter templates, pre-backfill rows) keep
+  // shipping whole-log — the baseline condition's searches read them across the
+  // entire log. A message with no type yet ships everything: it is transitional,
+  // and its routing is 'pending' anyway.
+  const intentTypeById = new Map(intentState.intents.map((i) => [i.id, i.type]));
   for (const [messageId, perIntent] of displayRatings) {
     const m: Record<number, { rating: RatingLevel; rationale: string | null; stale: boolean }> = {};
+    const messageType = queryTypeByMessage.get(messageId) ?? null;
     for (const [iid, pick] of perIntent) {
       if (!isRatingLevel(pick.row.rating)) continue;
+      const intentType = intentTypeById.get(iid) ?? null;
+      if (messageType !== null && intentType !== null && intentType !== messageType) continue;
       m[iid] = { rating: pick.row.rating, rationale: pick.row.rationale, stale: !pick.fresh };
     }
     intentRatingsByMessage.set(messageId, m);
@@ -202,16 +222,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       },
     ])
   );
-
-  // v7 type layer: which of the 4 fixed types each message was classified into.
-  // Rows below TYPE_CLASSIFIER_VERSION are treated as absent (they will be
-  // re-classified on the next run) rather than shown against a prompt that no
-  // longer exists.
-  const queryTypeByMessage = new Map<number, ScoreQueryType>();
-  for (const t of queryTypeRows) {
-    if (t.version < TYPE_CLASSIFIER_VERSION) continue;
-    if (isScoreQueryType(t.type)) queryTypeByMessage.set(t.messageId, t.type);
-  }
 
   // Pin verdicts per (message, intent) — instructor decisions that override
   // the classifier for the pinned question itself (applyPinOverrides).
@@ -336,10 +346,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       position: i.position,
     };
   });
-  const links = intentState.links.map((l) => ({
-    fromIntentId: l.fromIntentId,
-    toIntentId: l.toIntentId,
-  }));
 
   return (
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
@@ -380,7 +386,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
           assignmentId={id}
           rows={rows}
           intents={intents}
-          links={links}
           basePrompt={assignmentBasePrompt(assignment)}
           condition={studioView}
           baseline={

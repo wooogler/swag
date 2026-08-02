@@ -14,12 +14,11 @@
  *          (versions touching another intent too) are left intact.
  */
 import { NextResponse } from 'next/server';
-import { and, eq, or, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
 import {
   scoreConfigVersions,
-  scoreIntentLinks,
   scoreIntentPins,
   scoreIntentRatings,
   scoreIntents,
@@ -277,17 +276,6 @@ export async function DELETE(req: Request, { params }: RouteParams) {
           .where(and(eq(scoreRulePreviews.assignmentId, id), eq(scoreRulePreviews.intentId, intentId)))
           .returning({ id: scoreRulePreviews.id })
       ).length;
-      const links = (
-        await tx
-          .delete(scoreIntentLinks)
-          .where(
-            and(
-              eq(scoreIntentLinks.assignmentId, id),
-              or(eq(scoreIntentLinks.fromIntentId, intentId), eq(scoreIntentLinks.toIntentId, intentId))
-            )
-          )
-          .returning({ id: scoreIntentLinks.id })
-      ).length;
       // Only versions SOLELY about this intent — shared entries (e.g. an
       // ownership decision touching two intents) keep the other intent's history.
       const versions = (
@@ -304,7 +292,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
       await tx
         .delete(scoreIntents)
         .where(and(eq(scoreIntents.id, intentId), eq(scoreIntents.assignmentId, id)));
-      return { ratings, pins, links, previews, versions };
+      return { ratings, pins, previews, versions };
     });
     return NextResponse.json({ purged: true, deleted });
   }
