@@ -29,7 +29,7 @@ v6는 intent마다 독립 분류기를 전체 로그에 적용한다. 그 결과
 
 - 모든 쿼리는 **Planning / Translating / Reviewing / Drafting** 중 정확히 하나로 분류된다 (single-label).
 - Drafting은 구 Jelson 'All'의 후계 라벨이되 의미가 이동: "초안 생성 요청 + 다중 활동 흡수".
-- **Tie-break 규칙: 다중 활동 쿼리는 Drafting이 이긴다.** 필요하면 instructor가 Drafting 안에서 intent를 carve-out하여 대처한다. *(검증 필요 — §6.2, §6.3)*
+- **Tie-break 규칙(실측 반영, 2026-08-02):** 요청 중 하나라도 **에세이 산문 생성**이면 → Drafting이 이긴다. 그렇지 않은 다중 활동(예: 교정 + 주제 질문)은 **텍스트를 실제로 다루는 쪽**(reviewing/translating)이 이기고 planning이 진다. 로그의 9.8%가 다중 활동이며, 인간 코더도 prose 없는 사례 15건 중 11건을 Drafting이라 부르지 않았다. 프롬프트에는 앞 절만 쓰여 있다 — 뒤 절까지 명시하려는 시도는 세 번 모두 정확도를 떨어뜨렸다(`docs/SCORE_v7_type_eval.md` §8).
 - 'Other' type은 없다. off-topic/잡담도 4개 중 하나로 강제되고, 해당 type의 else rule이 적용된다.
 - **캐싱 성질**: 메시지 내용은 불변이므로 type 판정은 **메시지당 평생 1회**. 분류기 프롬프트/버전 변경 시에만 전체 재계산. (intent 판정처럼 definition 수정마다 재계산할 일이 없음.)
 - 성능 전제: 구 Classifier A의 Type 일치 79.2%(κ=0.72)는 자료 치환([ASSIGNMENT PROMPT], [OWN DRAFT]) **이전** 측정. 치환 적용 상태로 재평가가 선행되어야 한다 *(§6.1)*. Type 게이트 오류는 하위에서 복구 불가능하므로 이 실험이 설계의 전제 조건이다.
