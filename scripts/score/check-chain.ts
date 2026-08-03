@@ -149,7 +149,63 @@ console.log('\ncompileChains — degenerate trees stay total');
   check('no nodes at all', orderOf([]), []);
 }
 
-console.log('\nresolveRoute');
+console.log('\nresolveRoute — CONTAINMENT (a subset only owns what its parents own)');
+{
+  const nodes = [root(1, 'planning'), intent(10), intent(11, { parent: 10 })];
+  const chain = compileChains(nodes).get('planning')!; // order [11, 10]
+  const r = (entries: [number, RatingLevel][]) => resolveRoute(chain, new Map(entries));
+
+  check('ancestors recorded', chain.ancestorsOf.get(11), [10]);
+  check('top-level has none', chain.ancestorsOf.get(10), []);
+
+  check('parent in, child in → child (the subset refines it)', r([[10, 'clearly_in'], [11, 'clearly_in']]), {
+    kind: 'matched',
+    intentId: 11,
+  });
+  check('parent in, child out → parent', r([[10, 'clearly_in'], [11, 'clearly_out']]), {
+    kind: 'matched',
+    intentId: 10,
+  });
+  // THE case the containment rule exists for.
+  check('parent OUT, child in → nobody (child cannot escape its parent)', r([[10, 'clearly_out'], [11, 'clearly_in']]), {
+    kind: 'type_default',
+    intentId: 1,
+  });
+  check('parent unrated → pending, even though the child matched', r([[11, 'clearly_in']]), {
+    kind: 'pending',
+  });
+  check("ineligible child's own rating is never needed", r([[10, 'clearly_out']]), {
+    kind: 'type_default',
+    intentId: 1,
+  });
+}
+{
+  // Containment is transitive: a grandchild needs the whole ancestry.
+  const nodes = [root(1, 'planning'), intent(10), intent(11, { parent: 10 }), intent(12, { parent: 11 })];
+  const chain = compileChains(nodes).get('planning')!; // order [12, 11, 10]
+  check('grandchild ancestry', chain.ancestorsOf.get(12), [11, 10]);
+  const r = (e: [number, RatingLevel][]) => resolveRoute(chain, new Map(e));
+  check('all three in → grandchild', r([[10, 'clearly_in'], [11, 'clearly_in'], [12, 'clearly_in']]), {
+    kind: 'matched',
+    intentId: 12,
+  });
+  check('grandparent out → grandchild blocked, falls through', r([[10, 'clearly_out'], [11, 'clearly_in'], [12, 'clearly_in']]), {
+    kind: 'type_default',
+    intentId: 1,
+  });
+}
+{
+  // A blocked subtree must not stop a LATER sibling from winning.
+  const nodes = [root(1, 'planning'), intent(10), intent(11, { parent: 10 }), intent(20)];
+  const chain = compileChains(nodes).get('planning')!; // order [11, 10, 20]
+  const res = resolveRoute(
+    chain,
+    new Map<number, RatingLevel>([[10, 'clearly_out'], [11, 'clearly_in'], [20, 'clearly_in']])
+  );
+  check('blocked subtree yields to the next sibling', res, { kind: 'matched', intentId: 20 });
+}
+
+console.log('\nresolveRoute — basics');
 {
   const nodes = [root(1, 'planning'), intent(10), intent(11, { parent: 10 })];
   const chain = compileChains(nodes).get('planning')!; // order [11, 10]
@@ -172,10 +228,21 @@ console.log('\nresolveRoute');
     intentId: 1,
   });
   check('gap before any match → pending', r([[10, 'clearly_in']]), { kind: 'pending' });
-  check('gap AFTER the winner is irrelevant', r([[11, 'clearly_in']]), {
-    kind: 'matched',
-    intentId: 11,
-  });
+}
+{
+  // "A gap after the winner is irrelevant" needs TOP-LEVEL siblings now: for a
+  // subset, an unrated parent is a gap BEFORE it (it decides eligibility).
+  const chain = compileChains([root(1, 'planning'), intent(10), intent(20)]).get('planning')!;
+  check(
+    'gap AFTER the winner is irrelevant',
+    resolveRoute(chain, new Map<number, RatingLevel>([[10, 'clearly_in']])),
+    { kind: 'matched', intentId: 10 }
+  );
+}
+{
+  const nodes = [root(1, 'planning'), intent(10), intent(11, { parent: 10 })];
+  const chain = compileChains(nodes).get('planning')!;
+  const r = (entries: [number, RatingLevel][]) => resolveRoute(chain, new Map(entries));
   check('empty chain → type default', resolveRoute(compileChains([root(1, 'planning')]).get('planning')!, new Map()), {
     kind: 'type_default',
     intentId: 1,

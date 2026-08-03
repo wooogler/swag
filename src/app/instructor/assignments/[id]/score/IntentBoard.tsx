@@ -1637,35 +1637,44 @@ export default function IntentBoard({
 
   // Viewing a past deploy → the read-only version board replaces everything.
   /**
-   * Which sets are shadowed: an EARLIER node in the same chain also matches
-   * some of their questions and takes them first. With first-match routing a
-   * collision no longer announces itself — this is what replaces the v6 overlap
-   * queue (§3.7). Computed from the same effective ratings the router uses.
+   * Two things a set's owner needs to see, both invisible under first-match:
+   *   shadowedBy — an EARLIER sibling in the same chain answers questions this
+   *                set also matches, so they never reach it (§3.7).
+   *   outsideParent — questions this set matches that its ENCLOSING sets do
+   *                not. Containment means it can never win them; the fix is to
+   *                widen the parent or move the set out.
+   * Both are derived from the same walk the router does, so they can never
+   * disagree with what actually happens.
    */
-  const shadowedBy = useMemo(() => {
-    const map = new Map<number, { intentId: number; count: number }>();
+  const treeDiagnostics = useMemo(() => {
+    const shadowed = new Map<number, { intentId: number; count: number }>();
+    const outside = new Map<number, number>();
     for (const r of rows) {
       if (!r.queryType) continue;
       const chain = chains.get(r.queryType);
       if (!chain) continue;
       const eff = effectiveRatings(r);
-      // The winner takes it; every LATER node that also matches is shadowed.
-      let winner: number | null = null;
+      const winner = resolveRoute(chain, eff);
+      const winnerId = winner.kind === 'matched' ? winner.intentId : null;
       for (const id of chain.order) {
-        if (!isIncludedRating(eff.get(id))) continue;
-        if (winner === null) {
-          winner = id;
-          continue;
+        if (id === winnerId) continue;
+        if (!isIncludedRating(eff.get(id))) continue; // it did not claim this one
+        const blocked = (chain.ancestorsOf.get(id) ?? []).some(
+          (a) => !isIncludedRating(eff.get(a))
+        );
+        if (blocked) {
+          outside.set(id, (outside.get(id) ?? 0) + 1);
+        } else if (winnerId !== null) {
+          const prev = shadowed.get(id);
+          if (prev) prev.count += 1;
+          else shadowed.set(id, { intentId: winnerId, count: 1 });
         }
-        const prev = map.get(id);
-        if (prev && prev.intentId === winner) prev.count += 1;
-        else if (!prev) map.set(id, { intentId: winner, count: 1 });
-        else prev.count += 1; // several interceptors — keep the first seen
       }
     }
-    return map;
+    return { shadowed, outside };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, chains]);
+  const shadowedBy = treeDiagnostics.shadowed;
 
   /** One set in the left column's tree, then its subsets under it. */
   function renderTreeNode(
@@ -1679,6 +1688,7 @@ export default function IntentBoard({
     const idx = siblings.findIndex((sib) => sib.id === intent.id);
     const active = selection.kind === 'intent' && selection.id === intent.id;
     const shadow = shadowedBy.get(intent.id);
+    const outsideCount = treeDiagnostics.outside.get(intent.id) ?? 0;
     const own = counts.perIntent.get(intent.id) ?? 0;
     return (
       <div key={intent.id}>
@@ -1723,6 +1733,14 @@ export default function IntentBoard({
                   title={`“${titleOf(shadow.intentId)}” comes earlier in ${QUERY_TYPE_LABELS[type]} and answers ${shadow.count} question${shadow.count === 1 ? '' : 's'} this set also matches. Narrow it, move this set above it, or nest this set inside it.`}
                 >
                   <AlertTriangle className="w-3 h-3" /> {shadow.count}
+                </SmallChip>
+              )}
+              {outsideCount > 0 && (
+                <SmallChip
+                  className="bg-sky-50 text-sky-700 border-sky-200 shrink-0"
+                  title={`${outsideCount} question${outsideCount === 1 ? '' : 's'} this set matches sit outside “${titleOf(intent.parentIntentId ?? 0)}”. A subset only answers what the set around it answers, so these never reach it — widen the enclosing set, or drag this one out of it.`}
+                >
+                  ↗ {outsideCount}
                 </SmallChip>
               )}
             </div>

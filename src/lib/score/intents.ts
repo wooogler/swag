@@ -385,6 +385,10 @@ export interface TypeChain {
    * the set itself, sibling subtrees whole and in sibling order. First match
    * wins. The root is deliberately NOT in here — it is never judged. */
   order: number[];
+  /** Enclosing sets of each node, outermost last. A subset only owns what its
+   * enclosing sets own too (see resolveRoute) — this is what makes nesting
+   * mean CONTAINMENT rather than just evaluation order. */
+  ancestorsOf: Map<number, number[]>;
 }
 
 /** Effective sibling order key: an explicit position wins, otherwise creation
@@ -459,25 +463,29 @@ export function compileChains(nodes: readonly ChainNode[]): Map<ScoreQueryType, 
     for (const list of childrenOf.values()) list.sort(compareSiblings);
 
     const order: number[] = [];
+    const ancestorsOf = new Map<number, number[]>();
     const emitted = new Set<number>();
-    const walk = (siblings: ChainNode[]): void => {
+    const walk = (siblings: ChainNode[], ancestors: number[]): void => {
       for (const node of siblings) {
         if (emitted.has(node.id)) continue; // cycle guard
         emitted.add(node.id);
-        walk(childrenOf.get(node.id) ?? []); // children before their parent
-        order.push(node.id);
+        ancestorsOf.set(node.id, ancestors);
+        walk(childrenOf.get(node.id) ?? [], [node.id, ...ancestors]);
+        order.push(node.id); // children before their parent
       }
     };
-    walk(topLevel);
+    walk(topLevel, []);
     // Nodes stranded by a parent cycle: append in sibling order so they stay
-    // reachable (a malformed tree must not silently disable an intent).
+    // reachable (a malformed tree must not silently disable an intent). They
+    // are treated as top-level — a cycle has no well-defined enclosing set.
     for (const node of [...members].sort(compareSiblings)) {
       if (emitted.has(node.id)) continue;
       emitted.add(node.id);
+      ancestorsOf.set(node.id, []);
       order.push(node.id);
     }
 
-    chains.set(type, { type, rootId, order });
+    chains.set(type, { type, rootId, order, ancestorsOf });
   }
   return chains;
 }
@@ -494,25 +502,51 @@ export type RouteResolution =
 /**
  * Walk one type's chain and return the single node that owns the query.
  *
- * Instructor-side callers fold pins in first (applyPinOverrides): a pin fixes a
- * node's JUDGMENT, never its position in the chain (§3.6). The student runtime
- * passes raw ratings, and that is not an omission — pins are keyed to LOGGED
- * messages, and a message being answered live has never been labelled. Pins
- * reach students the way they always have: as examples inside the prompt.
+ * CONTAINMENT: a subset only ever owns questions its enclosing sets own too.
+ * Judgments stay independent — every set is rated against its whole type, and
+ * nothing is re-rated — but at routing time a subset is skipped unless every
+ * set it sits inside also matched. That is what makes the nesting in the UI a
+ * real claim: "inside Write Introduction" means the questions are a subset of
+ * Write Introduction's, so a parent's count never grows when a subset is added.
  *
- * Note what 'pending' does and does not cover: an unrated node AFTER the first
- * match cannot change the outcome, so the walk stops at the match. Only a gap
- * strictly before the winner is ambiguous — skipping it would silently promote
- * a later sibling — and that is what becomes 'pending'.
+ * The cost is deliberate and visible: a question the PARENT misses can no
+ * longer be rescued by a subset that would have matched it. Those are surfaced
+ * as "N matches outside this set" so the fix (widen the parent, or move the set
+ * out) is the obvious next action rather than an invisible loss.
+ *
+ * `ratings` must already have instructor pins folded in on the board side
+ * (applyPinOverrides): a pin fixes a set's JUDGMENT, never its position (§3.6).
+ * The student runtime passes raw ratings, and that is not an omission — pins
+ * are keyed to LOGGED messages, and a message being answered live has never
+ * been labelled. Pins reach students as examples inside the prompt.
+ *
+ * Note what 'pending' does and does not cover: an unrated set AFTER the winner
+ * cannot change the outcome, so the walk stops at the match. Only a gap that
+ * could change who wins — the winner's own rating, or an enclosing set's
+ * verdict, which decides whether a subset is even eligible — is ambiguous.
  */
 export function resolveRoute(
   chain: TypeChain,
   ratings: ReadonlyMap<number, RatingLevel>
 ): RouteResolution {
   for (const intentId of chain.order) {
+    // Eligibility first: an enclosing set that did not match takes this whole
+    // subtree out of the running, and its own rating is then irrelevant.
+    let eligible = true;
+    for (const ancestorId of chain.ancestorsOf.get(intentId) ?? []) {
+      const ancestorRating = ratings.get(ancestorId);
+      if (ancestorRating === undefined) return { kind: 'pending' };
+      if (!isIncludedRating(ancestorRating)) {
+        eligible = false;
+        break;
+      }
+    }
+    if (!eligible) continue;
+
     const rating = ratings.get(intentId);
     if (rating === undefined) return { kind: 'pending' };
     if (isIncludedRating(rating)) return { kind: 'matched', intentId };
   }
   return { kind: 'type_default', intentId: chain.rootId };
 }
+

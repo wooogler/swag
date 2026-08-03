@@ -172,15 +172,46 @@ export async function GET(req: Request, { params }: RouteParams) {
   // than the classifier actually saw (preview = runtime, §1.9).
   const pinRankByMessage = new Map(pinRows.map((p, i) => [p.messageId, i]));
 
-  // A typed intent can only ever own queries of ITS type — the chain it sits in
-  // is per-type — so the workbench must not list the rest. Two ways they get
-  // here otherwise: the route reads the whole log, and cloning a starter
-  // template copies that template's WHOLE-LOG ratings (templates are rated
-  // across everything on purpose, for the baseline's searches). An untyped
-  // intent (pre-backfill) still sees everything: it is judged whole-log.
-  const scopedRecords = isScoreQueryType(intent.type)
+  /**
+   * What this intent's workbench SHOWS. Judgment is unchanged — every set is
+   * rated against its whole type — but the list is the questions this set could
+   * actually end up owning:
+   *   · a top-level set  → its type's questions
+   *   · a subset         → the questions its enclosing sets matched, because
+   *                        routing now guarantees containment (resolveRoute)
+   * Without this a subset lists questions it can never win, and (when it was
+   * cloned from a starter template, whose ratings are whole-log by design for
+   * the baseline's searches) it arrives pre-filled with hundreds of them.
+   * An untyped intent (pre-backfill) still sees everything — it is judged
+   * whole-log and sits in no chain.
+   */
+  const ancestorIds = myChain?.ancestorsOf.get(intentId) ?? [];
+  const effectiveRating = (messageId: number, id: number): RatingLevel | null => {
+    const pin = state.pins.find((p) => p.messageId === messageId && p.intentId === id);
+    if (pin) return pin.verdict === 'in' ? 'clearly_in' : 'clearly_out';
+    const r = byMessage.get(messageId)?.get(id);
+    return r && isRatingLevel(r.row.rating) ? r.row.rating : null;
+  };
+  const inAncestors = (messageId: number) =>
+    ancestorIds.every((aid) => isIncludedRating(effectiveRating(messageId, aid)));
+
+  const typeScoped = isScoreQueryType(intent.type)
     ? records.filter((rec) => typeByMessage.get(rec.messageId) === intent.type)
     : records;
+  const scopedRecords = ancestorIds.length > 0 ? typeScoped.filter((rec) => inAncestors(rec.messageId)) : typeScoped;
+
+  /** Questions this set matches that its enclosing sets do NOT — containment
+   * means it can never win them. Not listed (they are outside the scope the
+   * instructor is working in), but counted, because the fix is to widen the
+   * parent or move this set out, and silence would hide that. */
+  const outsideParent =
+    ancestorIds.length > 0
+      ? typeScoped.filter(
+          (rec) =>
+            !inAncestors(rec.messageId) &&
+            isIncludedRating(effectiveRating(rec.messageId, intentId))
+        ).length
+      : 0;
 
   const shadowCounts = new Map<number, number>();
   const rows = scopedRecords.map((rec) => {
@@ -263,6 +294,9 @@ export async function GET(req: Request, { params }: RouteParams) {
     /** How many of the intent's type's queries exist at all — the denominator
      * the workbench's progress and counts are against. */
     scopeCount: scopedRecords.length,
+    /** null for a top-level set; for a subset, how many of its matches sit
+     * outside its enclosing sets and are therefore unreachable. */
+    outsideParent: ancestorIds.length > 0 ? outsideParent : null,
     ratedCount: rows.filter((r) => r.rating !== null).length,
     staleCount: rows.filter((r) => r.stale).length,
     includedCount: rows.filter((r) => isIncludedRating(r.rating)).length,
