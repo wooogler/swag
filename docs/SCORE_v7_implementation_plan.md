@@ -401,3 +401,48 @@ by `shareToken='nirvana-dataset'` (UUID changes on re-import, `import-nirvana.ts
 - Never rename/renumber intent ids: review-set scopes (`intent:<id>`), rule versions, pins key on id.
 - Two DDL sites exist; everything here goes in `intent-store.ts`'s `createIntentTables`, NOT `study/store.ts`.
 - If any step tempts you to change `RATING_INSTRUCTIONS` or the rating schema — stop and re-read invariant 2.
+
+---
+
+## AS-BUILT (2026-08-02) — P0-P6 landed on `score-v7`
+
+| Phase | Commit | What actually shipped |
+|---|---|---|
+| P0 | `20bee80` | tree columns + partial unique root index, `score_query_types`, `ScoreQueryType`/`TYPE_CLASSIFIER_VERSION`, `compileChains`/`resolveRoute` (+ `scripts/score/check-chain.ts`, 24 assertions), type-prompts/type-classifier, `ensureTypeRoots`, snapshot/version/revert/provisioning prep, backfill applied (60 roots, 27 intents typed) |
+| P1 | `419ca80` | rate-route type pass, board payload; both masters swept (NIRVANA 348, SWAG 507, 0 failures) |
+| P2 | `2de5c32` | resolver cutover + type scoping + overlap machinery deleted (-1,372 lines) |
+| P3 | `2a3c937`, `b691809` | type sections, tree, per-scope Uncategorized, context-driven creation, shadowing chips, placement API, "New intent for this query", type-root rules, "send here" |
+| P4 | `e153f16` | snapshot v2 + total parse helper, parallel type∥ratings runtime, chain routing, audit outcome, deploy guards; D11 legacy resolver retired |
+| P5 | `e49675d` | provisioning/teardown E2E verified, spec + v6 doc updated |
+| P6 | `24a939c` | type-eval / type-stability / multi-activity-rate (built + smoke-tested, not run in full) |
+
+### Deviations from the plan, and why
+
+1. **`kind` backfill runs ungated** (P0.1 said "in the same DDL block"). Gating it on
+   the ALTER meant a crash between adding the column and back-filling it would strand old
+   prompt-holders as `kind='intent'` forever. It now runs every boot; the predicate makes
+   every run after the first a no-op.
+2. **`basePrompt` was renamed to `seedRule`, not removed** (P3.10 said remove it). `seedV1`'s
+   "untouched" test asks whether a rule is still what the target STARTED from — under v7 that
+   is the copy from the enclosing scope, so the prop had to carry a different value per target,
+   not disappear. Type roots and the baseline holder still pass the assignment default, because
+   that is genuinely what seeds them.
+3. **A real leak fixed in P4 that the plan did not anticipate**: `buildInjectedSystemPrompt`
+   still had v6's "empty rule → base prompt" fallback, so a query falling through to a
+   rule-less type root silently got the old base prompt (invisible on NIRVANA, a 260-char leak
+   on SWAG). The fallback is gone, callers updated, `PREVIEW_VERSION` bumped to 3.
+4. **Two ordering bugs found while implementing** (both fixed): stored dissections were loaded
+   only for the rating wave, so a type-only job classified without the steer — and that verdict
+   is cached forever; and a scoped Apply on a typed intent could neither type nor rate an
+   untyped message, silently skipping it.
+5. **D7 run log**: pilot participant clones were BACK-FILLED, not reset — non-destructive and
+   it preserves their pilot data.
+6. **`score_intent_links` still exists in the database** (no FKs, one orphan row). Teardown no
+   longer references it. Dropping it is the documented one-off:
+   `DROP TABLE IF EXISTS score_intent_links;`
+
+### Still open
+- P6's three scripts are BUILT but not run in full — the §6.1 type re-evaluation is the gate
+  the user opens.
+- SCORE/baseline test-chat remains unimplemented in both conditions (no asymmetry; see
+  STUDY_BASELINE_SPEC §5.4).
