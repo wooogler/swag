@@ -17,9 +17,19 @@ import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { scoreIntentPins, scoreIntents } from '@/db/schema';
+import { scoreIntentPins, scoreIntentRatings, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
-import { ensureIntentTables, getAssignmentMessageText } from '@/lib/score/intent-store';
+import {
+  ensureIntentTables,
+  getAssignmentMessageText,
+  loadIntentState,
+} from '@/lib/score/intent-store';
+import {
+  compileChains,
+  isIncludedRating,
+  isRatingLevel,
+  isScoreQueryType,
+} from '@/lib/score/intents';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +40,11 @@ const postSchema = z.object({
   /** Optional out-pin rationale — stored and injected into the rating prompt.
    * Ignored for 'in' pins. */
   reason: z.string().trim().max(400).optional(),
+  /** v7 "send this question here": an IN pin fixes this intent's judgment but
+   * not the routing — an EARLIER set in the same chain still answers first. With
+   * this flag the server also pins the question OUT of every earlier set that
+   * currently matches it, in one transaction, so the question really lands here. */
+  routeHere: z.boolean().optional(),
 });
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
@@ -82,17 +97,81 @@ export async function POST(req: Request, { params }: RouteParams) {
     source: body.source ?? 'manual',
     createdAt: now, // refresh recency so re-pinned examples lead the prompt
   };
+  // Which earlier sets have to yield for this question to reach this intent.
+  // Computed before the write so the whole action lands (or doesn't) at once.
+  let redirected: number[] = [];
+  if (body.routeHere && body.verdict === 'in') {
+    const state = await loadIntentState(id);
+    const chains = compileChains(
+      state.promptReady
+        .filter((p) => !p.intent.isTemplate)
+        .map((p) => ({
+          id: p.intent.id,
+          kind: 'intent' as const,
+          type: p.intent.type,
+          parentIntentId: p.intent.parentIntentId,
+          position: p.intent.position,
+        }))
+    );
+    const chain = isScoreQueryType(intent.type) ? chains.get(intent.type) : undefined;
+    const myIndex = chain ? chain.order.indexOf(intent.id) : -1;
+    if (chain && myIndex > 0) {
+      const earlier = chain.order.slice(0, myIndex);
+      const ratingRows = await db
+        .select({ intentId: scoreIntentRatings.intentId, rating: scoreIntentRatings.rating, defHash: scoreIntentRatings.defHash })
+        .from(scoreIntentRatings)
+        .where(
+          and(
+            eq(scoreIntentRatings.assignmentId, id),
+            eq(scoreIntentRatings.messageId, body.messageId)
+          )
+        );
+      const wanted = new Map(state.promptReady.map((p) => [p.intent.id, p.defHash]));
+      const ratingByIntent = new Map<number, string>();
+      for (const r of ratingRows) {
+        if (wanted.get(r.intentId) === r.defHash) ratingByIntent.set(r.intentId, r.rating);
+      }
+      const pinByIntent = new Map(
+        state.pins.filter((pin) => pin.messageId === body.messageId).map((pin) => [pin.intentId, pin.verdict])
+      );
+      redirected = earlier.filter((oid) => {
+        const pin = pinByIntent.get(oid);
+        if (pin) return pin === 'in';
+        const rating = ratingByIntent.get(oid);
+        return isRatingLevel(rating) && isIncludedRating(rating);
+      });
+    }
+  }
+
   // Labeling does NOT record a version — the label set is captured on the next
   // Apply/Save (its snapshot's pins), so the history stays one entry per Apply.
-  await db
-    .insert(scoreIntentPins)
-    .values({ assignmentId: id, intentId: intent.id, messageId: body.messageId, ...set })
-    .onConflictDoUpdate({
-      target: [scoreIntentPins.intentId, scoreIntentPins.messageId],
-      set,
-    });
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(scoreIntentPins)
+      .values({ assignmentId: id, intentId: intent.id, messageId: body.messageId, ...set })
+      .onConflictDoUpdate({
+        target: [scoreIntentPins.intentId, scoreIntentPins.messageId],
+        set,
+      });
+    for (const otherId of redirected) {
+      const outSet = {
+        verdict: 'out' as const,
+        queryText,
+        reason: `Answered by “${intent.title}” instead.`,
+        source: 'route_here',
+        createdAt: now,
+      };
+      await tx
+        .insert(scoreIntentPins)
+        .values({ assignmentId: id, intentId: otherId, messageId: body.messageId, ...outSet })
+        .onConflictDoUpdate({
+          target: [scoreIntentPins.intentId, scoreIntentPins.messageId],
+          set: outSet,
+        });
+    }
+  });
 
-  return NextResponse.json({ verdict: body.verdict, messageId: body.messageId });
+  return NextResponse.json({ verdict: body.verdict, messageId: body.messageId, redirected });
 }
 
 export async function DELETE(req: Request, { params }: RouteParams) {

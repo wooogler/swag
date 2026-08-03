@@ -18,6 +18,7 @@ import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
 import { REFINE_MODEL } from '@/lib/score/intent-agent';
 import { ensureIntentTables, getAssignmentMessageText } from '@/lib/score/intent-store';
+import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES } from '@/lib/score/intents';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -25,11 +26,15 @@ export const maxDuration = 30;
 const bodySchema = z.object({
   messageId: z.number().int().positive(),
   currentIntentId: z.number().int().positive().optional(),
+  /** v7: the query type the new set will live in. Sent when creation starts
+   * from a question, so the candidates read as a refinement of a scope the
+   * instructor is already looking at rather than as free-floating ideas. */
+  scopeType: z.enum(SCORE_QUERY_TYPES).optional(),
 });
 
 const SYSTEM = `You draft intent candidates for SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT has a TITLE (imperative noun phrase, at most 5 words, git-commit style) and a DEFINITION (one or two sentences describing a category of student requests, starting with "asks").
 
-Given ONE student question — and the intent the instructor decided it does NOT belong to — propose exactly THREE candidates for a new intent that would own this question, each from a different altitude:
+Given ONE student question — the query type it was classified into, and (when there is one) the intent that currently answers it — propose exactly THREE candidates for a new intent that would own this question, each from a different altitude:
 1. SPECIFIC — tightly scoped to this request's action and object.
 2. CATEGORY — the broader family of requests this one belongs to.
 3. REFRAMED — an alternative cut (e.g., by pedagogical purpose or workflow stage) that would still clearly capture this question.
@@ -38,6 +43,7 @@ Rules:
 - Every definition starts with "asks" and is self-contained (a classifier will use it verbatim; no "etc.", no references to examples).
 - Each candidate must be meaningfully DIFFERENT from the current intent's definition and from each other.
 - Concrete over generic — name the work products involved.
+- The new intent lives INSIDE the given query type, and (when a current intent is shown) is carved out of it — so it must be NARROWER than that scope, not a restatement of it.
 
 Answer in JSON: { "suggestions": [ { "title", "definition" } × 3 ] }.`;
 
@@ -60,6 +66,14 @@ const SCHEMA = {
       },
     },
   },
+};
+
+/** One line per type, enough to keep a candidate inside its scope. */
+const TYPE_SCOPE_HINT: Record<(typeof SCORE_QUERY_TYPES)[number], string> = {
+  planning: 'deciding WHAT to write, with no essay text produced',
+  translating: "turning the student's own idea into a sentence or a paragraph",
+  reviewing: 'evaluating or revising text that already exists',
+  drafting: 'generating essay text wholesale, or handling several activities at once',
 };
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -105,9 +119,12 @@ export async function POST(req: Request, { params }: RouteParams) {
   try {
     const user = [
       `STUDENT QUESTION (verbatim):\n${queryText.slice(0, 4000)}`,
+      body.scopeType
+        ? `QUERY TYPE: ${QUERY_TYPE_LABELS[body.scopeType]} — ${TYPE_SCOPE_HINT[body.scopeType]}`
+        : 'QUERY TYPE: (unknown)',
       currentDefinition
-        ? `CURRENT INTENT it does NOT belong to:\n${currentDefinition}`
-        : 'CURRENT INTENT: (none)',
+        ? `CURRENT SCOPE the new intent is carved out of:\n${currentDefinition}`
+        : 'CURRENT SCOPE: the query type itself — nothing narrower answers this question yet.',
     ].join('\n\n');
     const raw = await callModel(
       SYSTEM,

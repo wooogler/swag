@@ -11,6 +11,7 @@
  */
 import { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowRight, Loader2, Plus, RefreshCw, X } from 'lucide-react';
+import type { ScoreQueryType } from '@/lib/score/intents';
 import type { ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments } from './materials';
 
@@ -25,7 +26,11 @@ interface NewIntentSuggestModalProps {
   assignmentId: string;
   /** The question that doesn't fit — becomes the seed's anchor. */
   row: ScoreQueryRow;
-  currentIntent: { id: number; title: string };
+  /** The scope the new set is carved out of: the intent that answers this
+   * question today, or null when its type's own rule does. */
+  currentIntent: { id: number; title: string } | null;
+  /** Query type of the anchor question — the type the new set will live in. */
+  scopeType?: ScoreQueryType | null;
   onCancel: () => void;
   onPick: (seed: { title: string; definition: string }) => void;
 }
@@ -34,6 +39,7 @@ export default function NewIntentSuggestModal({
   assignmentId,
   row,
   currentIntent,
+  scopeType,
   onCancel,
   onPick,
 }: NewIntentSuggestModalProps) {
@@ -51,7 +57,11 @@ export default function NewIntentSuggestModal({
         const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/intent-suggestions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messageId: row.messageId, currentIntentId: currentIntent.id }),
+          body: JSON.stringify({
+            messageId: row.messageId,
+            ...(currentIntent ? { currentIntentId: currentIntent.id } : {}),
+            ...(scopeType ? { scopeType } : {}),
+          }),
           signal: controller.signal,
         });
         const d = await res.json().catch(() => ({}));
@@ -103,10 +113,21 @@ export default function NewIntentSuggestModal({
 
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
           <p className="text-xs text-[hsl(var(--muted-foreground))]">
-            This question doesn&apos;t really fit{' '}
-            <span className="font-medium text-[hsl(var(--foreground))]">“{currentIntent.title}”</span> —
-            give it an intent of its own. Pick one of the proposals below (everything is editable), and
-            it becomes the seed of the New Intent workbench.
+            {currentIntent ? (
+              <>
+                This question doesn&apos;t really fit{' '}
+                <span className="font-medium text-[hsl(var(--foreground))]">
+                  “{currentIntent.title}”
+                </span>{' '}
+                — give it an intent of its own.
+              </>
+            ) : (
+              <>
+                No intent answers this question yet — its type&apos;s own rule does. Give it one.
+              </>
+            )}{' '}
+            Pick one of the proposals below (everything is editable), and it becomes the seed of the
+            New Intent workbench.
           </p>
           <p className="text-xs whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 max-h-28 overflow-y-auto leading-relaxed">
             <MaterialSegments text={row.queryText} dissection={row.dissection} />

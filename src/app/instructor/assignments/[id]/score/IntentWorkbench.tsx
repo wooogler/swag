@@ -918,7 +918,14 @@ export default function IntentWorkbench({
   // Optimistic: flip the pin immediately (no spinner/disable), fire the write,
   // and revert only if the server rejects it. Pins are boundary examples that
   // refine WHICH questions this intent captures on the next re-rate.
-  async function togglePin(row: RatingRow, verdict: 'in' | 'out', reason?: string) {
+  async function togglePin(
+    row: RatingRow,
+    verdict: 'in' | 'out',
+    reason?: string,
+    /** v7: also clear the earlier sets that would answer this question first,
+     * so an IN pin actually routes it here (§3.6). */
+    routeHere?: boolean
+  ) {
     // Checkout is a read-only view of a past version — pins mutate the LIVE
     // spec, so labeling is disabled until Apply (rollback) or Back to latest.
     if (intentId === null || checkout !== null) return;
@@ -954,12 +961,20 @@ export default function IntentWorkbench({
           : await fetch(`/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/pins`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ messageId: row.messageId, verdict, ...(nextReason ? { reason: nextReason } : {}) }),
+              body: JSON.stringify({
+                messageId: row.messageId,
+                verdict,
+                ...(nextReason ? { reason: nextReason } : {}),
+                ...(routeHere ? { routeHere: true } : {}),
+              }),
             });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error(typeof d?.error === 'string' ? `Pin failed: ${d.error}` : 'Failed to update the pin.');
       }
+      // "Send it here" also wrote out-pins on the earlier sets, which changes
+      // THEIR specs — reload so the shadowing tags reflect the new order.
+      if (routeHere) await fetchRatings(intentId, new AbortController().signal);
       // Labeling no longer records a version — the label set is captured on the
       // next Apply, so there is nothing to refresh in the history here.
     } catch (e) {
@@ -1524,10 +1539,25 @@ export default function IntentWorkbench({
               ? 'bg-emerald-600 text-white border-emerald-600'
               : 'border-[hsl(var(--border))] text-emerald-700 hover:bg-emerald-50'
           }`}
-          title="Pin: this question BELONGS to the intent"
+          title={
+            row.shadowedBy !== null
+              ? `Label: this question BELONGS to this intent. It will still be answered by “${row.shadowedByTitle ?? 'an earlier intent'}”, which comes first — use “send here” to change that.`
+              : 'Label: this question BELONGS to this intent'
+          }
         >
           in
         </button>
+        {/* A label fixes the JUDGMENT, never the order — so when an earlier set
+            answers this question, offer the one action that actually moves it. */}
+        {row.shadowedBy !== null && (
+          <button
+            onClick={() => togglePin(row, 'in', undefined, true)}
+            className="px-1.5 py-0.5 rounded text-xs font-medium border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+            title={`Answer this question here instead of in “${row.shadowedByTitle ?? 'the earlier intent'}” — labels it in here and out of every set that currently comes first.`}
+          >
+            send here
+          </button>
+        )}
         <button
           onClick={(e) =>
             row.pinned === 'out'
@@ -1539,7 +1569,7 @@ export default function IntentWorkbench({
               ? 'bg-rose-600 text-white border-rose-600'
               : 'border-[hsl(var(--border))] text-rose-700 hover:bg-rose-50'
           }`}
-          title="Pin: this question does NOT belong to the intent — pick a reason"
+          title="Label: this question does NOT belong to this intent — pick a reason"
         >
           out
         </button>

@@ -49,6 +49,7 @@ import { ConversationThread, ResponseBody } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
 import RuleWorkbench from './RuleWorkbench';
+import NewIntentSuggestModal from './NewIntentSuggestModal';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
 import { getJSON, postJSON } from './http';
 import { SortSelect, sortQueryRows, type QuerySortMode } from './query-list';
@@ -962,6 +963,33 @@ export default function IntentBoard({
    * carve it into/out of another set. Both are pure routing changes — position
    * and parent are outside intentDefHash, so nothing is re-rated (§3.4).
    */
+  /** The rule a set was seeded from: the nearest enclosing scope that has one,
+   * ultimately its type root. Mirrors the copy-on-create the API does, so the
+   * workbench can tell an untouched copy from an edited rule (§3.5). */
+  function seedRuleFor(intent: IntentSummary): string {
+    const byId = intentById;
+    let cursor = intent.parentIntentId;
+    for (let guard = 0; cursor !== null && guard < 100; guard++) {
+      const node = byId.get(cursor);
+      if (!node) break;
+      if (node.rule?.trim()) return node.rule;
+      cursor = node.parentIntentId;
+    }
+    const root = intent.type ? typeRoots.find((t) => t.type === intent.type) : undefined;
+    return root?.rule ?? basePrompt;
+  }
+
+  /** Revising a TYPE ROOT's rule — the rule that answers whatever its type
+   * leaves unclaimed. Mounts the same RuleWorkbench, scoped to those questions. */
+  const [rootReviseTarget, setRootReviseTarget] = useState<{
+    row: ScoreQueryRow;
+    root: TypeRootSummary;
+  } | null>(null);
+
+  /** "New intent for this query": the suggest modal anchored on a question the
+   * instructor is looking at, seeded with the scope that answers it today. */
+  const [suggestFor, setSuggestFor] = useState<ScoreQueryRow | null>(null);
+
   const [placementBusy, setPlacementBusy] = useState<number | null>(null);
   async function moveIntent(
     intentId: number,
@@ -1847,7 +1875,7 @@ export default function IntentBoard({
           rows={rows}
           row={reviseTarget.row}
           intent={reviseTarget.intent}
-          basePrompt={basePrompt}
+          seedRule={seedRuleFor(reviseTarget.intent)}
           isNirvana={isNirvana}
           deployedRule={deployedRuleByIntent.get(reviseTarget.intent.id) ?? null}
           viewVersion={reviseTarget.viewVersion}
@@ -1857,20 +1885,6 @@ export default function IntentBoard({
               setViewerVersionsNonce((n) => n + 1); // refetch the viewer dropdown
               router.refresh();
             }
-          }}
-          onCreateInstead={(seed) => {
-            // §2.3: switching from Revise makes the question being viewed the
-            // seed of the new intent — the suggest modal supplies a reviewed
-            // {title, definition}; fall back to a raw template without one.
-            const q = reviseTarget.row.queryText.replace(/\s+/g, ' ').trim();
-            setReviseTarget(null);
-            setNewIntentSeed(
-              seed ?? {
-                title: '',
-                definition: `asks the chatbot to <describe the request> — e.g. "${q.length > 120 ? `${q.slice(0, 120)}…` : q}"`,
-              }
-            );
-            setNewIntentOpen(true);
           }}
         />
       ) : isBaseline && searchMode ? (
@@ -1895,7 +1909,7 @@ export default function IntentBoard({
           rows={rows}
           row={promptReviseTarget}
           intent={promptHolder}
-          basePrompt={basePrompt}
+          seedRule={basePrompt}
           isNirvana={isNirvana}
           deployedRule={baseline?.deployedPrompt ?? null}
           promptMode
@@ -1906,7 +1920,48 @@ export default function IntentBoard({
               router.refresh();
             }
           }}
-          onCreateInstead={() => setPromptReviseTarget(null)}
+        />
+      ) : rootReviseTarget ? (
+        /* TYPE ROOT rule — no WHEN of its own (it is the type's final else), so
+           it reuses the promptMode workbench, scoped to the questions the type
+           actually leaves unclaimed. */
+        <RuleWorkbench
+          key={`root-${rootReviseTarget.root.id}-${rootReviseTarget.row.messageId}`}
+          assignmentId={assignmentId}
+          rows={rows}
+          row={rootReviseTarget.row}
+          intent={{
+            id: rootReviseTarget.root.id,
+            title: rootReviseTarget.root.title,
+            definition: '',
+            rule: rootReviseTarget.root.rule,
+            archived: false,
+            isTemplate: false,
+            pinCount: 0,
+            includedCount: 0,
+            excludedCount: 0,
+            type: rootReviseTarget.root.type,
+            parentIntentId: null,
+            position: null,
+          }}
+          seedRule={basePrompt}
+          isNirvana={isNirvana}
+          deployedRule={
+            deployedRules?.find((d) => d.id === rootReviseTarget.root.id)?.rule ?? null
+          }
+          promptMode
+          scopeMessageIds={rows
+            .filter(
+              (r) =>
+                r.queryType === rootReviseTarget.root.type &&
+                resolutions.get(r.messageId)?.kind === 'type_default'
+            )
+            .map((r) => r.messageId)}
+          scopeLabel={QUERY_TYPE_LABELS[rootReviseTarget.root.type]}
+          onClose={(changed) => {
+            setRootReviseTarget(null);
+            if (changed) router.refresh();
+          }}
         />
       ) : workbenchMode ? (
         <IntentWorkbench
@@ -2467,61 +2522,62 @@ export default function IntentBoard({
                     </button>
                   ) : (() => {
                     const res = resolutions.get(selectedRow.messageId);
+                    // v7: every question is answered by SOMETHING — a matching
+                    // intent, or its type's own rule. So Revise always has a
+                    // target and the old "no owning intent" disabled state is
+                    // gone; the type root is just the outermost owner.
                     const owner =
                       res?.kind === 'matched' ? intentById.get(res.intentId) ?? null : null;
-                    const button = (
+                    const root =
+                      !owner && selectedRow.queryType
+                        ? typeRoots.find((t) => t.type === selectedRow.queryType) ?? null
+                        : null;
+                    if (!owner && !root) return null;
+                    return (
                       <button
-                        disabled={!owner}
                         onClick={() =>
-                          owner &&
-                          setReviseTarget({
-                            row: selectedRow,
-                            intent: owner,
-                            // Viewing a version → revise builds on THAT version
-                            // (its rule + the response being looked at).
-                            viewVersion: viewedVersion,
-                          })
-                        }
-                        className={`inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] ${
                           owner
-                            ? 'text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]'
-                            : 'text-[hsl(var(--muted-foreground))] opacity-60 cursor-not-allowed'
-                        }`}
+                            ? setReviseTarget({
+                                row: selectedRow,
+                                intent: owner,
+                                // Viewing a version → revise builds on THAT
+                                // version (its rule + the response shown).
+                                viewVersion: viewedVersion,
+                              })
+                            : root && setRootReviseTarget({ row: selectedRow, root })
+                        }
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
                         title={
                           owner
                             ? viewedVersion
                               ? `Revise the rule from v${viewedVersion.major ?? viewedVersion.versionNo}${viewedVersion.name ? ` · ${viewedVersion.name}` : ''}`
                               : `Revise the rule of "${owner.title}" from this question`
-                            : undefined
+                            : `No intent claims this question — revise the ${QUERY_TYPE_LABELS[root!.type]} rule that answers it`
                         }
                       >
                         Revise rule <ChevronRight className="w-3.5 h-3.5" />
                       </button>
                     );
-                    if (owner) return button;
-                    // Disabled: a visible card explains WHY and what to do,
-                    // instead of a native title nobody notices.
-                    return (
-                      <HoverReveal
-                        content={
-                          <div className="space-y-1 text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
-                            <p className="font-semibold">Revise rule needs an owning intent</p>
-                            <p className="text-[hsl(var(--muted-foreground))]">
-                              A rule is an intent&apos;s <span className="font-medium">Then</span> — this
-                              question isn&apos;t assigned to any intent yet, so there is no rule to
-                              revise from it.
-                            </p>
-                            <p className="text-[hsl(var(--muted-foreground))]">
-                              Pin it into an intent (or pick a question that shows an owner), then
-                              revise from there.
-                            </p>
-                          </div>
-                        }
-                      >
-                        {button}
-                      </HoverReveal>
-                    );
                   })()}
+                  {/* Creating from the question itself: the candidates are
+                      seeded from it AND from the scope that answers it today,
+                      so they read as a refinement rather than a blank slate. */}
+                  {!isBaseline && (
+                    <button
+                      onClick={() => setSuggestFor(selectedRow)}
+                      disabled={!selectedRow.queryType || !openaiConfigured}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded border border-violet-300 text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                      title={
+                        !selectedRow.queryType
+                          ? 'This question has no query type yet — Run to categorize it first'
+                          : !openaiConfigured
+                            ? 'OPENAI_API_KEY is not configured'
+                            : 'Draft a new intent from this question'
+                      }
+                    >
+                      <Plus className="w-3.5 h-3.5" /> New intent for this query
+                    </button>
+                  )}
                 </div>
               </div>
               {/* Rule-version picker — view the response this question got
@@ -2632,6 +2688,31 @@ export default function IntentBoard({
         </div>
       </div>
       )}
+
+      {/* NEW INTENT FOR THIS QUERY — candidates seeded from the question and
+          from the scope that answers it today; picking one opens the create
+          workbench with that scope as the new set's parent (§3.2). */}
+      {suggestFor && suggestFor.queryType && (() => {
+        const res = resolutions.get(suggestFor.messageId);
+        const owner = res?.kind === 'matched' ? intentById.get(res.intentId) ?? null : null;
+        const type = suggestFor.queryType;
+        return (
+          <NewIntentSuggestModal
+            assignmentId={assignmentId}
+            row={suggestFor}
+            currentIntent={owner ? { id: owner.id, title: owner.title } : null}
+            scopeType={type}
+            onCancel={() => setSuggestFor(null)}
+            onPick={(seed) => {
+              setSuggestFor(null);
+              // The scope that answers it today becomes the new set's parent:
+              // an intent → carve a subset out of it; the type's own rule →
+              // a new top-level set of that type.
+              openNewIntent({ type, parentIntentId: owner?.id ?? null }, seed);
+            }}
+          />
+        );
+      })()}
 
       {/* HARD DELETE — irreversible; one confirm click executes (no typing). */}
       {purgeTarget && (

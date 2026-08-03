@@ -46,7 +46,6 @@ import { ConversationThread } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import { FEEDBACK_CHIPS } from '@/lib/score/feedback-chips';
 import { seedRuleVersionName } from '@/lib/score/intents';
-import NewIntentSuggestModal from './NewIntentSuggestModal';
 import RuleApplyPreview from './RuleApplyPreview';
 import QueryPicker from './QueryPicker';
 import { timeAgo } from './IntentWorkbench';
@@ -97,34 +96,6 @@ function versionLabel(v: RuleVersion): string {
   return v.minor ? `v${v.major}.${v.minorNo}` : `v${v.major}`;
 }
 
-/** A visible hover tooltip (native `title` is too subtle for the footer's
- * load-bearing actions). Rendered position:fixed so no card's overflow can
- * clip it — anchored above-right of the wrapped control. */
-function HoverTip({ tip, children }: { tip: string; children: React.ReactNode }) {
-  const anchorRef = useRef<HTMLSpanElement>(null);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-  return (
-    <span
-      ref={anchorRef}
-      className="inline-flex"
-      onMouseEnter={() => {
-        const r = anchorRef.current?.getBoundingClientRect();
-        if (r) setPos({ top: r.top - 6, right: Math.max(8, window.innerWidth - r.right) });
-      }}
-      onMouseLeave={() => setPos(null)}
-    >
-      {children}
-      {pos && (
-        <span
-          style={{ top: pos.top, right: pos.right }}
-          className="pointer-events-none fixed z-50 w-80 -translate-y-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 text-sm font-normal leading-relaxed text-[hsl(var(--foreground))] shadow-xl"
-        >
-          {tip}
-        </span>
-      )}
-    </span>
-  );
-}
 
 /** Batch cap of the preview/apply endpoints (MAX_PREVIEW_MESSAGES mirror). */
 const APPLY_BATCH = 6;
@@ -138,7 +109,12 @@ interface RuleWorkbenchProps {
   /** The assignment's default prompt — the text a fresh intent's rule is
    * seeded with. Used only to tell "still the starting prompt" from "edited"
    * when seeding v1; never rendered. */
-  basePrompt: string;
+  /** The rule this target STARTED from — what "untouched" is measured against
+   * when seeding v1. v7: a set is seeded by COPYING the rule of the scope that
+   * encloses it (§3.5), so that copy is the reference, not the assignment's
+   * default. Type roots and the baseline holder are still seeded from the
+   * assignment default, and pass it here. */
+  seedRule: string;
   /** NIRVANA import → render the delivered response as raw text. */
   isNirvana: boolean;
   /** The rule students CURRENTLY receive (deployed). The cross-query Preview
@@ -148,10 +124,6 @@ interface RuleWorkbenchProps {
   /** Set when the viewer had a rule VERSION selected — open checked out on it. */
   viewVersion?: { versionNo: number; name: string | null; rule: string | null; response: string | null } | null;
   onClose: (changed: boolean) => void;
-  /** "이 요청이 이 Intent에 안 맞나요?" → New Intent flow. The suggest modal
-   * hands over the picked {title, definition} seed; without one the parent
-   * falls back to its raw query-based template. */
-  onCreateInstead: (seed?: { title: string; definition: string }) => void;
   /** BASELINE (ablation): `intent` is the hidden prompt-holder and its rule IS
    * the whole monolithic system prompt. Hides the intent-only affordances (WHEN,
    * apply-to-intent, edge-case sweep, "doesn't fit → new intent") and swaps them
@@ -159,6 +131,13 @@ interface RuleWorkbenchProps {
    * history (v1 seed, minors, checkout, revert) + the feedback agent — is reused
    * verbatim. Default false → the SCORE rule workbench is unchanged. */
   promptMode?: boolean;
+  /** promptMode variants that DO have a scope: a v7 type root's rule answers
+   * whatever its type leaves unclaimed, so its examples and cross-query preview
+   * must come from those questions, not from the whole log. Omitted (baseline)
+   * → the whole log, unchanged. */
+  scopeMessageIds?: number[] | null;
+  /** Header/copy name for a scoped promptMode rule (e.g. "Planning"). */
+  scopeLabel?: string | null;
 }
 
 export default function RuleWorkbench({
@@ -166,13 +145,14 @@ export default function RuleWorkbench({
   rows,
   row,
   intent,
-  basePrompt,
+  seedRule,
   isNirvana,
   deployedRule = null,
   viewVersion = null,
   onClose,
-  onCreateInstead,
   promptMode = false,
+  scopeMessageIds = null,
+  scopeLabel = null,
 }: RuleWorkbenchProps) {
   const base = `/api/instructor/assignments/${assignmentId}/score`;
   // Full conversation — replaces the MIDDLE column in place (shared thread view).
@@ -198,7 +178,6 @@ export default function RuleWorkbench({
   // Cross-query preview workbench (review the saved rule across questions).
   const [previewOpen, setPreviewOpen] = useState(false);
   // "Make this a new intent" suggestion modal.
-  const [suggestOpen, setSuggestOpen] = useState(false);
 
   const [feedback, setFeedback] = useState('');
   const [rewriteOpen, setRewriteOpen] = useState(false);
@@ -322,12 +301,11 @@ export default function RuleWorkbench({
   }
 
   async function seedV1() {
-    // While the prompt is still the one this intent STARTED from — the
-    // assignment's default (a fresh intent is seeded with it), or nothing at all
-    // (NIRVANA) — the anchor's delivered response is exactly what that prompt
-    // produced, so v1 keeps it verbatim. Once edited, v1's response regenerates
-    // lazily like any other step.
-    const untouched = !intent.rule?.trim() || intent.rule.trim() === basePrompt.trim();
+    // While the rule is still the one this target STARTED from — the copy it
+    // was seeded with, or nothing at all (NIRVANA) — the anchor's delivered
+    // response is exactly what that rule produced, so v1 keeps it verbatim.
+    // Once edited, v1's response regenerates lazily like any other step.
+    const untouched = !intent.rule?.trim() || intent.rule.trim() === seedRule.trim();
     try {
       const res = await fetch(`${base}/intents/${intent.id}/rule-versions`, {
         method: 'POST',
@@ -364,12 +342,14 @@ export default function RuleWorkbench({
   const pickerLog = useMemo(
     () =>
       promptMode
-        ? rows
+        ? scopeMessageIds
+          ? rows.filter((r) => scopeMessageIds.includes(r.messageId))
+          : rows
         : rows.filter((r) => {
             const pin = r.pinnedIntents[intent.id];
             return pin ? pin === 'in' : r.intentRatings[intent.id]?.rating === 'clearly_in';
           }),
-    [promptMode, rows, intent.id]
+    [promptMode, scopeMessageIds, rows, intent.id]
   );
 
   // The response the pane shows for the active tab under the VIEWED version:
@@ -834,7 +814,7 @@ export default function RuleWorkbench({
   // log (RuleApplyPreview paginates 10 at a time). Review-only — Back to return.
   if (previewOpen) {
     const inScope = promptMode
-      ? rows.map((r) => r.messageId)
+      ? (scopeMessageIds ?? rows.map((r) => r.messageId))
       : rows
           .filter((r) => {
             const pin = r.pinnedIntents[intent.id];
@@ -880,7 +860,11 @@ export default function RuleWorkbench({
           <ArrowLeft className="w-3.5 h-3.5" /> Board
         </button>
         <h2 className="text-sm font-semibold truncate">
-          {promptMode ? 'Revise the system prompt' : `Revise rule — ${intent.title}`}
+          {promptMode
+            ? scopeLabel
+              ? `Revise rule — ${scopeLabel}`
+              : 'Revise the system prompt'
+            : `Revise rule — ${intent.title}`}
         </h2>
         {/* Preview the SAVED rule across many questions before deploying —
             SCORE across the intent's questions, baseline across the whole log
@@ -1300,20 +1284,6 @@ export default function RuleWorkbench({
                 <HelpCircle className="w-3.5 h-3.5" />
               </button>
             </span>
-            {/* SCORE escape hatch: this question isn't really this intent →
-                carve it into a new one (intent-only). */}
-            {!promptMode && (
-              <HoverTip
-                tip={`This question isn't really "${intent.title}"? Get three new-intent proposals seeded from it and start one instead of stretching this rule.`}
-              >
-                <button
-                  onClick={() => setSuggestOpen(true)}
-                  className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-violet-300 text-xs font-medium text-violet-700 hover:bg-violet-50"
-                >
-                  <Plus className="w-3 h-3" /> New intent
-                </button>
-              </HoverTip>
-            )}
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
@@ -1473,18 +1443,6 @@ export default function RuleWorkbench({
 
       {/* "Make this a new intent" — three editable candidates seeded from the
           ACTIVE question; picking one opens the New Intent workbench. */}
-      {suggestOpen && (
-        <NewIntentSuggestModal
-          assignmentId={assignmentId}
-          row={activeRow}
-          currentIntent={{ id: intent.id, title: intent.title }}
-          onCancel={() => setSuggestOpen(false)}
-          onPick={(seed) => {
-            setSuggestOpen(false);
-            onCreateInstead(seed);
-          }}
-        />
-      )}
 
       {/* promptMode: pull logged questions in as example tabs (manual review set).
           Distance is measured from the active tab, so the picker leads with the
