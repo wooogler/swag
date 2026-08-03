@@ -132,6 +132,9 @@ export default function NewIntentModal({
     const controller = new AbortController();
     setSuggestions(null);
     setSuggestError(null);
+    // Proposal keys are positional, so a re-proposal puts DIFFERENT candidates
+    // behind them — anything typed into the old ones has to go with them.
+    setEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith('ai-'))));
     void (async () => {
       try {
         const res = await fetch(
@@ -165,6 +168,8 @@ export default function NewIntentModal({
   }, [nonce, wantsAi]);
 
   // --- The one list --------------------------------------------------------
+  const [pickedKey, setPickedKey] = useState<string | null>(null);
+
   const options = useMemo((): Option[] => {
     const list: Option[] = [];
     (suggestions ?? []).forEach((s, i) => {
@@ -188,7 +193,11 @@ export default function NewIntentModal({
       };
     };
     starters.shortlist.forEach((s) => list.push(asOption(s)));
-    if (showAllStarters) starters.overflow.forEach((s) => list.push(asOption(s)));
+    // Collapsing hides the rest of the type — but never the one being worked
+    // on, or the selection (and the edits under it) would fall off the list.
+    starters.overflow
+      .filter((s) => showAllStarters || `starter-${s.code}` === pickedKey)
+      .forEach((s) => list.push(asOption(s)));
     list.push({
       key: 'scratch',
       group: 'scratch',
@@ -197,17 +206,30 @@ export default function NewIntentModal({
       seed: { title: '', definition: '' },
     });
     return list;
-  }, [suggestions, starters, showAllStarters, liveDefinitions]);
+  }, [suggestions, starters, showAllStarters, liveDefinitions, pickedKey]);
 
-  // Until something is picked, the selection FOLLOWS the list: a starter set at
-  // first, then the top proposal the moment it arrives. Derived rather than set
-  // from an effect, so the right pane is never briefly empty.
-  const [pickedKey, setPickedKey] = useState<string | null>(null);
+  // The opening selection is DERIVED, so the right pane is never briefly
+  // empty — and then pinned, so it cannot move again. Starter sets render
+  // instantly while the proposals take seconds: without the pin, the pane
+  // would swap out from under whoever is already reading or editing it the
+  // moment the proposals land at the head of the list.
   const selected = useMemo(() => {
     const picked = pickedKey ? options.find((o) => o.key === pickedKey) : null;
-    return picked ?? options.find((o) => !o.taken && o.group !== 'scratch') ?? null;
+    // Blank is the last resort, not a default — it is only where the pane opens
+    // when every set on offer already exists.
+    return (
+      picked ??
+      options.find((o) => !o.taken && o.group !== 'scratch') ??
+      options.find((o) => o.group === 'scratch') ??
+      null
+    );
   }, [pickedKey, options]);
   const selectedKey = selected?.key ?? null;
+  useEffect(() => {
+    // Pinning a real candidate; NOT the blank fallback, which should still give
+    // way to the proposals when they arrive (typing into it pins it instead).
+    if (!pickedKey && selected && selected.group !== 'scratch') setPickedKey(selected.key);
+  }, [pickedKey, selected]);
 
   // Edits are kept per candidate, so switching between two to compare them does
   // not throw away what was typed into either.
@@ -215,6 +237,7 @@ export default function NewIntentModal({
   const draft = selected ? edits[selected.key] ?? selected.seed : null;
   const editDraft = (patch: Partial<{ title: string; definition: string }>) => {
     if (!selected) return;
+    setPickedKey(selected.key); // typing claims the selection, whatever arrives later
     setEdits((prev) => ({
       ...prev,
       [selected.key]: { ...(prev[selected.key] ?? selected.seed), ...patch },
@@ -230,12 +253,16 @@ export default function NewIntentModal({
     return templates.find((t) => t.definition.trim() === def) ?? null;
   }, [draft?.definition, templates]);
 
-  const creatable = !!draft && draft.definition.trim().length > 0 && !selected?.taken;
+  // What blocks Create is the TEXT being one that already exists — not which
+  // row it came from. So an existing starter can be opened and read, and
+  // editing it into something different unblocks Create; and a definition
+  // typed by hand that happens to duplicate a live intent is caught too.
+  const duplicates = !!draft && liveDefinitions.has(draft.definition.trim());
+  const creatable = !!draft && draft.definition.trim().length > 0 && !duplicates;
 
   const [queryOpen, setQueryOpen] = useState(false);
 
   function pick(o: Option) {
-    if (o.taken) return;
     setPickedKey(o.key);
   }
 
@@ -343,7 +370,7 @@ export default function NewIntentModal({
                 >
                   {showAllStarters
                     ? 'Show fewer'
-                    : `Show all ${starters.overflow.length + starterRows.length}`}
+                    : `Show all ${starters.shortlist.length + starters.overflow.length}`}
                 </button>
               )}
             </Group>
@@ -392,10 +419,10 @@ export default function NewIntentModal({
                     className="w-full resize-y rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
                   />
                 </label>
-                {selected?.taken && (
+                {duplicates && (
                   <p className="flex items-start gap-1.5 text-[11px] text-amber-700">
-                    <AlertTriangle className="w-3 h-3 mt-px shrink-0" /> This starter set is already
-                    a live intent. Edit the definition to make it a different one.
+                    <AlertTriangle className="w-3 h-3 mt-px shrink-0" /> An intent with this exact
+                    definition already exists. Edit it into a different one to create it.
                   </p>
                 )}
               </>
@@ -484,8 +511,11 @@ function OptionRow({
   return (
     <button
       onClick={onClick}
-      disabled={option.taken}
-      title={option.taken ? 'Already a live intent in this assignment' : option.seed.definition}
+      title={
+        option.taken
+          ? `Already a live intent in this assignment — ${option.seed.definition}`
+          : option.seed.definition
+      }
       className={`w-full text-left px-3 py-1.5 flex items-start gap-1.5 ${
         active
           ? 'bg-[hsl(var(--primary))]/10 border-l-2 border-[hsl(var(--primary))] pl-[10px]'

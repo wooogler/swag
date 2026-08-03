@@ -334,7 +334,12 @@ export default function IntentWorkbench({
   // Driven by the chooser: it decides that the seed's definition still matches
   // a template and passes the id through, so the questions are already there
   // when the workbench opens instead of costing a rating pass.
-  async function adoptTemplate(templateId: number) {
+  //
+  // The title travels separately. The chooser matches templates on the
+  // DEFINITION alone, so a set can be adopted under a name the instructor
+  // typed; without passing it the server would fall back to the template's own
+  // title and the rename would be silently thrown away.
+  async function adoptTemplate(templateId: number, title?: string) {
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -349,6 +354,7 @@ export default function IntentWorkbench({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fromTemplateId: templateId,
+          ...(title?.trim() ? { title: title.trim() } : {}),
           isTemplate: true, // unregistered draft until Save
           recordVersion: false,
           autoTitle: false,
@@ -389,7 +395,7 @@ export default function IntentWorkbench({
   // workbench opens. Mount-only, like the title/definition seeds: `seed` is a
   // mount-time value and the parent re-keys this component per target.
   useEffect(() => {
-    if (seed?.fromTemplateId) void adoptTemplate(seed.fromTemplateId);
+    if (seed?.fromTemplateId) void adoptTemplate(seed.fromTemplateId, seed.title);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
