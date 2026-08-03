@@ -262,8 +262,6 @@ export default function NewIntentModal({
   const duplicates = !!draft && liveDefinitions.has(draft.definition.trim());
   const creatable = !!draft && draft.definition.trim().length > 0 && !duplicates;
 
-  const [queryOpen, setQueryOpen] = useState(false);
-
   function pick(o: Option) {
     setPickedKey(o.key);
   }
@@ -308,6 +306,22 @@ export default function NewIntentModal({
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {/* The question stays in view for the whole dialog. It is what the
+            candidates are drafted from and what the definition is being
+            written against, so hiding it behind a disclosure just means
+            opening it again on every edit. Long ones scroll in place rather
+            than pushing the panes down. */}
+        {anchorRow && (
+          <div className="shrink-0 px-4 py-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+              The question
+            </p>
+            <p className="mt-0.5 text-xs whitespace-pre-wrap leading-relaxed max-h-24 overflow-y-auto">
+              <MaterialSegments text={anchorRow.queryText} dissection={anchorRow.dissection} />
+            </p>
+          </div>
+        )}
 
         <div className="flex-1 min-h-0 flex">
           {/* LEFT — every way to start, in one scannable list. */}
@@ -433,25 +447,8 @@ export default function NewIntentModal({
         </div>
 
         <div className="shrink-0 border-t border-[hsl(var(--border))]">
-          {/* The anchor question, on tap. Reference material while editing the
-              definition — not the subject of the dialog. */}
-          {anchorRow && queryOpen && (
-            <p className="px-4 pt-3 text-xs whitespace-pre-wrap max-h-32 overflow-y-auto leading-relaxed">
-              <MaterialSegments text={anchorRow.queryText} dissection={anchorRow.dissection} />
-            </p>
-          )}
           <div className="px-4 py-3 flex items-center gap-3">
-            {anchorRow ? (
-              <button
-                onClick={() => setQueryOpen((v) => !v)}
-                className="min-w-0 flex-1 text-left text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] truncate"
-                title="Show the question this was opened from"
-              >
-                {queryOpen ? '▾' : '▸'} {anchorRow.queryText}
-              </button>
-            ) : (
-              <span className="flex-1" />
-            )}
+            <span className="flex-1" />
             {matchedTemplate && creatable && (
               <span
                 className="shrink-0 inline-flex items-center gap-1 text-[11px] text-emerald-700"
