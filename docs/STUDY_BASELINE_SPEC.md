@@ -16,6 +16,7 @@ Baseline은 SCORE의 ablation이다. 제거하는 것은 **"로그-근거 구조
 2. **셸 패리티**: 같은 대시보드/워크벤치/모달 셸을 재사용하고 세부 패널만 교체한다. 두 조건은 "같은 제품의 기능 티어 차이"로 보여야 한다 (demand effect 통제).
 3. **비-strawman**: Baseline은 2026 상용 표준(GPT Builder/SchoolAI 등: 모놀리식 instructions + test chat + 로그 열람 + coarse 버전) 이상이어야 한다. "기능을 일부러 뺐다"는 인상을 주는 UI 비일관성 금지.
 4. **한 문장 방어**: "Baseline은 **저장 가능한 검색**을 가진다; SCORE는 검색이 아니라 **설정 객체**를 가진다 — 카테고리가 rule을 소유하고, 커버리지가 로그 위에 상시 표시되며, 경계 사례(pins)로 판정을 조정한다." 구현 중 애매하면 이 문장에 비춰 판단.
+   - **(v7 갱신)** "상시 커버리지"의 형태가 바뀌었다: 전역 Uncategorized 버킷과 Overlaps 큐가 사라지고, **4개 쿼리 타입 섹션 + 스코프별 Uncategorized**가 그 자리를 차지한다. 커버리지는 여전히 로그 위에 상시 표시되지만 이제 계층적이다 — 각 타입 섹션의 합계 = (하위 세트 서브트리들) + (그 타입 자신의 미claim 분). **Overlaps는 지표에서 완전히 사라진다**: v7은 first-match라 한 쿼리가 두 세트에 동시에 속할 수 없다. 그 자리를 대신하는 진단은 **shadowing**("앞선 세트가 이 세트의 매치 N개를 먼저 가져감")이다.
 
 ### 0.1 용어
 
@@ -229,6 +230,13 @@ CREATE TABLE study_events (
 - [ ] rule/config 버전 타임라인 없음 (버전은 전문 복원 드롭다운만)
 - [ ] intent 제안(NewIntentSuggest) 진입점 없음
 - [ ] dissection/Jelson 칩 없음
+- [ ] **(v7)** 4개 쿼리 타입 섹션 / 타입별 브라우징 없음 — baseline 좌측은 Searches + All 그대로
+- [ ] **(v7)** intent 트리(들여쓰기·중첩), 형제 순서 조절(↑↓) 없음
+- [ ] **(v7)** 스코프별 "Uncategorized" 항목 없음
+- [ ] **(v7)** shadowing 칩("앞선 intent가 N개를 가져감") 없음
+- [ ] **(v7)** 타입 else-rule 편집 진입점 없음 (baseline의 Revise는 단일 rules 문서만)
+- [ ] **(v7)** "New intent for this query" 버튼 없음
+- [ ] **(v7)** 클론에 `kind='type_root'` 행이 생기지 않음 (ensureTypeRoots는 SCORE 뷰에서만 호출)
 
 ---
 
@@ -290,11 +298,14 @@ POST …/score/baseline/test-chat  { messages[], promptText } → { response }  
 ```
 
 ### 5.4 SCORE 테스트챗 (신규, 패리티용) — `POST …/score/test-chat`
+> **상태: 미구현 (양 조건 모두).** baseline의 `…/score/baseline/test-chat`도 라우트가 없다.
+> 서버 코어(`resolveChatPromptFromSnapshot`)는 존재하고 v7 런타임과 동일 경로를 쓰므로, 붙이면
+> 즉시 패리티가 성립한다. **비대칭은 없다** — 어느 조건에도 자유 대화 테스트가 없다.
 ```
 req:  { messages[] }  → draft intent 세트로 end-to-end 실행
 ```
-- `buildChatDeploySnapshot(assignmentId)`(저장 없이 현재 상태 스냅샷) → 기존 runtime 해석(분류→rule 주입)과 동일 경로로 응답 생성. 무저장.
-- SCORE 보드에도 TestChat 패널 추가(§4.5) — **baseline만 자유 대화 테스트를 갖는 비대칭 금지.**
+- `buildChatDeploySnapshot(assignmentId)`(저장 없이 현재 상태 스냅샷) → 런타임과 **같은 함수**로 응답 생성(v7: 타입 판정 ∥ 판정 병렬 → 체인 first-match → 미claim 시 타입 rule). 무저장.
+- 구현할 때 SCORE/baseline 양쪽에 동시에 붙일 것.
 
 ### 5.5 기타
 ```
@@ -306,9 +317,12 @@ POST …/score/events                             → study_events 적재 (클�
 ```
 
 ### 5.6 `/api/chat` 분기 (P0)
-- assignment가 study clone이고 condition='baseline'이면: **최신 deployed `baseline_prompt_versions.prompt`를 시스템 프롬프트로 사용** (intent 분류·주입 없음).
+- assignment가 study clone이고 condition='baseline'이면: **최신 deployed `baseline_prompt_versions.prompt`를 시스템 프롬프트로 사용** (분류·주입 없음). 이 분기는 **어떤 분류 호출보다도 먼저** 실행되므로 baseline 클론은 타입 분류기 비용을 한 번도 내지 않는다.
 - 배포 버전이 없으면 기존 base prompt로 fail-open (SCORE와 동일 원칙).
-- condition='score' 또는 비-study assignment는 기존 경로 그대로.
+- condition='score' 또는 비-study assignment는 v7 경로: **타입 판정 ∥ 세트 판정 두 콜을 병렬**(각 15s/재시도 0)로 던지고 → 그 타입의 체인을 first-match로 걷고 → 아무것도 매치 안 하면 **그 타입 자신의 rule**이 답한다.
+  - **base prompt는 이제 오류 전용 fail-open이다**: 배포 없음 / v7 이전 스냅샷 / 분류기 오류·타임아웃 / 판정 부분 실패. "아무 세트도 매치 안 함"은 오류가 아니다.
+  - 세트도 타입 rule도 비어 있으면 **시스템 메시지를 아예 보내지 않는다**(빈 rule = 빈 프롬프트, base prompt로 대체하지 않음).
+  - 비용: 학생 메시지당 LLM 콜이 1 → 2로 늘지만 병렬이라 대기시간은 max(a,b)다. baseline은 0으로 변함없다.
 
 ---
 
@@ -321,7 +335,8 @@ POST …/score/events                             → study_events 적재 (클�
 | S-3 | TestChat 패널 | §5.4. draft 스냅샷 기준 자유 대화 |
 | S-4 | 중립 명명 (**PHASE 2**) | 참가자 세션에서 헤더 "SCORE" → "Chatbot Studio". 격리와 함께 스터디 시작 전 켠다 (§1.3 PHASE 2). PHASE 1에선 기존 명명 유지 |
 | S-5 | 이벤트 로깅 | §7의 taxonomy를 SCORE 액션에도 심기 (intent 생성/수정, rate 실행, pin, revise 제안 승인/거부, deploy 등) |
-| S-6 | **변경하지 않는 것** | create intent → workbench 직행 플로우 유지 (search-first 승격 모델 기각됨). 템플릿 활성화 플로우 유지. probe 미리보기를 SCORE workbench에 넣지 않음 (스터디 후 과제) |
+| S-6 | **변경하지 않는 것** | ~~템플릿 활성화 플로우 유지~~ → **v7에서 대체됨**(아래). create intent → workbench 직행 플로우는 유지(search-first 승격 모델 기각). probe 미리보기를 SCORE workbench에 넣지 않음 (스터디 후 과제) |
+| S-6a | **(v7) 템플릿 활성화 대체** | SCORE의 스타터 세트 "Add Intent" 활성화는 제거됐다. 생성은 ① 타입 섹션에서, ② 선택된 intent 안에서(subset), ③ 질문에서 "New intent for this query" — 셋 다 **호출한 스코프가 곧 부모**다. subtype은 생성 시 템플릿 추천으로만 남는다. **baseline의 프리셋은 그대로**: `is_template` 행과 그 전 로그 판정이 저장 검색의 근거이므로 데이터·프로비저닝·`StarterSetTree`(browse 전용)는 전부 유지된다 |
 
 ---
 

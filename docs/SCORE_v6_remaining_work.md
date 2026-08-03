@@ -1,5 +1,13 @@
 # SCORE v6 — 남은 작업 (P4·P5 + 이월 항목)
 
+> **SUPERSEDED (2026-08-02) — 분류/배정 층에 한해.** v7 intent tree가 이 문서의
+> 분류·배타 배정·overlap 해소(boundary / exception links / Decide Ownership) 부분을
+> 대체했다. 현재 설계는 `docs/SCORE_v7_intent_tree_design.md`, 마이그레이션 계획과
+> 실행 기록은 `docs/SCORE_v7_implementation_plan.md`를 볼 것.
+> 이 문서에서 **여전히 유효한 것**: rule 축(score_rule_versions)·config 버전·배포
+> 스냅샷 메커니즘, 프리뷰=런타임 불변식, 판정 캐시(intentDefHash) 경제.
+
+
 > 기준 커밋: "SCORE v6: intent/rule layer (P0–P3)" (2026-07-05).
 > 설계 원본: 사용자 제공 "System Design v6" 문서 (2026-07-03, 저장소 외부).
 > 이 문서는 그 설계의 §번호를 그대로 인용한다.
