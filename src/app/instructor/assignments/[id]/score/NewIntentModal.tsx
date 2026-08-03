@@ -50,7 +50,9 @@ interface Option {
   tag: string | null;
   label: string;
   seed: { title: string; definition: string };
-  /** Already a live intent in this assignment — shown, but not creatable. */
+  /** Its definition is already a live intent. Nothing on the row says so — a
+   * struck-out list reads as broken. It only keeps the option from being where
+   * the pane OPENS; clicking it explains, in the pane, why Create is off. */
   taken?: boolean;
 }
 
@@ -70,7 +72,7 @@ interface NewIntentModalProps {
   /** Prepared starter templates: a definition match clones with zero LLM calls. */
   templates: { id: number; title: string; definition: string }[];
   /** Definitions already live in this assignment (trimmed) — those starters are
-   * shown, but not offered a second time. */
+   * still listed and still readable, just not creatable a second time. */
   liveDefinitions: Set<string>;
   openaiConfigured: boolean;
   typeLabel: string;
@@ -511,17 +513,11 @@ function OptionRow({
   return (
     <button
       onClick={onClick}
-      title={
-        option.taken
-          ? `Already a live intent in this assignment — ${option.seed.definition}`
-          : option.seed.definition
-      }
+      title={option.seed.definition}
       className={`w-full text-left px-3 py-1.5 flex items-start gap-1.5 ${
         active
           ? 'bg-[hsl(var(--primary))]/10 border-l-2 border-[hsl(var(--primary))] pl-[10px]'
-          : option.taken
-            ? 'opacity-45'
-            : 'hover:bg-[hsl(var(--muted))]/50'
+          : 'hover:bg-[hsl(var(--muted))]/50'
       }`}
     >
       {option.group === 'ai' && (
