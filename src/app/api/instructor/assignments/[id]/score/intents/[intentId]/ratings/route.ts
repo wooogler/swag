@@ -16,6 +16,7 @@ import {
   scoreDissections,
   scoreIntentRatings,
   scoreIntents,
+  scoreQueryTypes,
 } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import {
@@ -32,6 +33,7 @@ import {
   isRatingLevel,
   isScoreQueryType,
   ratingRank,
+  TYPE_CLASSIFIER_VERSION,
   selectPromptPins,
   type RatingLevel,
 } from '@/lib/score/intents';
@@ -128,6 +130,18 @@ export async function GET(req: Request, { params }: RouteParams) {
   // That is what this computes: for each question THIS intent matches, which
   // earlier chain node captures it instead. Starter-set templates are rated in
   // advance but own nothing, so they are not part of any chain.
+  const typeRows = await db
+    .select({
+      messageId: scoreQueryTypes.messageId,
+      type: scoreQueryTypes.type,
+      version: scoreQueryTypes.version,
+    })
+    .from(scoreQueryTypes)
+    .where(eq(scoreQueryTypes.assignmentId, id));
+  const typeByMessage = new Map(
+    typeRows.filter((t) => t.version >= TYPE_CLASSIFIER_VERSION).map((t) => [t.messageId, t.type])
+  );
+
   const chainNodes = state.promptReady
     .filter((p) => !p.intent.isTemplate)
     .map((p) => ({
@@ -158,8 +172,18 @@ export async function GET(req: Request, { params }: RouteParams) {
   // than the classifier actually saw (preview = runtime, §1.9).
   const pinRankByMessage = new Map(pinRows.map((p, i) => [p.messageId, i]));
 
+  // A typed intent can only ever own queries of ITS type — the chain it sits in
+  // is per-type — so the workbench must not list the rest. Two ways they get
+  // here otherwise: the route reads the whole log, and cloning a starter
+  // template copies that template's WHOLE-LOG ratings (templates are rated
+  // across everything on purpose, for the baseline's searches). An untyped
+  // intent (pre-backfill) still sees everything: it is judged whole-log.
+  const scopedRecords = isScoreQueryType(intent.type)
+    ? records.filter((rec) => typeByMessage.get(rec.messageId) === intent.type)
+    : records;
+
   const shadowCounts = new Map<number, number>();
-  const rows = records.map((rec) => {
+  const rows = scopedRecords.map((rec) => {
     const ratings = byMessage.get(rec.messageId);
     const minePick = ratings?.get(intentId);
     // Under checkout only EXACT spec rows count — a version view must never mix
@@ -236,6 +260,9 @@ export async function GET(req: Request, { params }: RouteParams) {
     },
     checkoutVersionNo: checkoutNo,
     rows,
+    /** How many of the intent's type's queries exist at all — the denominator
+     * the workbench's progress and counts are against. */
+    scopeCount: scopedRecords.length,
     ratedCount: rows.filter((r) => r.rating !== null).length,
     staleCount: rows.filter((r) => r.stale).length,
     includedCount: rows.filter((r) => isIncludedRating(r.rating)).length,
