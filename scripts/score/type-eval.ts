@@ -17,14 +17,23 @@
  * whitespace-normalized exact match first, then a collapsed+lowercased
  * fallback, duplicates consumed in order.
  *
- * Two ARMS, because they answer different questions:
- *   with-dissection    → what the instructor board produces (batch path)
- *   without-dissection → what a live student message gets (the chat runtime has
- *                        no dissection). This is the number the design's bet
- *                        actually rests on.
+ * ARMS, because they answer different questions — and because the classifier
+ * and the human coder did NOT see the same thing:
+ *   with       → prior turn + dissection: what the instructor board produces
+ *   without    → prior turn only: what a live student message gets. The number
+ *                the design's bet rests on.
+ *   queryonly  → the target query ALONE. Closest to how the humans coded (they
+ *                worked from the query), so it separates "the classifier judges
+ *                differently" from "the classifier was told more".
+ *   response   → query + the reply it actually received. What the coder had on
+ *                screen (the CSV carries Inquiry AND Response). DIAGNOSTIC
+ *                ONLY — the runtime can never have this, the reply does not
+ *                exist yet — so it is built here rather than in the shipped
+ *                classifier, and it bounds how much of the residual gap is
+ *                information rather than judgement.
  *
  *   npx tsx scripts/score/type-eval.ts out.json [nQueries] [arm]
- *     arm: both (default) | with | without
+ *     arm: both (default) | with | without | queryonly | response | all
  *
  * Reference to beat/compare: the pre-substitution Classifier A scored 79.2%
  * type agreement, kappa 0.72 — but that was a DIFFERENT instrument (26-subtype
@@ -58,7 +67,8 @@ for (const file of ['.env.local', '.env']) {
 
 const OUT = process.argv[2] ?? 'type-eval.json';
 const N = Number.parseInt(process.argv[3] ?? '', 10);
-const ARM = (process.argv[4] ?? 'both') as 'both' | 'with' | 'without';
+type Arm = 'with' | 'without' | 'queryonly' | 'response';
+const ARM_ARG = process.argv[4] ?? 'both';
 
 /** Code prefix → v7 query type. 'AL' is the old "All", now 'drafting'. */
 const PREFIX_TO_TYPE: Record<string, ScoreQueryType> = {
@@ -192,8 +202,17 @@ async function main(): Promise<void> {
     new Set(sample.map((p) => p.rec.messageId))
   );
 
+  const { callModel, extractJsonObject } = await import('../../src/lib/score/classifier');
+  const { buildTypeSystemPrompt, buildTypeSchema } = await import('../../src/lib/score/type-prompts');
+  const { isScoreQueryType } = await import('../../src/lib/score/intents');
+
   const model = getDefaultScoreModel();
-  const arms = ARM === 'both' ? (['with', 'without'] as const) : ([ARM] as const);
+  const arms: Arm[] =
+    ARM_ARG === 'both'
+      ? ['with', 'without']
+      : ARM_ARG === 'all'
+        ? ['with', 'without', 'queryonly', 'response']
+        : [ARM_ARG as Arm];
   const results: Record<string, unknown> = {};
 
   for (const arm of arms) {
@@ -203,14 +222,34 @@ async function main(): Promise<void> {
     await Promise.all(
       sample.map((p) =>
         limit(async () => {
-          const out = await classifyMessageType({
-            queryText: p.rec.queryText,
-            prevQueryText: p.rec.prevQueryText,
-            prevResponseText: p.rec.prevResponseText,
-            dissection: arm === 'with' ? dissections.get(p.rec.messageId) ?? null : null,
-            model,
-          });
-          predicted.set(p.rec.messageId, out.type);
+          let type: ScoreQueryType | null;
+          if (arm === 'response') {
+            // DIAGNOSTIC arm: same system prompt, but the user message carries
+            // the query and the reply it received — the coder's view. Built
+            // here on purpose; the shipped classifier must never depend on a
+            // reply that does not exist yet at runtime.
+            const reply = (p.rec.responseText ?? '').slice(0, 4000);
+            const user =
+              `STUDENT QUERY:\n${p.rec.queryText.slice(0, 4000)}` +
+              (reply ? `\n\nTHE REPLY THIS QUERY RECEIVED (for reference — classify the QUERY):\n${reply}` : '');
+            const raw = await callModel(buildTypeSystemPrompt(), user, model, 'low', {
+              name: 'query_type',
+              schema: buildTypeSchema() as Record<string, unknown>,
+            });
+            const parsed = extractJsonObject(raw);
+            type = isScoreQueryType(parsed.type) ? parsed.type : null;
+          } else {
+            const out = await classifyMessageType({
+              queryText: p.rec.queryText,
+              // queryonly: the target query alone, matching how the humans coded.
+              prevQueryText: arm === 'queryonly' ? null : p.rec.prevQueryText,
+              prevResponseText: arm === 'queryonly' ? null : p.rec.prevResponseText,
+              dissection: arm === 'with' ? dissections.get(p.rec.messageId) ?? null : null,
+              model,
+            });
+            type = out.type;
+          }
+          predicted.set(p.rec.messageId, type);
           done++;
           if (done % 25 === 0) console.error(`  [${arm}] ${done}/${sample.length}`);
         })
