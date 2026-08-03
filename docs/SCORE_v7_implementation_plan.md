@@ -441,6 +441,24 @@ by `shareToken='nirvana-dataset'` (UUID changes on re-import, `import-nirvana.ts
    longer references it. Dropping it is the documented one-off:
    `DROP TABLE IF EXISTS score_intent_links;`
 
+### Post-P4 adversarial review (`1ceba69`)
+3 lenses over the runtime, deploy lifecycle and study parity → 12 findings, 10 refuted on
+inspection, **2 confirmed**:
+- **Ghost intents (a real P3 bug)**: adopting a Jelson suggestion that matched a prepared
+  library template created the set WITHOUT placement — and templates are type-less by design
+  — so it was born untyped, in no chain, invisible on the board, yet deployed and rated on
+  every student turn. `type` is only written at INSERT, so it was unfixable from the UI.
+  Fixed at four levels (adoptTemplate sends placement, Save restates it, PATCH accepts it,
+  and untyped sets are excluded from deploys + surfaced on the board).
+- **All-rules-empty replies audited like fail-opens**: `applied:null` is the same signal for
+  "nothing configured" and "classifier failed". The short-circuit is kept (it saves both LLM
+  calls); the bucket copy no longer claims a failure.
+
+Also fixed while there, though the verifiers called them pre-existing rather than regressions:
+out-pin `reason` was dropped when freezing a deploy (so the deployed prompt was weaker than
+the one the board rated with), a legacy latest deploy was shown as live in the Revise
+before/after, and type roots rendered as phantom intents in `?chatv`.
+
 ### Still open
 - P6's three scripts are BUILT but not run in full — the §6.1 type re-evaluation is the gate
   the user opens.
