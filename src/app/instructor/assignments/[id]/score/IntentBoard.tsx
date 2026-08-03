@@ -148,21 +148,40 @@ export interface TypeRootSummary {
   latestRuleVersion?: { versionNo: number; name: string | null } | null;
 }
 
-/** One indent level of the tree. The vertical rule is what makes nesting
- * readable — indentation alone reads as "slightly offset", not "inside". */
+/** One indent level of the tree. Each item inside draws its OWN segment of the
+ * rule (see TreeItem), so the last one can end it — the line stops at the
+ * elbow rather than running past into empty space. */
 function TreeBranch({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="ml-[18px] border-l border-[hsl(var(--border))]">{children}</div>
-  );
+  return <div className="ml-[18px]">{children}</div>;
 }
 
-/** The elbow joining a row to its parent's vertical rule. */
-function TreeElbow() {
+/** Vertical offset of a row's centre — where its elbow meets the rule. Rows are
+ * a fixed height so every elbow in a branch lines up. */
+const TREE_ROW_CENTER = 14;
+
+/**
+ * One item hanging off its parent's rule: the elbow into it, plus the piece of
+ * the vertical rule beside it. The LAST item draws only down to its own elbow,
+ * which is what turns the corner into └ instead of ├.
+ *
+ * The segment spans the whole item — a set plus everything nested under it —
+ * so the rule runs unbroken past a subtree.
+ */
+function TreeItem({ last, children }: { last: boolean; children: React.ReactNode }) {
   return (
-    <span
-      aria-hidden
-      className="absolute left-0 top-1/2 w-2.5 border-t border-[hsl(var(--border))]"
-    />
+    <div className="relative">
+      <span
+        aria-hidden
+        className="absolute left-0 top-0 w-px bg-[hsl(var(--border))]"
+        style={last ? { height: TREE_ROW_CENTER } : { bottom: 0 }}
+      />
+      <span
+        aria-hidden
+        className="absolute left-0 w-2.5 border-t border-[hsl(var(--border))]"
+        style={{ top: TREE_ROW_CENTER }}
+      />
+      {children}
+    </div>
   );
 }
 
@@ -176,8 +195,7 @@ function NewIntentRow({
   onClick: () => void;
 }) {
   return (
-    <div className="relative pl-3 py-1">
-      <TreeElbow />
+    <div className="pl-3 py-1 min-h-[28px] flex items-center">
       <button
         onClick={onClick}
         title={scope.label}
@@ -1717,6 +1735,25 @@ export default function IntentBoard({
   }, [rows, chains]);
   const shadowedBy = treeDiagnostics.shadowed;
 
+  /**
+   * The contents of one branch — subsets, the bucket for what they leave
+   * behind, and (when this is the selected scope) the create button. Rendering
+   * them through here is what lets the LAST item end the vertical rule instead
+   * of the rule running past into empty space.
+   */
+  function renderBranch(parts: { key: string; node: React.ReactNode }[]): React.ReactNode {
+    if (parts.length === 0) return null;
+    return (
+      <TreeBranch>
+        {parts.map((part, i) => (
+          <TreeItem key={part.key} last={i === parts.length - 1}>
+            {part.node}
+          </TreeItem>
+        ))}
+      </TreeBranch>
+    );
+  }
+
   /** One set in the left column's tree, then its subsets under it. */
   function renderTreeNode(
     intent: IntentSummary,
@@ -1734,14 +1771,13 @@ export default function IntentBoard({
     // The new set would land INSIDE this one — so the button renders here.
     const createsHere = newIntentScope?.parentIntentId === intent.id;
     return (
-      <div key={intent.id}>
+      <div>
         <div
           className={`group relative flex items-center gap-1 pl-3 pr-2 py-1 cursor-pointer ${
             active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
           }`}
           onClick={() => setSelection({ kind: 'intent', id: intent.id })}
         >
-          <TreeElbow />
           <HoverReveal
             content={
               <div className="space-y-1.5 text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
@@ -1826,29 +1862,46 @@ export default function IntentBoard({
             selected — the button that creates the next subset. The button's
             POSITION is what says where the new set lands; that is why it moves
             with the selection instead of sitting in a fixed slot. */}
-        {(children.length > 0 || createsHere) && (
-          <TreeBranch>
-            {children.map((child) => renderTreeNode(child, type, entry, depth + 1))}
-            {children.length > 0 && (
-              <button
-                onClick={() => setSelection({ kind: 'residue', scopeId: intent.id })}
-                className={`relative w-full text-left pl-3 pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
-                  selection.kind === 'residue' && selection.scopeId === intent.id
-                    ? 'bg-[hsl(var(--muted))] font-medium'
-                    : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
-                }`}
-                title={`Questions “${intent.title}” answers itself — its subsets take the rest.`}
-              >
-                <TreeElbow />
-                <span className="truncate italic">Uncategorized</span>
-                <Badge n={own} />
-              </button>
-            )}
-            {createsHere && newIntentScope && (
-              <NewIntentRow scope={newIntentScope} onClick={() => openNewIntent(newIntentScope)} />
-            )}
-          </TreeBranch>
-        )}
+        {renderBranch([
+          ...children.map((child) => ({
+            key: `i${child.id}`,
+            node: renderTreeNode(child, type, entry, depth + 1),
+          })),
+          ...(children.length > 0
+            ? [
+                {
+                  key: 'residue',
+                  node: (
+                    <button
+                      onClick={() => setSelection({ kind: 'residue', scopeId: intent.id })}
+                      className={`w-full text-left pl-3 pr-3 py-1 min-h-[28px] text-xs flex items-center justify-between gap-2 ${
+                        selection.kind === 'residue' && selection.scopeId === intent.id
+                          ? 'bg-[hsl(var(--muted))] font-medium'
+                          : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
+                      }`}
+                      title={`Questions “${intent.title}” answers itself — its subsets take the rest.`}
+                    >
+                      <span className="truncate italic">Uncategorized</span>
+                      <Badge n={own} />
+                    </button>
+                  ),
+                },
+              ]
+            : []),
+          ...(createsHere && newIntentScope
+            ? [
+                {
+                  key: 'new',
+                  node: (
+                    <NewIntentRow
+                      scope={newIntentScope}
+                      onClick={() => openNewIntent(newIntentScope)}
+                    />
+                  ),
+                },
+              ]
+            : []),
+        ])}
       </div>
     );
   }
@@ -2285,37 +2338,49 @@ export default function IntentBoard({
                     <div className="pb-1">
                       {/* Everything inside the type sits one level in, behind
                           its own rule — the same shape as any set. */}
-                      {(entry.topLevel.length > 0 || createsAtTypeLevel) && (
-                        <TreeBranch>
-                          {entry.topLevel.map((intent) => renderTreeNode(intent, root.type, entry, 0))}
-
-                          {/* The type's own bucket — only worth a row once a set
-                              exists to take questions away from it. With none,
-                              the section header already means the same thing. */}
-                          {entry.topLevel.length > 0 && (
-                            <button
-                              onClick={() => setSelection({ kind: 'residue', scopeId: root.id })}
-                              className={`relative w-full text-left pl-3 pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
-                                selection.kind === 'residue' && selection.scopeId === root.id
-                                  ? 'bg-[hsl(var(--muted))] font-medium'
-                                  : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
-                              }`}
-                              title={`Questions no intent in ${QUERY_TYPE_LABELS[root.type]} claims — answered by the type's own rule.`}
-                            >
-                              <TreeElbow />
-                              <span className="truncate italic">Uncategorized</span>
-                              <Badge n={residue} />
-                            </button>
-                          )}
-
-                          {createsAtTypeLevel && newIntentScope && (
-                            <NewIntentRow
-                              scope={newIntentScope}
-                              onClick={() => openNewIntent(newIntentScope)}
-                            />
-                          )}
-                        </TreeBranch>
-                      )}
+                      {renderBranch([
+                        ...entry.topLevel.map((intent) => ({
+                          key: `i${intent.id}`,
+                          node: renderTreeNode(intent, root.type, entry, 0),
+                        })),
+                        // The type's own bucket — only worth a row once a set
+                        // exists to take questions away from it. With none, the
+                        // section header already means the same thing.
+                        ...(entry.topLevel.length > 0
+                          ? [
+                              {
+                                key: 'residue',
+                                node: (
+                                  <button
+                                    onClick={() => setSelection({ kind: 'residue', scopeId: root.id })}
+                                    className={`w-full text-left pl-3 pr-3 py-1 min-h-[28px] text-xs flex items-center justify-between gap-2 ${
+                                      selection.kind === 'residue' && selection.scopeId === root.id
+                                        ? 'bg-[hsl(var(--muted))] font-medium'
+                                        : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
+                                    }`}
+                                    title={`Questions no intent in ${QUERY_TYPE_LABELS[root.type]} claims — answered by the type's own rule.`}
+                                  >
+                                    <span className="truncate italic">Uncategorized</span>
+                                    <Badge n={residue} />
+                                  </button>
+                                ),
+                              },
+                            ]
+                          : []),
+                        ...(createsAtTypeLevel && newIntentScope
+                          ? [
+                              {
+                                key: 'new',
+                                node: (
+                                  <NewIntentRow
+                                    scope={newIntentScope}
+                                    onClick={() => openNewIntent(newIntentScope)}
+                                  />
+                                ),
+                              },
+                            ]
+                          : []),
+                      ])}
                     </div>
                   </div>
                 );
