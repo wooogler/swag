@@ -187,13 +187,19 @@ export const QUERY_TYPE_LABELS: Record<ScoreQueryType, string> = {
 
 /**
  * Version of the type-classification instructions (system prompt + schema).
+ * v2: the reviewing/drafting boundary was self-contradictory — drafting claimed
+ *     "regenerating text the chatbot produced" while reviewing claimed "text
+ *     that already exists", and a tie-break line handed every such request to
+ *     reviewing. Measured cost: drafting recall 49% (docs/SCORE_v7_type_eval.md).
+ *     The boundary is now WHOSE text, and a planning/drafting rule was added for
+ *     essay requests phrased as questions.
  * A message's type is judged ONCE PER MESSAGE EVER — content is immutable, so
  * unlike intent ratings there is no definition to invalidate against. Bumping
  * this constant is therefore the ONLY way a stored judgment is recomputed:
  * change any wording in type-prompts.ts and you MUST bump it here, or every
  * cached row stays "fresh" against a prompt it never saw.
  */
-export const TYPE_CLASSIFIER_VERSION = 1;
+export const TYPE_CLASSIFIER_VERSION = 2;
 
 /**
  * What a score_intents row IS. Replaces the PROMPT_HOLDER_TITLE string

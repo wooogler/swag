@@ -25,9 +25,9 @@ const TYPE_DEFINITIONS: Record<ScoreQueryType, string> = {
   translating:
     "The student already has the idea and asks the chatbot to turn it into usable text at PARAGRAPH SCALE OR SMALLER — writing a sentence or paragraph from a given idea, completing an unfinished sentence or paragraph, or suggesting wording and word choice.",
   reviewing:
-    "The student asks the chatbot to evaluate or revise TEXT THAT ALREADY EXISTS, without changing its overall theme or viewpoint — proofreading, a spelling or grammar question, feedback or a grade, shortening, rewriting to a specification, general improvement, or checking it against the assignment prompt.",
+    "The student asks the chatbot to evaluate or revise THE STUDENT'S OWN WRITING — text they wrote themselves — without changing its overall theme or viewpoint: proofreading, a spelling or grammar question, feedback or a grade, shortening, rewriting to a specification, general improvement, or checking it against the assignment prompt.",
   drafting:
-    'The student asks the chatbot to GENERATE ESSAY TEXT WHOLESALE — writing the whole essay or a complete section of it (introduction, body paragraph, conclusion) from a prompt or an idea, or regenerating, rewriting, or resizing text the chatbot itself produced.',
+    'The student asks the chatbot to PRODUCE ESSAY PROSE — writing the whole essay or a complete section of it (introduction, body paragraph, conclusion) from a prompt or an idea, or producing another version of prose THE CHATBOT ITSELF wrote earlier (rewriting, regenerating, restyling or resizing it).',
 };
 
 const INSTRUCTIONS = `Classify the STUDENT QUERY into exactly one of four types describing what the student is asking the chatbot to do.
@@ -40,7 +40,8 @@ RULES:
 - Judge only what the student is ASKING FOR in this message. Pasted material — the student's own draft, the assignment prompt, a previous chatbot reply — is context, never a request in itself.
 - Prior context is shown for reference only. Classify the STUDENT QUERY.
 - Scale separates translating from drafting: a sentence or a paragraph built from the student's own idea is translating; a whole essay or a complete section produced by the chatbot is drafting.
-- Existing text separates reviewing from the rest: if the request acts on text the student already has, it is reviewing.
+- WHOSE TEXT separates reviewing from drafting — not whether text exists. Acting on writing the STUDENT produced is reviewing. Acting on prose THE CHATBOT produced earlier in the conversation is drafting: asking for it again in another shape ("rewrite it adding the dystopian view", "make it sound like a 10th grader", "make it longer") is asking the chatbot to write it again, not to review the student's work.
+- WHAT THE ANSWER WOULD BE separates planning from drafting. Planning answers are ABOUT the writing — topics, facts, structure, comparisons. Drafting answers ARE the writing. A request phrased as a question still counts as drafting when the only way to answer it is to produce essay prose (e.g. "how would I defend the utilitarian view?", "state your perspective and analyse it against the others").
 - MULTIPLE ACTIVITIES: when one message asks for two or more different activities (for example "translate this and also fix the grammar"), answer drafting. Instructors handle these by carving out a narrower category inside drafting.
 - There is no "other" type. Off-topic messages, chit-chat, and meta questions about the chatbot still take the closest of the four.
 - Write the rationale FIRST, in 10 words or fewer, then give the type.`;
