@@ -148,6 +148,47 @@ export interface TypeRootSummary {
   latestRuleVersion?: { versionNo: number; name: string | null } | null;
 }
 
+/** One indent level of the tree. The vertical rule is what makes nesting
+ * readable — indentation alone reads as "slightly offset", not "inside". */
+function TreeBranch({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="ml-[18px] border-l border-[hsl(var(--border))]">{children}</div>
+  );
+}
+
+/** The elbow joining a row to its parent's vertical rule. */
+function TreeElbow() {
+  return (
+    <span
+      aria-hidden
+      className="absolute left-0 top-1/2 w-2.5 border-t border-[hsl(var(--border))]"
+    />
+  );
+}
+
+/** The "create a set here" affordance, rendered AT the place the new set would
+ * land — its indentation is the promise about where it goes. */
+function NewIntentRow({
+  scope,
+  onClick,
+}: {
+  scope: { label: string };
+  onClick: () => void;
+}) {
+  return (
+    <div className="relative pl-3 py-1">
+      <TreeElbow />
+      <button
+        onClick={onClick}
+        title={scope.label}
+        className="inline-flex items-center gap-1 rounded border border-dashed border-[hsl(var(--primary))]/60 px-1.5 py-0.5 text-[11px] font-medium text-[hsl(var(--primary))] hover:border-solid hover:bg-[hsl(var(--primary))]/10"
+      >
+        <Plus className="w-3 h-3" /> New intent
+      </button>
+    </div>
+  );
+}
+
 /** Section accents for the 4 query types (v7 left column). */
 const TYPE_SECTION_DOT: Record<ScoreQueryType, string> = {
   planning: 'bg-blue-500',
@@ -1690,15 +1731,17 @@ export default function IntentBoard({
     const shadow = shadowedBy.get(intent.id);
     const outsideCount = treeDiagnostics.outside.get(intent.id) ?? 0;
     const own = counts.perIntent.get(intent.id) ?? 0;
+    // The new set would land INSIDE this one — so the button renders here.
+    const createsHere = newIntentScope?.parentIntentId === intent.id;
     return (
       <div key={intent.id}>
         <div
-          className={`group flex items-center gap-1 pr-2 py-1 cursor-pointer ${
+          className={`group relative flex items-center gap-1 pl-3 pr-2 py-1 cursor-pointer ${
             active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
           }`}
-          style={{ paddingLeft: `${20 + depth * 12}px` }}
           onClick={() => setSelection({ kind: 'intent', id: intent.id })}
         >
+          <TreeElbow />
           <HoverReveal
             content={
               <div className="space-y-1.5 text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
@@ -1778,23 +1821,33 @@ export default function IntentBoard({
           </div>
         </div>
 
-        {children.map((child) => renderTreeNode(child, type, entry, depth + 1))}
-
-        {/* A set's own bucket: what IT answers, once subsets take their share. */}
-        {children.length > 0 && (
-          <button
-            onClick={() => setSelection({ kind: 'residue', scopeId: intent.id })}
-            className={`w-full text-left pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
-              selection.kind === 'residue' && selection.scopeId === intent.id
-                ? 'bg-[hsl(var(--muted))] font-medium'
-                : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
-            }`}
-            style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
-            title={`Questions “${intent.title}” answers itself — its subsets take the rest.`}
-          >
-            <span className="truncate italic">Uncategorized</span>
-            <Badge n={own} />
-          </button>
+        {/* Everything INSIDE this set sits behind its own rule, one level in:
+            its subsets, its own bucket, and — when this is the scope you have
+            selected — the button that creates the next subset. The button's
+            POSITION is what says where the new set lands; that is why it moves
+            with the selection instead of sitting in a fixed slot. */}
+        {(children.length > 0 || createsHere) && (
+          <TreeBranch>
+            {children.map((child) => renderTreeNode(child, type, entry, depth + 1))}
+            {children.length > 0 && (
+              <button
+                onClick={() => setSelection({ kind: 'residue', scopeId: intent.id })}
+                className={`relative w-full text-left pl-3 pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
+                  selection.kind === 'residue' && selection.scopeId === intent.id
+                    ? 'bg-[hsl(var(--muted))] font-medium'
+                    : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
+                }`}
+                title={`Questions “${intent.title}” answers itself — its subsets take the rest.`}
+              >
+                <TreeElbow />
+                <span className="truncate italic">Uncategorized</span>
+                <Badge n={own} />
+              </button>
+            )}
+            {createsHere && newIntentScope && (
+              <NewIntentRow scope={newIntentScope} onClick={() => openNewIntent(newIntentScope)} />
+            )}
+          </TreeBranch>
         )}
       </div>
     );
@@ -2207,6 +2260,10 @@ export default function IntentBoard({
                 const total =
                   residue + entry.topLevel.reduce((n, i) => n + subtreeCount(i.id), 0);
                 const typeActive = selection.kind === 'type' && selection.typeKey === root.type;
+                // A new top-level set of this type — the button belongs at the
+                // top level of this section's tree, not in a fixed slot.
+                const createsAtTypeLevel =
+                  newIntentScope?.type === root.type && newIntentScope.parentIntentId === null;
                 return (
                   <div key={root.id} className="border-b border-[hsl(var(--border))]">
                     {/* Section header = the type root. Clicking browses every
@@ -2226,37 +2283,38 @@ export default function IntentBoard({
                     </div>
 
                     <div className="pb-1">
-                      {entry.topLevel.map((intent) => renderTreeNode(intent, root.type, entry, 0))}
+                      {/* Everything inside the type sits one level in, behind
+                          its own rule — the same shape as any set. */}
+                      {(entry.topLevel.length > 0 || createsAtTypeLevel) && (
+                        <TreeBranch>
+                          {entry.topLevel.map((intent) => renderTreeNode(intent, root.type, entry, 0))}
 
-                      {/* The type's own bucket — only worth a row once a subset
-                          exists to take questions away from it. With no intents
-                          the section header already means the same thing. */}
-                      {entry.topLevel.length > 0 && (
-                        <button
-                          onClick={() => setSelection({ kind: 'residue', scopeId: root.id })}
-                          className={`w-full text-left pl-5 pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
-                            selection.kind === 'residue' && selection.scopeId === root.id
-                              ? 'bg-[hsl(var(--muted))] font-medium'
-                              : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
-                          }`}
-                          title={`Questions no intent in ${QUERY_TYPE_LABELS[root.type]} claims — answered by the type's own rule.`}
-                        >
-                          <span className="truncate italic">Uncategorized</span>
-                          <Badge n={residue} />
-                        </button>
-                      )}
+                          {/* The type's own bucket — only worth a row once a set
+                              exists to take questions away from it. With none,
+                              the section header already means the same thing. */}
+                          {entry.topLevel.length > 0 && (
+                            <button
+                              onClick={() => setSelection({ kind: 'residue', scopeId: root.id })}
+                              className={`relative w-full text-left pl-3 pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
+                                selection.kind === 'residue' && selection.scopeId === root.id
+                                  ? 'bg-[hsl(var(--muted))] font-medium'
+                                  : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
+                              }`}
+                              title={`Questions no intent in ${QUERY_TYPE_LABELS[root.type]} claims — answered by the type's own rule.`}
+                            >
+                              <TreeElbow />
+                              <span className="truncate italic">Uncategorized</span>
+                              <Badge n={residue} />
+                            </button>
+                          )}
 
-                      {/* Creating from inside a section is what places the new
-                          set: no picker, the scope you are looking at IS the
-                          parent (§3.2). */}
-                      {newIntentScope?.type === root.type && (
-                        <button
-                          onClick={() => openNewIntent(newIntentScope)}
-                          className="mt-0.5 ml-5 mb-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                          title={newIntentScope.label}
-                        >
-                          <Plus className="w-3 h-3" /> New intent {newIntentScope.suffix}
-                        </button>
+                          {createsAtTypeLevel && newIntentScope && (
+                            <NewIntentRow
+                              scope={newIntentScope}
+                              onClick={() => openNewIntent(newIntentScope)}
+                            />
+                          )}
+                        </TreeBranch>
                       )}
                     </div>
                   </div>
