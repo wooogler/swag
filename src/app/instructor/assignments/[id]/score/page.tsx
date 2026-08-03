@@ -28,7 +28,7 @@ import {
   type VersionSummary,
 } from '@/lib/score/intent-store';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
-import { listChatDeploys, type ChatDeploySnapshot } from '@/lib/score/deploy-store';
+import { listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
 import BaselineDeployButton from './BaselineDeployButton';
 import {
@@ -158,7 +158,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         versionNo: viewedDeploy.versionNo,
         note: viewedDeploy.note,
         createdAt: viewedDeploy.createdAt.toISOString(),
-        intents: (viewedDeploy.snapshot as ChatDeploySnapshot).intents.map((i) => ({
+        intents: parseChatDeploySnapshot(viewedDeploy.snapshot).intents.map((i) => ({
           id: i.id,
           title: i.title,
           definition: i.definition,
@@ -169,7 +169,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
 
   // The rule each intent CURRENTLY deploys to students (latest chat deploy) — the
   // Revise Preview compares the working rule against this, not against itself.
-  const latestDeploy = (chatDeploys[0]?.snapshot as ChatDeploySnapshot | undefined) ?? null;
+  const latestDeploy = chatDeploys[0] ? parseChatDeploySnapshot(chatDeploys[0].snapshot) : null;
   const deployedRules = latestDeploy ? latestDeploy.intents.map((i) => ({ id: i.id, rule: i.rule })) : [];
 
   const tokenBySession = new Map(sessions.map((s) => [s.id, s.participantToken]));
@@ -307,6 +307,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         responseText: rec.responseText,
         chatDeployVersion: rec.responseChatVersion,
         appliedIntentId: rec.responseIntentId,
+        appliedOutcome: rec.responseOutcome,
         prevQueryText: rec.prevQueryText,
         prevResponseText: rec.prevResponseText,
         turnIndex: rec.turnIndex,

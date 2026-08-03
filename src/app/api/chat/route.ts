@@ -301,6 +301,11 @@ export async function POST(req: Request) {
                 ? {
                     appliedIntentId: deployed.applied.intentId,
                     appliedIntentTitle: deployed.applied.intentTitle,
+                    // v7: 'intent' = a set matched; 'type_default' = the chain
+                    // ran out and the query type's own rule answered. Absent on
+                    // pre-v7 replies, which is how they stay distinguishable.
+                    appliedOutcome: deployed.applied.outcome,
+                    ...(deployed.applied.type ? { appliedType: deployed.applied.type } : {}),
                   }
                 : {}),
               ...(fullResponse.trim()

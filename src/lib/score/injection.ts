@@ -25,31 +25,35 @@ import { stableHash } from './config';
 /** Bump when anything that changes generated preview output changes — the
  * injection wording below, or the preview input shape (preview-service). Cached
  * rule previews (score_rule_previews) below this version are stale.
- * v2: previews now feed the FULL prior conversation, not just the prior pair. */
-export const PREVIEW_VERSION = 2;
+ * v2: previews now feed the FULL prior conversation, not just the prior pair.
+ * v3: v7 dropped the base-prompt fallback below — an empty rule now means NO
+ *     system message, so every preview generated under the old fallback (which
+ *     silently showed base-prompt behaviour) is wrong and must regenerate. */
+export const PREVIEW_VERSION = 3;
 
 /**
- * The rule, or the assignment's default prompt when there is no rule. Nothing
- * is concatenated: whatever the instructor sees in the rule box is verbatim
- * what the chatbot is given. "No rule yet" (a rule cleared to empty, or an
- * intent that started from an empty default) falls back to the default prompt —
- * the normal path, not an exception (§ 설계 원칙 14). With an EMPTY default
- * prompt and no rule (NIRVANA), no system message is sent at all.
+ * The injected system prompt IS the rule, verbatim — nothing is concatenated,
+ * and nothing sits underneath it.
+ *
+ * v7 removed the base-prompt fallback this function used to have. Every query
+ * now reaches a rule by construction: its type's chain either matches a set or
+ * ends at the type's own rule (docs/SCORE_v7_intent_tree_design.md §3.5). So a
+ * rule that is EMPTY is a real answer — "send no system message" — not a
+ * missing value to substitute the assignment default for. The base prompt
+ * survives only as the seed a rule starts from and as the emergency fail-open
+ * when the classifier itself errors, both of which live in the caller.
  */
-export function buildInjectedSystemPrompt(basePrompt: string, rule: string | null): string {
-  const r = rule?.trim();
-  return r ? r : basePrompt;
+export function buildInjectedSystemPrompt(rule: string | null): string {
+  return rule?.trim() ?? '';
 }
 
 /**
  * Cache key for one generated preview response: everything that changes the
  * output except the message itself (the cache row is already keyed by
- * message). Default-prompt edits, rule edits, and model switches all invalidate.
+ * message). Rule edits and model switches invalidate.
  */
-export function rulePreviewHash(model: string, basePrompt: string, rule: string | null): string {
-  return stableHash(
-    JSON.stringify([`p${PREVIEW_VERSION}`, model, buildInjectedSystemPrompt(basePrompt, rule)])
-  );
+export function rulePreviewHash(model: string, rule: string | null): string {
+  return stableHash(JSON.stringify([`p${PREVIEW_VERSION}`, model, buildInjectedSystemPrompt(rule)]));
 }
 
 /** The chatbot model, resolved exactly like /api/chat does — previews must

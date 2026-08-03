@@ -19,26 +19,46 @@ import {
   buildChatDeploySnapshot,
   canonicalChatConfig,
   getLatestChatDeploy,
+  isLegacySnapshot,
   listChatDeploys,
+  parseChatDeploySnapshot,
   recordChatDeploy,
+  splitSnapshot,
   type ChatDeploySnapshot,
 } from '@/lib/score/deploy-store';
+import { MAX_INTENTS_PER_CALL } from '@/lib/score/intent-prompts';
+import { QUERY_TYPE_LABELS, isScoreQueryType } from '@/lib/score/intents';
 import { isMinorVersion, loadIntentState, type VersionSummary } from '@/lib/score/intent-store';
 
 export const dynamic = 'force-dynamic';
 
 function summarize(versionNo: number, snapshot: ChatDeploySnapshot, note: string | null, createdAt: Date) {
+  const { judged, roots } = splitSnapshot(snapshot);
   return {
     versionNo,
     createdAt: createdAt.toISOString(),
     note,
-    intentCount: snapshot.intents.length,
-    ruleCount: snapshot.intents.filter((i) => i.rule?.trim()).length,
-    intents: snapshot.intents.map((i) => ({
+    // Counts describe the INTENTS an instructor authored; the 4 type roots are
+    // structure, not entries in the list.
+    intentCount: judged.length,
+    ruleCount: judged.filter((i) => i.rule?.trim()).length,
+    intents: judged.map((i) => ({
       id: i.id,
       title: i.title,
       hasRule: !!i.rule?.trim(),
+      type: isScoreQueryType(i.type) ? i.type : null,
+      parentId: i.parentId ?? null,
+      position: i.position ?? null,
     })),
+    typeRules: roots.map((r) => ({
+      id: r.id,
+      type: isScoreQueryType(r.type) ? r.type : null,
+      title: r.title,
+      hasRule: !!r.rule?.trim(),
+    })),
+    /** Frozen before the v7 cutover — the runtime cannot route it, so students
+     * get the plain base prompt until this assignment is deployed once. */
+    legacy: isLegacySnapshot(snapshot),
     configVersionNo: snapshot.configVersionNo,
   };
 }
@@ -73,9 +93,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const latest = rows[0] ?? null;
   // Dirty = the live intent→rule set differs from what students are getting.
   // Never deployed + nothing configured yet → not dirty (nothing to push).
+  const currentSplit = splitSnapshot(current);
   const dirty = latest
-    ? canonicalChatConfig(current) !== canonicalChatConfig(latest.snapshot as ChatDeploySnapshot)
-    : current.intents.length > 0;
+    ? canonicalChatConfig(current) !== canonicalChatConfig(parseChatDeploySnapshot(latest.snapshot))
+    : // Never deployed. The 4 type roots always exist now, so "anything to
+      // push?" means an authored intent, or a type rule the instructor has
+      // actually written — a freshly cloned board seeded from the assignment
+      // default is not a pending change.
+      currentSplit.judged.length > 0 ||
+      currentSplit.roots.some((r) => (r.rule ?? '').trim() !== (current.basePrompt ?? '').trim());
 
   // Live intent details for the deploy modal's browser pane: what exactly is
   // about to be frozen (definition, rule, and the instructor's labeled
@@ -138,16 +164,26 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   return NextResponse.json({
     latest: latest
-      ? summarize(latest.versionNo, latest.snapshot as ChatDeploySnapshot, latest.note, latest.createdAt)
+      ? summarize(latest.versionNo, parseChatDeploySnapshot(latest.snapshot), latest.note, latest.createdAt)
       : null,
     dirty,
     live: {
-      intentCount: current.intents.length,
-      ruleCount: current.intents.filter((i) => i.rule?.trim()).length,
+      intentCount: currentSplit.judged.length,
+      ruleCount: currentSplit.judged.filter((i) => i.rule?.trim()).length,
       intents: liveIntents,
+      // The type roots' else-rules are part of what Deploy freezes, so the
+      // review pane shows them alongside the intents.
+      typeRules: currentSplit.roots
+        .filter((r) => isScoreQueryType(r.type))
+        .map((r) => ({
+          id: r.id,
+          type: r.type as string,
+          label: QUERY_TYPE_LABELS[r.type as 'planning'],
+          rule: r.rule,
+        })),
     },
     versions: rows.map((r) =>
-      summarize(r.versionNo, r.snapshot as ChatDeploySnapshot, r.note, r.createdAt)
+      summarize(r.versionNo, parseChatDeploySnapshot(r.snapshot), r.note, r.createdAt)
     ),
   });
 }
@@ -181,7 +217,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const rows = await listChatDeploys(id, 200);
     const source = rows.find((r) => r.versionNo === body.fromVersion);
     if (!source) return NextResponse.json({ error: 'version_not_found' }, { status: 404 });
-    snapshot = source.snapshot as ChatDeploySnapshot;
+    snapshot = parseChatDeploySnapshot(source.snapshot);
+    // A pre-v7 snapshot cannot route (no types, no tree). Re-deploying one
+    // would put students back on the base prompt with no sign of why, so it is
+    // refused: deploy the CURRENT config instead, which is v7-shaped (D5).
+    if (isLegacySnapshot(snapshot)) {
+      return NextResponse.json(
+        {
+          error: 'legacy_snapshot',
+          message: `v${body.fromVersion} was saved before the intent tree and can no longer be served. Deploy the current setup instead.`,
+        },
+        { status: 409 }
+      );
+    }
     note = note ?? `redeploy of v${body.fromVersion}`;
   } else {
     snapshot = await buildChatDeploySnapshot(id);
@@ -195,6 +243,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         unchanged: true,
       });
     }
+  }
+
+  // The runtime rates every judged set in ONE call, so a chain longer than the
+  // call's cap would be silently truncated — and a truncated chain routes
+  // WRONGLY, not just partially. Refuse instead (D10).
+  const judgedCount = splitSnapshot(snapshot).judged.length;
+  if (judgedCount > MAX_INTENTS_PER_CALL) {
+    return NextResponse.json(
+      {
+        error: 'too_many_intents',
+        message: `This board has ${judgedCount} intents; the chatbot can route at most ${MAX_INTENTS_PER_CALL}. Archive or merge some before deploying.`,
+      },
+      { status: 400 }
+    );
   }
 
   const versionNo = await recordChatDeploy(id, auth.instructor.id, snapshot, note);

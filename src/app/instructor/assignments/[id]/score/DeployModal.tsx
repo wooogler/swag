@@ -37,7 +37,13 @@ interface DeploySummary {
 export interface DeployStatus {
   latest: DeploySummary | null;
   dirty: boolean;
-  live: { intentCount: number; ruleCount: number; intents: LiveIntent[] };
+  live: {
+    intentCount: number;
+    ruleCount: number;
+    intents: LiveIntent[];
+    /** The 4 query types' own rules — what answers a question no intent claims. */
+    typeRules?: { id: number; type: string; label: string; rule: string | null }[];
+  };
 }
 
 interface DeployModalProps {
@@ -178,6 +184,8 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
               )}
               {/* Same item shape as the board's intents panel: title + short
                   When/Then VERSION labels (full text on the right when selected). */}
+              {/* Grouped by query type: the tree's shape is what decides which
+                  rule answers first, so the review pane shows it. */}
               {status?.live.intents.map((i) => (
                 <button
                   key={i.id}
@@ -206,6 +214,27 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
                   </span>
                 </button>
               ))}
+              {(status?.live.typeRules?.length ?? 0) > 0 && (
+                <>
+                  <p className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                    Type rules
+                  </p>
+                  <p className="px-3 pb-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+                    Used when no intent of that type claims a question.
+                  </p>
+                  {status?.live.typeRules?.map((t) => (
+                    <div
+                      key={t.id}
+                      className="px-3 py-1.5 border-b border-[hsl(var(--border))]/60"
+                    >
+                      <span className="block text-xs font-medium">{t.label}</span>
+                      <span className="mt-0.5 block text-[11px] text-[hsl(var(--muted-foreground))] line-clamp-1">
+                        {t.rule?.trim() ? t.rule : <span className="italic">No rule yet</span>}
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
 
             <div className="min-h-0 overflow-y-auto p-3 space-y-2.5 text-xs">
@@ -335,8 +364,9 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
               </button>
             </div>
             <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
-              A deploy freezes the intents&apos; definitions, labels, rules, and tie-breakers. Students always get
-              the latest version; board edits stay invisible until the next deploy.
+              A deploy freezes the intents&apos; definitions, labels and rules, the order they are
+              checked in, and each query type&apos;s own rule. Students always get the latest version;
+              board edits stay invisible until the next deploy.
             </p>
           </div>
         </DialogPanel>

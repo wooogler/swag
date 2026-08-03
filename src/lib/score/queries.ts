@@ -31,6 +31,9 @@ export interface QueryRecord {
    *  pre-deploy / imported logs. */
   responseChatVersion: number | null;
   responseIntentId: number | null;
+  /** v7 routing outcome of the reply: 'intent' (a set matched) or
+   * 'type_default' (the type's own rule answered). Null on pre-v7 replies. */
+  responseOutcome: string | null;
   /** Prior context the query is reacting to (sent to the classifier): the
    *  previous student message and the chatbot reply the student had just seen. */
   prevQueryText: string | null;
@@ -206,6 +209,7 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
     let responseText: string | null = null;
     let responseChatVersion: number | null = null;
     let responseIntentId: number | null = null;
+    let responseOutcome: string | null = null;
     for (let j = i + 1; j < rows.length; j++) {
       const next = rows[j];
       if (next.conversationId !== m.conversationId) break;
@@ -215,10 +219,14 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
         const meta = (next.metadata ?? null) as {
           chatDeployVersion?: unknown;
           appliedIntentId?: unknown;
+          appliedOutcome?: unknown;
         } | null;
         responseChatVersion =
           typeof meta?.chatDeployVersion === 'number' ? meta.chatDeployVersion : null;
         responseIntentId = typeof meta?.appliedIntentId === 'number' ? meta.appliedIntentId : null;
+        // 'intent' | 'type_default' — absent on pre-v7 replies (they predate the
+        // distinction and must not be relabelled as either).
+        responseOutcome = typeof meta?.appliedOutcome === 'string' ? meta.appliedOutcome : null;
         break;
       }
     }
@@ -260,6 +268,7 @@ export async function getQueryRecords(assignmentId: string): Promise<QueryRecord
       responseText,
       responseChatVersion,
       responseIntentId,
+      responseOutcome,
       prevQueryText,
       prevResponseText,
       turnIndex: m.seq,

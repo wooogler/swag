@@ -80,6 +80,10 @@ export interface ScoreQueryRow {
   chatDeployVersion: number | null;
   /** The intent whose rule the runtime injected for this reply (audit trail). */
   appliedIntentId: number | null;
+  /** How that rule was chosen: 'intent' = a set matched, 'type_default' = the
+   * query type's own rule answered. Null on replies from before v7 — they
+   * predate the distinction and must not be relabelled as either. */
+  appliedOutcome: string | null;
   dissection: { materialKinds: MaterialKind[]; requests: string[] } | null;
   /** v7: which of the 4 fixed query types this message was classified into.
    * Null = not yet typed (or typed below TYPE_CLASSIFIER_VERSION) — such a
@@ -686,7 +690,13 @@ function DeployVersionBoard({
     return served.filter((r) => r.appliedIntentId === sel);
   }, [served, sel]);
   const selectedRow = filtered.find((r) => r.messageId === selectedId) ?? null;
+  // Replies with no applied rule at all. Under v7 that is only ever a
+  // fail-open (a query the chain leaves unclaimed is answered by its TYPE, and
+  // that reply carries the type root's id like any other). Pre-v7 replies land
+  // here too and stay undifferentiated — they predate the distinction, so
+  // relabelling them as either would be a lie.
   const baseCount = served.filter((r) => r.appliedIntentId === null).length;
+  const legacyBase = served.some((r) => r.appliedIntentId === null && r.appliedOutcome === null);
   const fmt = (iso: string) =>
     new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -767,17 +777,25 @@ function DeployVersionBoard({
               </div>
             );
           })}
-          {/* Replies no intent rule covered (no match / fail-open). */}
-          <button
-            onClick={() => setSel('base')}
-            className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between border-t border-[hsl(var(--border))] ${
-              sel === 'base' ? 'bg-[hsl(var(--muted))] font-medium' : 'hover:bg-[hsl(var(--muted))]/50'
-            }`}
-            title="Replies where no intent rule was injected (no match / fail-open)"
-          >
-            <span className="text-[hsl(var(--muted-foreground))]">No intent matched</span>
-            <Badge n={baseCount} />
-          </button>
+          {/* Replies with no rule at all — a fail-open, or a pre-v7 reply. */}
+          {baseCount > 0 && (
+            <button
+              onClick={() => setSel('base')}
+              className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between border-t border-[hsl(var(--border))] ${
+                sel === 'base' ? 'bg-[hsl(var(--muted))] font-medium' : 'hover:bg-[hsl(var(--muted))]/50'
+              }`}
+              title={
+                legacyBase
+                  ? 'Replies served before the intent tree, plus any where the classifier failed and the chatbot answered with no rule.'
+                  : 'The classifier failed for these, so the chatbot answered with no rule.'
+              }
+            >
+              <span className="text-[hsl(var(--muted-foreground))]">
+                {legacyBase ? 'No rule applied' : 'Classifier failed'}
+              </span>
+              <Badge n={baseCount} />
+            </button>
+          )}
         </div>
 
         {/* MIDDLE — the queries this deploy served */}

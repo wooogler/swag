@@ -84,9 +84,9 @@ export async function getCachedRulePreviews(args: {
   basePrompt: string;
   model: string;
 }): Promise<PreviewBatchResult> {
-  const { assignmentId, intent, records, basePrompt, model } = args;
-  const hash = rulePreviewHash(model, basePrompt, intent.rule);
-  const system = buildInjectedSystemPrompt(basePrompt, intent.rule);
+  const { assignmentId, intent, records, model } = args;
+  const hash = rulePreviewHash(model, intent.rule);
+  const system = buildInjectedSystemPrompt(intent.rule);
   const responses = new Map<number, string>();
   let failed = 0;
   if (records.length === 0) return { responses, failed };
@@ -146,8 +146,8 @@ export async function getDraftPreviews(args: {
   basePrompt: string;
   model: string;
 }): Promise<PreviewBatchResult> {
-  const { assignmentId, records, rule, basePrompt, model } = args;
-  const system = buildInjectedSystemPrompt(basePrompt, rule);
+  const { assignmentId, records, rule, model } = args;
+  const system = buildInjectedSystemPrompt(rule);
   const responses = new Map<number, string>();
   let failed = 0;
 
