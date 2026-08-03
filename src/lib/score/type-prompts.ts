@@ -11,6 +11,13 @@
  * definition to invalidate against, so a silent wording change would leave
  * every cached row marked fresh against a prompt it never saw.
  *
+ * Measured alternative, REJECTED: scoring all four types and taking the argmax
+ * instead of this forced single choice. It scored 8pp WORSE on the same 331
+ * human-coded rows (docs/SCORE_v7_type_eval.md §7) — independent scoring
+ * invites "does this partly fit?", spreads credit across the near misses, and
+ * the argmax then lands on a partial match. The forced choice is what makes the
+ * model commit to the dominant reading. Do not retry without new evidence.
+ *
  * The type definitions descend from the hand-written whole-Type definitions in
  * jelson-suggest.ts (TYPE_INTENT_DEFINITIONS), reworded here for the forced
  * 4-way choice: the legacy 'All' is this scheme's 'drafting', and the
