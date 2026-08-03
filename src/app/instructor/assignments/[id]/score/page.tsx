@@ -28,7 +28,7 @@ import {
   type VersionSummary,
 } from '@/lib/score/intent-store';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
-import { listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
+import { isLegacySnapshot, listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
 import BaselineDeployButton from './BaselineDeployButton';
 import {
@@ -158,19 +158,31 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         versionNo: viewedDeploy.versionNo,
         note: viewedDeploy.note,
         createdAt: viewedDeploy.createdAt.toISOString(),
-        intents: parseChatDeploySnapshot(viewedDeploy.snapshot).intents.map((i) => ({
-          id: i.id,
-          title: i.title,
-          definition: i.definition,
-          rule: i.rule,
-        })),
+        // v2 snapshots carry the 4 type roots inside intents[] — they are the
+        // chain's else, not authored intents, so the version board must not
+        // list them as such. v1 rows have no kind and are all real intents.
+        intents: parseChatDeploySnapshot(viewedDeploy.snapshot)
+          .intents.filter((i) => (i.kind ?? 'intent') === 'intent')
+          .map((i) => ({
+            id: i.id,
+            title: i.title,
+            definition: i.definition,
+            rule: i.rule,
+          })),
       }
     : null;
 
   // The rule each intent CURRENTLY deploys to students (latest chat deploy) — the
   // Revise Preview compares the working rule against this, not against itself.
   const latestDeploy = chatDeploys[0] ? parseChatDeploySnapshot(chatDeploys[0].snapshot) : null;
-  const deployedRules = latestDeploy ? latestDeploy.intents.map((i) => ({ id: i.id, rule: i.rule })) : [];
+  // What students ACTUALLY get right now. A pre-v7 snapshot cannot be served
+  // (the runtime refuses it and falls back to the base prompt), so presenting
+  // its rules as "deployed" in the Revise before/after would be a lie — the
+  // board must show that nothing of it is live until a re-deploy.
+  const deployedRules =
+    latestDeploy && !isLegacySnapshot(latestDeploy)
+      ? latestDeploy.intents.map((i) => ({ id: i.id, rule: i.rule }))
+      : [];
 
   const tokenBySession = new Map(sessions.map((s) => [s.id, s.participantToken]));
 

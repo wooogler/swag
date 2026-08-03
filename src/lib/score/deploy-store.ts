@@ -6,14 +6,22 @@
  * intent→rule set as a numbered snapshot (score_chat_deploys), and the student
  * chat runtime (/api/chat) always serves the LATEST deploy:
  *
- *   student message → rate against the DEPLOYED intents (one classifier call,
- *   same prompt machinery as the board) → resolveAssignment over the deployed
- *   links → owning intent's rule injected via buildInjectedSystemPrompt.
+ *   student message → (query type ∥ ratings of every deployed set, in PARALLEL)
+ *   → walk that type's first-match chain → the winning set's rule, or, when
+ *   nothing matches, the TYPE's own rule. Every message reaches a rule.
  *
- * Fail-open by design (principle 14): no deploy yet, no ruled intents, a
- * classifier error/timeout, or no owning intent → the plain base prompt.
- * The base prompt itself stays LIVE (§1.9: managed in assignment settings,
- * outside the SCORE loop) — the snapshot records it for reference only.
+ * The base prompt is now an ERROR path only: no deploy, a pre-v7 snapshot, a
+ * classifier error/timeout, an unusable type, or a partial rating response.
+ * "Nothing matched" is NOT an error — the type answers it, even with an empty
+ * rule (which means no system message at all, not a base-prompt substitute).
+ * The base prompt itself stays LIVE (managed in assignment settings, outside
+ * the SCORE loop) — the snapshot records it for reference only.
+ *
+ * The live type judgment is deliberately NOT cached into score_query_types: it
+ * is made without the deterministic dissection (too heavy per chat message),
+ * so writing it would poison the instructor-side cache with a weaker verdict
+ * that a version bump alone could never correct. What actually routed the reply
+ * is recorded on the reply itself instead (appliedType in its metadata).
  */
 import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
@@ -128,7 +136,11 @@ export async function buildChatDeploySnapshot(assignmentId: string): Promise<Cha
       .from(assignments)
       .where(eq(assignments.id, assignmentId)),
   ]);
-  const active = state.promptReady.filter((p) => !p.intent.isTemplate);
+  // Untyped sets are excluded: compileChains puts them in no chain, so freezing
+  // one would deploy a rule that can never answer anything while still counting
+  // against the runtime's per-call budget. (Only pre-backfill rows can be
+  // untyped — every create carries its type.)
+  const active = state.promptReady.filter((p) => !p.intent.isTemplate && isScoreQueryType(p.intent.type));
   // promptReady is the JUDGED set, so it excludes the type roots by design —
   // append them explicitly or the frozen chain would have no else-rules.
   const roots = state.intents.filter(
@@ -147,6 +159,11 @@ export async function buildChatDeploySnapshot(assignmentId: string): Promise<Cha
         promptPins: p.promptPins.map((pin) => ({
           verdict: pin.verdict,
           text: pinPromptText(pin.text),
+          // The instructor's out-reason is rendered INTO the rating prompt
+          // ("— why not: …"), so dropping it here would deploy a strictly
+          // weaker prompt than the one the board rated with — preview would
+          // stop equalling runtime for every intent with a reasoned out-label.
+          ...(pin.reason?.trim() ? { reason: pin.reason } : {}),
         })),
         kind: 'intent' as IntentKind,
         type: p.intent.type,

@@ -433,6 +433,12 @@ export default function IntentWorkbench({
           isTemplate: true, // unregistered draft until Save
           recordVersion: false,
           autoTitle: false,
+          // The PLACEMENT of the scope this was created from. Library templates
+          // are deliberately type-less (they are rated whole-log for the
+          // baseline's searches), so without this the adopted set would be born
+          // untyped — in no chain, invisible on the board, and unroutable
+          // forever, since `type` is only ever written at INSERT.
+          ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
         }),
         signal: controller.signal,
       });
@@ -671,7 +677,13 @@ export default function IntentWorkbench({
             ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
           }
         : force
-          ? { isTemplate: false }
+          ? {
+              isTemplate: false,
+              // Save also (re)states the placement: a draft that reached here
+              // without one — e.g. adopted from a type-less library template —
+              // would otherwise register into no chain at all.
+              ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
+            }
           : {}),
       // Rollback: restore the checked-out version's pin set alongside the spec.
       ...(checkout !== null && !isCreate ? { pinsFromVersion: checkout } : {}),

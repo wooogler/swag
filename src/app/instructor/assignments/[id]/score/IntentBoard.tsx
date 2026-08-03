@@ -786,13 +786,11 @@ function DeployVersionBoard({
               }`}
               title={
                 legacyBase
-                  ? 'Replies served before the intent tree, plus any where the classifier failed and the chatbot answered with no rule.'
-                  : 'The classifier failed for these, so the chatbot answered with no rule.'
+                  ? 'Replies served before the intent tree, plus any answered with no rule at all — either nothing was configured yet, or the classifier failed.'
+                  : 'Answered with no rule: either nothing was configured for this deploy, or the classifier failed.'
               }
             >
-              <span className="text-[hsl(var(--muted-foreground))]">
-                {legacyBase ? 'No rule applied' : 'Classifier failed'}
-              </span>
+              <span className="text-[hsl(var(--muted-foreground))]">No rule applied</span>
               <Badge n={baseCount} />
             </button>
           )}
@@ -2159,6 +2157,30 @@ export default function IntentBoard({
                   >
                     {running ? <RefreshCw className="w-3 h-3 animate-spin" /> : null} Run
                   </button>
+                </div>
+              )}
+              {/* An active set with no query type sits in no chain: it can
+                  never answer anything and has no section to live in. That can
+                  only happen to a row created before the type layer, but it
+                  must not be INVISIBLE — surface it so it can be opened and
+                  given a home. */}
+              {activeIntents.filter((i) => !i.type).length > 0 && (
+                <div className="border-b border-[hsl(var(--border))] bg-rose-50/70 px-3 py-1.5">
+                  <p className="text-[11px] font-semibold text-rose-800">Not in any type</p>
+                  <p className="text-[10px] text-rose-700/80">
+                    These answer nothing until they are given one. Open and save to place them.
+                  </p>
+                  {activeIntents
+                    .filter((i) => !i.type)
+                    .map((i) => (
+                      <button
+                        key={i.id}
+                        onClick={() => setEditIntent(i)}
+                        className="mt-1 w-full text-left text-xs text-rose-900 underline decoration-rose-300 hover:decoration-rose-600 truncate"
+                      >
+                        {i.title}
+                      </button>
+                    ))}
                 </div>
               )}
               {typeRoots.map((root) => {

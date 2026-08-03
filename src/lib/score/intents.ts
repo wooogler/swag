@@ -487,8 +487,12 @@ export type RouteResolution =
 
 /**
  * Walk one type's chain and return the single node that owns the query.
- * `ratings` must already have instructor pins folded in (applyPinOverrides):
- * pins fix a node's JUDGMENT, never its position in the chain (§3.6).
+ *
+ * Instructor-side callers fold pins in first (applyPinOverrides): a pin fixes a
+ * node's JUDGMENT, never its position in the chain (§3.6). The student runtime
+ * passes raw ratings, and that is not an omission — pins are keyed to LOGGED
+ * messages, and a message being answered live has never been labelled. Pins
+ * reach students the way they always have: as examples inside the prompt.
  *
  * Note what 'pending' does and does not cover: an unrated node AFTER the first
  * match cannot change the outcome, so the walk stops at the match. Only a gap

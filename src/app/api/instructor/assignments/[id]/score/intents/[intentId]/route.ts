@@ -27,6 +27,7 @@ import {
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { generateIntentTitle } from '@/lib/score/intent-agent';
+import { SCORE_QUERY_TYPES } from '@/lib/score/intents';
 import {
   ensureIntentTables,
   recordConfigVersion,
@@ -48,6 +49,12 @@ const patchSchema = z
     // Library templates are activated by CLONING (POST fromTemplateId), never
     // by flipping this on the template row itself.
     isTemplate: z.boolean().optional(),
+    // v7 placement. Normally written at create; accepted here so a draft that
+    // reached Save without one (or an intent being re-placed) can still be
+    // given a home — an untyped intent sits in no chain and would otherwise be
+    // unreachable and invisible.
+    type: z.enum(SCORE_QUERY_TYPES).optional(),
+    parentIntentId: z.number().int().positive().nullable().optional(),
     // Auto-generate the title from the definition on save (git-commit style).
     // Ignored when an explicit title is sent.
     autoTitle: z.boolean().optional(),
@@ -129,6 +136,8 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   if (body.rule !== undefined) set.rule = body.rule && body.rule.length > 0 ? body.rule : null;
   if (body.archived !== undefined) set.archived = body.archived;
   if (body.isTemplate !== undefined) set.isTemplate = body.isTemplate;
+  if (body.type !== undefined) set.type = body.type;
+  if (body.parentIntentId !== undefined) set.parentIntentId = body.parentIntentId;
 
   // Auto-title (git-commit style): regenerate from the definition on save.
   // Best-effort — a failed LLM call must never fail the save.
