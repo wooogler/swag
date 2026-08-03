@@ -49,7 +49,7 @@ import { ConversationThread, ResponseBody } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
 import RuleWorkbench from './RuleWorkbench';
-import NewIntentSuggestModal from './NewIntentSuggestModal';
+import NewIntentModal from './NewIntentModal';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
 import { getJSON, postJSON } from './http';
 import { SortSelect, sortQueryRows, type QuerySortMode } from './query-list';
@@ -1061,9 +1061,14 @@ export default function IntentBoard({
     root: TypeRootSummary;
   } | null>(null);
 
-  /** "New intent for this query": the suggest modal anchored on a question the
-   * instructor is looking at, seeded with the scope that answers it today. */
-  const [suggestFor, setSuggestFor] = useState<ScoreQueryRow | null>(null);
+  /** The New Intent chooser — the ONE door to creating an intent (§3.2). It
+   * carries the placement, because the left column opens it from a spot in the
+   * tree where there may be no question in view at all; `anchorRow` is the
+   * question the instructor was looking at, and only seeds the proposals. */
+  const [newIntentRequest, setNewIntentRequest] = useState<{
+    scope: { type: ScoreQueryType; parentIntentId: number | null };
+    anchorRow: ScoreQueryRow | null;
+  } | null>(null);
 
   const [placementBusy, setPlacementBusy] = useState<number | null>(null);
   async function moveIntent(
@@ -1101,6 +1106,9 @@ export default function IntentBoard({
   const [newIntentSeed, setNewIntentSeed] = useState<{
     title?: string;
     definition?: string;
+    /** Chose a prepared starter set: the workbench clones that template instead
+     * of rating the log again, so its questions are there on arrival. */
+    fromTemplateId?: number;
     /** v7 placement — where the new set lands, decided by WHERE creation was
      * invoked from rather than by a picker (§3.2). */
     type?: ScoreQueryType;
@@ -1590,6 +1598,20 @@ export default function IntentBoard({
     [rows, selectedMessageId]
   );
 
+  /**
+   * The question the New Intent chooser anchors its proposals on — the one in
+   * view. Guarded on the row still being ON SCREEN: `selectedMessageId` is not
+   * cleared when the left column moves, so without this a question left
+   * selected in Planning would seed the proposals for a Drafting set.
+   */
+  const anchorRow = useMemo(
+    () =>
+      selectedRow && sortedRows.some((r) => r.messageId === selectedRow.messageId)
+        ? selectedRow
+        : null,
+    [selectedRow, sortedRows]
+  );
+
   // ---- Viewer rule-version dropdown ---------------------------------------
   // The owning intent's rule versions for the SELECTED message, each with its
   // stored response when one was generated (Save / "apply to intent"). null
@@ -1647,6 +1669,7 @@ export default function IntentBoard({
   // the version fetch lands rather than flashing the delivered original first.
   // Owner-less / rule-less questions can only ever show the delivered reply, so
   // they resolve instantly.
+  // Also the scope a new intent created FROM this question is carved out of.
   const selectedOwner = selectedOwnerId !== null ? intentById.get(selectedOwnerId) ?? null : null;
   const responseResolved =
     selectedOwnerId === null || !selectedOwner?.rule || viewerVersions !== null;
@@ -1895,7 +1918,7 @@ export default function IntentBoard({
                   node: (
                     <NewIntentRow
                       scope={newIntentScope}
-                      onClick={() => openNewIntent(newIntentScope)}
+                      onClick={() => openIntentChooser(newIntentScope, anchorRow)}
                     />
                   ),
                 },
@@ -1905,6 +1928,27 @@ export default function IntentBoard({
       </div>
     );
   }
+
+  /** The prepared starter-set library — picking one of these clones its rating
+   * rows server-side instead of rating the log again. */
+  const templateOptions = useMemo(
+    () =>
+      intents
+        .filter((i) => i.isTemplate && !i.archived)
+        .map(({ id, title, definition }) => ({ id, title, definition })),
+    [intents]
+  );
+
+  /** Definitions already registered as live intents. Offering a starter set
+   * that duplicates one would only produce a set the board immediately flags as
+   * shadowed, so the chooser shows those but will not create them. */
+  const liveDefinitions = useMemo(
+    () =>
+      new Set(
+        intents.filter((i) => !i.isTemplate && !i.archived).map((i) => i.definition.trim())
+      ),
+    [intents]
+  );
 
   /**
    * Where a new set would land, read off the CURRENT selection. Creating from a
@@ -1916,7 +1960,6 @@ export default function IntentBoard({
     type: ScoreQueryType;
     parentIntentId: number | null;
     label: string;
-    suffix: string;
   } | null => {
     if (isBaseline) return null;
     const forScope = (scope: IntentSummary) =>
@@ -1925,7 +1968,6 @@ export default function IntentBoard({
             type: scope.type,
             parentIntentId: scope.id,
             label: `Create a subset of “${scope.title}”`,
-            suffix: `in “${scope.title}”`,
           }
         : null;
     if (selection.kind === 'type') {
@@ -1933,7 +1975,6 @@ export default function IntentBoard({
         type: selection.typeKey,
         parentIntentId: null,
         label: `Create a set inside ${QUERY_TYPE_LABELS[selection.typeKey]}`,
-        suffix: '',
       };
     }
     if (selection.kind === 'residue') {
@@ -1943,7 +1984,6 @@ export default function IntentBoard({
           type: root.type,
           parentIntentId: null,
           label: `Create a set for the questions ${QUERY_TYPE_LABELS[root.type]} does not cover yet`,
-          suffix: '',
         };
       }
       const scope = intentById.get(selection.scopeId);
@@ -1956,9 +1996,22 @@ export default function IntentBoard({
     return null;
   }, [selection, isBaseline, typeRoots, intentById]);
 
+  /**
+   * Every intent is created through the chooser — a blank form does not tell an
+   * instructor what a good intent looks like, and the taxonomy's starter sets
+   * are invisible from one. The placement is settled BEFORE it opens (by where
+   * creation was invoked from), so all the chooser decides is the seed.
+   */
+  function openIntentChooser(
+    scope: { type: ScoreQueryType; parentIntentId: number | null },
+    anchor: ScoreQueryRow | null
+  ) {
+    setNewIntentRequest({ scope, anchorRow: anchor });
+  }
+
   function openNewIntent(
     scope: { type: ScoreQueryType; parentIntentId: number | null },
-    seed?: { title?: string; definition?: string }
+    seed?: { title?: string; definition?: string; fromTemplateId?: number }
   ) {
     setNewIntentSeed({ ...seed, type: scope.type, parentIntentId: scope.parentIntentId });
     setNewIntentOpen(true);
@@ -2112,10 +2165,6 @@ export default function IntentBoard({
           rows={rows}
           isNirvana={isNirvana}
           mode={workbenchMode}
-          jelsonSuggestions={jelsonSuggestions}
-          templates={intents
-            .filter((i) => i.isTemplate && !i.archived)
-            .map(({ id, title, definition }) => ({ id, title, definition }))}
           onExit={() => {
             setNewIntentOpen(false);
             setNewIntentSeed(null);
@@ -2374,7 +2423,7 @@ export default function IntentBoard({
                                 node: (
                                   <NewIntentRow
                                     scope={newIntentScope}
-                                    onClick={() => openNewIntent(newIntentScope)}
+                                    onClick={() => openIntentChooser(newIntentScope, anchorRow)}
                                   />
                                 ),
                               },
@@ -2740,20 +2789,27 @@ export default function IntentBoard({
                       </button>
                     );
                   })()}
-                  {/* Creating from the question itself: the candidates are
-                      seeded from it AND from the scope that answers it today,
-                      so they read as a refinement rather than a blank slate. */}
+                  {/* Creating from the question itself: it lands inside
+                      whatever answers it today, so the candidates read as a
+                      refinement of that scope rather than a blank slate. */}
                   {!isBaseline && (
                     <button
-                      onClick={() => setSuggestFor(selectedRow)}
-                      disabled={!selectedRow.queryType || !openaiConfigured}
+                      onClick={() =>
+                        selectedRow.queryType &&
+                        openIntentChooser(
+                          {
+                            type: selectedRow.queryType,
+                            parentIntentId: selectedOwner?.id ?? null,
+                          },
+                          selectedRow
+                        )
+                      }
+                      disabled={!selectedRow.queryType}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded border border-violet-300 text-violet-700 hover:bg-violet-50 disabled:opacity-50"
                       title={
                         !selectedRow.queryType
                           ? 'This question has no query type yet — Run to categorize it first'
-                          : !openaiConfigured
-                            ? 'OPENAI_API_KEY is not configured'
-                            : 'Draft a new intent from this question'
+                          : 'Draft a new intent from this question'
                       }
                     >
                       <Plus className="w-3.5 h-3.5" /> New intent for this query
@@ -2870,26 +2926,28 @@ export default function IntentBoard({
       </div>
       )}
 
-      {/* NEW INTENT FOR THIS QUERY — candidates seeded from the question and
-          from the scope that answers it today; picking one opens the create
-          workbench with that scope as the new set's parent (§3.2). */}
-      {suggestFor && suggestFor.queryType && (() => {
-        const res = resolutions.get(suggestFor.messageId);
-        const owner = res?.kind === 'matched' ? intentById.get(res.intentId) ?? null : null;
-        const type = suggestFor.queryType;
+      {/* THE NEW INTENT CHOOSER — the one door to creating an intent, from the
+          tree (placement = where the button sits) or from a question
+          (placement = whatever answers it today). It settles only the SEED;
+          the placement was decided before it opened (§3.2). */}
+      {newIntentRequest && (() => {
+        const parentId = newIntentRequest.scope.parentIntentId;
+        const parent = parentId !== null ? intentById.get(parentId) ?? null : null;
         return (
-          <NewIntentSuggestModal
+          <NewIntentModal
             assignmentId={assignmentId}
-            row={suggestFor}
-            currentIntent={owner ? { id: owner.id, title: owner.title } : null}
-            scopeType={type}
-            onCancel={() => setSuggestFor(null)}
+            scope={newIntentRequest.scope}
+            anchorRow={newIntentRequest.anchorRow}
+            currentIntent={parent ? { id: parent.id, title: parent.title } : null}
+            jelsonSuggestions={jelsonSuggestions}
+            templates={templateOptions}
+            liveDefinitions={liveDefinitions}
+            openaiConfigured={openaiConfigured}
+            typeLabel={QUERY_TYPE_LABELS[newIntentRequest.scope.type]}
+            onCancel={() => setNewIntentRequest(null)}
             onPick={(seed) => {
-              setSuggestFor(null);
-              // The scope that answers it today becomes the new set's parent:
-              // an intent → carve a subset out of it; the type's own rule →
-              // a new top-level set of that type.
-              openNewIntent({ type, parentIntentId: owner?.id ?? null }, seed);
+              setNewIntentRequest(null);
+              openNewIntent(newIntentRequest.scope, seed);
             }}
           />
         );

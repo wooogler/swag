@@ -44,11 +44,6 @@ import { runShardedRate } from './rate-runner';
 import { DefinitionEditor, QueryTextButton, WorkbenchTopBar } from './workbench-shared';
 import { ConversationThread } from './conversation';
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
-import {
-  suggestJelson,
-  jelsonToIntent,
-  type JelsonSuggestion,
-} from '@/lib/score/jelson-suggest';
 
 interface RatingRow {
   messageId: number;
@@ -81,15 +76,6 @@ interface RatingRow {
 // The lean tabs already split in from out, so no signed cross-lean measure is
 // needed — each tab just picks a direction.
 type NdSort = 'in-like' | 'out-like' | 'newest' | 'oldest';
-
-/** The legacy taxonomy's type keys ↔ the v7 query types. Its 'All' is v7's
- * 'drafting'; everything else matches on lower-casing. */
-const LEGACY_TYPE_TO_QUERY_TYPE: Record<string, ScoreQueryType> = {
-  Planning: 'planning',
-  Translating: 'translating',
-  Reviewing: 'reviewing',
-  All: 'drafting',
-};
 
 /** Prompt order: the server's pin index, with optimistic (negative) pins first. */
 function byPinRank(a: RatingRow, b: RatingRow): number {
@@ -160,42 +146,6 @@ function labeledTooltip(v: IntentVersion): string | undefined {
     .join('\n');
 }
 
-/** Hover tooltip anchored to the RIGHT of its trigger. Uses `position: fixed`
- * (via getBoundingClientRect) so it escapes the workbench panel's overflow clip;
- * flips to the left near the viewport edge. Used by the taxonomy suggestions,
- * whose rows show only a title and reveal the description on hover. */
-function HoverTip({ content, children }: { content: React.ReactNode; children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  return (
-    <div
-      ref={ref}
-      className="min-w-0 flex-1"
-      onMouseEnter={() => {
-        const r = ref.current?.getBoundingClientRect();
-        if (!r) return;
-        const width = Math.min(320, window.innerWidth * 0.8); // w-80 / max-w-[80vw]
-        const flipLeft = r.right + width + 12 > window.innerWidth;
-        const left = flipLeft ? Math.max(8, r.left - width - 6) : r.right + 6;
-        const top = Math.min(Math.max(12, r.top + r.height / 2), window.innerHeight - 12);
-        setPos({ left, top });
-      }}
-      onMouseLeave={() => setPos(null)}
-    >
-      {children}
-      {pos && (
-        <div
-          role="tooltip"
-          className="fixed z-[60] w-80 max-w-[80vw] rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 shadow-lg pointer-events-none"
-          style={{ left: pos.left, top: pos.top, transform: 'translateY(-50%)' }}
-        >
-          {content}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** The free-text "Other" row of the out-reason picker. Keeps its own input
  * state so typing doesn't re-render the whole workbench; submit pins out with
  * the typed reason. */
@@ -248,6 +198,8 @@ export type WorkbenchMode =
       seed?: {
         title?: string;
         definition?: string;
+        /** A prepared starter set whose ratings are copied instead of re-run. */
+        fromTemplateId?: number;
         type?: ScoreQueryType;
         parentIntentId?: number | null;
       } | null;
@@ -261,12 +213,6 @@ interface IntentWorkbenchProps {
   rows: ScoreQueryRow[];
   isNirvana: boolean;
   mode: WorkbenchMode;
-  /** Jelson taxonomy subtypes for the create-mode definition suggestions. */
-  jelsonSuggestions?: JelsonSuggestion[];
-  /** Prepared starter-set templates (pre-rated via "Run all") — picking a
-   * matching suggestion clones one into a draft (ratings copied) so results
-   * load instantly; the template itself is never mutated. */
-  templates?: { id: number; title: string; definition: string }[];
   /** Leave the workbench (unsaved drafts are purged) — board refreshes. */
   onExit: () => void;
   /** Jump to editing ANOTHER intent (the overlap chips' shortcut): the parent
@@ -282,8 +228,6 @@ export default function IntentWorkbench({
   rows,
   isNirvana,
   mode,
-  jelsonSuggestions,
-  templates,
   onExit,
   onEditIntent,
 }: IntentWorkbenchProps) {
@@ -297,9 +241,6 @@ export default function IntentWorkbench({
   // every Save auto-generates it from the definition (git-commit style).
   const [titleDirty, setTitleDirty] = useState(!!seed?.title);
   const [definition, setDefinition] = useState(intent?.definition ?? seed?.definition ?? '');
-  // Create-mode taxonomy suggestions: hidden once a suggestion is picked, until
-  // the instructor edits the definition again.
-  const [suggestDismissed, setSuggestDismissed] = useState(false);
   // "Out" reason picker: opened under the clicked out button, it offers three
   // LLM-suggested reasons (why this message isn't the intent) + a free-text
   // "Other", then pins out with the chosen reason. `anchor` positions it fixed
@@ -364,18 +305,6 @@ export default function IntentWorkbench({
   // Board rows by messageId — the conversation view joins through this.
   const rowByMessage = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
 
-  // Create-mode only: fuzzy-match what they've typed against the Jelson
-  // taxonomy — restricted to the query type the new set is being created in.
-  // A Drafting set has no use for a Reviewing starter: adopting it would put a
-  // reviewing definition inside a chain that only ever sees drafting queries.
-  const jelsonMatches = useMemo(() => {
-    if (isEdit || !jelsonSuggestions?.length) return [];
-    const scoped = seed?.type
-      ? jelsonSuggestions.filter((j) => LEGACY_TYPE_TO_QUERY_TYPE[j.typeKey] === seed.type)
-      : jelsonSuggestions;
-    return suggestJelson(definition, scoped, 3);
-  }, [isEdit, jelsonSuggestions, definition, seed?.type]);
-
   // Discard the unsaved discovery draft (fire-and-forget purge). Called when
   // switching suggestions or leaving without Save — an unsaved draft must not
   // linger as a hidden intent.
@@ -396,41 +325,16 @@ export default function IntentWorkbench({
     onExit();
   }
 
-  // Pick a suggestion → the applied result appears IMMEDIATELY. A prepared
-  // template (pre-rated via "Run all") is CLONED into a discovery draft — the
-  // server copies its rating rows, so results load with zero LLM calls and the
-  // shared template is never touched. Otherwise a draft is created and rated
-  // on the spot. Either way nothing is registered as an intent until Save.
-  function applySuggestion(s: JelsonSuggestion) {
-    const seeded = jelsonToIntent(s);
-    setDefinition(seeded.definition);
-    setTitle(seeded.title);
-    setTitleDirty(true);
-    setSuggestDismissed(true);
-    discardDraft(); // switching picks — drop the previous unsaved draft
-    const tpl = templates?.find((t) => t.definition.trim() === seeded.definition.trim());
-    if (tpl) {
-      void adoptTemplate(tpl);
-    } else {
-      // Not prepared — auto-apply: create a draft and rate the log right away
-      // (results appear without extra clicks).
-      abortRef.current?.abort();
-      abortRef.current = null;
-      setIntentId(null);
-      setData(null);
-      setVersions(null);
-      savedRef.current = { title: '', definition: '' };
-      setPinsDirty(false);
-      apply({ ...seeded, createNew: true });
-    }
-  }
-
   // Clone a prepared library template into an UNSAVED draft: spec + rating
   // rows copied server-side (same definition + no pins ⇒ same defHash, so the
   // copied ratings are already fresh). The draft behaves exactly like an
   // Apply-created one — pins attach to it, Save registers it, leaving without
   // Save purges it — while the template stays in the library untouched.
-  async function adoptTemplate(tpl: { id: number; title: string; definition: string }) {
+  //
+  // Driven by the chooser: it decides that the seed's definition still matches
+  // a template and passes the id through, so the questions are already there
+  // when the workbench opens instead of costing a rating pass.
+  async function adoptTemplate(templateId: number) {
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -444,15 +348,15 @@ export default function IntentWorkbench({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fromTemplateId: tpl.id,
+          fromTemplateId: templateId,
           isTemplate: true, // unregistered draft until Save
           recordVersion: false,
           autoTitle: false,
           // The PLACEMENT of the scope this was created from. Library templates
           // are deliberately type-less (they are rated whole-log for the
           // baseline's searches), so without this the adopted set would be born
-          // untyped — in no chain, invisible on the board, and unroutable
-          // forever, since `type` is only ever written at INSERT.
+          // untyped — in no chain and invisible on the board until something
+          // restated its placement.
           ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
         }),
         signal: controller.signal,
@@ -479,6 +383,15 @@ export default function IntentWorkbench({
       if (live(controller.signal)) setBusy(false);
     }
   }
+
+  // A seed carrying a template id is a starter set the chooser found already
+  // rated — adopt it straight away, so its questions are on screen when the
+  // workbench opens. Mount-only, like the title/definition seeds: `seed` is a
+  // mount-time value and the parent re-keys this component per target.
+  useEffect(() => {
+    if (seed?.fromTemplateId) void adoptTemplate(seed.fromTemplateId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Collapse state for the LEFT boundary-example lists.
   const [incOpen, setIncOpen] = useState(true);
@@ -1678,10 +1591,7 @@ export default function IntentWorkbench({
             </label>
             <DefinitionEditor
               value={definition}
-              onChange={(v) => {
-                setDefinition(v);
-                setSuggestDismissed(false);
-              }}
+              onChange={setDefinition}
               placeholder="e.g. asks the chatbot to write a thesis statement or conclusion for them"
             />
 
@@ -1866,77 +1776,6 @@ export default function IntentWorkbench({
               )}
             </div>
 
-            {/* Create mode: taxonomy suggestions fuzzy-matched as they type.
-                Rendered BELOW the actions so the Save/Apply row stays put as
-                suggestions appear/disappear. Each row shows the Type on top and
-                the title below (two rows); the description reveals on hover. */}
-            {!isEdit && !suggestDismissed && jelsonMatches.length > 0 && (
-              <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
-                <div className="flex items-center justify-between px-2 py-1 text-xs text-[hsl(var(--muted-foreground))]">
-                  <span className="inline-flex items-center gap-1 font-medium">
-                    <Wand2 className="w-3 h-3" /> Suggested starter sets
-                  </span>
-                  <button
-                    onClick={() => setSuggestDismissed(true)}
-                    className="p-0.5 hover:text-[hsl(var(--foreground))]"
-                    title="Dismiss suggestions"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-                <ul className="pb-1">
-                  {jelsonMatches.map(({ suggestion }) => {
-                    const prepared = !!templates?.some(
-                      (t) => t.definition.trim() === jelsonToIntent(suggestion).definition.trim()
-                    );
-                    return (
-                      <li key={suggestion.code}>
-                        <div className="flex items-center gap-1 pr-2 hover:bg-[hsl(var(--muted))]">
-                          {/* Type on top, title below; description on hover. */}
-                          <HoverTip
-                            content={
-                              <p className="text-sm leading-relaxed text-[hsl(var(--foreground))]">
-                                {suggestion.description}
-                              </p>
-                            }
-                          >
-                            <button
-                              onClick={() => applySuggestion(suggestion)}
-                              className="w-full min-w-0 text-left px-2 py-1.5"
-                              title={
-                                prepared
-                                  ? `${suggestion.code} — prepared, results load instantly`
-                                  : suggestion.code
-                              }
-                            >
-                              <span className="block text-xs font-mono uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                                {suggestion.typeLabel}
-                              </span>
-                              <span className="block truncate text-sm font-medium">{suggestion.label}</span>
-                            </button>
-                          </HoverTip>
-                          <button
-                            onClick={() => applySuggestion(suggestion)}
-                            disabled={busy || saving}
-                            title={
-                              prepared
-                                ? 'Apply — its questions appear immediately (already rated)'
-                                : 'Apply — rate the log against this set and show its questions'
-                            }
-                            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50"
-                          >
-                            <Search className="w-3 h-3" /> Apply
-                          </button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <p className="px-2 pb-1 text-xs text-[hsl(var(--muted-foreground))]">
-                  Apply a set — its matching questions appear immediately.
-                </p>
-              </div>
-            )}
 
             {/* History — one line per saved version of THIS intent. Clicking
                 a version CHECKS IT OUT (title/definition/labels/ratings load

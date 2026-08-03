@@ -1,14 +1,25 @@
 /**
- * SCORE v6 — Jelson taxonomy suggestions for the New Intent modal.
+ * SCORE — Jelson taxonomy suggestions for the New Intent modal.
  *
- * The instructor types a rough description; we fuzzy-match it against the 26
- * Jelson "ChatGPT Query Codes" subtypes (the default config) and recommend the
- * closest ones. Picking a suggestion seeds the intent title + definition.
+ * The 26 Jelson "ChatGPT Query Codes" subtypes are the starter sets the modal
+ * offers. They are fuzzy-matched against a piece of free text — v6 matched the
+ * definition the instructor was typing; v7 matches the question they are
+ * looking at — and ranked, so a rough phrase surfaces the closest few.
  *
  * Pure + client-safe (only imports config types/helpers) so the whole thing
- * runs in the browser with no round-trip — matching is instant as they type.
+ * runs in the browser with no round-trip — matching is instant.
  */
 import { flattenSubtypes, type ScoreConfig } from './config';
+import type { ScoreQueryType } from './intents';
+
+/** The legacy taxonomy's type keys ↔ the v7 query types. Its 'All' is v7's
+ * 'drafting'; everything else matches on lower-casing. */
+export const LEGACY_TYPE_TO_QUERY_TYPE: Record<string, ScoreQueryType> = {
+  Planning: 'planning',
+  Translating: 'translating',
+  Reviewing: 'reviewing',
+  All: 'drafting',
+};
 
 export interface JelsonSuggestion {
   code: string; // e.g. 'AL01'
