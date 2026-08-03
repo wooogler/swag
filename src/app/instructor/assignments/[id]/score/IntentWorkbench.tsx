@@ -82,6 +82,15 @@ interface RatingRow {
 // needed — each tab just picks a direction.
 type NdSort = 'in-like' | 'out-like' | 'newest' | 'oldest';
 
+/** The legacy taxonomy's type keys ↔ the v7 query types. Its 'All' is v7's
+ * 'drafting'; everything else matches on lower-casing. */
+const LEGACY_TYPE_TO_QUERY_TYPE: Record<string, ScoreQueryType> = {
+  Planning: 'planning',
+  Translating: 'translating',
+  Reviewing: 'reviewing',
+  All: 'drafting',
+};
+
 /** Prompt order: the server's pin index, with optimistic (negative) pins first. */
 function byPinRank(a: RatingRow, b: RatingRow): number {
   return (a.pinRank ?? Number.MAX_SAFE_INTEGER) - (b.pinRank ?? Number.MAX_SAFE_INTEGER);
@@ -355,11 +364,17 @@ export default function IntentWorkbench({
   // Board rows by messageId — the conversation view joins through this.
   const rowByMessage = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
 
-  // Create-mode only: fuzzy-match what they've typed against the Jelson taxonomy.
+  // Create-mode only: fuzzy-match what they've typed against the Jelson
+  // taxonomy — restricted to the query type the new set is being created in.
+  // A Drafting set has no use for a Reviewing starter: adopting it would put a
+  // reviewing definition inside a chain that only ever sees drafting queries.
   const jelsonMatches = useMemo(() => {
     if (isEdit || !jelsonSuggestions?.length) return [];
-    return suggestJelson(definition, jelsonSuggestions, 3);
-  }, [isEdit, jelsonSuggestions, definition]);
+    const scoped = seed?.type
+      ? jelsonSuggestions.filter((j) => LEGACY_TYPE_TO_QUERY_TYPE[j.typeKey] === seed.type)
+      : jelsonSuggestions;
+    return suggestJelson(definition, scoped, 3);
+  }, [isEdit, jelsonSuggestions, definition, seed?.type]);
 
   // Discard the unsaved discovery draft (fire-and-forget purge). Called when
   // switching suggestions or leaving without Save — an unsaved draft must not
