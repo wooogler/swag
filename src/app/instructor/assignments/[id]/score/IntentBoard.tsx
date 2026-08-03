@@ -2944,6 +2944,7 @@ export default function IntentBoard({
             liveDefinitions={liveDefinitions}
             openaiConfigured={openaiConfigured}
             typeLabel={QUERY_TYPE_LABELS[newIntentRequest.scope.type]}
+            typeDot={TYPE_SECTION_DOT[newIntentRequest.scope.type]}
             onCancel={() => setNewIntentRequest(null)}
             onPick={(seed) => {
               setNewIntentRequest(null);

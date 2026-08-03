@@ -24,7 +24,17 @@
  *    Create, which is where the wait would otherwise happen.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowRight, Loader2, Plus, RefreshCw, Sparkles, X, Zap } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  ChevronRight,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  X,
+  Zap,
+} from 'lucide-react';
 import type { ScoreQueryType } from '@/lib/score/intents';
 import {
   LEGACY_TYPE_TO_QUERY_TYPE,
@@ -76,6 +86,10 @@ interface NewIntentModalProps {
   liveDefinitions: Set<string>;
   openaiConfigured: boolean;
   typeLabel: string;
+  /** The section dot colour, so the header reads as the same place the left
+   * column shows — passed rather than imported to keep the modal off the
+   * board's module graph. */
+  typeDot: string;
   onCancel: () => void;
   onPick: (seed: { title: string; definition: string; fromTemplateId?: number }) => void;
 }
@@ -90,6 +104,7 @@ export default function NewIntentModal({
   liveDefinitions,
   openaiConfigured,
   typeLabel,
+  typeDot,
   onCancel,
   onPick,
 }: NewIntentModalProps) {
@@ -278,23 +293,45 @@ export default function NewIntentModal({
         className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* WHERE IT LANDS — the promise the tree's indentation used to make. */}
-        <div className="shrink-0 px-4 py-3 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
+        {/* WHERE IT LANDS — the promise the tree's indentation used to make,
+            now said in words. Drawn as the same path the left column shows
+            (type dot → section → set) and ending in the same dashed chip that
+            was clicked, so the dialog is recognisably standing in that spot.
+            The line under it states the CONSEQUENCE of landing there, which is
+            the part that surprises people: a subset can only ever take what
+            its parent already took. */}
+        <div className="shrink-0 px-4 py-3 border-b border-[hsl(var(--border))] flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold flex items-center gap-1.5">
-              <Plus className="w-4 h-4 shrink-0" /> New intent
-            </h2>
-            <p className="text-xs text-[hsl(var(--muted-foreground))] truncate">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+              New intent
+            </p>
+            <p className="mt-1 flex items-center gap-1.5 min-w-0">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${typeDot}`} />
+              <span className="shrink-0 text-xs font-semibold uppercase tracking-wide">
+                {typeLabel}
+              </span>
+              {currentIntent && (
+                <>
+                  <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
+                  <span className="truncate text-sm font-semibold">{currentIntent.title}</span>
+                </>
+              )}
+              <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
+              <span className="shrink-0 inline-flex items-center gap-1 rounded border border-dashed border-[hsl(var(--primary))]/60 px-1.5 py-0.5 text-[11px] font-medium text-[hsl(var(--primary))]">
+                <Plus className="w-3 h-3" /> new intent
+              </span>
+            </p>
+            <p className="mt-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
               {currentIntent ? (
                 <>
-                  Inside{' '}
+                  Only questions{' '}
                   <span className="font-medium text-[hsl(var(--foreground))]">
                     “{currentIntent.title}”
                   </span>{' '}
-                  · {typeLabel}
+                  already answers can land here.
                 </>
               ) : (
-                <>Top level of {typeLabel}</>
+                <>Answers {typeLabel} questions no existing set claims first.</>
               )}
             </p>
           </div>

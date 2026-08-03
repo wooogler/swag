@@ -1,13 +1,18 @@
 /**
- * SCORE v6 — intent candidates seeded from one student question.
+ * SCORE — intent candidates seeded from one student question.
  *
- * POST {messageId, currentIntentId?} → three distinct {title, definition}
- * candidates for a NEW intent that would own this question (the rule
- * workbench's "this doesn't really fit this intent" escape hatch). The
- * candidates take different altitudes — the specific request, the broader
- * category, the pedagogical purpose — and must differ meaningfully from the
- * current intent. The instructor reviews/edits them in a modal and picks one
- * as the New Intent seed.
+ * POST {messageId, currentIntentId?, scopeType?} → three distinct
+ * {title, definition} candidates for a NEW intent that would own this
+ * question. The candidates take different altitudes — the specific request,
+ * the broader category, an alternative cut — and must differ meaningfully from
+ * the scope they are carved out of. The instructor reviews/edits them in the
+ * New Intent chooser and picks one as the seed.
+ *
+ * Definitions carry their example queries INLINE, in the same shape the
+ * taxonomy's starter sets use ("… — for example, "…", "…", or "…""). The
+ * chooser stands both sources side by side, so a proposal without examples
+ * reads as the lesser thing; and the examples are what a definition's boundary
+ * is actually argued from — the rating pass reads them as anchors.
  */
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
@@ -32,17 +37,27 @@ const bodySchema = z.object({
   scopeType: z.enum(SCORE_QUERY_TYPES).optional(),
 });
 
-const SYSTEM = `You draft intent candidates for SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT has a TITLE (imperative noun phrase, at most 5 words, git-commit style) and a DEFINITION (one or two sentences describing a category of student requests, starting with "asks").
+const SYSTEM = `You draft intent candidates for SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT has a TITLE (imperative noun phrase, at most 5 words, git-commit style) and a DEFINITION that a classifier will read verbatim to decide whether a question belongs.
 
 Given ONE student question — the query type it was classified into, and (when there is one) the intent that currently answers it — propose exactly THREE candidates for a new intent that would own this question, each from a different altitude:
 1. SPECIFIC — tightly scoped to this request's action and object.
 2. CATEGORY — the broader family of requests this one belongs to.
 3. REFRAMED — an alternative cut (e.g., by pedagogical purpose or workflow stage) that would still clearly capture this question.
 
+DEFINITION FORMAT — follow it exactly:
+
+  asks the chatbot to <action, lower case, no final period> — for example, "<question>", "<question>", or "<question>"
+
+- Start with the literal words "asks the chatbot to".
+- The action clause is one clause, not a paragraph. Concrete over generic: name the work products involved.
+- Then exactly THREE example questions, each in double quotes, comma-separated, with "or" before the last.
+- The SPECIFIC candidate must quote the student's actual request as one of its three. Keep their wording, shortened to about 20 words if it runs long.
+- The CATEGORY and REFRAMED candidates pick examples that show their RANGE. They may include the student's request, but three restatements of it means the candidate was not actually broader — at least one example must be something the SPECIFIC candidate would not cover.
+- Where a student pastes their own writing, the assignment prompt, or any other material, write it as a bracketed placeholder — "Fix the grammar in the following text: [text]" — never reproduce it.
+- An example is always a REQUEST. When the student's question is mostly pasted material with little or no request in it, write the request that the paste implies and attach the placeholder — "Review this draft: [text]" — never a bare placeholder on its own.
+
 Rules:
-- Every definition starts with "asks" and is self-contained (a classifier will use it verbatim; no "etc.", no references to examples).
 - Each candidate must be meaningfully DIFFERENT from the current intent's definition and from each other.
-- Concrete over generic — name the work products involved.
 - The new intent lives INSIDE the given query type, and (when a current intent is shown) is carved out of it — so it must be NARROWER than that scope, not a restatement of it.
 
 Answer in JSON: { "suggestions": [ { "title", "definition" } × 3 ] }.`;
@@ -61,7 +76,11 @@ const SCHEMA = {
         required: ['title', 'definition'],
         properties: {
           title: { type: 'string', description: 'at most 5 words, no trailing period' },
-          definition: { type: 'string', description: 'one or two sentences, starts with "asks"' },
+          definition: {
+            type: 'string',
+            description:
+              'asks the chatbot to <action> — for example, "<question>", "<question>", or "<question>"',
+          },
         },
       },
     },
