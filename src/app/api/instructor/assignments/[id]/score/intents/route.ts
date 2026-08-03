@@ -19,7 +19,7 @@ import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { generateIntentTitle } from '@/lib/score/intent-agent';
-import { seedRuleVersionName } from '@/lib/score/intents';
+import { SCORE_QUERY_TYPES, seedRuleVersionName } from '@/lib/score/intents';
 import {
   ensureIntentTables,
   loadIntentState,
@@ -49,6 +49,11 @@ const createSchema = z
     // intent, the template row untouched. definition defaults to the template's
     // own when omitted; rule to the template's own, else the assignment default.
     fromTemplateId: z.number().int().positive().optional(),
+    // v7 placement: which query type the set lives in, and the set it is
+    // carved out of (null/omitted = directly under the type root). Decided by
+    // WHERE creation was invoked from, not by a picker.
+    type: z.enum(SCORE_QUERY_TYPES).optional(),
+    parentIntentId: z.number().int().positive().nullable().optional(),
     // Save-time counts from the modal, recorded on the version for history.
     stats: z
       .object({
@@ -166,8 +171,36 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // default prompt rather than from nothing. Explicit rule > the template's own
   // > that default. NIRVANA's default is empty, so its intents still start
   // rule-less and the chatbot answers with no system prompt — unchanged.
+  // v7 copy-on-create: a new set starts from the rule of the set that ENCLOSES
+  // it — the nearest ancestor that actually has one, ultimately the type root
+  // (§3.5). The instructor then edits only what should differ. This is a COPY,
+  // not live inheritance: editing the parent later never rewrites a child.
+  let enclosingRule: string | null = null;
+  if (body.type) {
+    const rows = await db
+      .select()
+      .from(scoreIntents)
+      .where(and(eq(scoreIntents.assignmentId, id), eq(scoreIntents.type, body.type)));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    let cursor = body.parentIntentId ?? null;
+    for (let guard = 0; guard < 100; guard++) {
+      const node = cursor === null ? null : byId.get(cursor);
+      if (!node) break;
+      if (node.rule?.trim()) {
+        enclosingRule = node.rule;
+        break;
+      }
+      cursor = node.parentIntentId;
+    }
+    if (enclosingRule === null) {
+      const root = rows.find((r) => r.kind === 'type_root');
+      if (root?.rule?.trim()) enclosingRule = root.rule;
+    }
+  }
   const rule =
-    body.rule !== undefined ? body.rule : template?.rule ?? assignmentBasePrompt(auth.assignment);
+    body.rule !== undefined
+      ? body.rule
+      : template?.rule ?? enclosingRule ?? assignmentBasePrompt(auth.assignment);
 
   // Title: explicit > template's own > LLM auto-title (git-commit style,
   // best-effort) > definition-head fallback.
@@ -189,6 +222,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         rule: rule && rule.trim().length > 0 ? rule : null,
         archived: false,
         isTemplate: body.isTemplate ?? false,
+        // Untyped when the caller gives no placement (starter-template
+        // preparation): such a row is judged whole-log and sits in no chain
+        // until it is typed.
+        type: body.type ?? null,
+        parentIntentId: body.type ? body.parentIntentId ?? null : null,
         createdAt: now,
         updatedAt: now,
       })

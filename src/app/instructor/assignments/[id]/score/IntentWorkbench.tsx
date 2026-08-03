@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   type MaterialKind,
   type RatingLevel,
+  type ScoreQueryType,
 } from '@/lib/score/intents';
 import {
   AlertTriangle,
@@ -231,7 +232,17 @@ export function timeAgo(iso: string): string {
 
 export type WorkbenchMode =
   | { kind: 'edit'; intent: IntentSummary }
-  | { kind: 'create'; seed?: { title?: string; definition?: string } | null };
+  | {
+      kind: 'create';
+      /** `type`/`parentIntentId` are the v7 placement — where the new set lands
+       * in its type's tree, decided by where creation was invoked from. */
+      seed?: {
+        title?: string;
+        definition?: string;
+        type?: ScoreQueryType;
+        parentIntentId?: number | null;
+      } | null;
+    };
 
 interface IntentWorkbenchProps {
   assignmentId: string;
@@ -652,7 +663,16 @@ export default function IntentWorkbench({
       ...(opts?.silent ? { recordVersion: false } : { recordVersion: true, ...(force ? {} : { minorVersion: true }) }),
       stats,
       // Creates start as unregistered drafts; Save activates (registers).
-      ...(isCreate ? { isTemplate: true } : force ? { isTemplate: false } : {}),
+      // A create also carries its PLACEMENT: the scope it was invoked from is
+      // its parent, and its rule is seeded from that scope (v7 §3.2/§3.5).
+      ...(isCreate
+        ? {
+            isTemplate: true,
+            ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
+          }
+        : force
+          ? { isTemplate: false }
+          : {}),
       // Rollback: restore the checked-out version's pin set alongside the spec.
       ...(checkout !== null && !isCreate ? { pinsFromVersion: checkout } : {}),
     };

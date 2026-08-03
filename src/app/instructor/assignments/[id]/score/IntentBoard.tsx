@@ -15,18 +15,23 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   applyPinOverrides,
   compileChains,
+  isIncludedRating,
+  QUERY_TYPE_LABELS,
   resolveRoute,
+  SCORE_QUERY_TYPES,
   type MaterialKind,
   type RatingLevel,
   type RouteResolution,
   type ScoreQueryType,
 } from '@/lib/score/intents';
 import { SCORE_RATING_MODEL } from '@/lib/score/models';
+import { runShardedRate } from './rate-runner';
 import {
   AlertTriangle,
   Archive,
-  Check,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Maximize2,
   MessageSquare,
   Minimize2,
@@ -35,7 +40,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
@@ -48,7 +52,6 @@ import RuleWorkbench from './RuleWorkbench';
 import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
 import { getJSON, postJSON } from './http';
 import { SortSelect, sortQueryRows, type QuerySortMode } from './query-list';
-import { runShardedRate } from './rate-runner';
 
 /** One student message, with its per-intent ratings/pins and dissection. Built
  * server-side in page.tsx; the sole row shape for the intents board. */
@@ -128,6 +131,26 @@ export interface IntentSummary {
   position: number | null;
 }
 
+/** One of the 4 fixed query types, as the left column's section header. A type
+ * root is a score_intents row, so it owns a rule and a rule history like any
+ * intent — but it is never judged: its rule answers whatever its chain leaves
+ * unclaimed (docs/SCORE_v7_intent_tree_design.md §3.2). */
+export interface TypeRootSummary {
+  id: number;
+  type: ScoreQueryType;
+  title: string;
+  rule: string | null;
+  latestRuleVersion?: { versionNo: number; name: string | null } | null;
+}
+
+/** Section accents for the 4 query types (v7 left column). */
+const TYPE_SECTION_DOT: Record<ScoreQueryType, string> = {
+  planning: 'bg-blue-500',
+  translating: 'bg-emerald-500',
+  reviewing: 'bg-amber-500',
+  drafting: 'bg-violet-500',
+};
+
 /** Type dot colors for the pre-built starter-set library. */
 const TYPE_DOT: Record<string, string> = {
   Planning: 'bg-blue-500',
@@ -140,6 +163,8 @@ interface IntentBoardProps {
   assignmentId: string;
   rows: ScoreQueryRow[];
   intents: IntentSummary[];
+  /** The 4 type roots (SCORE only — the baseline has no tree). */
+  typeRoots?: TypeRootSummary[];
   basePrompt: string;
   /** Study condition. 'baseline' turns the SAME board into the ablation: the
    * left column is topped by ONE monolithic prompt instead of the intent list,
@@ -178,9 +203,12 @@ interface IntentBoardProps {
 type IntentSelection =
   | { kind: 'all' }
   | { kind: 'intent'; id: number }
-  // Queries no intent claimed — answered by their type's own rule. P3 splits
-  // this into a per-type residue row inside each type section.
-  | { kind: 'unassigned' }
+  // Every query of one type — the section header.
+  | { kind: 'type'; typeKey: ScoreQueryType }
+  // Queries that land on ONE scope's own rule: a type root (its chain left them
+  // unclaimed) or an intent (it matched, and none of its subsets did). Rendered
+  // as that scope's "Uncategorized" leaf.
+  | { kind: 'residue'; scopeId: number }
   | { kind: 'pending' }
   // Starter-set browse: questions rated clearly-in for one prepared template
   // (`set:CODE`) or for every prepared template of a Type (`type:KEY`).
@@ -307,21 +335,11 @@ function StarterSetTree({
   counts,
   selection,
   setSelection,
-  showActivation,
-  activatingCode,
-  libraryBusy,
-  activateType,
-  activateStarterSet,
 }: {
   groups: StarterGroup[];
   counts: StarterCounts;
   selection: IntentSelection;
   setSelection: (s: IntentSelection) => void;
-  showActivation: boolean;
-  activatingCode?: string | null;
-  libraryBusy?: boolean;
-  activateType?: (g: StarterGroup) => void;
-  activateStarterSet?: (s: StarterGroup['sets'][number]) => void;
 }) {
   // Accordion: every Type starts COLLAPSED so the library opens as four
   // headings to unpack one at a time, not 26 sets at once. Tracked as the
@@ -345,8 +363,7 @@ function StarterSetTree({
         // definition overlap on every question — the resolver then assigns
         // neither, so both read 0. The baseline keeps the full tree: there the
         // sets are searches, not intents, and nothing is ever "added".
-        const sets = showActivation ? g.sets.filter((s) => !s.active) : g.sets;
-        if (showActivation && sets.length === 0 && g.typeActive) return null;
+        const sets = g.sets;
         // Browse the TYPE template's own questions when prepared (what Add would
         // capture); fall back to the union of its prepared sets. Matches the
         // badge (counts.perType) — so it spans ALL sets, added ones included.
@@ -394,27 +411,6 @@ function StarterSetTree({
                   </span>
                 </button>
               </div>
-              {showActivation &&
-                (g.typeActive ? (
-                  <span
-                    className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700"
-                    title={`"${g.typeLabel}" is already a live intent — the library keeps the set for later re-use`}
-                  >
-                    <Check className="w-3 h-3" /> Added
-                  </span>
-                ) : activatingCode === `type:${g.typeKey}` ? (
-                  <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
-                    <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
-                  </span>
-                ) : libraryBusy ? null : (
-                  <button
-                    onClick={() => activateType?.(g)}
-                    className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[10px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                    title={`Add "${g.typeLabel}" as ONE intent covering the whole type (subtypes stay in the library)`}
-                  >
-                    <Plus className="w-3 h-3" /> Add Intent
-                  </button>
-                ))}
               {groupIds.length > 0 && (
                 <span className="shrink-0">
                   <Badge n={counts.perType.get(g.typeKey) ?? 0} />
@@ -462,24 +458,6 @@ function StarterSetTree({
                       {/* No "Added" chip here: an added set is filtered out of
                           the tree above, so this row only ever renders for sets
                           that can still be added. */}
-                      {showActivation &&
-                        (activatingCode === s.code ? (
-                          <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
-                            <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
-                          </span>
-                        ) : libraryBusy ? null : (
-                          <button
-                            onClick={() => activateStarterSet?.(s)}
-                            className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[11px] font-medium text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                            title={
-                              s.templateId !== null
-                                ? 'Add as an intent — a copy of the prepared set, instantly. It leaves the starter list.'
-                                : 'Add as an intent and rate the log against it. It leaves the starter list.'
-                            }
-                          >
-                            <Plus className="w-3 h-3" /> Add Intent
-                          </button>
-                        ))}
                       {browsable && (
                         <span className="shrink-0">
                           <Badge n={counts.perSet.get(s.templateId as number) ?? 0} />
@@ -890,6 +868,7 @@ export default function IntentBoard({
   assignmentId,
   rows,
   intents,
+  typeRoots = [],
   basePrompt,
   condition = 'score',
   baseline,
@@ -915,7 +894,12 @@ export default function IntentBoard({
   const intentById = useMemo(() => new Map(intents.map((i) => [i.id, i])), [intents]);
   const titleOf = (id: number) => intentById.get(id)?.title ?? `Intent ${id}`;
 
-  const [selection, setSelection] = useState<IntentSelection>({ kind: 'all' });
+  // SCORE opens on the first type section — there is no global "All" any more,
+  // and a fixed starting point gives every study participant the same first
+  // screen. The baseline keeps All (its left column is searches, not types).
+  const [selection, setSelection] = useState<IntentSelection>(
+    condition === 'baseline' ? { kind: 'all' } : { kind: 'type', typeKey: SCORE_QUERY_TYPES[0] }
+  );
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   // PID ascending by default: the log is a finished class's archive, so
@@ -973,10 +957,51 @@ export default function IntentBoard({
     [baseline]
   );
 
+  /**
+   * Move a set: same parent + different neighbour = reorder, different parent =
+   * carve it into/out of another set. Both are pure routing changes — position
+   * and parent are outside intentDefHash, so nothing is re-rated (§3.4).
+   */
+  const [placementBusy, setPlacementBusy] = useState<number | null>(null);
+  async function moveIntent(
+    intentId: number,
+    where: { parentIntentId?: number | null; beforeIntentId?: number | null }
+  ) {
+    if (placementBusy !== null) return;
+    setPlacementBusy(intentId);
+    try {
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/placement`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(where),
+        }
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        window.alert(typeof d?.message === 'string' ? d.message : 'Could not move that intent.');
+        setPlacementBusy(null);
+        return;
+      }
+      router.refresh();
+    } catch {
+      window.alert('Could not move that intent — network error.');
+      setPlacementBusy(null);
+    }
+  }
+  // Clears when the new order actually lands, not when the POST returns:
+  // router.refresh() is fire-and-forget and the old order is still on screen.
+  useEffect(() => setPlacementBusy(null), [intents]);
+
   const [newIntentOpen, setNewIntentOpen] = useState(false);
   const [newIntentSeed, setNewIntentSeed] = useState<{
     title?: string;
     definition?: string;
+    /** v7 placement — where the new set lands, decided by WHERE creation was
+     * invoked from rather than by a picker (§3.2). */
+    type?: ScoreQueryType;
+    parentIntentId?: number | null;
   } | null>(null);
 
   // BASELINE: the Intents list is replaced by Searches — the pre-built starter
@@ -1104,12 +1129,8 @@ export default function IntentBoard({
   // Open by default: the section costs four Type headings, and seeing that a
   // prepared library exists is the point. The TYPES stay collapsed, so it is
   // still unpacked one at a time (StarterSetTree's `expanded`).
-  const [starterOpen, setStarterOpen] = useState(true);
-  const [activatingCode, setActivatingCode] = useState<string | null>(null);
   /** Definitions added since the last server render — see starterGroups. */
   const [justAddedDefs, setJustAddedDefs] = useState<Set<string>>(() => new Set());
-  const markJustAdded = (definition: string) =>
-    setJustAddedDefs((prev) => new Set(prev).add(definition.trim()));
   // A fresh server render supersedes the optimistic overlay: whatever it says
   // about live intents is now the truth (added, or archived again since).
   useEffect(() => {
@@ -1181,43 +1202,10 @@ export default function IntentBoard({
     return groups;
   }, [jelsonSuggestions, intents, justAddedDefs]);
   // Only what is still addable — the header count must match the rows inside.
-  const starterCount = starterGroups.reduce((n, g) => n + g.sets.filter((s) => !s.active).length, 0);
-  // Unprepared work for "Run all": every set/Type without a template — active
-  // ones included, so a template lost to the legacy consume-on-activate
-  // behavior gets rebuilt (the server reuses same-spec ratings, no LLM cost).
-  const unpreparedCount = starterGroups.reduce(
-    (n, g) =>
-      n +
-      g.sets.filter((s) => s.templateId === null).length +
-      (g.typeTemplateId === null ? 1 : 0),
-    0
-  );
-  // Prepared templates whose ratings went STALE (e.g. the rating prompt
-  // version changed since they ran) or are incomplete — Run all must stay
-  // available to refresh them; the rate pipeline re-does only the stale rows.
-  const staleTemplateCount = useMemo(() => {
-    const ids = new Set<number>();
-    for (const g of starterGroups) {
-      if (g.typeTemplateId !== null) ids.add(g.typeTemplateId);
-      for (const s of g.sets) if (s.templateId !== null) ids.add(s.templateId);
-    }
-    let stale = 0;
-    for (const tid of ids) {
-      for (const r of rows) {
-        const rating = r.intentRatings[tid];
-        if (!rating || rating.stale) {
-          stale += 1;
-          break;
-        }
-      }
-    }
-    return stale;
-  }, [rows, starterGroups]);
-
-  // Question counts behind the starter library: per prepared set = its
-  // clearly-in count (pins override). Per Type = the TYPE template's own count
-  // when prepared (that's exactly what Add would produce); otherwise the union
-  // across its prepared sets — either way the badge matches the browse list.
+  /** Per-set / per-type clearly-in counts for the starter library. SCORE no
+   * longer activates starter sets (v7 creates from the type sections instead),
+   * but the BASELINE condition still browses them as its saved-search presets,
+   * so the counts stay. */
   const starterCounts = useMemo(() => {
     const perSet = new Map<number, number>();
     const perType = new Map<string, number>();
@@ -1242,134 +1230,23 @@ export default function IntentBoard({
     return { perSet, perType };
   }, [rows, starterGroups]);
 
-  // Activate a starter set into a live intent. The template is NEVER consumed —
-  // the library is a permanent catalog.
-  //   • PREPARED (template rated by "Run all") → CLONE it (spec + rating rows
-  //     copied server-side). Instant: no LLM call, edit-ready at once.
-  //   • not prepared → create + rate on the spot (waits for the rating).
-  async function activateStarterSet(set: {
-    code: string;
-    title: string;
-    definition: string;
-    templateId: number | null;
-  }) {
-    if (running || activatingCode) return;
-    setActivatingCode(set.code);
+  /**
+   * Categorize (and rate) whatever is still pending across the whole log. This
+   * is the board's one run control: the type pass rides the same sharded loop
+   * as rating, and a query with no type cannot be routed at all, so this is
+   * what turns a freshly imported log into a browsable one.
+   */
+  async function runPending() {
+    if (running) return;
+    setRunning(true);
     setRunError(null);
-    try {
-      if (set.templateId !== null) {
-        const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/intents`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fromTemplateId: set.templateId, autoTitle: false }),
-        });
-        // 409 = the server's one-live-intent-per-set guard already has it (a
-        // stale tab, a replayed click). Not an error to the instructor: mark it
-        // added so the row leaves the library, exactly as a fresh add would.
-        if (!res.ok && res.status !== 409) {
-          window.alert('Failed to activate the starter set.');
-          return;
-        }
-        markJustAdded(set.definition);
-        router.refresh();
-        return;
-      }
-      // Not prepared → create the intent, then rate the log against just it.
-      const controller = new AbortController();
-      abortRef.current = controller;
-      const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/intents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: set.title, definition: set.definition, autoTitle: false }),
-      });
-      if (!res.ok) {
-        window.alert('Failed to activate the starter set.');
-        return;
-      }
-      const created = (await res.json().catch(() => null)) as { intent?: { id?: number } } | null;
-      const newId = created?.intent?.id;
-      if (!newId) return;
-      markJustAdded(set.definition);
-      setRunning(true);
-      setRunProgress({ rated: 0, total: rows.length, failed: 0 });
-      await runShardedRate({
-        assignmentId,
-        model: selectedModel,
-        intentIds: [newId],
-        estimatedTotal: rows.length,
-        signal: controller.signal,
-        isLive: () => mountedRef.current && !controller.signal.aborted,
-        onProgress: (p) =>
-          setRunProgress({ rated: Math.min(p.rated, rows.length), total: rows.length, failed: p.failed }),
-      });
-    } catch (err) {
-      if ((err as Error)?.name !== 'AbortError' && mountedRef.current) {
-        setRunError((err as Error)?.message || 'Rating was interrupted. Please try again.');
-      }
-    } finally {
-      if (mountedRef.current) {
-        setActivatingCode(null);
-        setRunning(false);
-        router.refresh();
-      }
-    }
-  }
-
-  // Add a Type as ONE intent (not its subtypes): a dedicated self-contained
-  // definition covers the whole Type. Reuses the set-activation path — instant
-  // when the type template was prepared by "Run all", else create + rate.
-  function activateType(g: {
-    typeKey: string;
-    typeSeed: { title: string; definition: string };
-    typeTemplateId: number | null;
-    typeActive: boolean;
-  }) {
-    if (running || preparing || activatingCode || g.typeActive) return;
-    void activateStarterSet({
-      code: `type:${g.typeKey}`,
-      title: g.typeSeed.title,
-      definition: g.typeSeed.definition,
-      templateId: g.typeTemplateId,
-    });
-  }
-
-  // "Run all" — prepare EVERY starter set up front: a template intent per
-  // subtype set AND per whole Type (its one-intent seed), deduped server-side,
-  // then one rate run over all of them — so any later activation is instant.
-  const [preparing, setPreparing] = useState(false);
-  async function runPrepareAll() {
-    if (preparing || running || activatingCode) return;
-    const templates = starterGroups.flatMap((g) => [
-      { title: g.typeSeed.title, definition: g.typeSeed.definition },
-      ...g.sets.map((s) => ({ title: s.title, definition: s.definition })),
-    ]);
-    if (templates.length === 0) return;
-    setPreparing(true);
-    setRunError(null);
+    setRunProgress({ rated: 0, total: rows.length, failed: 0 });
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/templates`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templates }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        window.alert('Failed to prepare the starter sets.');
-        return;
-      }
-      const data = (await res.json().catch(() => null)) as { templates?: { id: number }[] } | null;
-      const ids = (data?.templates ?? []).map((t) => t.id);
-      if (ids.length === 0) {
-        router.refresh();
-        return;
-      }
-      setRunProgress({ rated: 0, total: rows.length, failed: 0 });
       await runShardedRate({
         assignmentId,
-        model: selectedModel,
-        intentIds: ids,
+        model: SCORE_RATING_MODEL,
         estimatedTotal: rows.length,
         signal: controller.signal,
         isLive: () => mountedRef.current && !controller.signal.aborted,
@@ -1378,11 +1255,11 @@ export default function IntentBoard({
       });
     } catch (err) {
       if ((err as Error)?.name !== 'AbortError' && mountedRef.current) {
-        setRunError((err as Error)?.message || 'Preparing was interrupted. Please try again.');
+        setRunError((err as Error)?.message || 'The run was interrupted. Please try again.');
       }
     } finally {
       if (mountedRef.current) {
-        setPreparing(false);
+        setRunning(false);
         setRunProgress(null);
         router.refresh();
       }
@@ -1408,7 +1285,69 @@ export default function IntentBoard({
     [activeIntents]
   );
 
-  /** Pin-overridden ratings for one row — pins fix a JUDGMENT, never the
+  /**
+   * The same tree the chain compiler walks, shaped for rendering: per type, the
+   * top-level sets and each set's children, siblings in evaluation order.
+   * `parentIntentId` may point at a type root (or at nothing), which both mean
+   * "top level of this type" — normalized here exactly as compileChains does.
+   */
+  const tree = useMemo(() => {
+    const rootIdByType = new Map<ScoreQueryType, number>();
+    for (const r of typeRoots) rootIdByType.set(r.type, r.id);
+    const byType = new Map<
+      ScoreQueryType,
+      { topLevel: IntentSummary[]; childrenOf: Map<number, IntentSummary[]> }
+    >();
+    for (const t of SCORE_QUERY_TYPES) {
+      byType.set(t, { topLevel: [], childrenOf: new Map() });
+    }
+    const membersByType = new Map<ScoreQueryType, IntentSummary[]>();
+    for (const i of activeIntents) {
+      if (!i.type) continue;
+      const list = membersByType.get(i.type);
+      if (list) list.push(i);
+      else membersByType.set(i.type, [i]);
+    }
+    const order = (a: IntentSummary, b: IntentSummary) =>
+      (a.position ?? a.id) - (b.position ?? b.id) || a.id - b.id;
+    for (const [type, members] of membersByType) {
+      const ids = new Set(members.map((m) => m.id));
+      const rootId = rootIdByType.get(type) ?? null;
+      const entry = byType.get(type)!;
+      for (const m of members) {
+        const parent = m.parentIntentId;
+        if (parent === null || parent === rootId || !ids.has(parent)) entry.topLevel.push(m);
+        else {
+          const list = entry.childrenOf.get(parent);
+          if (list) list.push(m);
+          else entry.childrenOf.set(parent, [m]);
+        }
+      }
+      entry.topLevel.sort(order);
+      for (const list of entry.childrenOf.values()) list.sort(order);
+    }
+    return { byType, rootIdByType };
+  }, [activeIntents, typeRoots]);
+
+  /** Every id in a set's subtree, itself included — what selecting it browses. */
+  const subtreeIds = useMemo(() => {
+    const map = new Map<number, number[]>();
+    const childrenOf = new Map<number, IntentSummary[]>();
+    for (const entry of tree.byType.values()) {
+      for (const [pid, list] of entry.childrenOf) childrenOf.set(pid, list);
+    }
+    const walk = (id: number, seen: Set<number>): number[] => {
+      if (seen.has(id)) return [];
+      seen.add(id);
+      const out = [id];
+      for (const c of childrenOf.get(id) ?? []) out.push(...walk(c.id, seen));
+      return out;
+    };
+    for (const i of activeIntents) map.set(i.id, walk(i.id, new Set()));
+    return map;
+  }, [tree, activeIntents]);
+
+    /** Pin-overridden ratings for one row — pins fix a JUDGMENT, never the
    * routing order (§3.6). Stale ratings still count, for display continuity. */
   const effectiveRatings = (r: ScoreQueryRow): Map<number, RatingLevel> => {
     const ratings = new Map<number, RatingLevel>();
@@ -1454,6 +1393,17 @@ export default function IntentBoard({
     return { perIntent, residueByType, unassigned, pending };
   }, [rows, resolutions]);
 
+  /** A set's badge: everything its subtree answers (its own residue + every
+   * subset's), so a parent's number always equals its children plus its own
+   * "Uncategorized" leaf. */
+  const subtreeCount = (intentId: number): number =>
+    (subtreeIds.get(intentId) ?? [intentId]).reduce(
+      (n, id) => n + (counts.perIntent.get(id) ?? 0),
+      0
+    );
+  /** Queries with no type judgment yet — they cannot be routed at all. */
+  const untypedCount = useMemo(() => rows.filter((r) => !r.queryType).length, [rows]);
+
   // ---- Middle column ------------------------------------------------------
   // Selection can outlive its target (intent archived, boundary resolved,
   // pending bucket drained after a rate run) — fall back to "All" instead of
@@ -1461,12 +1411,21 @@ export default function IntentBoard({
   useEffect(() => {
     const gone =
       (selection.kind === 'intent' && !activeIntents.some((i) => i.id === selection.id)) ||
-      (selection.kind === 'pending' && counts.pending === 0) ||
+      // A scope's bucket dies with the scope (archived set, or a type root that
+      // is not loaded — the baseline never has them).
+      (selection.kind === 'residue' &&
+        !typeRoots.some((t) => t.id === selection.scopeId) &&
+        !activeIntents.some((i) => i.id === selection.scopeId)) ||
+      (selection.kind === 'pending' && untypedCount === 0) ||
       // A browsed template can leave the library (activated → live intent).
       (selection.kind === 'starter' &&
         !selection.ids.some((tid) => intentById.get(tid)?.isTemplate));
-    if (gone) setSelection({ kind: 'all' });
-  }, [selection, activeIntents, counts, intentById]);
+    if (gone) {
+      setSelection(
+        isBaseline ? { kind: 'all' } : { kind: 'type', typeKey: SCORE_QUERY_TYPES[0] }
+      );
+    }
+  }, [selection, activeIntents, untypedCount, intentById, typeRoots, isBaseline]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
@@ -1475,10 +1434,21 @@ export default function IntentBoard({
       switch (selection.kind) {
         case 'all':
           return true;
-        case 'intent':
-          return res.kind === 'matched' && res.intentId === selection.id;
-        case 'unassigned':
-          return res.kind === 'type_default';
+        case 'intent': {
+          // A set browses its whole subtree: its own questions plus everything
+          // its subsets took first.
+          const ids = subtreeIds.get(selection.id) ?? [selection.id];
+          return res.kind === 'matched' && ids.includes(res.intentId);
+        }
+        case 'type':
+          return r.queryType === selection.typeKey;
+        case 'residue': {
+          // A type root's residue is what its chain left unclaimed; an intent's
+          // is what it answers itself (its subsets are evaluated first).
+          const root = typeRoots.find((t) => t.id === selection.scopeId);
+          if (root) return res.kind === 'type_default' && r.queryType === root.type;
+          return res.kind === 'matched' && res.intentId === selection.scopeId;
+        }
         case 'pending':
           return res.kind === 'pending';
         case 'starter':
@@ -1493,7 +1463,7 @@ export default function IntentBoard({
           return selection.ids.includes(r.messageId);
       }
     });
-  }, [rows, resolutions, selection]);
+  }, [rows, resolutions, selection, subtreeIds, typeRoots]);
 
   const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1588,11 +1558,6 @@ export default function IntentBoard({
   const [running, setRunning] = useState(false);
   const [runProgress, setRunProgress] = useState<{ rated: number; total: number; failed: number } | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  // Any library-wide operation in flight. While true the hover Add buttons are
-  // NOT RENDERED (merely disabling them would defeat their opacity-0 hover
-  // reveal — disabled:opacity-50 wins and every row's button pops in at once);
-  // only the row being activated shows its own progress chip.
-  const libraryBusy = preparing || running || activatingCode !== null;
   const mountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -1609,10 +1574,16 @@ export default function IntentBoard({
         return 'All questions';
       case 'intent':
         return titleOf(selection.id);
-      case 'unassigned':
-        return 'Uncategorized questions';
+      case 'type':
+        return `${QUERY_TYPE_LABELS[selection.typeKey]} questions`;
+      case 'residue': {
+        const root = typeRoots.find((t) => t.id === selection.scopeId);
+        return root
+          ? `${QUERY_TYPE_LABELS[root.type]} · Uncategorized`
+          : `${titleOf(selection.scopeId)} · Uncategorized`;
+      }
       case 'pending':
-        return 'Not yet rated';
+        return 'Not yet categorized';
       case 'starter':
         return `Starter set · ${selection.label}`;
       case 'search':
@@ -1621,6 +1592,210 @@ export default function IntentBoard({
   })();
 
   // Viewing a past deploy → the read-only version board replaces everything.
+  /**
+   * Which sets are shadowed: an EARLIER node in the same chain also matches
+   * some of their questions and takes them first. With first-match routing a
+   * collision no longer announces itself — this is what replaces the v6 overlap
+   * queue (§3.7). Computed from the same effective ratings the router uses.
+   */
+  const shadowedBy = useMemo(() => {
+    const map = new Map<number, { intentId: number; count: number }>();
+    for (const r of rows) {
+      if (!r.queryType) continue;
+      const chain = chains.get(r.queryType);
+      if (!chain) continue;
+      const eff = effectiveRatings(r);
+      // The winner takes it; every LATER node that also matches is shadowed.
+      let winner: number | null = null;
+      for (const id of chain.order) {
+        if (!isIncludedRating(eff.get(id))) continue;
+        if (winner === null) {
+          winner = id;
+          continue;
+        }
+        const prev = map.get(id);
+        if (prev && prev.intentId === winner) prev.count += 1;
+        else if (!prev) map.set(id, { intentId: winner, count: 1 });
+        else prev.count += 1; // several interceptors — keep the first seen
+      }
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, chains]);
+
+  /** One set in the left column's tree, then its subsets under it. */
+  function renderTreeNode(
+    intent: IntentSummary,
+    type: ScoreQueryType,
+    entry: { topLevel: IntentSummary[]; childrenOf: Map<number, IntentSummary[]> },
+    depth: number
+  ): React.ReactNode {
+    const children = entry.childrenOf.get(intent.id) ?? [];
+    const siblings = depth === 0 ? entry.topLevel : entry.childrenOf.get(intent.parentIntentId ?? -1) ?? [];
+    const idx = siblings.findIndex((sib) => sib.id === intent.id);
+    const active = selection.kind === 'intent' && selection.id === intent.id;
+    const shadow = shadowedBy.get(intent.id);
+    const own = counts.perIntent.get(intent.id) ?? 0;
+    return (
+      <div key={intent.id}>
+        <div
+          className={`group flex items-center gap-1 pr-2 py-1 cursor-pointer ${
+            active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
+          }`}
+          style={{ paddingLeft: `${20 + depth * 12}px` }}
+          onClick={() => setSelection({ kind: 'intent', id: intent.id })}
+        >
+          <HoverReveal
+            content={
+              <div className="space-y-1.5 text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
+                <p>
+                  <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                    When
+                  </span>{' '}
+                  {intent.definition}
+                </p>
+                {intent.pinCount > 0 && (
+                  <p className="text-[hsl(var(--muted-foreground))]">
+                    Boundary labels:{' '}
+                    <span className="text-emerald-700">included {intent.includedCount}</span>
+                    {' · '}
+                    <span className="text-rose-700">excluded {intent.excludedCount}</span>
+                  </p>
+                )}
+                <p className="whitespace-pre-wrap">
+                  <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                    Then
+                  </span>{' '}
+                  {intent.rule ?? <span className="italic">No rule yet</span>}
+                </p>
+              </div>
+            }
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-sm truncate">{intent.title}</span>
+              {shadow && (
+                <SmallChip
+                  className="bg-amber-50 text-amber-700 border-amber-200 shrink-0"
+                  title={`“${titleOf(shadow.intentId)}” comes earlier in ${QUERY_TYPE_LABELS[type]} and answers ${shadow.count} question${shadow.count === 1 ? '' : 's'} this set also matches. Narrow it, move this set above it, or nest this set inside it.`}
+                >
+                  <AlertTriangle className="w-3 h-3" /> {shadow.count}
+                </SmallChip>
+              )}
+            </div>
+          </HoverReveal>
+          <div className="ml-auto flex items-center gap-0.5 shrink-0">
+            {/* Order is routing: the set above answers first. Shown, never
+                hidden (§3.7) — but only on the row you are working with. */}
+            {siblings.length > 1 && (
+              <span className="hidden group-hover:flex items-center">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void moveIntent(intent.id, { beforeIntentId: siblings[idx - 1]?.id ?? null });
+                  }}
+                  disabled={idx <= 0 || placementBusy !== null}
+                  className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
+                  title="Answer earlier than the set above"
+                >
+                  <ChevronUp className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void moveIntent(intent.id, { beforeIntentId: siblings[idx + 2]?.id ?? null });
+                  }}
+                  disabled={idx < 0 || idx >= siblings.length - 1 || placementBusy !== null}
+                  className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
+                  title="Answer later than the set below"
+                >
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+              </span>
+            )}
+            <Badge n={subtreeCount(intent.id)} />
+          </div>
+        </div>
+
+        {children.map((child) => renderTreeNode(child, type, entry, depth + 1))}
+
+        {/* A set's own bucket: what IT answers, once subsets take their share. */}
+        {children.length > 0 && (
+          <button
+            onClick={() => setSelection({ kind: 'residue', scopeId: intent.id })}
+            className={`w-full text-left pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
+              selection.kind === 'residue' && selection.scopeId === intent.id
+                ? 'bg-[hsl(var(--muted))] font-medium'
+                : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
+            }`}
+            style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
+            title={`Questions “${intent.title}” answers itself — its subsets take the rest.`}
+          >
+            <span className="truncate italic">Uncategorized</span>
+            <Badge n={own} />
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  /**
+   * Where a new set would land, read off the CURRENT selection. Creating from a
+   * type section (or its Uncategorized bucket) makes a top-level set of that
+   * type; creating while a set is selected carves a subset out of it. There is
+   * no placement picker — the scope you are looking at is the answer.
+   */
+  const newIntentScope = useMemo((): {
+    type: ScoreQueryType;
+    parentIntentId: number | null;
+    label: string;
+    suffix: string;
+  } | null => {
+    if (isBaseline) return null;
+    const forScope = (scope: IntentSummary) =>
+      scope.type
+        ? {
+            type: scope.type,
+            parentIntentId: scope.id,
+            label: `Create a subset of “${scope.title}”`,
+            suffix: `in “${scope.title}”`,
+          }
+        : null;
+    if (selection.kind === 'type') {
+      return {
+        type: selection.typeKey,
+        parentIntentId: null,
+        label: `Create a set inside ${QUERY_TYPE_LABELS[selection.typeKey]}`,
+        suffix: '',
+      };
+    }
+    if (selection.kind === 'residue') {
+      const root = typeRoots.find((t) => t.id === selection.scopeId);
+      if (root) {
+        return {
+          type: root.type,
+          parentIntentId: null,
+          label: `Create a set for the questions ${QUERY_TYPE_LABELS[root.type]} does not cover yet`,
+          suffix: '',
+        };
+      }
+      const scope = intentById.get(selection.scopeId);
+      return scope ? forScope(scope) : null;
+    }
+    if (selection.kind === 'intent') {
+      const scope = intentById.get(selection.id);
+      return scope ? forScope(scope) : null;
+    }
+    return null;
+  }, [selection, isBaseline, typeRoots, intentById]);
+
+  function openNewIntent(
+    scope: { type: ScoreQueryType; parentIntentId: number | null },
+    seed?: { title?: string; definition?: string }
+  ) {
+    setNewIntentSeed({ ...seed, type: scope.type, parentIntentId: scope.parentIntentId });
+    setNewIntentOpen(true);
+  }
+
   if (deployView) {
     return <DeployVersionBoard rows={rows} deployView={deployView} />;
   }
@@ -1801,45 +1976,35 @@ export default function IntentBoard({
             </div>
           ) : null}
 
-          {/* INTENTS (score) / SEARCHES (baseline) + the whole-log filters.
-              Sticky: in the baseline the panel is a flex column and this block
-              is shrink-0, and in SCORE the panel scrolls as one — so All /
-              Uncategorized would otherwise scroll away behind a long intent list. */}
-          <div className="shrink-0 sticky top-0 z-10 bg-[hsl(var(--card))]">
-            <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                {isBaseline ? 'Searches' : 'Intents'}
-              </span>
-              <button
-                onClick={() => (isBaseline ? setSearchMode({ kind: 'new' }) : setNewIntentOpen(true))}
-                className="inline-flex items-center gap-1 shrink-0 text-xs px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                title={isBaseline ? 'Create a new search' : 'Create a new intent'}
-              >
-                <Plus className="w-3 h-3" /> New
-              </button>
-            </div>
-            {/* The two views of the WHOLE log, as one either/or control. The
-                baseline has no intents, so it gets All alone (a full-width
-                "clear the search filter" button). */}
-            <div className="mx-3 mb-2 flex items-stretch gap-1 rounded-md bg-[hsl(var(--muted))] p-0.5">
-              <FilterSegment
-                label="All"
-                count={rows.length}
-                active={selection.kind === 'all'}
-                onClick={() => setSelection({ kind: 'all' })}
-                title="Every logged question"
-              />
-              {!isBaseline && (
+          {/* SEARCHES (baseline only) + its whole-log filter. SCORE's left
+              column is the type sections below: there is no global "All" and no
+              global Uncategorized any more — every query belongs to exactly one
+              type, and each type owns its own unclaimed bucket. */}
+          {isBaseline && (
+            <div className="shrink-0 sticky top-0 z-10 bg-[hsl(var(--card))]">
+              <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  Searches
+                </span>
+                <button
+                  onClick={() => setSearchMode({ kind: 'new' })}
+                  className="inline-flex items-center gap-1 shrink-0 text-xs px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+                  title="Create a new search"
+                >
+                  <Plus className="w-3 h-3" /> New
+                </button>
+              </div>
+              <div className="mx-3 mb-2 flex items-stretch gap-1 rounded-md bg-[hsl(var(--muted))] p-0.5">
                 <FilterSegment
-                  label="Uncategorized"
-                  count={counts.unassigned}
-                  active={selection.kind === 'unassigned'}
-                  onClick={() => setSelection({ kind: 'unassigned' })}
-                  title="No intent captures these yet — no intent rule is applied."
+                  label="All"
+                  count={rows.length}
+                  active={selection.kind === 'all'}
+                  onClick={() => setSelection({ kind: 'all' })}
+                  title="Every logged question"
                 />
-              )}
+              </div>
             </div>
-          </div>
+          )}
 
           {isBaseline && (
             /* SEARCHES: the user's saved custom searches, then the pre-built
@@ -1885,77 +2050,110 @@ export default function IntentBoard({
                   counts={starterCounts}
                   selection={selection}
                   setSelection={setSelection}
-                  showActivation={false}
                 />
               )}
             </div>
           )}
-          {isBaseline ? null : activeIntents.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-[hsl(var(--muted-foreground))] space-y-2">
-              <p>
-                No intents yet. Create your first one — describe when a student is making a particular kind
-                of request, and Apply to rate the log against it.
-              </p>
-              <button
-                onClick={() => setNewIntentOpen(true)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
-              >
-                <Plus className="w-3 h-3" /> New Intent
-              </button>
-            </div>
-          ) : (
+          {/* TYPE SECTIONS (score) — the four fixed query types, each a set
+              whose own rule answers whatever its subsets leave unclaimed. The
+              tree under a section IS the evaluation order: subsets are checked
+              before the set they were carved from, siblings top to bottom. */}
+          {!isBaseline && (
             <div className="pb-1">
-              {activeIntents.map((intent) => {
-                const active = selection.kind === 'intent' && selection.id === intent.id;
-                return (
-                  <div
-                    key={intent.id}
-                    className={`group border-b border-[hsl(var(--border))]/60 px-3 py-2 cursor-pointer ${
-                      active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
-                    }`}
-                    onClick={() => setSelection({ kind: 'intent', id: intent.id })}
+              {untypedCount > 0 && (
+                <div
+                  className={`flex items-center gap-1 border-b border-[hsl(var(--border))] text-xs ${
+                    selection.kind === 'pending' ? 'bg-amber-100' : 'bg-amber-50/70'
+                  }`}
+                >
+                  <button
+                    onClick={() => setSelection({ kind: 'pending' })}
+                    className="flex-1 min-w-0 text-left pl-3 py-1.5 flex items-center justify-between gap-2 text-amber-800 hover:text-amber-900"
+                    title="These questions have no query type yet, so no rule can be chosen for them."
                   >
-                    {/* Navigation only: the title and how many questions it
-                        holds. The definition, the rule and their edit actions
-                        moved to the middle column's header, where the SELECTED
-                        intent gets full width and real buttons instead of two
-                        truncated version labels repeated down the whole list.
-                        Hover still reveals both texts, so intents can be
-                        compared without changing the selection. */}
-                    <HoverReveal
-                      content={
-                        <div className="space-y-1.5 text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
-                          <p>
-                            <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                              When
-                            </span>{' '}
-                            {intent.definition}
-                          </p>
-                          {intent.pinCount > 0 && (
-                            <p className="text-[hsl(var(--muted-foreground))]">
-                              Boundary labels:{' '}
-                              <span className="text-emerald-700">included {intent.includedCount}</span>
-                              {' · '}
-                              <span className="text-rose-700">excluded {intent.excludedCount}</span>
-                            </p>
-                          )}
-                          <p className="whitespace-pre-wrap">
-                            <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                              Then
-                            </span>{' '}
-                            {intent.rule ?? <span className="italic">No rule yet</span>}
-                          </p>
-                        </div>
-                      }
+                    <span className="truncate">Not yet categorized</span>
+                    <Badge n={untypedCount} />
+                  </button>
+                  <button
+                    onClick={() => void runPending()}
+                    disabled={running || !openaiConfigured}
+                    className="shrink-0 inline-flex items-center gap-1 px-2 py-1.5 text-amber-800 hover:text-amber-900 disabled:opacity-50"
+                    title={
+                      openaiConfigured
+                        ? 'Categorize these questions (and rate anything else pending)'
+                        : 'OPENAI_API_KEY is not configured'
+                    }
+                  >
+                    {running ? <RefreshCw className="w-3 h-3 animate-spin" /> : null} Run
+                  </button>
+                </div>
+              )}
+              {typeRoots.map((root) => {
+                const entry = tree.byType.get(root.type)!;
+                const residue = counts.residueByType.get(root.type) ?? 0;
+                const total =
+                  residue + entry.topLevel.reduce((n, i) => n + subtreeCount(i.id), 0);
+                const typeActive = selection.kind === 'type' && selection.typeKey === root.type;
+                return (
+                  <div key={root.id} className="border-b border-[hsl(var(--border))]">
+                    {/* Section header = the type root. Clicking browses every
+                        query of the type; Edit rule opens the rule this type
+                        answers with when nothing else claims a question. */}
+                    <div
+                      className={`group flex items-center gap-1.5 px-3 py-1.5 cursor-pointer ${
+                        typeActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
+                      }`}
+                      onClick={() => setSelection({ kind: 'type', typeKey: root.type })}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium truncate">{intent.title}</span>
-                        <Badge n={counts.perIntent.get(intent.id) ?? 0} />
-                      </div>
-                    </HoverReveal>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TYPE_SECTION_DOT[root.type]}`} />
+                      <span className="text-xs font-semibold uppercase tracking-wide truncate flex-1">
+                        {QUERY_TYPE_LABELS[root.type]}
+                      </span>
+                      <Badge n={total} />
+                    </div>
+
+                    <div className="pb-1">
+                      {entry.topLevel.map((intent) => renderTreeNode(intent, root.type, entry, 0))}
+
+                      {/* The type's own bucket — only worth a row once a subset
+                          exists to take questions away from it. With no intents
+                          the section header already means the same thing. */}
+                      {entry.topLevel.length > 0 && (
+                        <button
+                          onClick={() => setSelection({ kind: 'residue', scopeId: root.id })}
+                          className={`w-full text-left pl-5 pr-3 py-1 text-xs flex items-center justify-between gap-2 ${
+                            selection.kind === 'residue' && selection.scopeId === root.id
+                              ? 'bg-[hsl(var(--muted))] font-medium'
+                              : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
+                          }`}
+                          title={`Questions no intent in ${QUERY_TYPE_LABELS[root.type]} claims — answered by the type's own rule.`}
+                        >
+                          <span className="truncate italic">Uncategorized</span>
+                          <Badge n={residue} />
+                        </button>
+                      )}
+
+                      {/* Creating from inside a section is what places the new
+                          set: no picker, the scope you are looking at IS the
+                          parent (§3.2). */}
+                      {newIntentScope?.type === root.type && (
+                        <button
+                          onClick={() => openNewIntent(newIntentScope)}
+                          className="mt-0.5 ml-5 mb-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+                          title={newIntentScope.label}
+                        >
+                          <Plus className="w-3 h-3" /> New intent {newIntentScope.suffix}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
+              {typeRoots.length === 0 && (
+                <p className="px-3 py-3 text-xs text-[hsl(var(--muted-foreground))]">
+                  Preparing the query types…
+                </p>
+              )}
             </div>
           )}
 
@@ -2016,100 +2214,6 @@ export default function IntentBoard({
             </div>
           )}
 
-          {/* PENDING + STARTER SETS — intent-only. Baseline shows its own
-              Searches section (above) instead of this whole block. Uncategorized
-              lives in the sticky filter control at the top of the column now:
-              it is a view of the whole log, not a library/management row like
-              Archived and Starter sets. */}
-          {!isBaseline && (
-          <div className="mt-auto border-t border-[hsl(var(--border))]">
-            {counts.pending > 0 && (
-              <button
-                onClick={() => setSelection({ kind: 'pending' })}
-                className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between ${
-                  selection.kind === 'pending' ? 'bg-[hsl(var(--muted))] font-medium' : 'hover:bg-[hsl(var(--muted))]/50'
-                }`}
-                title="Questions not yet rated against every active intent"
-              >
-                <span className="text-[hsl(var(--muted-foreground))]">Not yet rated</span>
-                <Badge n={counts.pending} />
-              </button>
-            )}
-            {/* STARTER SETS — pre-built intent templates (the Jelson taxonomy),
-                grouped by Type. "Run all" pre-rates every set so activation is
-                instant; the hover Add turns one into a live intent. */}
-            {starterCount > 0 && (
-              <div className="border-t border-[hsl(var(--border))]">
-                <div
-                  className={`flex items-center ${
-                    starterOpen ? 'bg-[hsl(var(--muted))]/40' : 'hover:bg-[hsl(var(--muted))]/50'
-                  }`}
-                >
-                  <button
-                    onClick={() => setStarterOpen((o) => !o)}
-                    className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]"
-                  >
-                    <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${starterOpen ? 'rotate-90' : ''}`} />
-                    <Sparkles className="w-3.5 h-3.5 shrink-0" /> Starter sets ({starterCount})
-                  </button>
-                  {preparing && runProgress ? (
-                    // Run all in progress → the button slot becomes its bar.
-                    <div className="shrink-0 flex items-center gap-1.5 pr-3 py-1.5 text-[10px] text-[hsl(var(--muted-foreground))]">
-                      <RefreshCw className="w-3 h-3 animate-spin" />
-                      <div className="w-16 h-1.5 rounded bg-[hsl(var(--muted))] overflow-hidden">
-                        <div
-                          className="h-full bg-[hsl(var(--primary))] transition-all"
-                          style={{
-                            width: `${runProgress.total ? Math.round((runProgress.rated / runProgress.total) * 100) : 0}%`,
-                          }}
-                        />
-                      </div>
-                      <span className="tabular-nums">
-                        {runProgress.rated}/{runProgress.total}
-                      </span>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={runPrepareAll}
-                      disabled={
-                        preparing ||
-                        running ||
-                        activatingCode !== null ||
-                        !openaiConfigured ||
-                        (unpreparedCount === 0 && staleTemplateCount === 0)
-                      }
-                      className="shrink-0 inline-flex items-center gap-1 px-2 pr-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
-                      title={
-                        !openaiConfigured
-                          ? 'OPENAI_API_KEY is not configured'
-                          : unpreparedCount === 0 && staleTemplateCount === 0
-                            ? 'Every starter set is prepared and up to date'
-                            : unpreparedCount === 0
-                              ? `Run all — ${staleTemplateCount} set(s) carry stale ratings (the matching method changed); refresh them`
-                              : 'Run all — pre-rate every starter set so activating is instant'
-                      }
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" /> Run all
-                    </button>
-                  )}
-                </div>
-                {starterOpen && (
-                  <StarterSetTree
-                    groups={starterGroups}
-                    counts={starterCounts}
-                    selection={selection}
-                    setSelection={setSelection}
-                    showActivation
-                    activatingCode={activatingCode}
-                    libraryBusy={libraryBusy}
-                    activateType={activateType}
-                    activateStarterSet={activateStarterSet}
-                  />
-                )}
-              </div>
-            )}
-          </div>
-          )}
         </div>
 
         {/* MIDDLE — question group */}
@@ -2192,49 +2296,6 @@ export default function IntentBoard({
                     >
                       Edit Rule
                     </HeaderAction>
-                  </div>
-                </div>
-              );
-            }
-            if (selection.kind === 'starter' && !isBaseline) {
-              // The browsed starter, found back from the selection key so the
-              // header offers the SAME activation the library tree does.
-              const isType = selection.key.startsWith('type:');
-              const g = isType
-                ? starterGroups.find((x) => `type:${x.typeKey}` === selection.key)
-                : starterGroups.find((x) => x.sets.some((s) => `set:${s.code}` === selection.key));
-              if (!g) return null;
-              const set = isType ? null : g.sets.find((s) => `set:${s.code}` === selection.key) ?? null;
-              const added = isType ? g.typeActive : set?.active ?? false;
-              const desc = isType ? g.typeDescription : set?.desc ?? '';
-              const adding = activatingCode === (isType ? `type:${g.typeKey}` : set?.code);
-              return (
-                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
-                  <div className="flex items-start gap-2">
-                    <DetailLabel>Set</DetailLabel>
-                    <ClampedText text={desc} muted />
-                    {added ? (
-                      <span className="shrink-0 self-start inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
-                        <Check className="w-3 h-3" /> Added
-                      </span>
-                    ) : adding ? (
-                      <span className="shrink-0 self-start inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-1 text-[11px] font-medium text-[hsl(var(--muted-foreground))]">
-                        <RefreshCw className="w-3 h-3 animate-spin" /> Adding…
-                      </span>
-                    ) : (
-                      <HeaderAction
-                        onClick={() =>
-                          isType
-                            ? activateType(g)
-                            : set && void activateStarterSet(set)
-                        }
-                        disabled={running || preparing || !!activatingCode}
-                        title="Add as an intent — it leaves the starter list"
-                        icon={<Plus className="w-3 h-3" />}
-                      >
-                        Add Intent
-                      </HeaderAction>
-                    )}
                   </div>
                 </div>
               );

@@ -33,6 +33,7 @@ import DeployControls from './DeployControls';
 import BaselineDeployButton from './BaselineDeployButton';
 import {
   DISSECTION_VERSION,
+  SCORE_QUERY_TYPES,
   TYPE_CLASSIFIER_VERSION,
   isRatingLevel,
   isScoreQueryType,
@@ -40,7 +41,11 @@ import {
   type RatingLevel,
   type ScoreQueryType,
 } from '@/lib/score/intents';
-import IntentBoard, { type IntentSummary, type ScoreQueryRow } from './IntentBoard';
+import IntentBoard, {
+  type IntentSummary,
+  type ScoreQueryRow,
+  type TypeRootSummary,
+} from './IntentBoard';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
@@ -347,6 +352,21 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     };
   });
 
+  // v7: the 4 type roots. They are score_intents rows but NOT board intents —
+  // each is a section header whose rule answers the queries its chain leaves
+  // unclaimed. Kept in their own payload so every `intents` consumer stays a
+  // list of real intents.
+  const typeRoots: TypeRootSummary[] = intentState.intents
+    .filter((i) => i.kind === 'type_root' && isScoreQueryType(i.type))
+    .map((i) => ({
+      id: i.id,
+      type: i.type as ScoreQueryType,
+      title: i.title,
+      rule: i.rule,
+      latestRuleVersion: latestRuleByIntent.get(i.id) ?? null,
+    }))
+    .sort((a, b) => SCORE_QUERY_TYPES.indexOf(a.type) - SCORE_QUERY_TYPES.indexOf(b.type));
+
   return (
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
       <header className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
@@ -386,6 +406,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
           assignmentId={id}
           rows={rows}
           intents={intents}
+          typeRoots={typeRoots}
           basePrompt={assignmentBasePrompt(assignment)}
           condition={studioView}
           baseline={
