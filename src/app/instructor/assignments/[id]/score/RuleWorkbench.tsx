@@ -153,6 +153,91 @@ function versionLabel(v: RuleVersion): string {
   return v.minor ? `v${v.major}.${v.minorNo}` : `v${v.major}`;
 }
 
+/**
+ * Wraps the response pane and owns the span-quote affordance.
+ *
+ * ISOLATED ON PURPOSE — this is what makes the selection survive. The button's
+ * state lives HERE, so showing it re-renders only this layer; `children` keeps
+ * the element reference the workbench last handed down, and React bails out of
+ * re-rendering that subtree entirely. Holding the state in the workbench
+ * instead re-rendered ChatMessages, whose ReactMarkdown `components` are
+ * defined inline (new function identities every render), so the markdown
+ * subtree remounted and its DOM — with the browser's selection on it — was
+ * replaced. The highlight vanished at the very moment the button appeared,
+ * leaving nothing to check the quote against.
+ */
+function QuoteSelectionLayer({
+  disabled,
+  onQuote,
+  children,
+}: {
+  disabled: boolean;
+  onQuote: (text: string) => void;
+  children: React.ReactNode;
+}) {
+  const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null);
+
+  // The button lives exactly as long as its selection: collapsing it anywhere
+  // (click, Esc, a new drag elsewhere) dismisses the button too.
+  useEffect(() => {
+    function onSelectionChange() {
+      const s = window.getSelection();
+      if (!s || s.isCollapsed) setSel(null);
+    }
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
+  function handleMouseUp() {
+    if (disabled) {
+      setSel(null);
+      return;
+    }
+    const s = window.getSelection();
+    const text = s?.toString().replace(/\s+/g, ' ').trim() ?? '';
+    if (!s || s.isCollapsed || text.length < 3) {
+      setSel(null);
+      return;
+    }
+    const rect = s.getRangeAt(0).getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      setSel(null);
+      return;
+    }
+    setSel({
+      text,
+      x: Math.min(Math.max(8, rect.left), window.innerWidth - 190),
+      y: Math.max(8, rect.top - 34),
+    });
+  }
+
+  return (
+    <div
+      className="flex-1 min-h-0 overflow-y-auto"
+      // Scrolling would strand the fixed-position button, so it dismisses.
+      onMouseUp={handleMouseUp}
+      onScroll={() => setSel(null)}
+    >
+      {children}
+      {/* onMouseDown preventDefault keeps the selection alive through the click. */}
+      {sel && !disabled && (
+        <button
+          style={{ position: 'fixed', top: sel.y, left: sel.x }}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            onQuote(sel.text);
+            setSel(null);
+          }}
+          title="Insert this part of the response into the feedback box"
+          className="z-[70] inline-flex items-center gap-1 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-xs font-medium text-[hsl(var(--foreground))] shadow-md hover:bg-[hsl(var(--muted))]"
+        >
+          <Quote className="w-3 h-3 text-[hsl(var(--primary))]" /> Quote in feedback
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** The rule an agent card carries: the DIFF against the step it revised (what
  * changed is the point — full text a toggle away). */
 function ChatRuleBlock({ rule, baseRule }: { rule: string | null; baseRule: string | null }) {
@@ -287,10 +372,8 @@ export default function RuleWorkbench({
     selected: Set<string>;
     custom: string;
   } | null>(null);
-  // Span-quote: select part of the response → a floating button inserts the
-  // span into the feedback box, so the agent knows exactly WHERE the response
-  // went wrong instead of guessing from a whole-response critique.
-  const [quoteSel, setQuoteSel] = useState<{ text: string; x: number; y: number } | null>(null);
+  // Span-quote target: the feedback box a quoted span lands in (the button and
+  // its selection state live in QuoteSelectionLayer, deliberately isolated).
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
   // A simulation (preview + minor record) is in flight.
   const [simulating, setSimulating] = useState(false);
@@ -377,49 +460,12 @@ export default function RuleWorkbench({
     if (!rewriteOpen) setRewriteStep(null);
   }, [rewriteOpen]);
 
-  // The quote button lives exactly as long as its selection: collapsing the
-  // selection anywhere (click, Esc, new selection elsewhere) dismisses it.
-  useEffect(() => {
-    function onSelectionChange() {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) setQuoteSel(null);
-    }
-    document.addEventListener('selectionchange', onSelectionChange);
-    return () => document.removeEventListener('selectionchange', onSelectionChange);
-  }, []);
-
-  /** Mouseup in the response pane: a real text selection there surfaces the
-   * floating "Quote in feedback" button just above it. */
-  function handleResponseMouseUp() {
-    if (readOnly || rewriteOpen) {
-      setQuoteSel(null);
-      return;
-    }
-    const sel = window.getSelection();
-    const text = sel?.toString().replace(/\s+/g, ' ').trim() ?? '';
-    if (!sel || sel.isCollapsed || text.length < 3) {
-      setQuoteSel(null);
-      return;
-    }
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) {
-      setQuoteSel(null);
-      return;
-    }
-    setQuoteSel({
-      text,
-      x: Math.min(Math.max(8, rect.left), window.innerWidth - 190),
-      y: Math.max(8, rect.top - 34),
-    });
-  }
-
   /** Insert the selected span into the feedback box as a quote (editable like
    * any typed text — propose reads it as part of the feedback). */
   function quoteIntoFeedback(text: string) {
     const capped = text.length > 600 ? `${text.slice(0, 600)}…` : text;
     const quoted = `Regarding this part: "${capped}"`;
     setFeedback((prev) => (prev.trim() ? `${prev.trimEnd()}\n${quoted}\n` : `${quoted}\n`));
-    setQuoteSel(null);
     window.getSelection()?.removeAllRanges();
     feedbackRef.current?.focus();
   }
@@ -1387,13 +1433,9 @@ export default function RuleWorkbench({
                     : []),
                 ];
                 return (
-                  <div
-                    className="flex-1 min-h-0 overflow-y-auto"
-                    // Selecting response text surfaces "Quote in feedback";
-                    // scrolling would strand the fixed-position button, so it
-                    // dismisses instead.
-                    onMouseUp={handleResponseMouseUp}
-                    onScroll={() => setQuoteSel(null)}
+                  <QuoteSelectionLayer
+                    disabled={readOnly || rewriteOpen}
+                    onQuote={quoteIntoFeedback}
                   >
                     <ChatMessages
                       messages={messages}
@@ -1556,7 +1598,7 @@ export default function RuleWorkbench({
                         </p>
                       ) : null}
                     </div>
-                  </div>
+                  </QuoteSelectionLayer>
                 );
               })()}
 
@@ -1760,20 +1802,6 @@ export default function RuleWorkbench({
           onAdd={(ids) => void addExamples(ids)}
           onClose={() => setPickerOpen(false)}
         />
-      )}
-
-      {/* Floating quote button — lives while its selection does. onMouseDown
-          preventDefault keeps the selection alive through the click. */}
-      {quoteSel && (
-        <button
-          style={{ position: 'fixed', top: quoteSel.y, left: quoteSel.x }}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => quoteIntoFeedback(quoteSel.text)}
-          title="Insert this part of the response into the feedback box"
-          className="z-[70] inline-flex items-center gap-1 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-xs font-medium text-[hsl(var(--foreground))] shadow-md hover:bg-[hsl(var(--muted))]"
-        >
-          <Quote className="w-3 h-3 text-[hsl(var(--primary))]" /> Quote in feedback
-        </button>
       )}
 
       {/* THE VARIANT CHOOSER — three strengths of the proposed revision, each
