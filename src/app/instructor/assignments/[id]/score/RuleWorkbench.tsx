@@ -22,7 +22,7 @@
  *  - Checkout an older step → "Revert to vX" makes it live and deletes the
  *    later steps (git-reset, confirmed) — clicking the newest returns to it.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowUp,
@@ -45,7 +45,6 @@ import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
 import { WorkbenchTopBar } from './workbench-shared';
 import ChatMessages from '@/components/chat/ChatMessages';
-import { FEEDBACK_CHIPS } from '@/lib/score/feedback-chips';
 import { seedRuleVersionName } from '@/lib/score/intents';
 import RuleApplyPreview from './RuleApplyPreview';
 import QueryPicker from './QueryPicker';
@@ -375,16 +374,16 @@ export default function RuleWorkbench({
   // Span-quote target: the feedback box a quoted span lands in (the button and
   // its selection state live in QuoteSelectionLayer, deliberately isolated).
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
+  // The rule box grows to fit its text (see the textarea below).
+  const ruleBoxRef = useRef<HTMLTextAreaElement>(null);
   // A simulation (preview + minor record) is in flight.
   const [simulating, setSimulating] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Feedback starters — the generic templates until the intent-tailored ones
-  // load (a small-model call server-side; generic is the graceful fallback).
-  const [chips, setChips] = useState(FEEDBACK_CHIPS);
-  // The five-element rule guide: auto-shown while the panel is fresh, and
-  // re-openable anytime from the header (null = auto by chat state).
+  // The six-element rule hint: auto-shown while the panel is fresh, and
+  // re-openable anytime from the Hint button by the input (null = auto by
+  // chat state).
   const [guideOpen, setGuideOpen] = useState<boolean | null>(null);
   // The Cursor-style exchange log (session-local).
   const [chat, setChat] = useState<ChatEntry[]>([]);
@@ -403,27 +402,6 @@ export default function RuleWorkbench({
 
   useEffect(() => {
     const controller = abortRef.current;
-    // Tailor the feedback starters to this intent (fire-and-forget — the
-    // generic texts stay if it fails or is slow). Skipped in promptMode: the
-    // holder has no definition, so the generic prompt-authoring starters fit.
-    if (!promptMode)
-      void (async () => {
-        try {
-          const res = await fetch(`${base}/intents/${intent.id}/feedback-chips`, { signal: signal() });
-          const d = await res.json().catch(() => null);
-          if (res.ok && d?.chips && live()) {
-            setChips((prev) =>
-              prev.map((c) =>
-                typeof d.chips[c.key] === 'string' && d.chips[c.key].trim()
-                  ? { ...c, text: d.chips[c.key].trim() }
-                  : c
-              )
-            );
-          }
-        } catch {
-          /* generic templates remain */
-        }
-      })();
     void (async () => {
       let list = await loadVersions();
       if (!live()) return;
@@ -459,6 +437,16 @@ export default function RuleWorkbench({
   useEffect(() => {
     if (!rewriteOpen) setRewriteStep(null);
   }, [rewriteOpen]);
+
+  // Keep the rule box exactly as tall as its text. Runs before paint so a
+  // version checkout never flashes the wrong height; min-height (CSS) is the
+  // floor, so short rules still get a usable box.
+  useLayoutEffect(() => {
+    const el = ruleBoxRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [ruleText]);
 
   /** Insert the selected span into the feedback box as a quote (editable like
    * any typed text — propose reads it as part of the feedback). */
@@ -783,7 +771,11 @@ export default function RuleWorkbench({
         instruction,
       });
     } catch (e) {
-      if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
+      if ((e as Error)?.name !== 'AbortError' && live()) {
+        setError((e as Error).message);
+        // Give the typed feedback back, so retrying is not retyping.
+        if (origin === 'feedback') setFeedback(instruction);
+      }
     } finally {
       if (live()) setProposing(false);
     }
@@ -869,7 +861,7 @@ export default function RuleWorkbench({
         baseRule: proposal.baseRule,
         versionNo: created.versionNo,
       });
-      if (proposal.origin === 'feedback') setFeedback('');
+      // The feedback box was already emptied on send.
       if (proposal.origin === 'rewrite') setRewriteOpen(false);
       setProposal(null);
     }
@@ -879,6 +871,10 @@ export default function RuleWorkbench({
     const text = feedback.trim();
     if (!text || proposing || simulating || readOnly) return;
     pushChat({ role: 'user', text });
+    // Sending empties the box — the text is already in the timeline above, and
+    // leaving it sitting there read as "not sent yet". propose puts it back if
+    // the call fails, so a failed send never costs you what you typed.
+    setFeedback('');
     void propose(
       {
         mode: 'feedback',
@@ -1160,23 +1156,25 @@ export default function RuleWorkbench({
         }
         onBack={() => onClose(savedAnyRef.current)}
         actions={
-          /* Preview the SAVED rule across many questions before deploying —
-             SCORE across the intent's questions, baseline across the whole log
-             (10 at a time). Review-only; edits happen on the left, deploy on the board. */
-          <button
-            onClick={() => setPreviewOpen(true)}
-            disabled={boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-            title={
-              boxEdited
-                ? 'Apply your edit first, then Preview'
-                : promptMode
-                  ? 'Preview these rules across the log (10 questions at a time)'
-                  : "Preview this rule across the intent's questions — and pull any in as examples to fix"
-            }
-          >
-            <Eye className="w-3.5 h-3.5" /> Preview
-          </button>
+          /* BASELINE ONLY. In SCORE the same surface is reached from "Other
+             questions" in the tab strip, where it belongs — it is about the
+             questions, and a second door in the header only asked which one to
+             use. The baseline's picker is a different action (a blind list), so
+             it keeps this review-only preview as its own entry. */
+          promptMode ? (
+            <button
+              onClick={() => setPreviewOpen(true)}
+              disabled={boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+              title={
+                boxEdited
+                  ? 'Apply your edit first, then Preview'
+                  : 'Preview these rules across the log (10 questions at a time)'
+              }
+            >
+              <Eye className="w-3.5 h-3.5" /> Preview
+            </button>
+          ) : undefined
         }
       />
 
@@ -1234,18 +1232,22 @@ export default function RuleWorkbench({
                   </span>
                 ) : null}
               </div>
+              {/* Grows with the rule instead of scrolling inside a fixed box:
+                  a rule is the whole system prompt, and judging one you can
+                  only see nine lines of is the wrong constraint. The column
+                  scrolls; min-height keeps a short rule from collapsing. */}
               <textarea
+                ref={ruleBoxRef}
                 value={ruleText}
                 onChange={(e) => !readOnly && setRuleText(e.target.value)}
                 readOnly={readOnly}
-                rows={9}
                 placeholder={
                   promptMode
                     ? 'Empty — the chatbot answers with no rules at all.'
                     : 'Empty — this intent has no rule of its own yet.'
                 }
                 title={readOnly ? 'Viewing an old step — Revert to make it live, or Latest to edit' : undefined}
-                className={`mt-1 w-full text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
+                className={`mt-1 w-full min-h-[200px] resize-none overflow-hidden text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
                   readOnly ? 'bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--background))]'
                 }`}
               />
@@ -1298,9 +1300,10 @@ export default function RuleWorkbench({
 
         {/* MIDDLE — the viewed version's Q → response for the active question */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
-          {/* QUESTION TABS — always shown (anchor ★ + examples + "Add example").
-              SCORE seeds the intent's top edge cases; baseline starts at the
-              anchor. Both add more from the log with the same picker. */}
+          {/* QUESTION TABS — always shown: the anchor ★, any examples pulled
+              in, and the door to the rest. SCORE seeds the intent's top edge
+              cases and reviews the others through the cross-query preview;
+              baseline starts at the anchor and adds from the blind picker. */}
           <div className="shrink-0 flex items-center gap-1 overflow-x-auto border-b border-[hsl(var(--border))] px-3 py-1.5">
             {(caseIds ?? [row.messageId]).map((id) => {
                 const r0 = rows.find((r) => r.messageId === id);
@@ -1323,8 +1326,11 @@ export default function RuleWorkbench({
                 );
               })}
             <button
-              // SCORE: adding an example goes THROUGH the preview — see the
-              // rule across the intent's questions, check the ones to fix.
+              // SCORE's main affordance here: the rule is doing something to
+              // every OTHER question in the intent, and this is the door to
+              // that. Named for what you go there to do (look at the others)
+              // rather than the mechanism (adding a tab), and styled to be
+              // seen — in the study nobody found the quiet "Add example".
               // Baseline keeps the blind picker (its hand-built review set is
               // part of the ablation).
               onClick={() => (promptMode ? setPickerOpen(true) : setPreviewOpen(true))}
@@ -1332,14 +1338,26 @@ export default function RuleWorkbench({
                 !promptMode &&
                 (boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving)
               }
-              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+              className={`shrink-0 ml-auto inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs disabled:opacity-50 ${
+                promptMode
+                  ? 'border border-[hsl(var(--border))] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]'
+                  : 'border border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 font-semibold text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20'
+              }`}
               title={
                 promptMode
                   ? 'Pull in more logged questions to try the rule against'
-                  : "See this rule across the intent's questions and pull any in as examples"
+                  : "See what this rule does to the intent's other questions — and pull any in to fix"
               }
             >
-              <Plus className="w-3 h-3" /> Add example
+              {promptMode ? (
+                <>
+                  <Plus className="w-3 h-3" /> Add example
+                </>
+              ) : (
+                <>
+                  <Eye className="w-3.5 h-3.5" /> Other questions
+                </>
+              )}
             </button>
           </div>
 
@@ -1611,59 +1629,11 @@ export default function RuleWorkbench({
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
           <div className="shrink-0 px-3 py-2 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-              <Sparkles className="w-3.5 h-3.5" /> Feedback & history
-              <button
-                onClick={() => setGuideOpen((v) => !(v ?? chatFresh))}
-                title="What makes a strong rule: the six elements"
-                className={`inline-flex items-center p-0.5 rounded hover:text-[hsl(var(--foreground))] ${
-                  (guideOpen ?? chatFresh) ? 'text-[hsl(var(--primary))]' : ''
-                }`}
-              >
-                <HelpCircle className="w-3.5 h-3.5" />
-              </button>
+              <Sparkles className="w-3.5 h-3.5" /> Feedback &amp; history
             </span>
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-            {(guideOpen ?? chatFresh) && (
-              <div className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
-                {/* Rule-authoring guide: the six elements a strong rule sets,
-                    one-to-one with the feedback chips (see
-                    @/lib/score/feedback-chips). Auto-shown while fresh; the
-                    header ? re-opens it anytime. */}
-                <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 space-y-1.5">
-                  <p className="text-xs font-semibold text-[hsl(var(--foreground))]">
-                    Not sure what to ask for? A strong rule usually sets these six:
-                  </p>
-                  <ul className="space-y-1 text-xs">
-                    <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Role.</span> The stance
-                      the AI takes, like a coach that draws out thinking rather than an answer engine.
-                    </li>
-                    <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">No direct answers.</span>{' '}
-                      What it must not hand over, even when the student pushes for it.
-                    </li>
-                    <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Attempt first.</span> Have
-                      the student try before the AI steps in.
-                    </li>
-                    <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">One thing at a time.</span> A
-                      single question or step per turn, not a wall of them.
-                    </li>
-                    <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Brief, with a next step.</span>{' '}
-                      Short replies that end with something concrete to do.
-                    </li>
-                    <li>
-                      <span className="font-medium text-[hsl(var(--foreground))]">Ask for evidence.</span> Have
-                      the student back a claim with a reason or evidence.
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            )}
             {chat.map((m) =>
               m.role === 'event' ? (
                 /* Milestone row — the v1 baseline or a Save. The chip checks
@@ -1706,23 +1676,56 @@ export default function RuleWorkbench({
             <div ref={chatEndRef} />
           </div>
 
-          {/* One-click feedback starters — pinned just above the input, in ONE
-              place; they insert into the box (editable), not send. */}
-          {!readOnly && (
-            <div className="shrink-0 flex flex-wrap gap-1 px-3 pb-2">
-              {chips.map((c) => (
-                <button
-                  key={c.label}
-                  onClick={() =>
-                    setFeedback((prev) => (prev.trim() ? `${prev.trimEnd()}\n${c.text}` : c.text))
-                  }
-                  disabled={proposing || simulating}
-                  title={c.text}
-                  className="rounded-full border border-[hsl(var(--border))] px-2 py-0.5 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
-                >
-                  {c.label}
-                </button>
-              ))}
+          {/* HINT — what a strong rule usually sets. The six one-click starters
+              that used to sit here are gone: in the user study nobody built a
+              revision out of them, and a row of canned sentences above the box
+              mostly crowded out writing one. The same six ideas survive as this
+              hint, which explains rather than types for you. They map onto the
+              teacher-authored prompt schema in Liu et al. 2026
+              (arXiv:2604.16738, Table 1) plus the "no direct answers" guardrail
+              — the study's most effective safeguard (AI answer-giving 16.2% →
+              7.7%). Opened from the button by the input, not a "?" in the
+              header nobody looked at. */}
+          {(guideOpen ?? chatFresh) && !readOnly && (
+            <div className="shrink-0 px-2.5 pb-2">
+              <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 space-y-1.5">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-[hsl(var(--foreground))]">
+                  Not sure what to ask for? A strong rule usually sets these six:
+                  <button
+                    onClick={() => setGuideOpen(false)}
+                    className="ml-auto p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                    aria-label="Hide the hint"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </p>
+                <ul className="space-y-1 text-xs text-[hsl(var(--muted-foreground))]">
+                  <li>
+                    <span className="font-medium text-[hsl(var(--foreground))]">Role.</span> The stance
+                    the AI takes, like a coach that draws out thinking rather than an answer engine.
+                  </li>
+                  <li>
+                    <span className="font-medium text-[hsl(var(--foreground))]">No direct answers.</span>{' '}
+                    What it must not hand over, even when the student pushes for it.
+                  </li>
+                  <li>
+                    <span className="font-medium text-[hsl(var(--foreground))]">Attempt first.</span> Have
+                    the student try before the AI steps in.
+                  </li>
+                  <li>
+                    <span className="font-medium text-[hsl(var(--foreground))]">One thing at a time.</span> A
+                    single question or step per turn, not a wall of them.
+                  </li>
+                  <li>
+                    <span className="font-medium text-[hsl(var(--foreground))]">Brief, with a next step.</span>{' '}
+                    Short replies that end with something concrete to do.
+                  </li>
+                  <li>
+                    <span className="font-medium text-[hsl(var(--foreground))]">Ask for evidence.</span> Have
+                    the student back a claim with a reason or evidence.
+                  </li>
+                </ul>
+              </div>
             </div>
           )}
 
@@ -1735,18 +1738,35 @@ export default function RuleWorkbench({
                 </button>
               </p>
             )}
-            {/* WHAT the feedback critiques — the response on screen right now. */}
-            {viewed && !readOnly && (
-              <p className="flex flex-wrap items-center gap-1 text-xs text-[hsl(var(--muted-foreground))]">
-                Feedback on:
-                <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 font-medium text-emerald-700">
-                  {versionLabel(viewed)} response
-                </span>
-                <span className="rounded border border-[hsl(var(--border))] px-1 py-0.5 font-mono">
-                  {activeRow.participantToken || '—'}
-                  {activeRow.turnNumber > 0 ? ` · T${activeRow.turnNumber}` : ''}
-                </span>
-              </p>
+            {!readOnly && (
+              <div className="flex items-start justify-between gap-2">
+                {/* WHAT the feedback critiques — the response on screen now. */}
+                {viewed ? (
+                  <p className="flex flex-wrap items-center gap-1 text-xs text-[hsl(var(--muted-foreground))]">
+                    Feedback on:
+                    <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 font-medium text-emerald-700">
+                      {versionLabel(viewed)} response
+                    </span>
+                    <span className="rounded border border-[hsl(var(--border))] px-1 py-0.5 font-mono">
+                      {activeRow.participantToken || '—'}
+                      {activeRow.turnNumber > 0 ? ` · T${activeRow.turnNumber}` : ''}
+                    </span>
+                  </p>
+                ) : (
+                  <span />
+                )}
+                <button
+                  onClick={() => setGuideOpen((v) => !(v ?? chatFresh))}
+                  title="What makes a strong rule: the six elements"
+                  className={`shrink-0 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs font-medium ${
+                    (guideOpen ?? chatFresh)
+                      ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
+                      : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]'
+                  }`}
+                >
+                  <HelpCircle className="w-3 h-3" /> Hint
+                </button>
+              </div>
             )}
             <div className="relative">
               <textarea
