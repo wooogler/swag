@@ -12,11 +12,13 @@
  * that list (the board viewer's theater-style thread, shared component), so a
  * labeling call that needs the chatbot's reply never leaves the workbench.
  *
- * The Apply/Save lifecycle:
- *  - "Apply" persists the spec (a create's FIRST apply registers it as v1),
+ * The Try/Apply lifecycle (one vocabulary with the rule workbench: Try
+ * iterates, Apply commits the next version):
+ *  - "Try" persists the spec (a create's FIRST try registers it as v1),
  *    rates the scope against just this intent, and loads the two lists.
- *  - Pinning in/out changes the prompt (and defHash) → re-Apply gates Save.
- *  - "Save version" (in History) records a named checkpoint on top.
+ *  - Pinning in/out changes the prompt (and defHash) → re-Try gates Apply.
+ *  - "Apply" (in History) records the tried state as the next MAJOR version —
+ *    the board's "When vN" advances on it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -112,7 +114,7 @@ interface IntentVersion {
 /** Instructor-facing labels for the version-history actions (majors). */
 const ACTION_LABELS: Record<string, string> = {
   create_intent: 'created',
-  update_intent: 'saved',
+  update_intent: 'saved', // majors read 'saved'; spec-persisting minors read 'tried' below
   archive_intent: 'archived',
   restore_intent: 'restored',
   add_pin: 'labeled',
@@ -128,9 +130,9 @@ function versionLabel(v: IntentVersion): string {
   return v.minor ? `v${v.intentVersion}.${v.minorNo}` : `v${v.intentVersion}`;
 }
 
-/** What the entry DID, in one word — minors that persisted a spec are applies. */
+/** What the entry DID, in one word — minors that persisted a spec are tries. */
 function versionAction(v: IntentVersion): string {
-  if (v.minor && (v.action === 'update_intent' || v.action === 'create_intent')) return 'applied';
+  if (v.minor && (v.action === 'update_intent' || v.action === 'create_intent')) return 'tried';
   return ACTION_LABELS[v.action] ?? v.action.replace(/_/g, ' ');
 }
 
@@ -1905,11 +1907,13 @@ export default function IntentWorkbench({
               value={definition}
               onChange={setDefinition}
               placeholder="e.g. asks the chatbot to write a thesis statement or conclusion for them"
-              // Apply belongs to the definition — it re-rates the log against
+              // Try belongs to the definition — it re-rates the log against
               // THIS text — so it sits on its header, small and right-aligned,
               // instead of taking a row of the column. Disabled while the shown
-              // ratings already reflect the text (`applied`), which is also
-              // what tells you nothing needs re-rating.
+              // ratings already reflect the text (`applied`) — i.e. whenever
+              // "When a student…" hasn't changed and nothing is stale, there is
+              // nothing to try. (A changed TITLE alone also enables it: Try is
+              // the rename's persistence path — the tooltip says so.)
               action={
                 <button
                   onClick={() => apply()}
@@ -1918,12 +1922,14 @@ export default function IntentWorkbench({
                     !openaiConfigured
                       ? 'OPENAI_API_KEY is not configured'
                       : applied
-                        ? 'Up to date — nothing to re-rate'
-                        : isEdit
-                          ? // In edit mode Apply IS the save (a minor version) — saying
-                            // otherwise is what made leaving-after-Apply feel like loss.
-                            'Rate every question against this definition — the change is kept (revertible from History)'
-                          : 'Rate every question against this definition (nothing is registered until Save)'
+                        ? 'Up to date — the definition is unchanged and nothing needs re-rating'
+                        : definition.trim() === savedRef.current.definition && scopedStaleCount === 0 && !!data
+                          ? 'Keep the new name — the definition is unchanged, nothing re-rates'
+                          : isEdit
+                            ? // In edit mode Try IS persistent (a minor version) — saying
+                              // otherwise is what made leaving-after-Try feel like loss.
+                              'Rate every question against this definition — the change is kept (revertible from History)'
+                            : 'Rate every question against this definition (nothing is registered until Apply)'
                   }
                   className="inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2 py-0.5 text-[11px] font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-40"
                 >
@@ -1932,7 +1938,7 @@ export default function IntentWorkbench({
                   ) : (
                     <Search className="h-3 w-3" />
                   )}
-                  Apply
+                  Try
                 </button>
               }
             />
@@ -2068,29 +2074,30 @@ export default function IntentWorkbench({
                       })()}
                     </button>
                   ) : (
-                    // Save lives WHERE ITS RESULT APPEARS: clicking it adds the
-                    // next entry right below this button.
+                    // Apply lives WHERE ITS RESULT APPEARS: clicking it adds
+                    // the next entry right below this button. Same verb as the
+                    // rule workbench's live-committing Apply.
                     <button
                       onClick={save}
                       disabled={saving || busy || !definition.trim() || !applied}
                       title={
                         !data
-                          ? 'Apply first — a version saves the applied result'
+                          ? 'Try first — Apply records the tried state as a version'
                           : specDirty()
-                            ? 'Definition changed — Apply it before saving'
+                            ? 'Definition changed — Try it first'
                             : scopedStaleCount > 0
-                              ? 'Ratings are stale — Apply to re-rate, then save'
-                              : 'Save the applied state as the next version'
+                              ? 'Ratings are stale — Try to re-rate first'
+                              : "Record this state as the next version — the board's When version advances"
                       }
-                      className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                      className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
                     >
                       {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
-                      Save version
+                      Apply
                     </button>
                   )}
                 </div>
                 <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                  Every saved version is a snapshot you can click to revisit.
+                  Every applied version is a snapshot you can click to revisit.
                 </p>
                 <ul className="space-y-1.5">
                   {versionGroups.map((g) => {
@@ -2106,7 +2113,7 @@ export default function IntentWorkbench({
                           versionEntry(g.major, false)
                         ) : (
                           <p className="px-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
-                            Draft steps — before the first save
+                            Draft steps — before the first Apply
                           </p>
                         )}
                         {g.minors.length > 0 && (
@@ -2140,7 +2147,7 @@ export default function IntentWorkbench({
                 ? 'Rating every question in the log against this definition…'
                 : isEdit
                   ? 'Loading this intent’s questions…'
-                  : 'Define the intent, then Apply to rate the log against it.'}
+                  : 'Define the intent, then Try to rate the log against it.'}
             </div>
           ) : (
             <>
@@ -2538,11 +2545,11 @@ export default function IntentWorkbench({
                 className="w-full max-w-sm rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xl"
                 onClick={(e) => e.stopPropagation()}
               >
-                <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Unapplied edits</h3>
+                <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Untried edits</h3>
                 <p className="mt-1.5 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
                   {intentId !== null
-                    ? 'The edited definition hasn’t been applied — leaving discards it. Everything you applied is saved.'
-                    : 'The typed definition hasn’t been applied — leaving discards it, and no intent is created.'}
+                    ? 'The edited definition hasn’t been tried — leaving discards it. Everything you tried is kept.'
+                    : 'The typed definition hasn’t been tried — leaving discards it, and no intent is created.'}
                 </p>
                 <div className="mt-3 flex items-center justify-end gap-2">
                   <button
