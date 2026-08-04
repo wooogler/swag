@@ -108,10 +108,14 @@ function reconstructChat(list: RuleVersion[]): Omit<ChatEntry, 'id'>[] {
   for (const v of [...list].reverse()) {
     // list arrives newest-first
     if (v.source === 'seed') {
+      // The seed carries its rule block too — where this rule began is part
+      // of the story, and the block is the checkout target for v1.
       entries.push({
         role: 'event',
         text: v.name ? `Starting rule — ${v.name}` : 'Starting rule',
         versionNo: v.versionNo,
+        rule: v.rule,
+        baseRule: null,
       });
     } else if (!v.minor) {
       entries.push({
@@ -129,7 +133,9 @@ function reconstructChat(list: RuleVersion[]): Omit<ChatEntry, 'id'>[] {
             : v.source === 'rewrite'
               ? 'Rewrote the response — infer the rule change.'
               : 'Feedback on the response.'),
-        ...(v.source === 'direct' ? { versionNo: v.versionNo } : {}),
+        // Direct edits have no agent card — their rule block hangs off the
+        // user bubble instead.
+        ...(v.source === 'direct' ? { versionNo: v.versionNo, rule: v.rule, baseRule: prevRule } : {}),
       });
       if (v.source !== 'direct') {
         entries.push({
@@ -237,29 +243,95 @@ function QuoteSelectionLayer({
   );
 }
 
-/** The rule an agent card carries: the DIFF against the step it revised (what
- * changed is the point — full text a toggle away). */
-function ChatRuleBlock({ rule, baseRule }: { rule: string | null; baseRule: string | null }) {
+/**
+ * A step's rule in the timeline: version-labelled, and CLICKABLE — clicking
+ * the block checks that step out (the block IS the version navigation; the
+ * old separate v1.1 chips read as decoration). Shows the DIFF against the
+ * step it revised (what changed is the point), full text a toggle away; a
+ * step with no predecessor (the seed, or a step on an empty rule) shows the
+ * plain text — an all-green diff says nothing.
+ */
+function ChatRuleBlock({
+  rule,
+  baseRule,
+  label,
+  exists = true,
+  active = false,
+  onOpen,
+}: {
+  rule: string | null;
+  baseRule: string | null;
+  /** "v1" / "v2.3" — shown in the block's header strip. */
+  label?: string;
+  /** False when a revert deleted this step — the block renders inert. */
+  exists?: boolean;
+  /** This step is the one checked out right now. */
+  active?: boolean;
+  onOpen?: () => void;
+}) {
   const [full, setFull] = useState(false);
+  const clickable = !!onOpen && exists;
+  const diffable = rule !== null && baseRule !== null;
   return (
-    <div className="mt-1">
-      <div className="max-h-40 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 text-xs leading-relaxed">
+    <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? onOpen : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              onOpen?.();
+            }
+          : undefined
+      }
+      title={
+        !exists
+          ? 'This step was deleted by a revert'
+          : clickable
+            ? 'View this step — its rule and response load in place'
+            : undefined
+      }
+      className={`mt-1 rounded border ${
+        active
+          ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5'
+          : 'border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30'
+      } ${clickable ? 'cursor-pointer hover:border-[hsl(var(--primary))]/60' : ''} ${!exists ? 'opacity-60' : ''}`}
+    >
+      {label && (
+        <div className="flex items-center justify-between gap-2 border-b border-[hsl(var(--border))]/60 px-2 py-1">
+          <span
+            className={`font-mono text-[10px] font-semibold ${
+              active ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground))]'
+            }`}
+          >
+            {label}
+            {!exists && <span className="ml-1 font-sans line-through">removed</span>}
+            {active && <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 font-sans">viewing</span>}
+          </span>
+          {diffable && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setFull((v) => !v);
+              }}
+              className="text-[10px] font-medium text-[hsl(var(--primary))] hover:underline"
+            >
+              {full ? 'Show what changed' : 'Show full text'}
+            </button>
+          )}
+        </div>
+      )}
+      <div className="max-h-40 overflow-y-auto p-2 text-xs leading-relaxed">
         {rule === null ? (
           <span className="italic text-[hsl(var(--foreground))]">(no rule yet)</span>
-        ) : full ? (
+        ) : !diffable || full ? (
           <span className="whitespace-pre-wrap text-[hsl(var(--foreground))]">{rule}</span>
         ) : (
           <RuleDiff before={baseRule} after={rule} />
         )}
       </div>
-      {rule !== null && (
-        <button
-          onClick={() => setFull((v) => !v)}
-          className="mt-0.5 text-[10px] font-medium text-[hsl(var(--primary))] hover:underline"
-        >
-          {full ? 'Show what changed' : 'Show full text'}
-        </button>
-      )}
     </div>
   );
 }
@@ -908,6 +980,30 @@ export default function RuleWorkbench({
   // ways forward are Revert (make it live) or returning to the latest.
   const readOnly = !viewingLatest;
 
+  /**
+   * What leaving would silently cost (the demo confusion: "Apply" LOOKED like
+   * it applied — but only Save puts a rule on the board):
+   *  - 'edit': an un-applied textarea edit — client state, genuinely lost.
+   *  - 'unsaved': simulated steps never saved — persisted and reopenable, but
+   *    NOT the intent's live rule, which is exactly what the leaver believes.
+   */
+  const leaveLoss = (): 'edit' | 'unsaved' | null => {
+    if (boxEdited && !readOnly) return 'edit';
+    if (dirty) return 'unsaved';
+    return null;
+  };
+  const [leavePrompt, setLeavePrompt] = useState(false);
+  // Browser-level leave (reload, tab close): the native confirm, reading fresh.
+  const leaveLossRef = useRef(leaveLoss);
+  leaveLossRef.current = leaveLoss;
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (leaveLossRef.current()) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
   /** Save = promote the latest simulated state to a MAJOR version (recorded +
    * reflected onto the live intent rule). Gated to the latest view. */
   async function saveVersion(): Promise<RuleVersion | null> {
@@ -1077,34 +1173,17 @@ export default function RuleWorkbench({
     setViewNo(latest && versionNo === latest.versionNo ? null : versionNo);
   }
 
-  /** The chip linking a feedback exchange to its recorded step. A step wiped
-   * by a later revert renders inert. */
-  const versionChip = (versionNo: number) => {
+  /** How a timeline entry's step renders: its display label, whether it still
+   * exists (a revert may have deleted it), and whether it is checked out. The
+   * rule BLOCKS carry this — they are the version navigation. */
+  const stepInfo = (versionNo: number | undefined) => {
+    if (versionNo === undefined) return null;
     const v = versions?.find((x) => x.versionNo === versionNo);
-    if (!v) {
-      return (
-        <span
-          className="shrink-0 rounded border border-[hsl(var(--border))] px-1 py-0.5 text-xs text-[hsl(var(--muted-foreground))] line-through"
-          title="This step was deleted by a revert"
-        >
-          removed
-        </span>
-      );
-    }
-    const isViewed = viewed !== null && viewed.versionNo === versionNo;
-    return (
-      <button
-        onClick={() => jumpToVersion(versionNo)}
-        title="Check this step out — its rule and response load in place"
-        className={`shrink-0 rounded border px-1 py-0.5 font-mono text-xs font-medium ${
-          isViewed
-            ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
-            : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
-        }`}
-      >
-        {versionLabel(v)}
-      </button>
-    );
+    return {
+      label: v ? versionLabel(v) : 'v?',
+      exists: v !== undefined,
+      active: v !== undefined && viewed !== null && viewed.versionNo === versionNo,
+    };
   };
 
   // CROSS-QUERY PREVIEW — replaces the workbench while reviewing the saved rule's
@@ -1162,7 +1241,7 @@ export default function RuleWorkbench({
               : 'Revise the system prompt'
             : `Revise rule — ${intent.title}`
         }
-        onBack={() => onClose(savedAnyRef.current)}
+        onBack={() => (leaveLoss() ? setLeavePrompt(true) : onClose(savedAnyRef.current))}
         actions={
           /* BASELINE ONLY. In SCORE the same surface is reached from "Other
              questions" in the tab strip, where it belongs — it is about the
@@ -1244,37 +1323,37 @@ export default function RuleWorkbench({
                     ? `Rules${viewed ? ` · ${versionLabel(viewed)}` : ''}`
                     : `Then… (rule${viewed ? ` · ${versionLabel(viewed)}` : ''})`}
                 </p>
-                {readOnly ? (
-                  /* Checked out on an old step (from a timeline chip). The two
-                     ways forward used to live in the History accordion; they
-                     sit with the badge now that the timeline IS the history. */
-                  <span className="flex items-center gap-1.5">
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
-                      viewing {viewed ? versionLabel(viewed) : 'an old step'}
-                    </span>
-                    <button
-                      onClick={revertToViewed}
-                      disabled={saving || simulating || proposing}
-                      title="Make this step the live rule and delete the later steps (asks first)"
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
-                    >
-                      <RotateCcw className="w-3 h-3" /> Revert here
-                    </button>
-                    <button
-                      onClick={() => setViewNo(null)}
-                      disabled={saving || simulating || proposing}
-                      title="Back to the latest step"
-                      className="px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium hover:bg-[hsl(var(--muted))] disabled:opacity-40"
-                    >
-                      Latest
-                    </button>
-                  </span>
-                ) : dirty ? (
+                {!readOnly && dirty && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
                     not saved yet
                   </span>
-                ) : null}
+                )}
               </div>
+              {/* Checked out on an old step (from a timeline block): one clean
+                  banner on its own row — the label row above never wraps. */}
+              {readOnly && (
+                <div className="mt-1 flex items-center gap-2 rounded border border-amber-200 bg-amber-50 px-2 py-1">
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-amber-800">
+                    Viewing {viewed ? versionLabel(viewed) : 'an old step'} · read-only
+                  </span>
+                  <button
+                    onClick={revertToViewed}
+                    disabled={saving || simulating || proposing}
+                    title="Make this step the live rule and delete the later steps (asks first)"
+                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Revert here
+                  </button>
+                  <button
+                    onClick={() => setViewNo(null)}
+                    disabled={saving || simulating || proposing}
+                    title="Back to the latest step"
+                    className="shrink-0 px-2 py-0.5 rounded border border-amber-300 bg-white/60 text-xs font-medium text-amber-800 hover:bg-white disabled:opacity-40"
+                  >
+                    Latest
+                  </button>
+                </div>
+              )}
               {/* Grows with the rule instead of scrolling inside a fixed box:
                   a rule is the whole system prompt, and judging one you can
                   only see nine lines of is the wrong constraint. The column
@@ -1302,9 +1381,17 @@ export default function RuleWorkbench({
                 <button
                   onClick={() => {
                     void (async () => {
-                      const created = await simulate(ruleText.trim() || null, 'direct');
+                      const prevRule = viewed?.rule ?? null;
+                      const nextRule = ruleText.trim() || null;
+                      const created = await simulate(nextRule, 'direct');
                       if (created) {
-                        pushChat({ role: 'user', text: 'Edited the rule directly.', versionNo: created.versionNo });
+                        pushChat({
+                          role: 'user',
+                          text: 'Edited the rule directly.',
+                          versionNo: created.versionNo,
+                          rule: nextRule,
+                          baseRule: prevRule,
+                        });
                       }
                     })();
                   }}
@@ -1321,22 +1408,26 @@ export default function RuleWorkbench({
                   {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                   Apply edit
                 </button>
+                {/* Save is THE consequential action here — it makes this rule
+                    the intent's live rule, visible on the board the moment you
+                    go back. Filled primary + explicit label so it reads as
+                    "this leaves the workbench", not as a local file-save. */}
                 <button
                   onClick={() => void saveVersion()}
                   disabled={!dirty || !viewingLatest || boxEdited || saving || proposing || simulating}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 disabled:opacity-50"
                   title={
                     boxEdited
-                      ? 'Apply the edited rule first, then Save'
+                      ? 'Apply the edited rule first, then save'
                       : !viewingLatest
                         ? 'Viewing an old step — Revert to make it live instead'
                         : dirty
-                          ? 'Record a major version and apply it to the live intent'
+                          ? "Make this the intent's live rule — the board shows it as soon as you go back"
                           : 'Nothing to save — apply a change first'
                   }
                 >
                   {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
-                  Save
+                  Save to board
                 </button>
               </div>
             </div>
@@ -1561,27 +1652,40 @@ export default function RuleWorkbench({
                               </button>
                             </div>
                           ) : (
-                            /* THE CONFIRMATION STEP — what the rewrite MEANS, as
-                               checkable intents. Confirmed ones steer the
-                               proposal; "Propose anyway" skips the wait. */
-                            <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 space-y-2">
-                              <p className="text-xs font-medium text-[hsl(var(--foreground))]">
+                            /* THE CONFIRMATION STEP — what the rewrite MEANS.
+                               Your own words come FIRST (they are the best
+                               signal); the agent's readings of the edit are
+                               below as checkable fallbacks. */
+                            <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-3 space-y-2.5">
+                              <p className="text-sm font-semibold text-[hsl(var(--foreground))]">
                                 What should this change in general?{' '}
                                 <span className="font-normal text-[hsl(var(--muted-foreground))]">
-                                  Confirm what you meant — it steers the new rule.
+                                  It steers the new rule.
                                 </span>
                               </p>
+                              <input
+                                autoFocus
+                                value={rewriteStep.custom}
+                                onChange={(e) =>
+                                  setRewriteStep((prev) => (prev ? { ...prev, custom: e.target.value } : prev))
+                                }
+                                placeholder="Say it in your own words — the strongest signal…"
+                                className="w-full text-sm border border-[hsl(var(--border))] rounded px-2.5 py-1.5 bg-[hsl(var(--background))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                              />
                               {rewriteStep.loading ? (
-                                <p className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
-                                  <Loader2 className="w-3 h-3 animate-spin" /> Reading your edit…
+                                <p className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Reading your edit…
                                 </p>
                               ) : (
-                                <div className="space-y-1">
+                                <div className="space-y-1.5">
+                                  <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                                    …or confirm what the agent read from your edit:
+                                  </p>
                                   {rewriteStep.options.map((opt) => (
-                                    <label key={opt} className="flex items-start gap-2 text-xs cursor-pointer">
+                                    <label key={opt} className="flex items-start gap-2 text-sm cursor-pointer">
                                       <input
                                         type="checkbox"
-                                        className="mt-0.5 shrink-0"
+                                        className="mt-1 shrink-0"
                                         checked={rewriteStep.selected.has(opt)}
                                         onChange={() =>
                                           setRewriteStep((prev) => {
@@ -1598,14 +1702,6 @@ export default function RuleWorkbench({
                                   ))}
                                 </div>
                               )}
-                              <input
-                                value={rewriteStep.custom}
-                                onChange={(e) =>
-                                  setRewriteStep((prev) => (prev ? { ...prev, custom: e.target.value } : prev))
-                                }
-                                placeholder="Or say it in your own words…"
-                                className="w-full text-xs border border-[hsl(var(--border))] rounded px-2 py-1 bg-[hsl(var(--background))]"
-                              />
                               <div className="flex items-center justify-end gap-2">
                                 <button
                                   onClick={() => setRewriteStep(null)}
@@ -1679,39 +1775,71 @@ export default function RuleWorkbench({
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-            {chat.map((m) =>
-              m.role === 'event' ? (
-                /* Milestone row — the v1 baseline or a Save. The chip checks
-                   the step out; a step wiped by a revert renders 'removed'. */
-                <div key={m.id} className="flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                  <span className="flex-1 border-t border-[hsl(var(--border))]" aria-hidden />
-                  {m.versionNo !== undefined && versionChip(m.versionNo)}
-                  <span className="shrink-0">{m.text}</span>
-                  <span className="flex-1 border-t border-[hsl(var(--border))]" aria-hidden />
+            {chat.map((m) => {
+              const info = stepInfo(m.versionNo);
+              // A rule block, when this entry carries one — labelled with its
+              // version and clickable to check the step out.
+              const block =
+                m.rule !== undefined ? (
+                  <ChatRuleBlock
+                    rule={m.rule}
+                    baseRule={m.baseRule ?? null}
+                    label={info?.label}
+                    exists={info?.exists ?? true}
+                    active={info?.active ?? false}
+                    onOpen={
+                      m.versionNo !== undefined && info?.exists
+                        ? () => jumpToVersion(m.versionNo as number)
+                        : undefined
+                    }
+                  />
+                ) : null;
+              return m.role === 'event' ? (
+                /* Milestone row — the v1 baseline (with its rule block) or a
+                   Save. Rows with a surviving step check it out on click. */
+                <div key={m.id}>
+                  <div
+                    role={info?.exists ? 'button' : undefined}
+                    onClick={info?.exists ? () => jumpToVersion(m.versionNo as number) : undefined}
+                    title={info?.exists ? 'View this step — its rule and response load in place' : undefined}
+                    className={`flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))] ${
+                      info?.exists ? 'cursor-pointer hover:text-[hsl(var(--foreground))]' : ''
+                    }`}
+                  >
+                    <span className="flex-1 border-t border-[hsl(var(--border))]" aria-hidden />
+                    {info && (
+                      <span className={`shrink-0 font-mono font-semibold ${info.active ? 'text-[hsl(var(--primary))]' : ''}`}>
+                        {info.exists ? info.label : 'removed'}
+                      </span>
+                    )}
+                    <span className="shrink-0">{m.text}</span>
+                    <span className="flex-1 border-t border-[hsl(var(--border))]" aria-hidden />
+                  </div>
+                  {block}
                 </div>
               ) : m.role === 'user' ? (
-                <div key={m.id} className="flex flex-col items-end gap-1">
-                  <p className="max-w-[90%] rounded-2xl rounded-tr-sm bg-[hsl(var(--muted))] px-3 py-2 text-sm whitespace-pre-wrap">
+                <div key={m.id} className="flex flex-col items-stretch gap-0">
+                  <p className="ml-auto max-w-[90%] rounded-2xl rounded-tr-sm bg-[hsl(var(--muted))] px-3 py-2 text-sm whitespace-pre-wrap">
                     {m.text}
                   </p>
-                  {m.versionNo !== undefined && versionChip(m.versionNo)}
+                  {/* Direct edits carry their rule block here (no agent card). */}
+                  {block}
                 </div>
               ) : (
                 <div key={m.id} className="text-sm">
                   <p className="flex items-center gap-1.5 font-medium text-[hsl(var(--foreground))]">
                     <Sparkles className="w-3 h-3 shrink-0 text-[hsl(var(--primary))]" />
                     <span className="min-w-0 truncate">{m.name}</span>
-                    {m.versionNo !== undefined && versionChip(m.versionNo)}
                   </p>
                   {m.text && (
                     <p className="mt-0.5 whitespace-pre-wrap text-[hsl(var(--muted-foreground))]">{m.text}</p>
                   )}
                   {/* What this exchange did to the rule — a diff by default,
                       so the panel reads as a self-contained changelog. */}
-                  {m.rule !== undefined && <ChatRuleBlock rule={m.rule} baseRule={m.baseRule ?? null} />}
+                  {block}
                 </div>
-              )
-            )}
+              );
+            })}
             {(proposing || simulating) && (
               <p className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1868,6 +1996,72 @@ export default function RuleWorkbench({
           onClose={() => setPickerOpen(false)}
         />
       )}
+
+      {/* LEAVE GUARD — the demo confusion this prevents: Apply/feedback only
+          SIMULATE; walking out after them leaves the board on the old rule.
+          Mirrors the intent workbench's leave prompt, plus a save-and-leave
+          primary action since here the fix is one click. */}
+      {leavePrompt &&
+        (() => {
+          const loss = leaveLoss();
+          if (!loss) return null; // resolved meanwhile
+          const canSaveNow = loss === 'unsaved' && viewingLatest && !boxEdited;
+          return (
+            <div
+              className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4"
+              onClick={() => setLeavePrompt(false)}
+            >
+              <div
+                className="w-full max-w-sm rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
+                  {loss === 'edit' ? 'Un-applied edit' : 'Not on the board yet'}
+                </h3>
+                <p className="mt-1.5 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+                  {loss === 'edit'
+                    ? 'The rule text you edited hasn’t been applied — leaving discards it.'
+                    : 'Your latest steps are simulations — students still get the old rule. Save to board to make this the intent’s live rule; if you leave, the steps stay here as drafts you can save later.'}
+                </p>
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => setLeavePrompt(false)}
+                    className="px-2.5 py-1.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+                  >
+                    Keep working
+                  </button>
+                  <button
+                    onClick={() => {
+                      setLeavePrompt(false);
+                      onClose(savedAnyRef.current);
+                    }}
+                    className="px-2.5 py-1.5 rounded border border-rose-300 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                  >
+                    {loss === 'edit' ? 'Discard & leave' : 'Leave without saving'}
+                  </button>
+                  {canSaveNow && (
+                    <button
+                      onClick={() => {
+                        void (async () => {
+                          const saved = await saveVersion();
+                          if (saved && live()) {
+                            setLeavePrompt(false);
+                            onClose(true);
+                          }
+                        })();
+                      }}
+                      disabled={saving}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-[hsl(var(--primary))] text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                    >
+                      {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
+                      Save to board &amp; leave
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* THE VARIANT CHOOSER — three strengths of the proposed revision, each
           with its rule diff and regenerated response; picking one records it. */}
