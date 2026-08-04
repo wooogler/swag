@@ -1,6 +1,6 @@
 # Rule Workbench 개선 계획 (v2)
 
-작성: 2026-08-04 · 상태: **구현 전 계획** (코드 리뷰 + 원인 분석 완료) · 대상 브랜치: score-v7
+작성: 2026-08-04 · 상태: **§1–§5 구현 완료** (2026-08-04, 같은 날 5개 커밋: §1 버그 → §2 변형 모달 → §3 rewrite 의도 → §4 타임라인 통합 → §5 preview 병합; §6은 후순위로 미구현) · 대상 브랜치: score-v7
 선행 문서: `docs/SCORE_v7_intent_tree_design.md` (트리/체인 아키텍처), `docs/STUDY_BASELINE_SPEC.md` (baseline parity 제약)
 
 ## 0. 문제 정의
