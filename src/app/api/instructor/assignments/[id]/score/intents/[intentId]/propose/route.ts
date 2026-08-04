@@ -51,19 +51,39 @@ const bodySchema = z.discriminatedUnion('mode', [
   }),
 ]);
 
+/** The three revision strengths, weakest first — the client relies on this
+ * order for its columns, so the route sorts model output into it. */
+type ProposalStrength = 'minimal' | 'moderate' | 'aggressive';
+const STRENGTHS: ProposalStrength[] = ['minimal', 'moderate', 'aggressive'];
+
 const PROPOSAL_SCHEMA = {
   name: 'rule_revision',
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['revised_rule', 'title', 'note'],
+    required: ['variants'],
     properties: {
-      revised_rule: { type: 'string' },
-      title: {
-        type: 'string',
-        description: 'a short label naming this rule, AT MOST 5 words, git-commit-subject style, no trailing period',
+      variants: {
+        type: 'array',
+        minItems: 3,
+        maxItems: 3,
+        description: 'exactly one variant per strength, minimal first',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['strength', 'revised_rule', 'title', 'note'],
+          properties: {
+            strength: { type: 'string', enum: ['minimal', 'moderate', 'aggressive'] },
+            revised_rule: { type: 'string' },
+            title: {
+              type: 'string',
+              description:
+                'a short label naming this rule, AT MOST 5 words, git-commit-subject style, no trailing period',
+            },
+            note: { type: 'string', description: 'one sentence: what changed and why' },
+          },
+        },
       },
-      note: { type: 'string', description: 'one sentence: what changed and why' },
     },
   },
 };
@@ -73,8 +93,12 @@ function buildSystemPrompt(): string {
     'You revise the SYSTEM PROMPT of a writing-support chatbot that students use for school assignments.',
     'An instructor groups student requests into "intents". Each intent owns a COMPLETE system prompt (its "rule"): whenever a student request matches that intent, the chatbot answers with that prompt and nothing else stacked underneath.',
     "You will get: the intent definition, the intent's current prompt, one anchor question with the response it produced, and the instructor's input.",
-    'Return the REVISED FULL PROMPT for this intent:',
-    "- MINIMAL EDIT: change only what the instructor's input demands; preserve everything else verbatim and do not restate unchanged parts differently.",
+    'Return THREE candidate revised full prompts, one per strength, minimal first:',
+    '- "minimal": change ONLY what the instructor\'s input demands; preserve everything else verbatim and do not restate unchanged parts differently.',
+    '- "moderate": fold the input in AND rework the part of the prompt it touches so the new behavior actually lands — say what to do instead, when it applies, and remove sentences that directly conflict. Leave unrelated parts as they are.',
+    '- "aggressive": re-author the prompt with the instructor\'s input as a central requirement. Reorganize freely, merge redundant instructions, drop what no longer earns its place — but keep every behavior the current prompt demands that the input does not contradict.',
+    'The three must genuinely differ in how much they change, not be three rewordings of one edit.',
+    'For every variant:',
     '- FEEDBACK mode: the input is a complaint about the response — fold it into the prompt as a durable instruction to the chatbot.',
     '- REWRITE mode: the input is the response rewritten the way the instructor wants it — infer the GENERALIZABLE change in behavior (tone, structure, what to withhold or ask), never the anchor-specific content.',
     "- The prompt only ever runs on requests matching this intent's definition, so it may speak directly to that kind of request. Imperative voice, addressed to the chatbot, coherent and self-contained; do not bloat it.",
@@ -157,19 +181,34 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       parts.join('\n\n'),
       getDefaultScoreModel(),
       'medium', // revision authoring warrants more deliberation than batch rating
-      PROPOSAL_SCHEMA
+      PROPOSAL_SCHEMA,
+      // Three full prompts is ~3× the output of the old single proposal — keep
+      // the call inside the route's 60s budget rather than the SDK default.
+      { timeoutMs: 55_000, maxRetries: 1 }
     );
     const parsed = extractJsonObject(raw);
-    const revisedRule = typeof parsed.revised_rule === 'string' ? parsed.revised_rule.trim() : '';
-    if (!revisedRule) throw new Error('proposal missing revised_rule');
+    // Sort model output into canonical strength order and drop malformed
+    // entries; one usable variant is enough to answer.
+    const rawVariants = Array.isArray(parsed.variants) ? parsed.variants : [];
+    const byStrength = new Map<ProposalStrength, { strength: ProposalStrength; revisedRule: string; title: string; note: string }>();
+    for (const v of rawVariants) {
+      const row = (v ?? {}) as Record<string, unknown>;
+      const strength = STRENGTHS.find((s) => s === row.strength);
+      const revisedRule = typeof row.revised_rule === 'string' ? row.revised_rule.trim() : '';
+      if (!strength || !revisedRule || byStrength.has(strength)) continue;
+      byStrength.set(strength, {
+        strength,
+        revisedRule,
+        title: typeof row.title === 'string' ? row.title.trim() : '',
+        note: typeof row.note === 'string' ? row.note.trim() : '',
+      });
+    }
+    const variants = STRENGTHS.map((s) => byStrength.get(s)).filter(
+      (v): v is NonNullable<typeof v> => v !== undefined
+    );
+    if (variants.length === 0) throw new Error('proposal produced no usable variant');
     await logStudyEvent(id, 'revise_submit', { condition: 'score', mode: body.mode, intentId, anchorMessageId: body.messageId });
-    return NextResponse.json({
-      revisedRule,
-      title: typeof parsed.title === 'string' ? parsed.title.trim() : '',
-      note: typeof parsed.note === 'string' ? parsed.note.trim() : '',
-      mode: body.mode,
-      raw,
-    });
+    return NextResponse.json({ variants, mode: body.mode, raw });
   } catch (error) {
     console.error(`SCORE rule proposal failed for intent ${intentId}:`, error);
     return NextResponse.json(

@@ -48,6 +48,7 @@ import { FEEDBACK_CHIPS } from '@/lib/score/feedback-chips';
 import { seedRuleVersionName } from '@/lib/score/intents';
 import RuleApplyPreview from './RuleApplyPreview';
 import QueryPicker from './QueryPicker';
+import ProposalPreviewModal, { type ProposalVariant } from './ProposalPreviewModal';
 import { timeAgo } from './IntentWorkbench';
 
 type RuleSource = 'direct' | 'feedback' | 'rewrite' | 'manual' | 'seed';
@@ -183,6 +184,14 @@ export default function RuleWorkbench({
   const [rewriteOpen, setRewriteOpen] = useState(false);
   const [rewriteText, setRewriteText] = useState('');
   const [proposing, setProposing] = useState(false);
+  // The variant chooser: a successful propose lands here; only the variant the
+  // instructor picks is recorded (Cancel records nothing).
+  const [proposal, setProposal] = useState<{
+    variants: ProposalVariant[];
+    mode: 'feedback' | 'rewrite';
+    origin: 'feedback' | 'rewrite';
+    baseRule: string | null;
+  } | null>(null);
   // A simulation (preview + minor record) is in flight.
   const [simulating, setSimulating] = useState(false);
 
@@ -458,21 +467,29 @@ export default function RuleWorkbench({
    * The core loop: regenerate the ACTIVE question's response under `rule`,
    * then record it as a MINOR version (checkout-able, revertible — the costly
    * LLM output never vanishes). The new step becomes the viewed state.
+   * `precomputed` skips the regeneration when the caller already holds this
+   * question's response under `rule` (the variant chooser generated it).
    */
   async function simulate(
     rule: string | null,
     source: RuleSource,
     name?: string,
-    note?: string
+    note?: string,
+    precomputed?: string
   ): Promise<{ versionNo: number } | null> {
     if (simulating) return null;
     setSimulating(true);
     setError(null);
     const gen = ++genRef.current;
     try {
-      const m = await fetchPreviews([activeId], rule);
-      if (!live()) return null;
-      const text = m.get(activeId) ?? null;
+      let text: string | null;
+      if (precomputed !== undefined) {
+        text = precomputed;
+      } else {
+        const m = await fetchPreviews([activeId], rule);
+        if (!live()) return null;
+        text = m.get(activeId) ?? null;
+      }
       const res = await fetch(`${base}/intents/${intent.id}/rule-versions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -501,6 +518,11 @@ export default function RuleWorkbench({
     }
   }
 
+  /**
+   * Ask the agent for revision candidates. The route returns up to three
+   * strength variants; nothing is recorded here — the chooser modal opens and
+   * only the variant the instructor picks becomes a step (chooseVariant).
+   */
   async function propose(payload: object, origin: 'feedback' | 'rewrite'): Promise<void> {
     setProposing(true);
     setError(null);
@@ -516,27 +538,47 @@ export default function RuleWorkbench({
         throw new Error(typeof data?.message === 'string' ? data.message : 'Proposal failed.');
       }
       if (!live()) return;
-      const created = await simulate(
-        (data.revisedRule as string) ?? null,
-        (data.mode as 'feedback' | 'rewrite') ?? 'feedback',
-        (data.title as string) || undefined,
-        (data.note as string) || undefined
-      );
-      if (created && live()) {
-        pushChat({
-          role: 'agent',
-          name: (data.title as string) || 'Revised rule',
-          text: (data.note as string) || '',
-          rule: (data.revisedRule as string) ?? null,
-          versionNo: created.versionNo,
-        });
-        if (origin === 'feedback') setFeedback('');
-        if (origin === 'rewrite') setRewriteOpen(false);
-      }
+      const variants = (Array.isArray(data.variants) ? data.variants : []) as ProposalVariant[];
+      if (variants.length === 0) throw new Error('The proposal came back empty — try again.');
+      setProposal({
+        variants,
+        mode: (data.mode as 'feedback' | 'rewrite') ?? 'feedback',
+        origin,
+        // Diff against the rule the proposal revised — the viewed rule at
+        // submit time (draftRule), not whatever is viewed when the modal
+        // renders.
+        baseRule: viewed?.rule ?? null,
+      });
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
     } finally {
       if (live()) setProposing(false);
+    }
+  }
+
+  /** The instructor picked a variant in the chooser — record it as a minor
+   * step (reusing its already-generated preview when it has one) and log the
+   * exchange. Cancel never reaches here: nothing gets recorded. */
+  async function chooseVariant(v: ProposalVariant, previewText: string | null) {
+    if (!proposal) return;
+    const created = await simulate(
+      v.revisedRule,
+      proposal.mode,
+      v.title || undefined,
+      v.note || undefined,
+      previewText ?? undefined
+    );
+    if (created && live()) {
+      pushChat({
+        role: 'agent',
+        name: v.title || 'Revised rule',
+        text: v.note || '',
+        rule: v.revisedRule,
+        versionNo: created.versionNo,
+      });
+      if (proposal.origin === 'feedback') setFeedback('');
+      if (proposal.origin === 'rewrite') setRewriteOpen(false);
+      setProposal(null);
     }
   }
 
@@ -1477,6 +1519,21 @@ export default function RuleWorkbench({
           isNirvana={isNirvana}
           onAdd={(ids) => void addExamples(ids)}
           onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {/* THE VARIANT CHOOSER — three strengths of the proposed revision, each
+          with its rule diff and regenerated response; picking one records it. */}
+      {proposal && (
+        <ProposalPreviewModal
+          assignmentId={assignmentId}
+          intentId={intent.id}
+          baseRule={proposal.baseRule}
+          variants={proposal.variants}
+          row={activeRow}
+          busy={simulating}
+          onChoose={(v, text) => void chooseVariant(v, text)}
+          onClose={() => !simulating && setProposal(null)}
         />
       )}
     </div>
