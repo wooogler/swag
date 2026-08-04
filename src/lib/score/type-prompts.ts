@@ -26,7 +26,13 @@
  */
 import { SCORE_QUERY_TYPES, type ScoreQueryType } from './intents';
 
-const TYPE_DEFINITIONS: Record<ScoreQueryType, string> = {
+/**
+ * What puts a message in each type. Exported because the board shows it: a type
+ * root's WHEN is read-only, and the honest way to render a condition nobody can
+ * edit is to show the text the classifier was actually given — not a paraphrase
+ * of it that can drift away from the judgment it describes.
+ */
+export const TYPE_DEFINITIONS: Record<ScoreQueryType, string> = {
   planning:
     'The student is deciding WHAT to write, and asks for no essay text in return — a question about the topic, examples or factual information, a suggested structure or list of topics, expanding or comparing ideas, or interpreting the assignment prompt.',
   translating:

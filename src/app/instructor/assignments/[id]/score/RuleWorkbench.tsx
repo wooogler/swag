@@ -306,6 +306,13 @@ interface RuleWorkbenchProps {
   scopeMessageIds?: number[] | null;
   /** Header/copy name for a scoped promptMode rule (e.g. "Planning"). */
   scopeLabel?: string | null;
+  /** A WHEN nobody authored, shown READ-ONLY. A type root's rule fires on
+   * whatever its type leaves unclaimed: half of that condition is the type
+   * classifier's own definition, half is the chain's shape — neither is a
+   * sentence there is a box to edit. Rendered in the same slot an intent's
+   * definition occupies so the rule is never shown without the question it
+   * answers. Omitted (baseline) → no WHEN at all: that rule has no trigger. */
+  fixedWhen?: { summary: string; definition?: string; definitionLabel?: string; note: string } | null;
 }
 
 export default function RuleWorkbench({
@@ -321,6 +328,7 @@ export default function RuleWorkbench({
   promptMode = false,
   scopeMessageIds = null,
   scopeLabel = null,
+  fixedWhen = null,
 }: RuleWorkbenchProps) {
   const base = `/api/instructor/assignments/${assignmentId}/score`;
   // Full conversation — replaces the MIDDLE column in place (shared thread view).
@@ -1182,8 +1190,12 @@ export default function RuleWorkbench({
         {/* LEFT — WHEN (read-only) · THEN (editable rule) · rule history */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
           <div className="p-4 space-y-3">
-            {/* WHEN — intent-only; the baseline's rules have no trigger condition. */}
-            {!promptMode && (
+            {/* WHEN — an intent's authored definition. Read-only here: this
+                screen is for the Then; the When is edited in the intent
+                workbench. The baseline's rule has no trigger condition at all,
+                so promptMode falls through to `fixedWhen` (a type root) or to
+                nothing (the monolithic prompt). */}
+            {!promptMode ? (
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   When a student…
@@ -1192,12 +1204,43 @@ export default function RuleWorkbench({
                   {intent.definition}
                 </p>
               </div>
-            )}
+            ) : fixedWhen ? (
+              /* A type root's WHEN. Shown, because a rule with no visible
+                 trigger reads as "applies to everything" — which is the one
+                 thing this rule does NOT do. Read-only, because there is
+                 nothing here anyone authored: see `fixedWhen`. */
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  When a student…
+                </p>
+                <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))] whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2">
+                  {fixedWhen.summary}
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed text-[hsl(var(--muted-foreground))]">
+                  {fixedWhen.note}
+                </p>
+                {/* The classifier's own words for the type, verbatim — folded
+                    away because it is reference, not the condition's headline. */}
+                {fixedWhen.definition && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-[11px] font-medium text-[hsl(var(--primary))] hover:underline">
+                      What counts as {fixedWhen.definitionLabel ?? 'this type'}?
+                    </summary>
+                    <p className="mt-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20 p-2 text-[11px] leading-relaxed text-[hsl(var(--muted-foreground))]">
+                      {fixedWhen.definition}
+                    </p>
+                  </details>
+                )}
+              </div>
+            ) : null}
 
             <div>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  {promptMode
+                  {/* A When above it makes this half of a pair — label it as one.
+                      Only the baseline's monolithic prompt (no When) keeps the
+                      bare "Rules". */}
+                  {promptMode && !fixedWhen
                     ? `Rules${viewed ? ` · ${versionLabel(viewed)}` : ''}`
                     : `Then… (rule${viewed ? ` · ${versionLabel(viewed)}` : ''})`}
                 </p>
@@ -1242,9 +1285,11 @@ export default function RuleWorkbench({
                 onChange={(e) => !readOnly && setRuleText(e.target.value)}
                 readOnly={readOnly}
                 placeholder={
-                  promptMode
-                    ? 'Empty — the chatbot answers with no rules at all.'
-                    : 'Empty — this intent has no rule of its own yet.'
+                  fixedWhen
+                    ? 'Empty — the questions above get no system prompt at all.'
+                    : promptMode
+                      ? 'Empty — the chatbot answers with no rules at all.'
+                      : 'Empty — this intent has no rule of its own yet.'
                 }
                 title={readOnly ? 'Viewing an old step — Revert to make it live, or Latest to edit' : undefined}
                 className={`mt-1 w-full min-h-[200px] resize-none overflow-hidden text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${

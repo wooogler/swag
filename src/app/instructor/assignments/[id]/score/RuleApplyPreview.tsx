@@ -22,11 +22,21 @@ import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments, QuerySnippet } from './materials';
 import { WorkbenchTopBar } from './workbench-shared';
 import { ResponseBody } from './conversation';
+import { sortQueryRows, type QuerySortMode } from './query-list';
+import { getJSON } from './http';
 
 /** Batch cap of the preview endpoint (MAX_PREVIEW_MESSAGES mirror). */
 const BATCH = 6;
 /** Questions revealed / generated per "Load more" page. */
 const PAGE = 10;
+
+// Same sort set the old Add-example picker had (QueryPicker): the shared
+// dashboard modes plus the anchor-distance "Most different" — it moved here
+// with the picker's job when Add example merged into this preview.
+type PreviewSort = QuerySortMode | 'different';
+
+const SORT_CLASS =
+  'text-[11px] border border-[hsl(var(--border))] rounded px-1.5 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]';
 
 interface RuleApplyPreviewProps {
   assignmentId: string;
@@ -86,21 +96,71 @@ export default function RuleApplyPreview({
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
   const selectedRow = rowById.get(selectedId) ?? null;
-  const visibleIds = useMemo(() => queryIds.slice(0, visible), [queryIds, visible]);
   const includedCount = useMemo(() => rows.filter((r) => r.pinnedIntents[intent.id] === 'in').length, [rows, intent.id]);
   const excludedCount = useMemo(() => rows.filter((r) => r.pinnedIntents[intent.id] === 'out').length, [rows, intent.id]);
+
+  // Sorting — the anchor stays pinned first (it is the question under
+  // revision); the rest reorder. "Most different" ranks by anchor distance so
+  // the questions most likely to break the rule surface early.
+  const [sortMode, setSortMode] = useState<PreviewSort>('different');
+  // Cosine to the anchor per messageId; null = loading, {} = unavailable.
+  const [distances, setDistances] = useState<Record<number, number> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getJSON<{ scores?: Record<number, number> }>(`${base}/intents/${intent.id}/similar?anchor=${anchorId}`)
+      .then((d) => {
+        if (!alive) return;
+        const s = d.scores ?? {};
+        setDistances(s);
+        if (Object.keys(s).length === 0) setSortMode('recent');
+      })
+      .catch(() => {
+        if (!alive) return;
+        setDistances({});
+        setSortMode('recent');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [base, intent.id, anchorId]);
+
+  const sortedIds = useMemo(() => {
+    const rest = queryIds.filter((id) => id !== anchorId);
+    const restRows = rest
+      .map((id) => rowById.get(id))
+      .filter((r): r is ScoreQueryRow => r !== undefined);
+    let ordered: number[];
+    if (sortMode === 'different') {
+      if (!distances) {
+        ordered = rest; // hold the given order until scores land
+      } else {
+        // Farthest first = ascending cosine; unscored sink to the bottom.
+        const scored = restRows.filter((r) => typeof distances[r.messageId] === 'number');
+        const unscored = restRows.filter((r) => typeof distances[r.messageId] !== 'number');
+        scored.sort((a, b) => distances[a.messageId] - distances[b.messageId]);
+        ordered = [...scored, ...unscored].map((r) => r.messageId);
+      }
+    } else {
+      ordered = sortQueryRows(restRows, sortMode).map((r) => r.messageId);
+    }
+    return [anchorId, ...ordered];
+  }, [queryIds, anchorId, rowById, sortMode, distances]);
+
+  const visibleIds = useMemo(() => sortedIds.slice(0, visible), [sortedIds, visible]);
 
   const doneCount = visibleIds.filter((id) => gen.has(id)).length;
   const failedCount = visibleIds.filter((id) => gen.has(id) && gen.get(id) === null).length;
   const allVisibleDone = doneCount >= visibleIds.length;
   const moreToLoad = visible < queryIds.length;
 
-  // Generate the missing responses for the VISIBLE page, batch by batch. Re-runs
-  // when the page grows (Load more) — only the newly-revealed ids are missing.
+  // Generate the missing responses for the VISIBLE page, batch by batch.
+  // Re-runs when the page grows (Load more) or the sort reorders which ids are
+  // visible — only ids without a response are fetched, so reordering never
+  // regenerates what already exists.
   useEffect(() => {
     const controller = new AbortController();
     void (async () => {
-      const missing = queryIds.slice(0, visible).filter((id) => !genRef.current.has(id));
+      const missing = visibleIds.filter((id) => !genRef.current.has(id));
       for (let i = 0; i < missing.length; i += BATCH) {
         const batch = missing.slice(i, i + BATCH);
         try {
@@ -134,11 +194,33 @@ export default function RuleApplyPreview({
     })();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
+  }, [visibleIds]);
 
   const selectedGen = gen.get(selectedId);
   const selectedPending = !gen.has(selectedId);
   const selectedOriginal = selectedRow?.responseText?.trim() ? selectedRow.responseText : null;
+
+  // The picker's sort set, anchor pinned. Reordering only changes which page
+  // generates next — existing responses are never thrown away.
+  const sortControl = (
+    <span className="flex items-center gap-1.5">
+      {sortMode === 'different' && distances === null && (
+        <Loader2 className="w-3 h-3 animate-spin text-[hsl(var(--muted-foreground))]" />
+      )}
+      <select
+        value={sortMode}
+        onChange={(e) => setSortMode(e.target.value as PreviewSort)}
+        className={SORT_CLASS}
+        title="Order the questions (the ★ anchor stays first)"
+      >
+        <option value="different">Most different</option>
+        <option value="participant-asc">PID ↑</option>
+        <option value="participant-desc">PID ↓</option>
+        <option value="recent">Newest</option>
+        <option value="oldest">Oldest</option>
+      </select>
+    </span>
+  );
 
   const ruleHeader = (label: string, rule: string | null, accent: boolean) => (
     <div
@@ -188,10 +270,11 @@ export default function RuleApplyPreview({
         {/* LEFT — scope + questions with generation status. */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
           {promptMode ? (
-            <div className="shrink-0 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-2">
+            <div className="shrink-0 flex items-center justify-between gap-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-1.5">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                 All questions · {queryIds.length}
               </span>
+              {sortControl}
             </div>
           ) : (
             <>
@@ -209,10 +292,11 @@ export default function RuleApplyPreview({
                   <span className="font-normal"> — your boundary labels</span>
                 </p>
               </div>
-              <div className="shrink-0 px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))]">
+              <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))]">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   In this intent · {queryIds.length}
                 </span>
+                {sortControl}
               </div>
             </>
           )}

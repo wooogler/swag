@@ -22,6 +22,7 @@ import {
   type RouteResolution,
   type ScoreQueryType,
 } from '@/lib/score/intents';
+import { TYPE_DEFINITIONS } from '@/lib/score/type-prompts';
 import { SCORE_RATING_MODEL } from '@/lib/score/models';
 import { runShardedRate } from './rate-runner';
 import {
@@ -566,6 +567,32 @@ function ClampedText({ text, muted = false }: { text: string; muted?: boolean })
       )}
     </span>
   );
+}
+
+/**
+ * The WHEN of a type's default rule, in words — the one condition on the board
+ * that no instructor wrote and none can edit.
+ *
+ * A set's When is a definition someone typed and a judge evaluates. A type
+ * root's is the leftover of two mechanisms: the type classifier put the
+ * question in this type, and no set inside the type claimed it. So it is shown
+ * READ-ONLY, with the classifier's own definition available underneath rather
+ * than a paraphrase — and with the note that says how to actually narrow it
+ * (add a set), since the missing textbox otherwise reads as a bug.
+ */
+function typeRootWhen(type: ScoreQueryType): {
+  summary: string;
+  definition: string;
+  definitionLabel: string;
+  note: string;
+} {
+  const label = QUERY_TYPE_LABELS[type];
+  return {
+    summary: `asks a ${label} question that none of the sets inside ${label} capture.`,
+    definition: TYPE_DEFINITIONS[type],
+    definitionLabel: label,
+    note: `Every ${label} question falls here unless a set takes it first, so this rule is the type's last resort — there is nothing to narrow it with. To answer some of these questions differently, add a set inside ${label}; whatever it captures stops arriving here.`,
+  };
 }
 
 /** The header's label gutter — "When" / "Then" / "Set", one fixed column so the
@@ -2216,9 +2243,10 @@ export default function IntentBoard({
           }}
         />
       ) : rootReviseTarget ? (
-        /* TYPE ROOT rule — no WHEN of its own (it is the type's final else), so
-           it reuses the promptMode workbench, scoped to the questions the type
-           actually leaves unclaimed. */
+        /* TYPE ROOT rule — no AUTHORED When (it is the type's final else), so it
+           reuses the promptMode workbench, scoped to the questions the type
+           actually leaves unclaimed. The condition still exists and is still
+           narrow, so it is shown read-only via `fixedWhen`. */
         <RuleWorkbench
           key={`root-${rootReviseTarget.root.id}-${rootReviseTarget.row.messageId}`}
           assignmentId={assignmentId}
@@ -2252,6 +2280,7 @@ export default function IntentBoard({
             )
             .map((r) => r.messageId)}
           scopeLabel={QUERY_TYPE_LABELS[rootReviseTarget.root.type]}
+          fixedWhen={typeRootWhen(rootReviseTarget.root.type)}
           onClose={(changed) => {
             setRootReviseTarget(null);
             if (changed) {
@@ -2667,37 +2696,48 @@ export default function IntentBoard({
                     r.queryType === root.type &&
                     resolutions.get(r.messageId)?.kind === 'type_default'
                 ) ?? null;
+              const when = typeRootWhen(root.type);
               return (
-                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20 flex items-start gap-2">
-                  <DetailLabel>Then</DetailLabel>
-                  {root.rule?.trim() ? (
-                    <ClampedText text={root.rule} />
-                  ) : (
-                    <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
-                      No rule yet — these questions get no system prompt
-                    </span>
-                  )}
-                  {root.latestRuleVersion && (
-                    <SmallChip
-                      className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200"
-                      title={`Latest saved rule version${root.latestRuleVersion.name ? ` — ${root.latestRuleVersion.name}` : ''}`}
+                <div className="px-3 py-2 space-y-1.5 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
+                  {/* Same When/Then pair a set gets. That it is read-only is
+                      said by the ABSENCE of the Edit Intent action a set's When
+                      carries — not by a badge, which only labels the row without
+                      telling anyone what to do about it. The why is on hover. */}
+                  <div className="flex items-start gap-2" title={when.note}>
+                    <DetailLabel>When</DetailLabel>
+                    <ClampedText text={`A student ${when.summary}`} muted />
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <DetailLabel>Then</DetailLabel>
+                    {root.rule?.trim() ? (
+                      <ClampedText text={root.rule} />
+                    ) : (
+                      <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
+                        No rule yet — these questions get no system prompt
+                      </span>
+                    )}
+                    {root.latestRuleVersion && (
+                      <SmallChip
+                        className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200"
+                        title={`Latest saved rule version${root.latestRuleVersion.name ? ` — ${root.latestRuleVersion.name}` : ''}`}
+                      >
+                        v{root.latestRuleVersion.versionNo}
+                        {root.latestRuleVersion.name ? ` · ${root.latestRuleVersion.name}` : ''}
+                      </SmallChip>
+                    )}
+                    <HeaderAction
+                      onClick={() => anchor && setRootReviseTarget({ row: anchor, root })}
+                      disabled={!anchor}
+                      title={
+                        anchor
+                          ? `Edit the ${QUERY_TYPE_LABELS[root.type]} rule — how unclaimed questions here are answered`
+                          : 'Every question here is claimed by a set — edit those rules instead'
+                      }
+                      icon={<Pencil className="w-3 h-3" />}
                     >
-                      v{root.latestRuleVersion.versionNo}
-                      {root.latestRuleVersion.name ? ` · ${root.latestRuleVersion.name}` : ''}
-                    </SmallChip>
-                  )}
-                  <HeaderAction
-                    onClick={() => anchor && setRootReviseTarget({ row: anchor, root })}
-                    disabled={!anchor}
-                    title={
-                      anchor
-                        ? `Edit the ${QUERY_TYPE_LABELS[root.type]} rule — how unclaimed questions here are answered`
-                        : 'Every question here is claimed by a set — edit those rules instead'
-                    }
-                    icon={<Pencil className="w-3 h-3" />}
-                  >
-                    Edit Rule
-                  </HeaderAction>
+                      Edit Rule
+                    </HeaderAction>
+                  </div>
                 </div>
               );
             }
