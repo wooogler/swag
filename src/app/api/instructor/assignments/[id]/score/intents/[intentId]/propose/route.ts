@@ -17,11 +17,17 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntents } from '@/db/schema';
-import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
 import { ensureIntentTables } from '@/lib/score/intent-store';
 import { getDefaultScoreModel } from '@/lib/score/models';
+import {
+  buildProposeSystemPrompt,
+  buildProposeUserContent,
+  PROPOSAL_SCHEMA,
+  PROPOSAL_STRENGTHS,
+  type ProposalStrength,
+} from '@/lib/score/propose-prompt';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
 import { logStudyEvent } from '@/lib/study/events';
 
@@ -72,63 +78,6 @@ const bodySchema = z.discriminatedUnion('mode', [
   }),
 ]);
 
-/** The three revision strengths, weakest first — the client relies on this
- * order for its columns, so the route sorts model output into it. */
-type ProposalStrength = 'minimal' | 'moderate' | 'aggressive';
-const STRENGTHS: ProposalStrength[] = ['minimal', 'moderate', 'aggressive'];
-
-const PROPOSAL_SCHEMA = {
-  name: 'rule_revision',
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    required: ['variants'],
-    properties: {
-      variants: {
-        type: 'array',
-        minItems: 3,
-        maxItems: 3,
-        description: 'exactly one variant per strength, minimal first',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['strength', 'revised_rule', 'title', 'note'],
-          properties: {
-            strength: { type: 'string', enum: ['minimal', 'moderate', 'aggressive'] },
-            revised_rule: { type: 'string' },
-            title: {
-              type: 'string',
-              description:
-                'a short label naming this rule, AT MOST 5 words, git-commit-subject style, no trailing period',
-            },
-            note: { type: 'string', description: 'one sentence: what changed and why' },
-          },
-        },
-      },
-    },
-  },
-};
-
-function buildSystemPrompt(): string {
-  return [
-    'You revise the SYSTEM PROMPT of a writing-support chatbot that students use for school assignments.',
-    'An instructor groups student requests into "intents". Each intent owns a COMPLETE system prompt (its "rule"): whenever a student request matches that intent, the chatbot answers with that prompt and nothing else stacked underneath.',
-    "You will get: the intent definition, the intent's current prompt, one anchor question with the response it produced, and the instructor's input.",
-    'Return THREE candidate revised full prompts, one per strength, minimal first:',
-    '- "minimal": change ONLY what the instructor\'s input demands; preserve everything else verbatim and do not restate unchanged parts differently.',
-    '- "moderate": fold the input in AND rework the part of the prompt it touches so the new behavior actually lands — say what to do instead, when it applies, and remove sentences that directly conflict. Leave unrelated parts as they are.',
-    '- "aggressive": re-author the prompt with the instructor\'s input as a central requirement. Reorganize freely, merge redundant instructions, drop what no longer earns its place — but keep every behavior the current prompt demands that the input does not contradict.',
-    'The three must genuinely differ in how much they change, not be three rewordings of one edit.',
-    'For every variant:',
-    '- FEEDBACK mode: the input is a complaint about the response — fold it into the prompt as a durable instruction to the chatbot.',
-    '- REWRITE mode: the input is the response rewritten the way the instructor wants it — infer the GENERALIZABLE change in behavior (tone, structure, what to withhold or ask), never the anchor-specific content.',
-    "- The prompt only ever runs on requests matching this intent's definition, so it may speak directly to that kind of request. Imperative voice, addressed to the chatbot, coherent and self-contained; do not bloat it.",
-    '- Also give a short TITLE naming this revision: at most 5 words, git-commit-subject style, no trailing period (e.g. "Scaffold, don\'t write").',
-    '- The note is one sentence for the instructor: what you changed and why.',
-    'Answer in the required JSON shape.',
-  ].join('\n');
-}
-
 export async function POST(req: Request, { params }: { params: Promise<{ id: string; intentId: string }> }) {
   const { id, intentId: intentIdRaw } = await params;
   const auth = await authorizeAssignment(id);
@@ -175,45 +124,30 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   // The rule under revision: the pending draft when the sweep loop is
   // hardening an unapplied proposal, else the saved rule. An empty-string
-  // draft means "no rule" — same as null.
+  // draft means "no rule" — same as null. NO base-prompt fallback: v7's
+  // runtime injects the rule verbatim (buildInjectedSystemPrompt), so telling
+  // the agent to preserve a default prompt the runtime never sends was a bug.
   const baseRule = body.draftRule !== undefined ? body.draftRule || null : intent.rule;
-  // Exactly what the runtime would send for this intent (buildInjectedSystemPrompt):
-  // the rule, or the assignment default when the rule is empty.
-  const currentPrompt = baseRule?.trim() || assignmentBasePrompt(auth.assignment).trim();
-  const parts = [
-    `INTENT DEFINITION (when a student…): ${intent.definition}`,
-    `CURRENT PROMPT FOR THIS INTENT:\n${
-      currentPrompt || '(empty — the chatbot currently answers these requests with no system prompt at all)'
-    }`,
-    `ANCHOR QUESTION:\n${anchor.queryText}`,
-  ];
-  if (body.priorExchanges && body.priorExchanges.length > 0) {
-    parts.push(
-      `REVISIONS ALREADY MADE THIS SESSION (oldest first — the current prompt reflects them; do not undo them, and read the new input in their context, e.g. "stronger" means stronger than the last step):\n${body.priorExchanges
-        .map((x) => `- asked: ${x.instruction}${x.note ? `\n  did: ${x.note}` : ''}`)
-        .join('\n')}`
-    );
-  }
-  if (body.currentResponse) {
-    parts.push(`RESPONSE THE INSTRUCTOR IS LOOKING AT:\n${body.currentResponse}`);
-  }
-  if (body.mode === 'feedback') {
-    parts.push(`INSTRUCTOR FEEDBACK (fold into the prompt):\n${body.feedback}`);
-  } else {
-    parts.push(`RESPONSE AS THE INSTRUCTOR REWROTE IT (infer the generalizable prompt change):\n${body.editedResponse}`);
-    if (body.changeIntents && body.changeIntents.length > 0) {
-      parts.push(
-        `INTENTS THE INSTRUCTOR CONFIRMED BEHIND THE REWRITE — each is a requirement; fold each into the prompt as a durable, generalizable instruction, using the rewrite as its evidence:\n${body.changeIntents
-          .map((s) => `- ${s}`)
-          .join('\n')}`
-      );
-    }
-  }
+  const user = buildProposeUserContent({
+    definition: intent.definition,
+    currentRule: baseRule,
+    anchor: {
+      queryText: anchor.queryText,
+      prevQueryText: anchor.prevQueryText,
+      prevResponseText: anchor.prevResponseText,
+    },
+    priorExchanges: body.priorExchanges,
+    currentResponse: body.currentResponse,
+    input:
+      body.mode === 'feedback'
+        ? { mode: 'feedback', feedback: body.feedback }
+        : { mode: 'rewrite', editedResponse: body.editedResponse, changeIntents: body.changeIntents },
+  });
 
   try {
     const raw = await callModel(
-      buildSystemPrompt(),
-      parts.join('\n\n'),
+      buildProposeSystemPrompt(),
+      user,
       getDefaultScoreModel(),
       'medium', // revision authoring warrants more deliberation than batch rating
       PROPOSAL_SCHEMA,
@@ -228,7 +162,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const byStrength = new Map<ProposalStrength, { strength: ProposalStrength; revisedRule: string; title: string; note: string }>();
     for (const v of rawVariants) {
       const row = (v ?? {}) as Record<string, unknown>;
-      const strength = STRENGTHS.find((s) => s === row.strength);
+      const strength = PROPOSAL_STRENGTHS.find((s) => s === row.strength);
       const revisedRule = typeof row.revised_rule === 'string' ? row.revised_rule.trim() : '';
       if (!strength || !revisedRule || byStrength.has(strength)) continue;
       byStrength.set(strength, {
@@ -238,7 +172,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         note: typeof row.note === 'string' ? row.note.trim() : '',
       });
     }
-    const variants = STRENGTHS.map((s) => byStrength.get(s)).filter(
+    const variants = PROPOSAL_STRENGTHS.map((s) => byStrength.get(s)).filter(
       (v): v is NonNullable<typeof v> => v !== undefined
     );
     if (variants.length === 0) throw new Error('proposal produced no usable variant');

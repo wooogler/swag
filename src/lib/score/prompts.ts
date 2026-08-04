@@ -23,7 +23,7 @@ export const MAX_PRIOR_RESPONSE_CHARS = 2000;
  * END — a plain prefix slice silently deletes trailing instructions, which is
  * exactly the part that carries intent.
  */
-function headTail(text: string, maxChars: number): string {
+export function headTail(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const head = Math.floor(maxChars * 0.7);
   const tail = maxChars - head;
