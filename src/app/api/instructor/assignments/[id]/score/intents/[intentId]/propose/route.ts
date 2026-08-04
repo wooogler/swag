@@ -48,6 +48,11 @@ const bodySchema = z.discriminatedUnion('mode', [
     editedResponse: z.string().trim().min(1).max(20000),
     currentResponse: z.string().trim().max(20000).optional(),
     draftRule: z.string().trim().max(8000).nullable().optional(),
+    /** The intents the instructor CONFIRMED behind the rewrite (the
+     * rewrite-intents step) — treated as requirements, with the rewrite itself
+     * as their evidence. A before/after pair alone underdetermines what the
+     * instructor meant; these pin it down. */
+    changeIntents: z.array(z.string().trim().min(1).max(200)).max(6).optional(),
   }),
 ]);
 
@@ -173,6 +178,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     parts.push(`INSTRUCTOR FEEDBACK (fold into the prompt):\n${body.feedback}`);
   } else {
     parts.push(`RESPONSE AS THE INSTRUCTOR REWROTE IT (infer the generalizable prompt change):\n${body.editedResponse}`);
+    if (body.changeIntents && body.changeIntents.length > 0) {
+      parts.push(
+        `INTENTS THE INSTRUCTOR CONFIRMED BEHIND THE REWRITE — each is a requirement; fold each into the prompt as a durable, generalizable instruction, using the rewrite as its evidence:\n${body.changeIntents
+          .map((s) => `- ${s}`)
+          .join('\n')}`
+      );
+    }
   }
 
   try {

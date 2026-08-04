@@ -192,6 +192,15 @@ export default function RuleWorkbench({
     origin: 'feedback' | 'rewrite';
     baseRule: string | null;
   } | null>(null);
+  // The rewrite-intent confirmation step: before proposing from a rewrite, the
+  // agent reads the edit and offers what it might MEAN; the instructor
+  // confirms. A before/after pair alone underdetermines the intent.
+  const [rewriteStep, setRewriteStep] = useState<{
+    loading: boolean;
+    options: string[];
+    selected: Set<string>;
+    custom: string;
+  } | null>(null);
   // A simulation (preview + minor record) is in flight.
   const [simulating, setSimulating] = useState(false);
 
@@ -264,6 +273,11 @@ export default function RuleWorkbench({
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [chat.length]);
+
+  // Closing the rewrite panel drops any pending intent-confirmation step.
+  useEffect(() => {
+    if (!rewriteOpen) setRewriteStep(null);
+  }, [rewriteOpen]);
 
   function pushChat(entry: Omit<ChatEntry, 'id'>) {
     setChat((prev) => [...prev, { ...entry, id: ++chatIdRef.current }]);
@@ -554,6 +568,65 @@ export default function RuleWorkbench({
     } finally {
       if (live()) setProposing(false);
     }
+  }
+
+  /** Rewrite step 1: have the agent read the edit and surface candidate
+   * intents to confirm. Any failure degrades to the direct propose — the
+   * confirmation step is an aid, never a gate. */
+  async function analyzeRewrite() {
+    const edited = rewriteText.trim();
+    if (!edited || proposing || simulating) return;
+    setRewriteStep({ loading: true, options: [], selected: new Set(), custom: '' });
+    setError(null);
+    try {
+      const res = await fetch(`${base}/intents/${intent.id}/rewrite-intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messageId: activeId,
+          editedResponse: edited,
+          ...(displayedResponse ? { currentResponse: displayedResponse } : {}),
+        }),
+        signal: signal(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error('analysis failed');
+      if (!live()) return;
+      const options = (Array.isArray(data.intents) ? data.intents : []).filter(
+        (s: unknown): s is string => typeof s === 'string' && s.trim().length > 0
+      );
+      if (options.length === 0) throw new Error('analysis empty');
+      // "Propose anyway" may already have fired during the wait — prev is null
+      // then, and the late analysis must not resurrect the step.
+      setRewriteStep((prev) => (prev ? { ...prev, loading: false, options } : prev));
+    } catch (e) {
+      if ((e as Error)?.name === 'AbortError' || !live()) return;
+      setRewriteStep(null);
+      submitRewrite([]);
+    }
+  }
+
+  /** Rewrite step 2: propose, carrying the confirmed intents (possibly none). */
+  function submitRewrite(intents: string[]) {
+    pushChat({
+      role: 'user',
+      text:
+        intents.length > 0
+          ? `Rewrote the response — meaning:\n${intents.map((s) => `· ${s}`).join('\n')}`
+          : 'Rewrote the response — infer the rule change.',
+    });
+    void propose(
+      {
+        mode: 'rewrite',
+        messageId: activeId,
+        editedResponse: rewriteText.trim(),
+        // The edit was made AGAINST the displayed response.
+        currentResponse: displayedResponse ?? undefined,
+        ...(viewed?.rule ? { draftRule: viewed.rule } : {}),
+        ...(intents.length > 0 ? { changeIntents: intents } : {}),
+      },
+      'rewrite'
+    );
   }
 
   /** The instructor picked a variant in the chooser — record it as a minor
@@ -1266,42 +1339,114 @@ export default function RuleWorkbench({
                           <textarea
                             value={rewriteText}
                             onChange={(e) => setRewriteText(e.target.value)}
+                            readOnly={rewriteStep !== null}
                             rows={14}
-                            className="w-full resize-y text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
+                            title={rewriteStep !== null ? 'Back returns to editing the rewrite' : undefined}
+                            className={`w-full resize-y text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
+                              rewriteStep !== null
+                                ? 'bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]'
+                                : 'bg-[hsl(var(--background))]'
+                            }`}
                           />
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => setRewriteOpen(false)}
-                              className="px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              onClick={() => {
-                                pushChat({ role: 'user', text: 'Rewrote the response — infer the rule change.' });
-                                void propose(
-                                  {
-                                    mode: 'rewrite',
-                                    messageId: activeId,
-                                    editedResponse: rewriteText.trim(),
-                                    // The edit was made AGAINST the displayed response.
-                                    currentResponse: displayedResponse ?? undefined,
-                                    ...(viewed?.rule ? { draftRule: viewed.rule } : {}),
-                                  },
-                                  'rewrite'
-                                );
-                              }}
-                              disabled={proposing || simulating || !rewriteText.trim()}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                            >
-                              {proposing || simulating ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : (
+                          {rewriteStep === null ? (
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => setRewriteOpen(false)}
+                                className="px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => void analyzeRewrite()}
+                                disabled={proposing || simulating || !rewriteText.trim()}
+                                title="The agent reads your edit, asks what you meant, then proposes the rule"
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                              >
                                 <Wand2 className="w-3 h-3" />
+                                Propose rule from my rewrite
+                              </button>
+                            </div>
+                          ) : (
+                            /* THE CONFIRMATION STEP — what the rewrite MEANS, as
+                               checkable intents. Confirmed ones steer the
+                               proposal; "Propose anyway" skips the wait. */
+                            <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2.5 space-y-2">
+                              <p className="text-xs font-medium text-[hsl(var(--foreground))]">
+                                What should this change in general?{' '}
+                                <span className="font-normal text-[hsl(var(--muted-foreground))]">
+                                  Confirm what you meant — it steers the new rule.
+                                </span>
+                              </p>
+                              {rewriteStep.loading ? (
+                                <p className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+                                  <Loader2 className="w-3 h-3 animate-spin" /> Reading your edit…
+                                </p>
+                              ) : (
+                                <div className="space-y-1">
+                                  {rewriteStep.options.map((opt) => (
+                                    <label key={opt} className="flex items-start gap-2 text-xs cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        className="mt-0.5 shrink-0"
+                                        checked={rewriteStep.selected.has(opt)}
+                                        onChange={() =>
+                                          setRewriteStep((prev) => {
+                                            if (!prev) return prev;
+                                            const next = new Set(prev.selected);
+                                            if (next.has(opt)) next.delete(opt);
+                                            else next.add(opt);
+                                            return { ...prev, selected: next };
+                                          })
+                                        }
+                                      />
+                                      <span>{opt}</span>
+                                    </label>
+                                  ))}
+                                </div>
                               )}
-                              Propose rule from my rewrite
-                            </button>
-                          </div>
+                              <input
+                                value={rewriteStep.custom}
+                                onChange={(e) =>
+                                  setRewriteStep((prev) => (prev ? { ...prev, custom: e.target.value } : prev))
+                                }
+                                placeholder="Or say it in your own words…"
+                                className="w-full text-xs border border-[hsl(var(--border))] rounded px-2 py-1 bg-[hsl(var(--background))]"
+                              />
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={() => setRewriteStep(null)}
+                                  disabled={proposing || simulating}
+                                  className="px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                                >
+                                  Back
+                                </button>
+                                {(() => {
+                                  const chosen = [...rewriteStep.selected];
+                                  const custom = rewriteStep.custom.trim();
+                                  if (custom) chosen.push(custom);
+                                  return (
+                                    <button
+                                      onClick={() => {
+                                        setRewriteStep(null);
+                                        submitRewrite(chosen);
+                                      }}
+                                      disabled={proposing || simulating}
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                                    >
+                                      {proposing || simulating ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Wand2 className="w-3 h-3" />
+                                      )}
+                                      {chosen.length > 0
+                                        ? `Propose with ${chosen.length} intent${chosen.length === 1 ? '' : 's'}`
+                                        : 'Propose anyway'}
+                                    </button>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : loading ? (
                         <p className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
