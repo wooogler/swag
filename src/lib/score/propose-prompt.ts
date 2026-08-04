@@ -5,16 +5,19 @@
  * text production sends — the wording below was tuned against that harness on
  * a real mid-thread anchor, not authored blind.
  *
- * Why the prompt reads the way it does (2026-08-04 diagnosis, empirical):
- * previews and the runtime replay the anchor's ENTIRE prior thread, and on a
- * mid-thread anchor those turns show the chatbot already behaving the old way
- * (e.g. 12k chars of ghostwritten essay prose). A rule that only FORBIDS
- * ("do not write the text") reliably loses to that precedent on the deployed
- * chat model — the same model complies once the rule also pins down the reply
- * SHAPE (sections, length, a hard cap) and covers the pushback case. So this
- * prompt makes the agent author rules of that second kind, and the user
- * content shows the agent the prior turn so it knows what the anchor's
- * "it/that" refers to.
+ * Why the prompt reads the way it does (2026-08-04, empirical — plan §9):
+ * a rule that only FORBIDS ("do not write the text") loses to the model's
+ * helpful-assistant instinct, so every variant must pair a prohibition with
+ * what to give INSTEAD (plus one countable cap), keep substitute examples
+ * visibly incomplete, and cover the pushback case. The heavier machinery an
+ * earlier revision demanded — mandated section headings, a fixed opening
+ * line, a precedent-disavowal sentence — existed to beat the OLD preview's
+ * verbatim replay of the prior thread; the digest context (preview-service
+ * v4, conversation-digest.ts) removed that adversary, and re-measurement
+ * showed compliance holds without them (11/1/0 across 12 generations) while
+ * rules come out half the length and read as the instructor's own
+ * instruction. The user content shows the agent the prior turn so it knows
+ * what the anchor's "it/that" refers to.
  */
 import { headTail, MAX_PRIOR_QUERY_CHARS, MAX_PRIOR_RESPONSE_CHARS, MAX_QUERY_CHARS } from './prompts';
 
@@ -65,14 +68,13 @@ export function buildProposeSystemPrompt(): string {
     'You revise the SYSTEM PROMPT of a writing-support chatbot that students use for school assignments.',
     'An instructor groups student requests into "intents". Each intent owns a COMPLETE system prompt (its "rule"): whenever a student request matches that intent, the chatbot answers with that prompt and nothing else stacked underneath.',
     "You will get: the intent definition, the intent's current prompt, the anchor exchange (the student message the instructor is working from, with its prior turn when it has one), and the instructor's input.",
-    'HOW THE PROMPT IS USED — this decides what a good one looks like. The chatbot answers MID-CONVERSATION: every earlier turn is replayed as context, and those turns usually show the chatbot already behaving the OLD way. The model imitates that precedent unless the prompt pins down a different reply shape. A bare prohibition ("do not write the essay") reliably loses to a transcript full of essays.',
-    'Therefore EVERY variant must:',
-    '- When the input forbids something or changes what a reply should look like, pin the NEW reply shape down positively: name the exact sections or list structure the reply uses (write out their headings), give a rough length, and set one hard cap in countable units (e.g. "never more than 12 consecutive words of new prose"). Two replies written to this prompt should come out the same shape.',
-    '- Mandate the reply\'s OPENING (e.g. \'Begin with the heading "## …"\'). The transcript pulls the reply into the old pattern from the first word; a fixed opening breaks that pull.',
-    '- Include one line disavowing the precedent: earlier replies in this conversation may show the old behavior and must not be imitated, no matter what the transcript shows.',
+    "HOW THE PROMPT IS USED — this decides what a good one looks like. The chatbot answers real student messages with only this prompt as guidance, and the model's default instinct is to be maximally helpful — for a \"change the style\" request that means writing the improved text itself. A bare prohibition is not enough to override that instinct.",
+    'Therefore, in EVERY variant:',
+    '- Whenever the input forbids something, also state POSITIVELY what a reply gives instead, with one concrete hard cap in countable units (e.g. "never more than one complete sentence of finished prose").',
     '- When the rule offers templates or examples as a substitute for a withheld output, require them to be visibly incomplete (blanks like "___", fragments) — never complete sentences the student could paste as-is.',
-    '- Say what the chatbot does when the student pushes back and asks again for exactly what the prompt withholds.',
-    '- Be imperative, addressed to the chatbot, coherent and self-contained. Long enough to pin the shape down and no longer — do not pad with restatement.',
+    '- Say in one line what the chatbot does when the student pushes back and asks again for exactly what the prompt withholds.',
+    "- Keep the rule SHORT — it should read as the instructor's own instruction, not a form specification. A few sentences is usually right. Do not mandate named sections, headings, exact bullet counts, or word budgets unless the instructor's input itself asks for structured replies.",
+    '- Be imperative, addressed to the chatbot, coherent and self-contained.',
     'Return THREE candidates, one per strength, minimal first. Strength is how much of the CURRENT prompt each touches, never how enforceable it is:',
     '- "minimal": add or adjust only what the instructor\'s input demands (plus the reply shape that makes it enforceable); preserve every other behavior of the current prompt verbatim.',
     '- "moderate": also rework the part of the prompt the input touches so the new behavior lands cleanly — say when it applies, and remove sentences that directly conflict. Leave unrelated parts as they are.',
