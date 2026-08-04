@@ -51,8 +51,12 @@ export interface ChatDeployIntent {
   title: string;
   definition: string;
   rule: string | null;
-  /** The intent's pins, in prompt order, frozen at deploy time (selectPromptPins). */
-  promptPins: PromptPin[];
+  /** LEGACY. Instructor examples used to be frozen into the deployed prompt.
+   * They are no longer built or sent — a label is a transient correction that
+   * changes the DEFINITION — but pre-cutover snapshots still carry them, and
+   * canonicalChatConfig must keep hashing them so those deploys correctly read
+   * as "changed since deploy" and get re-deployed. Never present on new rows. */
+  promptPins?: PromptPin[];
   /** v7 tree. 'type_root' rows are the type's final else — never judged, their
    * rule answers whatever the chain leaves unclaimed. Absent on v1 snapshots. */
   kind?: IntentKind;
@@ -153,18 +157,6 @@ export async function buildChatDeploySnapshot(assignmentId: string): Promise<Cha
         title: p.intent.title,
         definition: p.intent.definition,
         rule: p.intent.rule,
-        // Store pins in their PROMPT form (normalized + capped, pinPromptText is
-        // idempotent) — snapshots stay small even when a pin quotes a long
-        // pasted essay, and the runtime prompt is byte-identical either way.
-        promptPins: p.promptPins.map((pin) => ({
-          verdict: pin.verdict,
-          text: pinPromptText(pin.text),
-          // The instructor's out-reason is rendered INTO the rating prompt
-          // ("— why not: …"), so dropping it here would deploy a strictly
-          // weaker prompt than the one the board rated with — preview would
-          // stop equalling runtime for every intent with a reasoned out-label.
-          ...(pin.reason?.trim() ? { reason: pin.reason } : {}),
-        })),
         kind: 'intent' as IntentKind,
         type: p.intent.type,
         parentId: p.intent.parentIntentId,
@@ -175,7 +167,6 @@ export async function buildChatDeploySnapshot(assignmentId: string): Promise<Cha
         title: r.title,
         definition: '',
         rule: r.rule,
-        promptPins: [] as PromptPin[],
         kind: 'type_root' as IntentKind,
         type: r.type,
         parentId: null,
@@ -221,9 +212,10 @@ export function canonicalChatConfig(snapshot: ChatDeploySnapshot): string {
         id: i.id,
         definition: i.definition,
         rule: i.rule?.trim() || null,
-        // pinPromptText both sides: freshly built snapshots store capped text,
-        // but pre-cap rows must canonicalize identically.
-        pins: i.promptPins.map((p) => [p.verdict, pinPromptText(p.text)]),
+        // Legacy pins stay in the hash so a pre-cutover deploy — whose prompt
+        // carried instructor examples this build no longer sends — reads as
+        // changed and gets re-deployed. New snapshots contribute [].
+        pins: (i.promptPins ?? []).map((p) => [p.verdict, pinPromptText(p.text)]),
         kind: i.kind ?? 'intent',
         type: i.type ?? null,
         parent: i.parentId ?? null,
@@ -389,7 +381,9 @@ async function resolveAgainstSnapshot(args: {
           prevResponseText: args.prevResponseText,
           includeDissection: false,
           dissection: null,
-          intents: rated.map((i) => ({ id: i.id, definition: i.definition, pins: i.promptPins })),
+          // Definition only — a deployed snapshot's legacy examples are NOT
+          // resurrected into the runtime prompt, so preview equals runtime.
+          intents: rated.map((i) => ({ id: i.id, definition: i.definition })),
           model: getDefaultScoreModel(),
           callOptions,
         })

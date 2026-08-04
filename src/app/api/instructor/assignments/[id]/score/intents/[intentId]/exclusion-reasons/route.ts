@@ -1,13 +1,15 @@
 /**
- * SCORE v6 — candidate OUT-reasons for one question against one intent.
+ * SCORE — candidate reasons for one CORRECTION on one question.
  *
- * POST { messageId, rationale? } → three short, distinct reasons an instructor
- * might give for why THIS student message does NOT belong to THIS intent,
- * grounded in the message text, the intent definition, and (when supplied) the
- * classifier's own rationale for its rating. The instructor picks one, edits it,
- * or writes their own; the chosen reason is stored on the OUT pin and injected
- * into the rating prompt (intent-prompts.ts) so the classifier learns the
- * boundary, not just the example. On-demand call, like propose/edgecases.
+ * POST { messageId, verdict, rationale? } → three short, distinct reasons the
+ * instructor might give for overruling the classifier here: why the message does
+ * NOT belong (verdict 'out'), or why it DOES (verdict 'in').
+ *
+ * The UI asks only when the correction DISAGREES with the current rating, which
+ * is exactly when the reason carries information. That reason is the fold's main
+ * fuel: it becomes a PRINCIPLE in the definition — which generalizes to
+ * questions nobody has seen — where a bare verdict could only ever become
+ * another special case. On-demand call, like propose/edgecases.
  */
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
@@ -26,13 +28,16 @@ export const maxDuration = 30;
 
 const bodySchema = z.object({
   messageId: z.number().int().positive(),
+  /** Which way the instructor is overruling. Defaults to 'out' so a client that
+   * predates in-corrections keeps working. */
+  verdict: z.enum(['in', 'out']).optional(),
   /** The classifier's rationale for this question (from the row) — extra
    * grounding so the suggestions engage with why it was rated as it was. */
   rationale: z.string().trim().max(500).optional(),
 });
 
 const REASONS_SCHEMA = {
-  name: 'exclusion_reasons',
+  name: 'correction_reasons',
   schema: {
     type: 'object',
     additionalProperties: false,
@@ -44,19 +49,27 @@ const REASONS_SCHEMA = {
         maxItems: 3,
         items: {
           type: 'string',
-          description: 'Twelve words or fewer — a concrete reason this message is NOT this intent',
+          description: 'Twelve words or fewer — a concrete reason for the instructor\'s verdict',
         },
       },
     },
   },
 };
 
-function buildSystemPrompt(): string {
+function buildSystemPrompt(verdict: 'in' | 'out'): string {
+  const isOut = verdict === 'out';
   return [
-    'You help an instructor label boundary examples for a request-classification taxonomy used on a school writing assignment.',
-    'The instructor is marking one student message as OUT of one intent (it does NOT belong). Propose exactly THREE short, DISTINCT reasons WHY it does not belong.',
+    'You help an instructor correct a request-classification system used on a school writing assignment.',
+    isOut
+      ? 'The instructor is marking one student message as NOT belonging to one intent, overruling the classifier. Propose exactly THREE short, DISTINCT reasons WHY it does not belong.'
+      : 'The instructor is marking one student message as BELONGING to one intent, overruling the classifier that judged otherwise. Propose exactly THREE short, DISTINCT reasons WHY it does belong.',
+    // The reason is folded into the DEFINITION, so a reason that only describes
+    // this one message teaches nothing; the prompt has to push for the rule.
+    'Each reason will be folded into the intent\'s definition as a general rule, so state the PRINCIPLE that decides this case — not a description of this one message.',
     'Rules:',
-    '- Each reason ≤ 12 words, a concrete noun phrase or clause (e.g. "Asks to brainstorm topics, not write prose").',
+    isOut
+      ? '- Each reason ≤ 12 words, a concrete clause (e.g. "Asks to brainstorm topics, not write prose").'
+      : '- Each reason ≤ 12 words, a concrete clause (e.g. "Wording fixes are style revisions, however small").',
     '- Ground each reason in what the student\'s REQUEST actually asks versus the intent definition.',
     '- Use the PRIOR CONTEXT only to interpret what the current request refers to (e.g. "make it longer" points back to the prior reply); judge ONLY the current STUDENT QUERY, never the prior context itself.',
     '- Make the three genuinely different (different angle each), not rewordings.',
@@ -122,7 +135,7 @@ export async function POST(req: Request, { params }: RouteParams) {
 
   try {
     const raw = await callModel(
-      buildSystemPrompt(),
+      buildSystemPrompt(body.verdict ?? 'out'),
       parts.join('\n\n'),
       getDefaultScoreModel(),
       'low', // three short labels — cheap, low latency

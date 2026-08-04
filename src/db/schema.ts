@@ -265,14 +265,31 @@ export const scoreIntentPins = pgTable('score_intent_pins', {
   messageId: integer('message_id').notNull().references(() => chatMessages.id),
   verdict: text('verdict').notNull(), // 'in' | 'out'
   queryText: text('query_text').notNull(),
-  // Optional instructor-written reason a question is OUT — shown in the Excluded
-  // list and injected into the rating prompt so the classifier learns the
-  // boundary rationale, not just the example. Null for 'in' pins / legacy rows.
+  // Why the instructor overruled the judge. Asked only when the correction
+  // DISAGREES with the current rating (out on an in-leaning one, in on an
+  // out-leaning one) — agreement carries no information to fold. This is the
+  // fold's main fuel: a reason becomes a principle in the definition, whereas a
+  // bare verdict can only become another example.
   reason: text('reason'),
   source: text('source').notNull().default('manual'), // 'manual' | 'ownership' | …
+  // 'pending'  — waiting to be folded into the definition (the live correction)
+  // 'consumed' — already folded; kept ONLY as a display marker ("you marked
+  //              this in at v2"). A consumed row must never reach a prompt or
+  //              a hash: the definition it produced is the whole truth now.
+  status: text('status').notNull().default('pending'),
+  // The intent version this correction was folded into — what the marker cites.
+  // Null while pending. Clones start their own version timeline, so this is
+  // display-only and never a join key.
+  consumedAtVersion: integer('consumed_at_version'),
+  consumedAt: timestamp('consumed_at'),
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({
   assignmentIdx: index('score_intent_pins_assignment_idx').on(table.assignmentId),
+  // One correction per (intent, question). Re-labelling a question whose
+  // earlier correction was already consumed OVERWRITES the marker and returns
+  // the row to 'pending' — which is exactly right: you are teaching the same
+  // question again, and the marker should cite the live teaching, not a
+  // superseded one.
   intentMessageUnique: uniqueIndex('score_intent_pins_intent_message_unique').on(
     table.intentId,
     table.messageId
@@ -344,8 +361,9 @@ export const scoreDissections = pgTable('score_dissections', {
   id: serial('id').primaryKey(),
   assignmentId: text('assignment_id').notNull().references(() => assignments.id),
   messageId: integer('message_id').notNull().references(() => chatMessages.id),
-  materialKinds: jsonb('material_kinds').notNull(), // MaterialKind[]
+  materialKinds: jsonb('material_kinds').notNull(), // MaterialKind[] — message-wide set
   requests: jsonb('requests').notNull(), // string[] — verbatim substrings
+  materials: jsonb('materials'), // MaterialSpan[] — per-run kind + coverage (v4+; null on older rows)
   version: integer('version').notNull(), // DISSECTION_VERSION at write time
   rawResponse: text('raw_response'),
   model: text('model'),

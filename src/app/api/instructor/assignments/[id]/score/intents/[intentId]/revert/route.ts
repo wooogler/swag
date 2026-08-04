@@ -21,7 +21,7 @@ import { NextResponse } from 'next/server';
 import { and, eq, gt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { scoreConfigVersions, scoreIntentPins, scoreIntents } from '@/db/schema';
+import { scoreConfigVersions, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { ensureIntentTables, type IntentConfigSnapshot } from '@/lib/score/intent-store';
 
@@ -71,7 +71,6 @@ export async function POST(req: Request, { params }: RouteParams) {
   if (!snapshot || !snapIntent) {
     return NextResponse.json({ error: 'version_not_found' }, { status: 404 });
   }
-  const snapPins = (snapshot.pins ?? []).filter((p) => p.intentId === intentId);
 
   const result = await db.transaction(async (tx) => {
     // Restore the WHEN spec only. isTemplate/archived stay as they are —
@@ -97,29 +96,11 @@ export async function POST(req: Request, { params }: RouteParams) {
       .where(and(eq(scoreIntents.id, intentId), eq(scoreIntents.assignmentId, id)));
 
     // Restore the pin set. Snapshot pins are stored newest-first; stagger
-    // createdAt descending so the recency order — and thus the prompt-pin
-    // selection and defHash — reproduces the original spec byte-for-byte
-    // (same recipe as the PATCH route's pinsFromVersion).
-    await tx.delete(scoreIntentPins).where(eq(scoreIntentPins.intentId, intentId));
-    if (snapPins.length > 0) {
-      const base = Date.now();
-      await tx.insert(scoreIntentPins).values(
-        snapPins.map((p, i) => ({
-          assignmentId: id,
-          intentId,
-          messageId: p.messageId,
-          verdict: p.verdict,
-          queryText: p.queryText,
-          // An out-pin's reason is part of the rating prompt AND of
-          // intentDefHash, so dropping it here silently produced a different
-          // hash than the version being restored — the ratings then read stale
-          // and the spec was not actually reproduced.
-          reason: p.reason ?? null,
-          source: p.source ?? 'manual',
-          createdAt: new Date(base - i * 1000),
-        }))
-      );
-    }
+    // Corrections are deliberately NOT rewound. A version captured a
+    // DEFINITION, which is the whole of the spec now — restoring it reproduces
+    // the behaviour exactly. The corrections table is a different record: what
+    // the instructor taught and when. Rewinding it would delete consumed
+    // markers, which is the one history this model promises to keep.
 
     // Rewind the timeline: drop every LATER version that is solely about this
     // intent. Shared entries survive (they carry another intent's history).

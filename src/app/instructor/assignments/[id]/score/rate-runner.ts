@@ -26,6 +26,9 @@ interface ShardedRateOptions {
   model: string;
   /** Scope the run to these intents (New Intent flow). Omit to rate all active intents. */
   intentIds?: number[];
+  /** Scope the run to these messages (the workbench's visible-scope phase).
+   * Progress totals then describe only this subset. */
+  messageIds?: number[];
   /** Force a full re-rate (mark this shard's rows stale first). */
   force?: boolean;
   /** Rough size of the log — used only to pick a sensible shard count. */
@@ -56,7 +59,7 @@ function pickShardCount(estimatedTotal: number): number {
 }
 
 export async function runShardedRate(opts: ShardedRateOptions): Promise<RateProgress> {
-  const { assignmentId, model, intentIds, force, estimatedTotal, signal, isLive, onProgress } = opts;
+  const { assignmentId, model, intentIds, messageIds, force, estimatedTotal, signal, isLive, onProgress } = opts;
   const shardCount = pickShardCount(estimatedTotal);
 
   // Latest per-shard snapshot; the aggregate is their sum. `rated`/`total` from
@@ -78,6 +81,7 @@ export async function runShardedRate(opts: ShardedRateOptions): Promise<RateProg
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(intentIds ? { intentIds } : {}),
+          ...(messageIds ? { messageIds } : {}),
           force: first && !!force,
           limit: PER_SHARD_LIMIT,
           shardIndex,

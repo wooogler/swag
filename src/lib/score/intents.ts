@@ -119,22 +119,46 @@ export const MATERIAL_KINDS = [
   'student_draft', // the student's own essay/paragraph pasted in
   'assignment_prompt', // the assignment prompt / task description
   'prior_bot_reply', // a previous chatbot answer pasted back
+  'own_question', // one of the student's OWN earlier chat turns, pasted back
   'other', // some other pasted source (article, notes, …)
 ] as const;
 
 export type MaterialKind = (typeof MATERIAL_KINDS)[number];
 
+/** 'Own question' is the counterpart of 'Bot reply' — the two sides of the
+ * chat — and matches how the board names a student turn everywhere else. */
 export const MATERIAL_LABELS: Record<MaterialKind, string> = {
   student_draft: 'Own draft',
   assignment_prompt: 'Assignment prompt',
   prior_bot_reply: 'Bot reply',
+  own_question: 'Own question',
   other: 'Other source',
 };
+
+/** One contiguous run of pasted Material inside a student message. Stored per
+ * RUN (not per message) so a message that mixes an own draft with the
+ * assignment prompt can tag each run for what it actually is. */
+export interface MaterialSpan {
+  /** Verbatim substring of the message — the viewer re-locates it with indexOf,
+   * the same way it locates requests, so no offsets can drift. */
+  text: string;
+  kind: MaterialKind;
+  /** Whitespace-normalized length of this run. */
+  chars: number;
+  /** Whitespace-normalized length of the SOURCE this run came from — the
+   * denominator for "how much of the assignment prompt did they paste".
+   * Null when the source is unknown (external / unattributed paste). */
+  sourceChars: number | null;
+}
 
 export interface DissectionResult {
   materialKinds: MaterialKind[];
   /** Verbatim substrings of the message, one per request. Usually length 1. */
   requests: string[];
+  /** The material runs between the requests, in document order. Always set by
+   * dissectMessage; optional because the prompt-building readers reconstruct a
+   * dissection from the stored kinds/requests alone and never need the runs. */
+  materials?: MaterialSpan[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -146,15 +170,32 @@ export interface DissectionResult {
  * v2: rating prompt now receives the deterministic Material/Request dissection
  *     (buildQueryContent) and the reworded "no explicit request" rule, so the
  *     judge stops treating pasted material (esp. the assignment prompt) as an
- *     implicit request. */
-export const INTENT_RATING_VERSION = 2;
+ *     implicit request.
+ * v3: definition-example fast path — a request restating a definition example
+ *     is clearly_in for that intent, and matching several intents is not
+ *     "doubt". Fixes the mini judge hedging a whole family of overlapping
+ *     starter intents to probably_in on a query the definition itself names
+ *     (observed: "rewrite in college level" vs Regenerate with Feedback).
+ * v4: instructor examples left the prompt entirely. A label is now a transient
+ *     CORRECTION folded into the definition text and then consumed, so the
+ *     definition is the whole of what the judge reads — and the hash is the
+ *     definition alone. Every rating carrying a pin-derived hash is stale. */
+export const INTENT_RATING_VERSION = 4;
 
 /** Version of the dissection method/output. Rows below this are stale and
  * re-dissected on the next rate batch.
  * v2: explicit empty-requests rule for request-less messages (LLM method).
  * v3: DETERMINISTIC dissection from the editor-event log (see dissect.ts) —
- *     supersedes the LLM guess, so every v2 row is recomputed. */
-export const DISSECTION_VERSION = 3;
+ *     supersedes the LLM guess, so every v2 row is recomputed.
+ * v4: per-RUN material kind + source coverage (MaterialSpan). The assignment
+ *     prompt is also read as plain text now (a BlockNote-authored prompt used
+ *     to be matched against its raw JSON), and the instructor-only AI guidance
+ *     no longer counts as prompt text.
+ * v5: a chat paste is attributed by CONTENT, not by the recorded area. The
+ *     paste log's 'chat' means "from the chat panel" — the bot's replies, the
+ *     student's own turns and the input box alike — so it used to label every
+ *     one of them a bot reply; the student's own turns are now their own kind. */
+export const DISSECTION_VERSION = 5;
 
 /* ------------------------------------------------------------------ */
 /* v7 type layer                                                       */
@@ -261,25 +302,20 @@ export function selectPromptPins(pins: PromptPin[]): PromptPin[] {
 
 /**
  * Content hash of everything that affects one intent's rating in isolation:
- * the shared rating-prompt version + the intent definition + the pins actually
- * sent. Mirrors subtypeDefHash in config.ts — deliberately independent of
- * SIBLING intents, so editing one intent (or pinning one example) re-rates
- * only that intent. Stored on each (message, intent) rating row; mismatch vs
- * the current config means "re-rate".
+ * the shared rating-prompt version + the intent definition. Mirrors
+ * subtypeDefHash in config.ts — deliberately independent of SIBLING intents,
+ * so editing one intent re-rates only that intent. Stored on each
+ * (message, intent) rating row; mismatch vs the current config means "re-rate".
+ *
+ * Labels are NOT in here any more. They used to be, because they were
+ * few-shot examples in the prompt — and hashing them meant the hash depended
+ * on the pin SET AND ITS ORDER, so a reordered-but-identical label set read as
+ * a different spec. Now a label is a transient correction that changes the
+ * DEFINITION and is then consumed; the definition it produced is what the
+ * hash sees, which is also the only thing the judge sees.
  */
-export function intentDefHash(definition: string, promptPins: PromptPin[]): string {
-  const canonical = JSON.stringify([
-    `r${INTENT_RATING_VERSION}`,
-    definition,
-    // A reason is ADDITIVE: a pin without one hashes as the original 2-tuple, so
-    // existing ratings never go stale just because this field was introduced;
-    // only a pin that actually carries a reason changes the hash (→ re-rate).
-    promptPins.map((p) => {
-      const reason = p.reason?.trim();
-      return reason ? [p.verdict, pinPromptText(p.text), reason] : [p.verdict, pinPromptText(p.text)];
-    }),
-  ]);
-  return stableHash(canonical);
+export function intentDefHash(definition: string): string {
+  return stableHash(JSON.stringify([`r${INTENT_RATING_VERSION}`, definition]));
 }
 
 /* ------------------------------------------------------------------ */

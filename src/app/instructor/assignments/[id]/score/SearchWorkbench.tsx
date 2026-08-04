@@ -112,7 +112,7 @@ export default function SearchWorkbench({ assignmentId, rows, isNirvana, mode, o
             <DefinitionEditor
               value={definition}
               onChange={(v) => { setDefinition(v); setSaved(false); }}
-              label="When a student… (search)"
+              label="When a student…"
               placeholder="e.g. asks the chatbot to write the essay for them"
             />
             <div className="flex items-center gap-2">

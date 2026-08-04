@@ -331,7 +331,7 @@ export default function NewIntentModal({
                   already answers can land here.
                 </>
               ) : (
-                <>Answers {typeLabel} questions no existing set claims first.</>
+                <>Answers {typeLabel} questions no existing intent claims first.</>
               )}
             </p>
           </div>
@@ -406,7 +406,7 @@ export default function NewIntentModal({
               </Group>
             )}
 
-            <Group label={`Starter sets · ${typeLabel}`}>
+            <Group label={`Starter intents · ${typeLabel}`}>
               {starterRows.map((o) => (
                 <OptionRow
                   key={o.key}
@@ -449,7 +449,7 @@ export default function NewIntentModal({
               </p>
             ) : (
               <>
-                <label className="block space-y-1">
+                <label className="block space-y-1 cursor-text">
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                     Title
                   </span>
@@ -460,7 +460,7 @@ export default function NewIntentModal({
                     className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
                   />
                 </label>
-                <label className="block space-y-1">
+                <label className="block space-y-1 cursor-text">
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                     When a question…
                   </span>

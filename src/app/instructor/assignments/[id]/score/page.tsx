@@ -31,6 +31,7 @@ import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { isLegacySnapshot, listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
 import BaselineDeployButton from './BaselineDeployButton';
+import StudioShell from './StudioShell';
 import {
   DISSECTION_VERSION,
   SCORE_QUERY_TYPES,
@@ -38,6 +39,7 @@ import {
   isRatingLevel,
   isScoreQueryType,
   type MaterialKind,
+  type MaterialSpan,
   type RatingLevel,
   type ScoreQueryType,
 } from '@/lib/score/intents';
@@ -235,15 +237,19 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       {
         materialKinds: (Array.isArray(d.materialKinds) ? d.materialKinds : []) as MaterialKind[],
         requests: (Array.isArray(d.requests) ? d.requests : []) as string[],
+        materials: (Array.isArray(d.materials) ? d.materials : []) as MaterialSpan[],
         stale: d.version < DISSECTION_VERSION,
       },
     ])
   );
 
-  // Pin verdicts per (message, intent) — instructor decisions that override
-  // the classifier for the pinned question itself (applyPinOverrides).
+  // PENDING corrections per (message, intent) — teaching the definitions have
+  // not absorbed yet. Consumed rows are excluded on purpose: they are markers of
+  // teaching already folded in, and a board that read them as live labels would
+  // keep flagging a question as corrected long after the correction became part
+  // of the definition.
   const pinsByMessage = new Map<number, Record<number, 'in' | 'out'>>();
-  for (const p of intentState.pins) {
+  for (const p of intentState.pins.filter((x) => x.status !== 'consumed')) {
     let m = pinsByMessage.get(p.messageId);
     if (!m) {
       m = {};
@@ -328,7 +334,11 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         intentRatings: intentRatingsByMessage.get(rec.messageId) ?? {},
         pinnedIntents: pinsByMessage.get(rec.messageId) ?? {},
         dissection: dissection
-          ? { materialKinds: dissection.materialKinds, requests: dissection.requests }
+          ? {
+              materialKinds: dissection.materialKinds,
+              requests: dissection.requests,
+              materials: dissection.materials,
+            }
           : null,
         queryType: queryTypeByMessage.get(rec.messageId) ?? null,
       };
@@ -382,8 +392,8 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
 
   return (
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
-      <header className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
-        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
+      <StudioShell
+        header={
           <div className="flex items-center gap-4">
             <Link href={`/instructor/assignments/${id}`}>
               <Button variant="ghost" size="icon" className="hover:bg-[hsl(var(--muted))]">
@@ -411,10 +421,8 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
             )}
             <InstructorHeaderActions email={instructor.email} />
           </div>
-        </div>
-      </header>
-
-      <main className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-3 pb-6 flex-1 flex flex-col min-h-0">
+        }
+      >
         <IntentBoard
           assignmentId={id}
           rows={rows}
@@ -441,7 +449,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
           isNirvana={assignment.shareToken === 'nirvana-dataset'}
           deployView={deployView}
         />
-      </main>
+      </StudioShell>
     </div>
   );
 }

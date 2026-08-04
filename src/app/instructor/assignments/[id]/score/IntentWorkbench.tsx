@@ -12,16 +12,14 @@
  * that list (the board viewer's theater-style thread, shared component), so a
  * labeling call that needs the chatbot's reply never leaves the workbench.
  *
- * The Apply/Save lifecycle is unchanged from the modal:
- *  - "Apply" persists the spec silently (create → unregistered draft), rates
- *    the whole log against just this intent, and loads the two lists.
+ * The Apply/Save lifecycle:
+ *  - "Apply" persists the spec (a create's FIRST apply registers it as v1),
+ *    rates the scope against just this intent, and loads the two lists.
  *  - Pinning in/out changes the prompt (and defHash) → re-Apply gates Save.
- *  - "Save" registers: the draft becomes a live intent + a version entry.
- *  - Leaving without Save purges the draft (unmount + beforeunload).
+ *  - "Save version" (in History) records a named checkpoint on top.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  type MaterialKind,
   type RatingLevel,
   type ScoreQueryType,
 } from '@/lib/score/intents';
@@ -36,12 +34,13 @@ import {
   RotateCcw,
   Save as SaveIcon,
   Search,
-  Trash2,
   Wand2,
   X,
 } from 'lucide-react';
 import { runShardedRate } from './rate-runner';
 import { DefinitionEditor, QueryTextButton, WorkbenchTopBar } from './workbench-shared';
+import type { Dissection } from './materials';
+import FoldReviewModal, { type FoldProposalView } from './FoldReviewModal';
 import { ConversationThread } from './conversation';
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 
@@ -55,20 +54,22 @@ interface RatingRow {
   rating: RatingLevel | null;
   rationale: string | null;
   stale: boolean;
+  /** A PENDING correction — the instructor overruled the judge here and the
+   * definition has not absorbed it yet. Null when there is none. */
   pinned: 'in' | 'out' | null;
-  /** Instructor's reason this example is OUT (out pins only) — shown in the
-   * Excluded list and injected into the rating prompt. Null otherwise. */
+  /** The pending correction's row id (what the fold consumes). */
+  correctionId: number | null;
+  /** A correction already folded in, kept as a display-only marker. */
+  marker: { verdict: 'in' | 'out'; versionNo: number | null } | null;
+  /** Why the instructor overruled the judge — asked only when the correction
+   * disagreed with the rating. The fold's main fuel. Null otherwise. */
   reason: string | null;
-  /** Position among this intent's pins in PROMPT order (0 = first listed), null
-   * when unpinned. Optimistic local pins use negative ranks so a just-pinned
-   * example leads, exactly as the server's newest-first order would place it. */
-  pinRank: number | null;
   /** An EARLIER node in this intent's chain that takes the question first
    * (v7 first-match routing) — null when nothing shadows it. */
   shadowedBy: number | null;
   shadowedByTitle: string | null;
   /** Message split into Material vs Request(s), for the expand view. */
-  dissection: { materialKinds: MaterialKind[]; requests: string[] } | null;
+  dissection: Dissection | null;
 }
 
 // The two pin-driven orders both rank by the same embedding score (max cosine
@@ -76,11 +77,6 @@ interface RatingRow {
 // The lean tabs already split in from out, so no signed cross-lean measure is
 // needed — each tab just picks a direction.
 type NdSort = 'in-like' | 'out-like' | 'newest' | 'oldest';
-
-/** Prompt order: the server's pin index, with optimistic (negative) pins first. */
-function byPinRank(a: RatingRow, b: RatingRow): number {
-  return (a.pinRank ?? Number.MAX_SAFE_INTEGER) - (b.pinRank ?? Number.MAX_SAFE_INTEGER);
-}
 
 interface RatingsPayload {
   intent: { id: number; title: string; definition: string };
@@ -213,8 +209,19 @@ interface IntentWorkbenchProps {
   rows: ScoreQueryRow[];
   isNirvana: boolean;
   mode: WorkbenchMode;
-  /** Leave the workbench (unsaved drafts are purged) — board refreshes. */
-  onExit: () => void;
+  /** The enclosing intents of this workbench's placement, nearest first —
+   * empty for a top-level intent. A nested intent can only ever answer what
+   * its enclosing intents answer, so the panes, the Apply bar, and the first
+   * rating pass all scope to the queries those ancestors currently claim. */
+  scopeAncestorIds: number[];
+  /** The nearest enclosing intent's title, for the scope note. */
+  scopeLabel: string | null;
+  /** Leave the workbench — board refreshes. Carries the id of the intent
+   * being left (null when there is none: a create that was never Applied, an
+   * archive) so the board can flag it after the refresh lands — the refresh
+   * takes seconds and the board gives no other sign that the just-made intent
+   * actually arrived. */
+  onExit: (savedIntentId?: number | null) => void;
   /** Jump to editing ANOTHER intent (the overlap chips' shortcut): the parent
    * swaps `editIntent`, re-keying this workbench onto the target. Absent in
    * create/prompt-holder mounts, where the amber chip stays a static tag. */
@@ -228,6 +235,8 @@ export default function IntentWorkbench({
   rows,
   isNirvana,
   mode,
+  scopeAncestorIds,
+  scopeLabel,
   onExit,
   onEditIntent,
 }: IntentWorkbenchProps) {
@@ -237,16 +246,25 @@ export default function IntentWorkbench({
   const totalQuestions = rows.length;
 
   const [title, setTitle] = useState(intent?.title ?? seed?.title ?? '');
-  // Whether the instructor typed the title themselves this session — if not,
-  // every Save auto-generates it from the definition (git-commit style).
-  const [titleDirty, setTitleDirty] = useState(!!seed?.title);
+  // An intent with NO title yet is auto-named from the definition (git-commit
+  // style) on save; one that already has a name keeps it, always — the name
+  // only ever changes through the instructor, see titleSuggestion.
+  // A name generated from the refined definition and OFFERED, never taken:
+  // silently renaming an intent while its owner fine-tunes the definition reads
+  // as "this became a different intent".
+  const [titleSuggestion, setTitleSuggestion] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
   const [definition, setDefinition] = useState(intent?.definition ?? seed?.definition ?? '');
-  // "Out" reason picker: opened under the clicked out button, it offers three
-  // LLM-suggested reasons (why this message isn't the intent) + a free-text
-  // "Other", then pins out with the chosen reason. `anchor` positions it fixed
-  // so it escapes the column's scroll clip. null = closed.
-  const [outPicker, setOutPicker] = useState<{
+  /**
+   * The WHY picker — opened only when a correction contradicts the rating,
+   * which is exactly when the reason carries information. Agreeing with the
+   * classifier is a vote and stays one click; overruling it is teaching, and
+   * teaching needs a reason the fold can turn into a principle.
+   * `anchor` positions it fixed so it escapes the column's scroll clip.
+   */
+  const [reasonPicker, setReasonPicker] = useState<{
     messageId: number;
+    verdict: 'in' | 'out';
     anchor: { left: number; top: number; bottom: number; width: number };
     loading: boolean;
     reasons: string[];
@@ -254,19 +272,22 @@ export default function IntentWorkbench({
   } | null>(null);
   // Labels changed since the last Apply — the shown ratings no longer reflect
   // the prompt the pins produce, so Save (commit) is gated until re-Apply.
-  const [pinsDirty, setPinsDirty] = useState(false);
   const [intentId, setIntentId] = useState<number | null>(intent?.id ?? null);
-  // Create-mode discovery state. `draftIdRef` = an UNSAVED draft created this
-  // session (by Apply, or by cloning a picked library template); it is not a
-  // registered intent (is_template stays true) and is purged if the workbench
-  // is left without Save. Library templates themselves are never mutated here.
-  const draftIdRef = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refining, setRefining] = useState(false);
-  const [retiring, setRetiring] = useState(false);
+  // The review gate. `foldOpen` is the modal; `foldProposals` is null until the
+  // fold returns, which is what puts the loading state inside the review.
+  /** messageId → the intents a "send here" just corrected out. The workbench
+   * loads only this intent's rows, so the correction written on the intercepting
+   * intent has nowhere else to show — and without it "send here" looks like it
+   * did nothing but light the in pill. */
+  const [redirectedBy, setRedirectedBy] = useState<Record<number, string[]>>({});
+  const [foldOpen, setFoldOpen] = useState(false);
+  const [foldProposals, setFoldProposals] = useState<FoldProposalView[] | null>(null);
+  const [foldBusy, setFoldBusy] = useState(false);
+  const [foldError, setFoldError] = useState<string | null>(null);
   // The refine model's step-by-step audit, shown under the proposed definition.
-  const [refineReasoning, setRefineReasoning] = useState<string | null>(null);
   const [versions, setVersions] = useState<IntentVersion[] | null>(null);
   // Version CHECKOUT: clicking a history entry loads that version's full state
   // (title/definition/pins/ratings — instant, from the hash-keyed rating store).
@@ -275,9 +296,34 @@ export default function IntentWorkbench({
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ rated: number; total: number } | null>(null);
   const [data, setData] = useState<RatingsPayload | null>(null);
-  // Conversation view: a clicked question's full thread REPLACES its own list
-  // (same theater-style component as the board viewer) until Exit.
+  // Conversation view: a clicked question's full thread COVERS its own list
+  // (same theater-style component as the board viewer) until Exit. It is a
+  // LAYER, not a replacement — labeling questions is a pass down a long list,
+  // and unmounting the list on every open would drop the reader back at the top.
   const [convo, setConvo] = useState<{ messageId: number; pane: 'in' | 'nd' } | null>(null);
+  // The last question opened in each pane, kept AFTER Exit so the row you came
+  // back from is marked — otherwise a 200-row list gives no clue where you were.
+  const [lastOpened, setLastOpened] = useState<{ in: number | null; nd: number | null }>({
+    in: null,
+    nd: null,
+  });
+  // The marked row's element per pane, so Exit can bring it back into view when
+  // it has moved (labeling it from the conversation view re-sorts the list).
+  const markedRowRef = useRef<{ in: HTMLLIElement | null; nd: HTMLLIElement | null }>({
+    in: null,
+    nd: null,
+  });
+  const openConvo = (messageId: number, pane: 'in' | 'nd') => {
+    setConvo({ messageId, pane });
+    setLastOpened((prev) => ({ ...prev, [pane]: messageId }));
+  };
+  const exitConvo = (pane: 'in' | 'nd') => {
+    setConvo(null);
+    // Next frame: the list is displayed again, so it can be measured/scrolled.
+    // 'nearest' is a no-op while the row is already on screen, which is the
+    // common case now that the scroll position survives.
+    requestAnimationFrame(() => markedRowRef.current[pane]?.scrollIntoView({ block: 'nearest' }));
+  };
   // Rows whose TRUNCATED query is expanded in place (the inline link — reading
   // a long question must not require opening its whole conversation).
   const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set());
@@ -295,6 +341,12 @@ export default function IntentWorkbench({
   } | null>(null);
   const [newOpen, setNewOpen] = useState(true);
   const [leftOpen, setLeftOpen] = useState(true);
+  // Bumped when a rating pass finishes, to RE-READ the baseline snapshot. The
+  // base is version-scoped but its ratings are hash-scoped: a base whose spec
+  // still matches the live one (the just-created v1, before any edit) gains
+  // rows as the pass lands, and a snapshot fetched mid-pass would otherwise
+  // freeze the intent's whole membership as "entered since v1".
+  const [baselineNonce, setBaselineNonce] = useState(0);
   // What is persisted server-side — Apply skips the save round trip when clean.
   const savedRef = useRef<{ title: string; definition: string }>(
     intent
@@ -305,31 +357,67 @@ export default function IntentWorkbench({
   // Board rows by messageId — the conversation view joins through this.
   const rowByMessage = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
 
-  // Discard the unsaved discovery draft (fire-and-forget purge). Called when
-  // switching suggestions or leaving without Save — an unsaved draft must not
-  // linger as a hidden intent.
-  function discardDraft() {
-    const draftId = draftIdRef.current;
-    if (draftId === null) return;
-    draftIdRef.current = null;
-    fetch(`/api/instructor/assignments/${assignmentId}/score/intents/${draftId}?mode=purge`, {
-      method: 'DELETE',
-      keepalive: true,
-    }).catch(() => {});
-  }
+  /**
+   * The queries this workbench is actually ABOUT: the intent's type, narrowed
+   * to what every enclosing intent currently CLAIMS — its rating, the same rule
+   * routing uses. A nested intent can never answer a query its parent doesn't,
+   * so questions outside this scope are noise in the panes and dead weight in
+   * the visible Apply pass. Null = no scoping (a type-less legacy intent rates
+   * the whole log, as before).
+   *
+   * A pending correction on an ANCESTOR does not widen or narrow this: until
+   * that correction is folded into the ancestor's definition, the ancestor
+   * still claims exactly what it claimed before.
+   */
+  const scopeSet = useMemo((): Set<number> | null => {
+    const type = mode.kind === 'edit' ? mode.intent.type : seed?.type ?? null;
+    if (!type) return null;
+    const claimed = (r: (typeof rows)[number], intentId: number): boolean =>
+      r.intentRatings[intentId]?.rating === 'clearly_in';
+    const ids = new Set<number>();
+    for (const r of rows) {
+      if (r.queryType !== type) continue;
+      if (scopeAncestorIds.every((aid) => claimed(r, aid))) ids.add(r.messageId);
+    }
+    return ids;
+  }, [rows, scopeAncestorIds, mode, seed]);
 
-  // Leave = exit discovery: an unsaved draft is discarded (no Save → not
-  // registered, per the version-history contract).
+  // Leave the workbench. A create that was never Applied has no row to point
+  // at (intentId null); everything else is registered and survives.
   function exit() {
-    discardDraft();
-    onExit();
+    onExit(intentId);
   }
 
-  // Clone a prepared library template into an UNSAVED draft: spec + rating
-  // rows copied server-side (same definition + no pins ⇒ same defHash, so the
-  // copied ratings are already fresh). The draft behaves exactly like an
-  // Apply-created one — pins attach to it, Save registers it, leaving without
-  // Save purges it — while the template stays in the library untouched.
+  /**
+   * What leaving RIGHT NOW would actually destroy — the guard dialog names it,
+   * so this must be precise. Pins persist the moment they are clicked, an
+   * Apply persists the spec (a create is even registered by it), so only one
+   * state is at risk: definition/title text that differs from the last
+   * persisted spec (typed but not yet Applied) — client-only, gone on unmount.
+   * A checkout is a read-only view of a past version — its fields deviate from
+   * the live spec by design, so it never counts as loss.
+   */
+  const leaveLoss = (): 'edits' | null => {
+    if (checkout !== null) return null;
+    if (specDirty() && (title.trim() || definition.trim())) return 'edits';
+    return null;
+  };
+  // Confirm-before-leave: the deferred navigation (Board exit, or the overlap
+  // chip's jump into another intent) runs only when the instructor chooses to
+  // leave. Null = no dialog.
+  const [leavePrompt, setLeavePrompt] = useState<{ action: () => void } | null>(null);
+  function guardLeave(action: () => void) {
+    if (leaveLoss()) setLeavePrompt({ action });
+    else action();
+  }
+  // Mirror for the beforeunload listener (registered once, must read fresh).
+  const leaveLossRef = useRef(leaveLoss);
+  leaveLossRef.current = leaveLoss;
+
+  // Clone a prepared library template into a REGISTERED intent (v1): spec +
+  // rating rows copied server-side (same definition + no pins ⇒ same defHash,
+  // so the copied ratings are already fresh), while the template stays in the
+  // library untouched.
   //
   // Driven by the chooser: it decides that the seed's definition still matches
   // a template and passes the id through, so the questions are already there
@@ -347,7 +435,6 @@ export default function IntentWorkbench({
     setError(null);
     setData(null);
     setVersions(null);
-    setPinsDirty(false);
     try {
       const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/intents`, {
         method: 'POST',
@@ -355,8 +442,9 @@ export default function IntentWorkbench({
         body: JSON.stringify({
           fromTemplateId: templateId,
           ...(title?.trim() ? { title: title.trim() } : {}),
-          isTemplate: true, // unregistered draft until Save
-          recordVersion: false,
+          // Registered on adoption (v1, action create_intent) — picking a
+          // starter from the chooser IS the decision to have this intent.
+          isTemplate: false,
           autoTitle: false,
           // The PLACEMENT of the scope this was created from. Library templates
           // are deliberately type-less (they are rated whole-log for the
@@ -370,16 +458,16 @@ export default function IntentWorkbench({
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
-          typeof d?.message === 'string' ? d.message : 'Failed to load the starter set.'
+          typeof d?.message === 'string' ? d.message : 'Failed to load the starter intent.'
         );
       }
       const saved = d.intent as { id: number; title: string; definition: string };
       if (!live(controller.signal)) return;
-      draftIdRef.current = saved.id; // unsaved draft — purged if left without Save
       setIntentId(saved.id);
       setTitle(saved.title);
       setDefinition(saved.definition);
       savedRef.current = { title: saved.title, definition: saved.definition };
+      loadVersions(saved.id); // v1 is on the books — show it
       await fetchRatings(saved.id, controller.signal);
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live(controller.signal)) {
@@ -390,18 +478,25 @@ export default function IntentWorkbench({
     }
   }
 
-  // A seed carrying a template id is a starter set the chooser found already
-  // rated — adopt it straight away, so its questions are on screen when the
-  // workbench opens. Mount-only, like the title/definition seeds: `seed` is a
-  // mount-time value and the parent re-keys this component per target.
+  // The chooser's Create is the decision — so the workbench opens ALREADY
+  // working on it, never on a form waiting for a first click:
+  //  · a starter the chooser found prepared is adopted (its ratings are copied,
+  //    so its questions are on screen immediately);
+  //  · any other seeded candidate is Applied right away, which registers it as
+  //    v1 and starts the rating pass.
+  // Mount-only: `seed` is a mount-time value and the parent re-keys this
+  // component per target.
   useEffect(() => {
-    if (seed?.fromTemplateId) void adoptTemplate(seed.fromTemplateId, seed.title);
+    if (seed?.fromTemplateId) {
+      void adoptTemplate(seed.fromTemplateId, seed.title);
+    } else if (seed?.definition?.trim()) {
+      // Pass the seed explicitly: state is set from it in the same commit, so
+      // reading `definition` here would still see the initial value.
+      void apply({ title: seed.title?.trim() ?? '', definition: seed.definition.trim() });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Collapse state for the LEFT boundary-example lists.
-  const [incOpen, setIncOpen] = useState(true);
-  const [excOpen, setExcOpen] = useState(true);
   // Per-pane query search + sorts. Both pin-driven orders rank by the embedding
   // score (max cosine to the IN pins − max cosine to the OUT pins); 'in-like'
   // puts the highest scores first, 'out-like' the lowest.
@@ -423,10 +518,6 @@ export default function IntentWorkbench({
   const setNdSort = ndFilter === 'in' ? setNdSortIn : setNdSortOut;
   const [similarScores, setSimilarScores] = useState<Record<number, number> | null>(null);
   const [similarBusy, setSimilarBusy] = useState(false);
-
-  // Descending counter feeding optimistic pinRank (-1, -2, …): a just-pinned
-  // example must lead the prompt order the way the server's newest-first does.
-  const optimisticPinRankRef = useRef(0);
 
   const mountedRef = useRef(true);
   // One controller per run; aborted on unmount so an in-flight rate loop can
@@ -451,20 +542,20 @@ export default function IntentWorkbench({
     return () => {
       mountedRef.current = false;
       abortRef.current?.abort();
-      // Leaving the workbench by ANY route (Back, board navigation, unmount)
-      // discards an unsaved draft. No-op when nothing was drafted or after Save.
-      discardDraft();
+      bgAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Browser-level leave (reload, tab close, external nav) — same purge, via
-  // keepalive fetch so it survives the unload.
+  // Browser-level leave (reload, tab close, external nav): the native confirm
+  // when leaving would lose unapplied edits. Nothing to purge any more — every
+  // applied state is a registered intent.
   useEffect(() => {
-    const purge = () => discardDraft();
-    window.addEventListener('beforeunload', purge);
-    return () => window.removeEventListener('beforeunload', purge);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const warn = (e: BeforeUnloadEvent) => {
+      if (leaveLossRef.current()) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
   }, []);
 
   const live = (signal: AbortSignal) => mountedRef.current && !signal.aborted;
@@ -483,22 +574,62 @@ export default function IntentWorkbench({
   }
 
   async function rateLoop(id: number, signal: AbortSignal) {
-    // total is fixed to the whole log so the bar fills smoothly (the shard
-    // aggregate would otherwise climb as shards report their partition sizes).
-    setProgress({ rated: 0, total: totalQuestions });
-    // Fan the log out into parallel shards so a new intent applies to every
-    // question in ~one wave instead of a sequential 40-at-a-time crawl.
+    // The VISIBLE pass: only the queries in scope (what the panes show). The
+    // bar's total is fixed up front so it fills smoothly (the shard aggregate
+    // would otherwise climb as shards report their partition sizes).
+    const scopedIds = scopeSet ? [...scopeSet] : null;
+    const total = scopedIds ? scopedIds.length : totalQuestions;
+    setProgress({ rated: 0, total });
+    if (scopedIds !== null && scopedIds.length === 0) return; // nothing in scope
+    // Fan the work out into parallel shards so it applies in ~one wave instead
+    // of a sequential 40-at-a-time crawl.
     await runShardedRate({
       assignmentId,
       model,
       intentIds: [id],
-      estimatedTotal: totalQuestions,
+      ...(scopedIds ? { messageIds: scopedIds } : {}),
+      estimatedTotal: total,
       signal,
       isLive: () => live(signal),
       onProgress: (p) => {
-        if (live(signal)) setProgress({ rated: Math.min(p.rated, totalQuestions), total: totalQuestions });
+        if (live(signal)) setProgress({ rated: Math.min(p.rated, total), total });
       },
     });
+  }
+
+  // The background sweep: everything OUTSIDE the scope — out-of-scope queries
+  // of the type (they feed the board's ↗ outside-count diagnostic) and the
+  // untyped remainder. Deliberately invisible: no busy state, no bar, errors
+  // to the console only — the instructor's work does not depend on it.
+  const bgAbortRef = useRef<AbortController | null>(null);
+  function sweepRestInBackground(id: number) {
+    bgAbortRef.current?.abort();
+    const controller = new AbortController();
+    bgAbortRef.current = controller;
+    const { signal } = controller;
+    void (async () => {
+      try {
+        await runShardedRate({
+          assignmentId,
+          model,
+          intentIds: [id],
+          estimatedTotal: totalQuestions,
+          signal,
+          isLive: () => mountedRef.current && !signal.aborted,
+          onProgress: () => {},
+        });
+        // Refresh silently so the stale/outside numbers catch up. The scoped
+        // panes render the same rows either way.
+        if (mountedRef.current && !signal.aborted) {
+          await fetchRatings(id, signal);
+          setBaselineNonce((n) => n + 1);
+        }
+      } catch (e) {
+        if ((e as Error)?.name !== 'AbortError') {
+          console.error('SCORE background sweep failed:', e);
+        }
+      }
+    })();
   }
 
   /** Apply = persist the spec silently (draft on create), then rate the whole
@@ -544,8 +675,10 @@ export default function IntentWorkbench({
       await livePoll;
       await fetchRatings(id, signal);
       if (live(signal)) {
-        setPinsDirty(false); // shown ratings now reflect the pins
         setCheckout(null); // a rollback-apply lands back on the (new) live spec
+        setBaselineNonce((n) => n + 1); // the base's own rows may have landed too
+        // Visible scope is done — the rest of the log rates quietly behind it.
+        if (scopeSet) sweepRestInBackground(id);
       }
     } catch (e) {
       if ((e as Error)?.name === 'AbortError') return;
@@ -585,37 +718,50 @@ export default function IntentWorkbench({
     // redundant versions. A `silent` persist (Retire labels) still records none.
     const titleText = (specOverride?.title ?? title).trim();
     const defText = (specOverride?.definition ?? definition).trim();
-    const autoTitle = specOverride ? !titleText : !titleDirty || !title.trim();
+    // Auto-naming applies ONLY to an intent that has no name yet (a fresh
+    // draft). Once it has one, a changed definition produces a SUGGESTION the
+    // instructor can take or ignore — an Apply is fine-tuning, and a rename
+    // behind their back makes it look like a new intent was created.
+    const autoTitle = !titleText;
     const stats = {
       included: pinnedIn.length,
       excluded: pinnedOut.length,
       inCount: inThisIntent.length,
     };
     const isCreate = !!specOverride?.createNew || intentId === null;
+    // Only worth asking for on an EXISTING named intent whose definition moved:
+    // a create just took the instructor's own words, and an unchanged definition
+    // would only regenerate the name it already has.
+    const suggestTitle =
+      !isCreate && !!titleText && defText !== savedRef.current.definition.trim();
     const payload = {
       title: autoTitle ? undefined : titleText,
       definition: defText,
       autoTitle,
+      ...(suggestTitle ? { suggestTitle: true } : {}),
       // Save records a MAJOR version; Apply records a MINOR one — an Apply costs
-      // an LLM re-rate, so it must be revertible from History too. `silent`
-      // persists the spec with NO version (used by Retire labels, which folds the
-      // just-refined definition in before dropping the labels).
-      ...(opts?.silent ? { recordVersion: false } : { recordVersion: true, ...(force ? {} : { minorVersion: true }) }),
+      // an LLM re-rate, so it must be revertible from History too. The FIRST
+      // persist of a create is a major regardless: creating an intent is the
+      // decision to have it, so its opening state IS v1 (never a v0.x draft).
+      // `silent` persists the spec with NO version (used by Retire labels,
+      // which folds the just-refined definition in before dropping the labels).
+      ...(opts?.silent
+        ? { recordVersion: false }
+        : { recordVersion: true, ...(force || isCreate ? {} : { minorVersion: true }) }),
       stats,
-      // Creates start as unregistered drafts; Save activates (registers).
-      // A create also carries its PLACEMENT: the scope it was invoked from is
-      // its parent, and its rule is seeded from that scope (v7 §3.2/§3.5).
+      // A create is registered on arrival — the chooser was the moment of
+      // intent, not Save. It carries its PLACEMENT: the scope it was invoked
+      // from is its parent, and its rule is seeded from that scope (§3.2/§3.5).
       ...(isCreate
         ? {
-            isTemplate: true,
+            isTemplate: false,
             ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
           }
         : force
           ? {
               isTemplate: false,
-              // Save also (re)states the placement: a draft that reached here
-              // without one — e.g. adopted from a type-less library template —
-              // would otherwise register into no chain at all.
+              // Save also (re)states the placement: an intent adopted from a
+              // type-less library template would otherwise sit in no chain.
               ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
             }
           : {}),
@@ -640,16 +786,46 @@ export default function IntentWorkbench({
     const saved = d.intent as { id: number; title: string; definition: string };
     if (mountedRef.current) {
       setIntentId(saved.id);
-      setTitle(saved.title); // reflect the auto-generated title
-      setTitleDirty(false);
+      setTitle(saved.title); // a no-op unless the server auto-named an untitled draft
+      const offered = typeof d.titleSuggestion === 'string' ? d.titleSuggestion.trim() : '';
+      setTitleSuggestion(offered && offered !== saved.title ? offered : null);
       savedRef.current = { title: saved.title, definition: saved.definition };
-      if (isCreate) {
-        draftIdRef.current = saved.id; // unsaved draft — purged if left without Save
-      }
-      if (force) draftIdRef.current = null; // saved → registered, keep it
       loadVersions(saved.id);
     }
     return saved.id;
+  }
+
+  /** Take the offered name. A title has no bearing on ratings, so this is a
+   * plain rename: no re-rate, and no version entry — History stays a record of
+   * what changed the intent's BEHAVIOR. */
+  async function acceptTitleSuggestion() {
+    const next = titleSuggestion?.trim();
+    if (!next || intentId === null) return;
+    setRenaming(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: next, recordVersion: false }),
+        }
+      );
+      if (!res.ok) throw new Error('Failed to rename the intent.');
+      if (!mountedRef.current) return;
+      setTitle(next);
+      // savedRef too, or the workbench would read the rename as an unapplied
+      // edit and re-enable Apply for a change that needs no re-rating.
+      savedRef.current = { ...savedRef.current, title: next };
+      setTitleSuggestion(null);
+      // The board re-reads the intent on exit (onExit → router.refresh), so the
+      // new name reaches the chain there without another round trip here.
+    } catch (e) {
+      if (mountedRef.current) setError((e as Error).message);
+    } finally {
+      if (mountedRef.current) setRenaming(false);
+    }
   }
 
   // Save = REGISTER: commit the applied state (definition + pins) as a version;
@@ -667,12 +843,25 @@ export default function IntentWorkbench({
     }
   }
 
-  /** Rewrite the definition FROM the labeled examples (strong model). The
-   * result is a DRAFT put into the fields — review, then Save or Apply. */
-  async function refineFromLabels() {
-    if (refining || busy || intentId === null) return;
+  /**
+   * Ask the fold model to rewrite the definition from the pending corrections,
+   * and open the REVIEW MODAL with the result.
+   *
+   * Nothing is written here. The fold is a lossy rewrite and it is the only
+   * route by which a correction reaches the classifier, so the instructor sees
+   * (and may edit) what it produced before anything changes.
+   */
+  async function openFoldReview() {
+    if (refining || busy || saving || intentId === null || checkout !== null) return;
+    // Open on what we already know — the corrections and the text being
+    // rewritten — so the wait happens inside the review, with context, instead
+    // of behind a button that looks stuck. The fold runs a high-effort model
+    // over the whole definition; tens of seconds is normal.
+    setFoldOpen(true);
+    setFoldProposals(null);
     setRefining(true);
     setError(null);
+    setFoldError(null);
     try {
       const res = await fetch(
         `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/refine`,
@@ -686,70 +875,72 @@ export default function IntentWorkbench({
       if (!res.ok) {
         throw new Error(typeof d?.message === 'string' ? d.message : 'Failed to update the definition.');
       }
-      if (mountedRef.current) {
-        setDefinition(d.definition);
-        if (!titleDirty && typeof d.title === 'string' && d.title) setTitle(d.title);
-        setRefineReasoning(typeof d.reasoning === 'string' ? d.reasoning : null);
-      }
+      const proposals = Array.isArray(d?.proposals) ? (d.proposals as FoldProposalView[]) : [];
+      if (proposals.length === 0) throw new Error('The model returned no proposal. Try again.');
+      if (mountedRef.current) setFoldProposals(proposals);
     } catch (e) {
-      if (mountedRef.current) setError((e as Error).message);
+      // The error belongs INSIDE the modal now — that is where the instructor
+      // is looking, and closing it would throw away the context they need.
+      if (mountedRef.current) setFoldError((e as Error).message);
     } finally {
       if (mountedRef.current) setRefining(false);
     }
   }
 
   /**
-   * Retire every label of this intent, once refineFromLabels has folded them
-   * into the definition. That is the whole point of the refine: the boundary
-   * knowledge is meant to live in the definition TEXT, not ride along forever as
-   * examples. With the labels gone the next Apply re-rates the log against the
-   * definition standing alone — if the same questions come back, it absorbed
-   * them; if they don't, the definition still needs work.
-   *
-   * A dirty definition (e.g. just-refined by Update from labels) is persisted
-   * FIRST — silently, no version — so retiring the labels keeps the new
-   * definition instead of leaving the old one behind.
+   * Commit the reviewed fold: write the definition(s) the instructor left in
+   * the modal and consume the corrections they absorbed, atomically. The
+   * corrections become markers; the new definition makes every rating stale, so
+   * the next Apply re-rates against it — which is the only real test that the
+   * fold held.
    */
-  async function retireLabels() {
-    if (intentId === null || retiring || busy || saving || checkout !== null) return;
-    if (pinCount === 0) return;
-    if (
-      !window.confirm(
-        `Retire all ${pinCount} label(s)?\n\nThe definition keeps what it learned from them. ` +
-          `The next Apply re-rates the log against the definition alone.`
-      )
-    ) {
-      return;
-    }
-    setRetiring(true);
-    setError(null);
-    const controller = new AbortController();
-    abortRef.current?.abort();
-    abortRef.current = controller;
+  async function applyFold(edited: Record<number, string>) {
+    if (!foldProposals || intentId === null) return;
+    setFoldBusy(true);
+    setFoldError(null);
     try {
-      // Fold the current (possibly just-refined) definition into the live intent
-      // before dropping its labels — silent, so no version is recorded here.
-      if (specDirty()) {
-        const id = await persist(controller.signal, false, undefined, { silent: true });
-        if (id === null || !live(controller.signal)) return;
-      }
+      const applies = foldProposals.map((p) => ({
+        intentId: p.intentId,
+        definition: (edited[p.intentId] ?? p.after).trim(),
+        ...(p.intentId === intentId && p.suggestedTitle && !title.trim()
+          ? { title: p.suggestedTitle }
+          : {}),
+      }));
+      const correctionIds = foldProposals.flatMap((p) => p.corrections.map((c) => c.id));
       const res = await fetch(
-        `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/pins?all=1`,
-        { method: 'DELETE', signal: controller.signal }
+        `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/fold`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ applies, correctionIds }),
+        }
       );
-      if (!res.ok) throw new Error('Failed to retire the labels.');
-      await fetchRatings(intentId, controller.signal);
-      if (live(controller.signal)) {
-        setPinsDirty(true); // shown ratings still carry the retired pins → re-Apply
-        setSimilarScores(null); // no pins left → the pin-driven sorts are moot
-        setRefineReasoning(null);
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof d?.message === 'string' ? d.message : 'Failed to apply the definition.');
       }
+      if (!mountedRef.current) return;
+      const mine = applies.find((a) => a.intentId === intentId);
+      if (mine) {
+        setDefinition(mine.definition);
+        // The definition IS saved — mirror it into savedRef so the workbench
+        // does not read the fold as an unapplied edit and demand a re-Apply of
+        // text it just wrote.
+        savedRef.current = { ...savedRef.current, definition: mine.definition };
+        if (mine.title) setTitle(mine.title);
+      }
+      setFoldProposals(null);
+      setFoldOpen(false);
+      // The corrections are gone and the ratings now belong to an older
+      // definition: reload rows (markers, cleared pills) and history.
+      await fetchRatings(intentId, new AbortController().signal);
+      loadVersions(intentId);
+      setSimilarScores(null);
+      setBaselineNonce((n) => n + 1);
     } catch (e) {
-      if ((e as Error)?.name !== 'AbortError' && live(controller.signal)) {
-        setError((e as Error).message);
-      }
+      if (mountedRef.current) setFoldError((e as Error).message);
     } finally {
-      if (mountedRef.current) setRetiring(false);
+      if (mountedRef.current) setFoldBusy(false);
     }
   }
 
@@ -770,7 +961,6 @@ export default function IntentWorkbench({
     if (intentId === null || busy || saving) return;
     setCheckout(versionNo);
     setError(null);
-    setRefineReasoning(null);
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -779,7 +969,6 @@ export default function IntentWorkbench({
       if (live(controller.signal)) {
         setTitle(payload.intent.title);
         setDefinition(payload.intent.definition);
-        setTitleDirty(true);
       }
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live(controller.signal)) {
@@ -824,12 +1013,10 @@ export default function IntentWorkbench({
       if (!live(controller.signal)) return;
       setCheckout(null);
       setDiffSel('latest'); // the old base may be among the deleted steps
-      setPinsDirty(false);
       const payload = await fetchRatings(intentId, controller.signal);
       if (live(controller.signal)) {
         setTitle(payload.intent.title);
         setDefinition(payload.intent.definition);
-        setTitleDirty(false);
         savedRef.current = { title: payload.intent.title, definition: payload.intent.definition };
       }
       loadVersions(intentId);
@@ -861,42 +1048,38 @@ export default function IntentWorkbench({
     }
   }
 
-  // Optimistic: flip the pin immediately (no spinner/disable), fire the write,
-  // and revert only if the server rejects it. Pins are boundary examples that
-  // refine WHICH questions this intent captures on the next re-rate.
+  /**
+   * Record (or withdraw) a CORRECTION on one question.
+   *
+   * Optimistic: flip immediately, fire the write, revert only on rejection. A
+   * correction does not move the row — it changes nothing for students until
+   * "Update definition" folds it in — so the pill going active IS the feedback.
+   */
   async function togglePin(
     row: RatingRow,
     verdict: 'in' | 'out',
     reason?: string,
-    /** v7: also clear the earlier sets that would answer this question first,
-     * so an IN pin actually routes it here (§3.6). */
+    /** Also record an out-correction on every earlier intent that currently
+     * answers this question — the only way routing can actually move. */
     routeHere?: boolean
   ) {
-    // Checkout is a read-only view of a past version — pins mutate the LIVE
-    // spec, so labeling is disabled until Apply (rollback) or Back to latest.
+    // Checkout is a read-only view of a past version.
     if (intentId === null || checkout !== null) return;
     const next = row.pinned === verdict ? null : verdict;
-    // The server refreshes createdAt on every (re-)pin, so a new pin leads the
-    // prompt. Mirror that locally with a descending negative rank until the
-    // next fetch supplies the real indices — otherwise the preview would show
-    // this example last, or drop it, right after you added it.
-    const nextRank = next === null ? null : --optimisticPinRankRef.current;
-    // A reason only rides an OUT pin; clear it when pinning in or unpinning.
-    const nextReason = next === 'out' ? reason?.trim() || null : null;
-    const setPinned = (pinned: 'in' | 'out' | null, pinRank: number | null, rsn: string | null) =>
+    const nextReason = next === null ? null : reason?.trim() || null;
+    const setPinned = (pinned: 'in' | 'out' | null, rsn: string | null) =>
       setData((prev) =>
         prev
           ? {
               ...prev,
               rows: prev.rows.map((pr) =>
-                pr.messageId === row.messageId ? { ...pr, pinned, pinRank, reason: rsn } : pr
+                pr.messageId === row.messageId ? { ...pr, pinned, reason: rsn } : pr
               ),
             }
           : prev
       );
-    setPinned(next, nextRank, nextReason);
-    setPinsDirty(true); // ratings no longer reflect the pins → re-Apply before Save
-    setSimilarScores(null); // pins changed → pin-sort scores are stale, refetch
+    setPinned(next, nextReason);
+    setSimilarScores(null); // the correction set changed → pin-sort scores stale
     try {
       const res =
         next === null
@@ -916,16 +1099,34 @@ export default function IntentWorkbench({
             });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(typeof d?.error === 'string' ? `Pin failed: ${d.error}` : 'Failed to update the pin.');
+        throw new Error(
+          typeof d?.error === 'string' ? `Correction failed: ${d.error}` : 'Failed to record the correction.'
+        );
       }
-      // "Send it here" also wrote out-pins on the earlier sets, which changes
-      // THEIR specs — reload so the shadowing tags reflect the new order.
-      if (routeHere) await fetchRatings(intentId, new AbortController().signal);
-      // Labeling no longer records a version — the label set is captured on the
-      // next Apply, so there is nothing to refresh in the history here.
+      if (next === null) {
+        // Withdrawing the in-correction also withdraws the out-correction the
+        // send-here left on the intercepting intent (the server does it in one
+        // transaction), so the note goes with it.
+        setRedirectedBy((m) => {
+          if (!(row.messageId in m)) return m;
+          const rest = { ...m };
+          delete rest[row.messageId];
+          return rest;
+        });
+      } else if (routeHere) {
+        const d = await res.json().catch(() => ({}));
+        const titles = Array.isArray(d?.redirected)
+          ? d.redirected
+              .map((x: unknown) => (x as { title?: unknown })?.title)
+              .filter((t: unknown): t is string => typeof t === 'string')
+          : [];
+        setRedirectedBy((m) => ({ ...m, [row.messageId]: titles }));
+      }
+      // Refetch to pick up the server's correction ids — the fold consumes them.
+      await fetchRatings(intentId, new AbortController().signal);
     } catch (e) {
       if (mountedRef.current) {
-        setPinned(row.pinned, row.pinRank, row.reason); // revert the optimistic flip
+        setPinned(row.pinned, row.reason); // revert the optimistic flip
         setError((e as Error).message);
       }
     }
@@ -934,10 +1135,20 @@ export default function IntentWorkbench({
   // Open the out-reason picker under the clicked button and fetch three
   // LLM-suggested reasons in the background. NOTHING is pinned until the
   // instructor picks or writes one (pickOutReason) — closing cancels the out.
-  async function openOutPicker(row: RatingRow, btn: DOMRect) {
+  /** True when this correction overrules the classifier — the only case worth
+   * a reason. An 'in' on anything but clearly_in, an 'out' on anything but
+   * clearly_out. (Stated as disagreement, not list position, so a row reached
+   * from search or the conversation view is judged the same way.) */
+  function disagrees(row: RatingRow, verdict: 'in' | 'out'): boolean {
+    if (row.rating === null) return false; // unrated — nothing to overrule yet
+    return verdict === 'in' ? row.rating !== 'clearly_in' : row.rating !== 'clearly_out';
+  }
+
+  async function openReasonPicker(row: RatingRow, verdict: 'in' | 'out', btn: DOMRect) {
     if (intentId === null || checkout !== null) return;
-    setOutPicker({
+    setReasonPicker({
       messageId: row.messageId,
+      verdict,
       anchor: { left: btn.left, top: btn.top, bottom: btn.bottom, width: btn.width },
       loading: true,
       reasons: [],
@@ -949,7 +1160,11 @@ export default function IntentWorkbench({
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messageId: row.messageId, ...(row.rationale ? { rationale: row.rationale } : {}) }),
+          body: JSON.stringify({
+            messageId: row.messageId,
+            verdict,
+            ...(row.rationale ? { rationale: row.rationale } : {}),
+          }),
         }
       );
       const d = await res.json().catch(() => ({}));
@@ -957,47 +1172,21 @@ export default function IntentWorkbench({
       const reasons = Array.isArray(d.reasons)
         ? d.reasons.filter((r: unknown): r is string => typeof r === 'string')
         : [];
-      setOutPicker((p) => (p && p.messageId === row.messageId ? { ...p, loading: false, reasons } : p));
+      setReasonPicker((p) => (p && p.messageId === row.messageId ? { ...p, loading: false, reasons } : p));
     } catch (e) {
-      setOutPicker((p) =>
+      setReasonPicker((p) =>
         p && p.messageId === row.messageId ? { ...p, loading: false, error: (e as Error).message } : p
       );
     }
   }
 
-  // Commit the out pin with the chosen/typed reason (blank = out, no reason).
-  function pickOutReason(reason: string) {
-    if (!outPicker) return;
-    const row = data?.rows.find((r) => r.messageId === outPicker.messageId);
-    setOutPicker(null);
-    if (row) togglePin(row, 'out', reason.trim() || undefined);
-  }
-
-  // Edit mode only: archive (soft-delete) the intent; its questions fall back
-  // to Base-only. Recorded as a version, so it's reversible.
-  async function archive() {
-    if (!intent) return;
-    if (
-      !window.confirm(
-        `Archive "${intent.title}"? Its questions fall back to Base-only. This is recorded and reversible.`
-      )
-    ) {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/intents/${intent.id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error('Archive failed.');
-      onExit();
-    } catch (e) {
-      if (mountedRef.current) {
-        setError((e as Error).message);
-        setBusy(false);
-      }
-    }
+  /** Commit the correction with the chosen/typed reason (blank = no reason). */
+  function pickReason(reason: string) {
+    if (!reasonPicker) return;
+    const row = data?.rows.find((r) => r.messageId === reasonPicker.messageId);
+    const verdict = reasonPicker.verdict;
+    setReasonPicker(null);
+    if (row) togglePin(row, verdict, reason.trim() || undefined);
   }
 
   // Two instructor-facing buckets — the 4 internal rating levels stay hidden:
@@ -1010,55 +1199,75 @@ export default function IntentWorkbench({
   // keeps them visible. The instructor's pins ALSO appear on the LEFT with the
   // spec — that list is the ledger of Included/Excluded EXAMPLES injected into
   // the prompt.
-  const inThisIntent = useMemo(
+  // The panes show the SCOPE's rows only — out-of-scope ratings still exist
+  // (the background sweep writes them; the board's ↗ outside-count reads them)
+  // but browsing them here would drown the queries this intent can actually
+  // answer. Pins are exempt: an example is part of the spec wherever it lives.
+  const scopedRows = useMemo(
     () =>
       data
-        ? data.rows.filter(
-            (r) => r.pinned === 'in' || (r.pinned == null && r.rating === 'clearly_in')
-          )
+        ? scopeSet
+          ? data.rows.filter((r) => scopeSet.has(r.messageId) || r.pinned !== null || r.marker !== null)
+          : data.rows
         : [],
-    [data]
+    [data, scopeSet]
+  );
+  const scopedStaleCount = useMemo(() => scopedRows.filter((r) => r.stale).length, [scopedRows]);
+  // Both panes read the JUDGMENT. A correction deliberately does NOT move its
+  // row: until the definition absorbs it nothing has changed for students, and
+  // a row that jumped on click would claim otherwise. The row stays put with
+  // its pill lit — "taught, not yet learned" — and moves for real after the
+  // update re-rates it. That is the loop made visible.
+  const inThisIntent = useMemo(
+    () => scopedRows.filter((r) => r.rating === 'clearly_in'),
+    [scopedRows]
   );
   const needsDecision = useMemo(
     () =>
-      data
-        ? data.rows.filter(
-            (r) =>
-              r.pinned == null &&
-              r.rating !== 'clearly_in' &&
-              r.rating !== 'clearly_out' &&
-              // During the live fill, not-yet-rated rows stay out — the pane
-              // ACCUMULATES results rather than starting full and thinning.
-              (r.rating !== null || !busy)
-          )
-        : [],
-    [data, busy]
+      scopedRows.filter(
+        (r) =>
+          r.rating !== 'clearly_in' &&
+          r.rating !== 'clearly_out' &&
+          // During the live fill, not-yet-rated rows stay out — the pane
+          // ACCUMULATES results rather than starting full and thinning.
+          (r.rating !== null || !busy)
+      ),
+    [scopedRows, busy]
   );
-  // Pinned rows in PROMPT order, not in data.rows order. data.rows arrives
-  // sorted by rating strength, so slicing it hands the preview a different — and
-  // systematically weaker-rated — pin set than the classifier sees: a boundary
-  // example an instructor just labeled rates probably_*, so it sorts last there
-  // while the server, ordering by pin recency, lists it first.
-  const pinnedIn = useMemo(
-    () => (data ? data.rows.filter((r) => r.pinned === 'in').sort(byPinRank) : []),
-    [data]
-  );
-  const pinnedOut = useMemo(
-    () => (data ? data.rows.filter((r) => r.pinned === 'out').sort(byPinRank) : []),
-    [data]
-  );
+  /** Pending corrections — what "Update definition" will fold in. */
+  const pinnedIn = useMemo(() => (data ? data.rows.filter((r) => r.pinned === 'in') : []), [data]);
+  const pinnedOut = useMemo(() => (data ? data.rows.filter((r) => r.pinned === 'out') : []), [data]);
   const pinCount = pinnedIn.length + pinnedOut.length;
+  /**
+   * A folded correction the re-rating did NOT reproduce — the fold did not
+   * hold. Surfaced as a count so a failed teaching cannot pass unnoticed.
+   *
+   * STALE ratings are excluded, and that exclusion is the whole point: right
+   * after a fold the stored ratings still belong to the definition the fold
+   * replaced, so judging a marker against them would flag every correction as
+   * failed at the exact moment it succeeded. A marker is only testable once the
+   * re-Apply has rated the question against the definition it produced.
+   */
+  const conflictRows = useMemo(
+    () =>
+      scopedRows.filter(
+        (r) =>
+          r.marker !== null &&
+          r.pinned === null &&
+          r.rating !== null &&
+          !r.stale &&
+          (r.marker.verdict === 'in') !== (r.rating === 'clearly_in')
+      ),
+    [scopedRows]
+  );
 
   // ---- Membership diff vs the baseline version --------------------------
-  // "In the intent" for diff purposes = the EFFECTIVE membership: pinned in, or
-  // clearly_in with no pin (pin overrides rating, §1.6) — so pinning a capture
-  // in doesn't read as it "leaving", and pinning one out reads as a real exit.
-  const effectiveIn = (rowsIn: { messageId: number; rating: RatingLevel | null; pinned: 'in' | 'out' | null }[]) =>
-    new Set(
-      rowsIn
-        .filter((r) => r.pinned === 'in' || (r.pinned == null && r.rating === 'clearly_in'))
-        .map((r) => r.messageId)
-    );
+  // Membership is the JUDGMENT — what the deployed chatbot would do. A pending
+  // correction is not membership: it is a request for the definition to change,
+  // and counting it here would report an intent as already fixed while students
+  // still get the old routing.
+  const effectiveIn = (rowsIn: { messageId: number; rating: RatingLevel | null }[]) =>
+    new Set(rowsIn.filter((r) => r.rating === 'clearly_in').map((r) => r.messageId));
   const effectiveInNow = useMemo(() => (data ? effectiveIn(data.rows) : new Set<number>()), [data]);
 
   // The version the diff is anchored to: the latest SAVE (major) by default —
@@ -1081,15 +1290,19 @@ export default function IntentWorkbench({
         );
         const d = (await res.json().catch(() => null)) as RatingsPayload | null;
         if (!res.ok || !d || cancelled || !mountedRef.current) return;
+        // A base with nothing judged yet — the v1 an intent is BORN with, read
+        // before its first pass lands — cannot say what "entered since". It
+        // would report the entire membership as new, which is the intent's
+        // birth, not a change. No base until it has judgments of its own.
+        if (!d.rows.some((r) => r.rating !== null)) {
+          setBaseline(null);
+          return;
+        }
         const buckets = new Map<number, 'in' | 'nd' | 'out'>();
         for (const r of d.rows) {
           buckets.set(
             r.messageId,
-            r.pinned === 'in' || (r.pinned == null && r.rating === 'clearly_in')
-              ? 'in'
-              : r.pinned === 'out' || r.rating === 'clearly_out'
-                ? 'out'
-                : 'nd'
+            r.rating === 'clearly_in' ? 'in' : r.rating === 'clearly_out' ? 'out' : 'nd'
           );
         }
         setBaseline({ versionNo: diffBaseNo, inSet: effectiveIn(d.rows), buckets });
@@ -1101,7 +1314,7 @@ export default function IntentWorkbench({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diffBaseNo, intentId, assignmentId]);
+  }, [diffBaseNo, intentId, assignmentId, baselineNonce]);
 
   // Entered/left since the baseline. `newlyIn` marks rows in the current lists;
   // `leftRows` no longer qualify for "In this intent", so they get their own
@@ -1252,10 +1465,10 @@ export default function IntentWorkbench({
               : 'Diff base — click to compare against the latest version again'
             : 'Show diff — compare the current "In this intent" set against this version'
         }
-        className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-xs font-medium ${
+        className={`items-center gap-0.5 rounded border px-1 py-0.5 text-xs font-medium ${
           isDiffBase
-            ? 'border-sky-300 bg-sky-100 text-sky-800'
-            : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+            ? 'inline-flex border-sky-300 bg-sky-100 text-sky-800'
+            : 'hidden group-hover:inline-flex border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
         }`}
       >
         <GitCompareArrows className="w-3 h-3" /> diff
@@ -1276,11 +1489,15 @@ export default function IntentWorkbench({
         title={
           isNewest
             ? 'The live version — click to return to it'
-            : compact
-              ? `${v.definition ?? ''}\n\n${absoluteTime} — click to view this state`
-              : 'View this version — its definition, labels, and results load instantly'
+            : `${v.title ? `${v.title} — ` : ''}${v.definition ?? ''}\n${[
+                `included ${v.included}`,
+                `excluded ${v.excluded}`,
+                v.stats ? `in this intent ${v.stats.inCount}` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}\n\n${absoluteTime} — click to view this state (loads instantly)`
         }
-        className={`w-full cursor-pointer text-left rounded border text-xs ${
+        className={`group w-full cursor-pointer text-left rounded border text-xs ${
           compact ? 'px-2 py-1' : 'px-2 py-1.5'
         } ${
           highlighted
@@ -1320,22 +1537,9 @@ export default function IntentWorkbench({
             <span className="text-rose-700">{v.excluded} out</span>
           </p>
         )}
-        {!compact && (
-          <>
-            {v.definition && (
-              <p className="mt-0.5 text-[hsl(var(--foreground))]" title={v.definition}>
-                {v.title ? <span className="font-medium">{v.title} — </span> : null}
-                {v.definition.length > 90 ? `${v.definition.slice(0, 90)}…` : v.definition}
-              </p>
-            )}
-            <p className="mt-0.5 text-[hsl(var(--muted-foreground))]" title={labeledTooltip(v)}>
-              <span className="text-emerald-700">included {v.included}</span>
-              {' · '}
-              <span className="text-rose-700">excluded {v.excluded}</span>
-              {v.stats ? ` · in this intent ${v.stats.inCount}` : ''}
-            </p>
-          </>
-        )}
+        {/* Majors are ONE line — the definition and label counts live in the
+            row tooltip. Version-shy instructors read "v2 · saved · 2h ago",
+            nothing more. */}
       </div>
     );
   };
@@ -1386,8 +1590,20 @@ export default function IntentWorkbench({
       pane === 'nd' && r.shadowedBy !== null
         ? `taken first by “${r.shadowedByTitle ?? 'an earlier intent'}”`
         : '';
+    // The row whose conversation you last opened in THIS pane, marked so a
+    // return from the thread lands somewhere recognizable.
+    const marked = lastOpened[pane] === r.messageId;
     return (
-      <li key={r.messageId} className="group relative px-3 py-2 hover:bg-[hsl(var(--muted))]/40">
+      <li
+        key={r.messageId}
+        ref={marked ? (el) => { markedRowRef.current[pane] = el; } : undefined}
+        title={marked ? 'The conversation you last opened' : undefined}
+        className={`group relative px-3 py-2 border-l-2 ${
+          marked
+            ? 'border-l-[hsl(var(--ring))] bg-[hsl(var(--muted))]/60'
+            : 'border-l-transparent hover:bg-[hsl(var(--muted))]/40'
+        }`}
+      >
         <div className="flex items-start gap-2">
           <QueryTextButton
             queryText={r.queryText}
@@ -1401,8 +1617,56 @@ export default function IntentWorkbench({
                 return next;
               })
             }
-            onOpen={() => setConvo({ messageId: r.messageId, pane })}
+            onOpen={() => openConvo(r.messageId, pane)}
           >
+            {/* The instructor's own reason for overruling the judge here. */}
+            {r.pinned && r.reason && (
+              <p
+                className={`mt-1 text-xs italic ${
+                  r.pinned === 'in' ? 'text-emerald-700' : 'text-rose-700'
+                }`}
+              >
+                {r.pinned === 'in' ? 'why: ' : 'why not: '}
+                {r.reason}
+              </p>
+            )}
+            {/* A PENDING correction states plainly that nothing has changed
+                yet — the row has not moved, and this says why. */}
+            {r.pinned && (
+              <p className="mt-1 text-xs font-medium text-[hsl(var(--primary))]">
+                marked {r.pinned} — waiting for the definition update
+              </p>
+            )}
+            {/* The half of "send here" that happens on the OTHER intent. Naming
+                it is the point: only narrowing that intent can move the
+                question, and both definitions update together. */}
+            {r.pinned === 'in' && redirectedBy[r.messageId]?.length ? (
+              <p className="mt-0.5 text-xs text-rose-700">
+                also marked out of {redirectedBy[r.messageId].map((t) => `“${t}”`).join(', ')} — both
+                definitions update together
+              </p>
+            ) : null}
+            {/* MARKER — a correction already folded in. Quiet when the rating
+                agrees (it is just "I reviewed this"); loud when it does not,
+                because that is a teaching that did not hold. */}
+            {!r.pinned && r.marker && (() => {
+              const at = r.marker.versionNo ? ` · v${r.marker.versionNo}` : '';
+              // Only a FRESH rating can test a marker — see conflictRows.
+              const testable = r.rating !== null && !r.stale;
+              const held = (r.marker.verdict === 'in') === (r.rating === 'clearly_in');
+              return testable && !held ? (
+                <p className="mt-1 text-xs font-medium text-amber-700">
+                  ⚠ you marked this {r.marker.verdict}
+                  {at} — the updated definition does not agree
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+                  ✓ you marked this {r.marker.verdict}
+                  {at}
+                  {!testable ? ' — re-apply to check it held' : ''}
+                </p>
+              );
+            })()}
             {(r.rationale || drift || overlapChip) && (
               <p className="mt-1 flex flex-wrap items-baseline gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
                 {overlapChip &&
@@ -1415,13 +1679,13 @@ export default function IntentWorkbench({
                       tabIndex={0}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onEditIntent(overlapChip.intentId!);
+                        guardLeave(() => onEditIntent(overlapChip.intentId!));
                       }}
                       onKeyDown={(e) => {
                         if (e.key !== 'Enter' && e.key !== ' ') return;
                         e.preventDefault();
                         e.stopPropagation();
-                        onEditIntent(overlapChip.intentId!);
+                        guardLeave(() => onEditIntent(overlapChip.intentId!));
                       }}
                       title={overlapChip.title}
                       className="group/chip shrink-0 inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 hover:border-amber-300"
@@ -1462,7 +1726,7 @@ export default function IntentWorkbench({
         {showButtons && (
           <span
             className={`absolute right-2 top-1.5 z-10 flex items-center gap-1 rounded-md bg-[hsl(var(--card))] px-1 py-0.5 shadow-sm ring-1 ring-[hsl(var(--border))] transition-opacity focus-within:opacity-100 group-hover:opacity-100 ${
-              r.pinned || outPicker?.messageId === r.messageId ? 'opacity-100' : 'opacity-0'
+              r.pinned || reasonPicker?.messageId === r.messageId ? 'opacity-100' : 'opacity-0'
             }`}
           >
             {pinButtons(r)}
@@ -1479,16 +1743,24 @@ export default function IntentWorkbench({
   const pinButtons = (row: RatingRow) => (
     <>
         <button
-          onClick={() => togglePin(row, 'in')}
-          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
+          onClick={(e) =>
             row.pinned === 'in'
+              ? togglePin(row, 'in') // already corrected → withdraw
+              : disagrees(row, 'in')
+                ? openReasonPicker(row, 'in', e.currentTarget.getBoundingClientRect())
+                : togglePin(row, 'in') // agrees with the rating → one click
+          }
+          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
+            row.pinned === 'in' || (reasonPicker?.messageId === row.messageId && reasonPicker.verdict === 'in')
               ? 'bg-emerald-600 text-white border-emerald-600'
               : 'border-[hsl(var(--border))] text-emerald-700 hover:bg-emerald-50'
           }`}
           title={
             row.shadowedBy !== null
-              ? `Label: this question BELONGS to this intent. It will still be answered by “${row.shadowedByTitle ?? 'an earlier intent'}”, which comes first — use “send here” to change that.`
-              : 'Label: this question BELONGS to this intent'
+              ? `This question BELONGS here. “${row.shadowedByTitle ?? 'An earlier intent'}” still answers it first — use “send here” to change that.`
+              : disagrees(row, 'in')
+                ? 'This question BELONGS here — you’ll be asked why, since the classifier disagrees'
+                : 'This question BELONGS here'
           }
         >
           in
@@ -1499,7 +1771,7 @@ export default function IntentWorkbench({
           <button
             onClick={() => togglePin(row, 'in', undefined, true)}
             className="px-1.5 py-0.5 rounded text-xs font-medium border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-            title={`Answer this question here instead of in “${row.shadowedByTitle ?? 'the earlier intent'}” — labels it in here and out of every set that currently comes first.`}
+            title={`Answer this question here instead of in “${row.shadowedByTitle ?? 'the earlier intent'}” — labels it in here and out of every intent that currently comes first.`}
           >
             send here
           </button>
@@ -1507,15 +1779,21 @@ export default function IntentWorkbench({
         <button
           onClick={(e) =>
             row.pinned === 'out'
-              ? togglePin(row, 'out') // already out → unpin
-              : openOutPicker(row, e.currentTarget.getBoundingClientRect()) // pick a reason first
+              ? togglePin(row, 'out') // already corrected → withdraw
+              : disagrees(row, 'out')
+                ? openReasonPicker(row, 'out', e.currentTarget.getBoundingClientRect())
+                : togglePin(row, 'out') // agrees with the rating → one click
           }
           className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
-            row.pinned === 'out' || outPicker?.messageId === row.messageId
+            row.pinned === 'out' || (reasonPicker?.messageId === row.messageId && reasonPicker.verdict === 'out')
               ? 'bg-rose-600 text-white border-rose-600'
               : 'border-[hsl(var(--border))] text-rose-700 hover:bg-rose-50'
           }`}
-          title="Label: this question does NOT belong to this intent — pick a reason"
+          title={
+            disagrees(row, 'out')
+              ? 'This question does NOT belong here — you’ll be asked why, since the classifier disagrees'
+              : 'This question does NOT belong here'
+          }
         >
           out
         </button>
@@ -1530,12 +1808,16 @@ export default function IntentWorkbench({
     const boardRow = rowByMessage.get(convo.messageId) ?? null;
     const ratingRow = data?.rows.find((r) => r.messageId === convo.messageId) ?? null;
     return (
-      <div className="flex-1 min-h-0 flex flex-col">
+      // Covers the pane instead of replacing it: the list underneath keeps its
+      // layout box, so its scroll position is simply still there on Exit.
+      // z-20 clears the row hover strip (z-10), which a row still holding focus
+      // — the very row just clicked open — would otherwise paint over this.
+      <div className="absolute inset-0 z-20 flex flex-col bg-[hsl(var(--card))]">
         <div className="shrink-0 px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
           <button
-            onClick={() => setConvo(null)}
+            onClick={() => exitConvo(pane)}
             className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-            title="Back to the list"
+            title="Back to the list — it keeps the place you left it"
           >
             <Minimize2 className="w-3.5 h-3.5" /> Exit conversation
           </button>
@@ -1561,172 +1843,74 @@ export default function IntentWorkbench({
     );
   }
 
-  const applied = !!data && !specDirty() && !pinsDirty && (data?.staleCount ?? 0) === 0;
+  // "Applied" is judged on the VISIBLE scope: the background sweep may still
+  // be filling out-of-scope rows, and that must not hold Save hostage.
+  const applied = !!data && !specDirty() && scopedStaleCount === 0;
 
   return (
     <div className="flex flex-col gap-2 flex-1 min-h-0">
-      {/* TOP BAR — leave the workbench; unsaved drafts are discarded. */}
+      {/* TOP BAR — leave the workbench. */}
       <WorkbenchTopBar
         title={`${isEdit ? 'Edit intent' : 'New Intent'}${title.trim() ? ` — ${title.trim()}` : ''}`}
-        note={draftIdRef.current !== null ? 'unsaved draft — Save to register it on the board' : undefined}
-        onBack={exit}
-        backTitle={
-          draftIdRef.current !== null
-            ? 'Back to the board — the unsaved draft is discarded'
-            : 'Back to the board'
-        }
+        onBack={() => guardLeave(exit)}
+        backTitle="Back to the board"
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)_minmax(0,1fr)] gap-4 flex-1 min-h-0">
         {/* LEFT — the spec: definition, labeled examples, actions, history */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
           <div className="p-4 space-y-3">
-            <label className="block text-sm">
+            <label className="block text-sm cursor-text">
               <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                Title <span className="font-normal normal-case">(auto-named on save unless you type one)</span>
+                Title
               </span>
               <input
                 value={title}
                 onChange={(e) => {
                   setTitle(e.target.value);
-                  setTitleDirty(true);
+                  setTitleSuggestion(null); // their own words win over the offer
                 }}
                 placeholder="Auto-generated from the definition"
                 className="mt-1 w-full text-sm border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
               />
             </label>
+            {titleSuggestion && (
+              // Offered after an Apply that changed the definition. Nothing has
+              // been renamed at this point — this is the only way the name moves.
+              <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-2 py-1.5 text-xs">
+                <p className="text-[hsl(var(--muted-foreground))]">
+                  The refined definition suggests a name:
+                </p>
+                <p className="mt-0.5 font-medium text-[hsl(var(--foreground))]">“{titleSuggestion}”</p>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <button
+                    onClick={acceptTitleSuggestion}
+                    disabled={renaming}
+                    className="px-2 py-0.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] font-medium hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                    title="Rename this intent to the suggestion"
+                  >
+                    {renaming ? 'Renaming…' : 'Rename'}
+                  </button>
+                  <button
+                    onClick={() => setTitleSuggestion(null)}
+                    className="px-2 py-0.5 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                    title="Keep the current name"
+                  >
+                    Keep “{title}”
+                  </button>
+                </div>
+              </div>
+            )}
             <DefinitionEditor
               value={definition}
               onChange={setDefinition}
               placeholder="e.g. asks the chatbot to write a thesis statement or conclusion for them"
-            />
-
-            {refineReasoning && (
-              <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
-                <details className="text-xs text-[hsl(var(--muted-foreground))] px-2 py-1.5">
-                  <summary className="cursor-pointer font-medium text-[hsl(var(--foreground))]">
-                    Definition proposed from your labels — review, then Save or Apply
-                  </summary>
-                  <p className="mt-1 whitespace-pre-wrap">{refineReasoning}</p>
-                </details>
-                {/* Close the loop: the definition now carries the labels, so
-                    the labels can go. Retiring them re-rates against the
-                    definition ALONE — the only real test that it absorbed them.
-                    A just-refined (unsaved) definition is folded in first. */}
-                {pinCount > 0 && checkout === null && (
-                  <div className="flex items-center justify-between gap-2 border-t border-[hsl(var(--border))] px-2 py-1.5">
-                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                      {specDirty()
-                        ? `Retire the ${pinCount} label(s) — the proposed definition is saved first.`
-                        : `The definition carries these ${pinCount} label(s) now — retire them to test it alone.`}
-                    </p>
-                    <button
-                      onClick={retireLabels}
-                      disabled={retiring || busy || saving}
-                      title="Drop the labels; the next Apply re-rates the log against the definition alone (the proposed definition is saved first)"
-                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-                    >
-                      {retiring ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                      Retire labels
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Labeled by you — the questions you reviewed and marked in/out.
-                These ARE the Included/Excluded examples injected into the
-                rating prompt, so they live here with the spec. Collapsible;
-                remove with ×. */}
-            {data && (
-              <div className="space-y-2 border-t border-[hsl(var(--border))] pt-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  Labeled by you{' '}
-                  <span className="font-normal normal-case">
-                    — questions you reviewed &amp; marked, used when matching new questions
-                  </span>
-                </p>
-                {(
-                  [
-                    { key: 'in' as const, label: 'Included', rows: pinnedIn, open: incOpen, setOpen: setIncOpen, head: 'text-emerald-700 bg-emerald-50/60 hover:bg-emerald-50' },
-                    { key: 'out' as const, label: 'Excluded', rows: pinnedOut, open: excOpen, setOpen: setExcOpen, head: 'text-rose-700 bg-rose-50/60 hover:bg-rose-50' },
-                  ]
-                ).map((g) => (
-                  <div key={g.key} className="rounded border border-[hsl(var(--border))] overflow-hidden">
-                    <button
-                      onClick={() => g.setOpen((v) => !v)}
-                      className={`w-full flex items-center justify-between px-2 py-1 text-xs font-medium ${g.head}`}
-                    >
-                      <span>
-                        {g.label} · {g.rows.length}
-                      </span>
-                      {g.open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                    </button>
-                    {g.open &&
-                      (g.rows.length > 0 ? (
-                        <ul className="max-h-40 overflow-y-auto divide-y divide-[hsl(var(--border))]/60 border-t border-[hsl(var(--border))]">
-                          {g.rows.map((r) => (
-                            <li key={r.messageId} className="flex items-start gap-1.5 px-2 py-1.5 text-xs">
-                              <span className="min-w-0 flex-1">
-                                <span className="block text-[hsl(var(--foreground))]">
-                                  {(() => {
-                                    const c = r.queryText.replace(/\s+/g, ' ').trim();
-                                    return c.length > 120 ? `${c.slice(0, 120)}…` : c;
-                                  })()}
-                                </span>
-                                {/* The out-reason, injected into the rating prompt. */}
-                                {g.key === 'out' && r.reason && (
-                                  <span className="mt-0.5 block text-xs italic text-rose-700">
-                                    why not: {r.reason}
-                                  </span>
-                                )}
-                              </span>
-                              <button
-                                onClick={() => togglePin(r, g.key)}
-                                title="Remove this example"
-                                className="shrink-0 text-[hsl(var(--muted-foreground))] hover:text-red-600"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="px-2 py-1.5 text-xs text-[hsl(var(--muted-foreground))] border-t border-[hsl(var(--border))]">
-                          None yet — pin questions in “Needs decision”.
-                        </p>
-                      ))}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* actions — Apply (rate silently, nothing registered) · Save
-                (register: version + live intent) · Update from labels */}
-            <div className="space-y-2 border-t border-[hsl(var(--border))] pt-3">
-              {/* "Applied" = the shown ratings exactly reflect the current
-                  definition + labels. Apply is pointless then; Save is the
-                  next step. Anything dirty flips the two. */}
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={save}
-                  disabled={saving || busy || !definition.trim() || !applied}
-                  title={
-                    !data
-                      ? 'Apply first — Save registers the applied result as a version'
-                      : specDirty()
-                        ? 'Definition changed — Apply it before saving'
-                        : pinsDirty || (data?.staleCount ?? 0) > 0
-                          ? 'Labels changed — Apply to re-rate, then Save'
-                          : isEdit || draftIdRef.current === null
-                            ? 'Save a version of the applied state (definition + your in/out labels)'
-                            : 'Register this intent — record v1 with the applied state'
-                  }
-                  className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-                >
-                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SaveIcon className="w-3.5 h-3.5" />}
-                  Save
-                </button>
+              // Apply belongs to the definition — it re-rates the log against
+              // THIS text — so it sits on its header, small and right-aligned,
+              // instead of taking a row of the column. Disabled while the shown
+              // ratings already reflect the text (`applied`), which is also
+              // what tells you nothing needs re-rating.
+              action={
                 <button
                   onClick={() => apply()}
                   disabled={busy || saving || !definition.trim() || !openaiConfigured || applied}
@@ -1734,31 +1918,96 @@ export default function IntentWorkbench({
                     !openaiConfigured
                       ? 'OPENAI_API_KEY is not configured'
                       : applied
-                        ? 'Up to date — change the definition or labels to re-apply'
-                        : 'Rate every question in the log against this definition (nothing is registered until Save)'
+                        ? 'Up to date — nothing to re-rate'
+                        : isEdit
+                          ? // In edit mode Apply IS the save (a minor version) — saying
+                            // otherwise is what made leaving-after-Apply feel like loss.
+                            'Rate every question against this definition — the change is kept (revertible from History)'
+                          : 'Rate every question against this definition (nothing is registered until Save)'
                   }
-                  className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-sm font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2 py-0.5 text-[11px] font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-40"
                 >
-                  {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                  {busy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Search className="h-3 w-3" />
+                  )}
                   Apply
                 </button>
+              }
+            />
+
+            {/* CORRECTIONS WAITING — what the next update will fold in. The
+                rows themselves stay in the panes; this is the summary and the
+                trigger, so "what have I taught, and has it landed?" is one
+                place. Corrections do not accumulate: an update consumes them. */}
+            {pinCount > 0 && checkout === null && (
+              <div className="rounded border border-[hsl(var(--primary))]/40 bg-[hsl(var(--primary))]/5 px-2.5 py-2">
+                <p className="text-xs font-semibold text-[hsl(var(--foreground))]">
+                  Corrections waiting · {pinCount}
+                  <span className="ml-1 font-normal text-[hsl(var(--muted-foreground))]">
+                    — folded into the definition on update, then cleared
+                  </span>
+                </p>
+                <ul className="mt-1.5 space-y-1">
+                  {[...pinnedIn, ...pinnedOut].slice(0, 6).map((r) => (
+                    <li key={r.messageId} className="text-xs leading-snug">
+                      <span
+                        className={`font-semibold ${
+                          r.pinned === 'in' ? 'text-emerald-700' : 'text-rose-700'
+                        }`}
+                      >
+                        {r.pinned}
+                      </span>{' '}
+                      <span className="text-[hsl(var(--foreground))]">
+                        {r.queryText.replace(/\s+/g, ' ').trim().slice(0, 70)}
+                        {r.queryText.length > 70 ? '…' : ''}
+                      </span>
+                      {r.reason && (
+                        <span
+                          className={`block italic ${
+                            r.pinned === 'in' ? 'text-emerald-700' : 'text-rose-700'
+                          }`}
+                        >
+                          {r.pinned === 'in' ? 'why: ' : 'why not: '}
+                          {r.reason}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                  {pinCount > 6 && (
+                    <li className="text-xs text-[hsl(var(--muted-foreground))]">
+                      + {pinCount - 6} more
+                    </li>
+                  )}
+                </ul>
                 <button
-                  onClick={refineFromLabels}
-                  disabled={
-                    refining || busy || saving || intentId === null ||
-                    pinnedIn.length + pinnedOut.length === 0 || !openaiConfigured
-                  }
+                  onClick={openFoldReview}
+                  disabled={refining || busy || saving || !openaiConfigured}
                   title={
-                    intentId === null || pinnedIn.length + pinnedOut.length === 0
-                      ? 'Label at least one question in/out first'
-                      : 'Rewrite the definition so it carries your labels by itself (stronger model; result is a draft to review)'
+                    !openaiConfigured
+                      ? 'OPENAI_API_KEY is not configured'
+                      : 'Rewrite the definition so it carries these corrections by itself — you review the result before anything changes'
                   }
-                  className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-sm font-medium border border-[hsl(var(--primary))]/50 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
+                  className="mt-2 inline-flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-2 py-1 text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
                 >
-                  {refining ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-                  Update from labels
+                  {refining ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Wand2 className="h-3 w-3" />
+                  )}
+                  Update definition · {pinCount} correction{pinCount === 1 ? '' : 's'}
                 </button>
               </div>
+            )}
+
+            {/* Progress and errors only — every action now lives where its
+                subject is: Apply on the definition header, Update definition on
+                the corrections card, Save in the History header. Renders
+                nothing at all when there is nothing to report, so the column
+                does not carry an empty bordered block. */}
+            {(busy || error) && (
+            <div className="space-y-2 border-t border-[hsl(var(--border))] pt-3">
               {busy && progress && (
                 <div className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
                   <span className="shrink-0">Rating the log</span>
@@ -1781,7 +2030,7 @@ export default function IntentWorkbench({
                 </p>
               )}
             </div>
-
+            )}
 
             {/* History — one line per saved version of THIS intent. Clicking
                 a version CHECKS IT OUT (title/definition/labels/ratings load
@@ -1802,7 +2051,7 @@ export default function IntentWorkbench({
                       </span>
                     )}
                   </p>
-                  {checkout !== null && (
+                  {checkout !== null ? (
                     // Hard revert — the checked-out version becomes live, later
                     // steps are deleted (confirmed). Going back WITHOUT changes
                     // is just clicking the newest entry below.
@@ -1818,11 +2067,36 @@ export default function IntentWorkbench({
                         return v ? versionLabel(v) : `v${checkout}`;
                       })()}
                     </button>
+                  ) : (
+                    // Save lives WHERE ITS RESULT APPEARS: clicking it adds the
+                    // next entry right below this button.
+                    <button
+                      onClick={save}
+                      disabled={saving || busy || !definition.trim() || !applied}
+                      title={
+                        !data
+                          ? 'Apply first — a version saves the applied result'
+                          : specDirty()
+                            ? 'Definition changed — Apply it before saving'
+                            : scopedStaleCount > 0
+                              ? 'Ratings are stale — Apply to re-rate, then save'
+                              : 'Save the applied state as the next version'
+                      }
+                      className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                    >
+                      {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
+                      Save version
+                    </button>
                   )}
                 </div>
+                <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                  Every saved version is a snapshot you can click to revisit.
+                </p>
                 <ul className="space-y-1.5">
-                  {versionGroups.map((g, gi) => {
-                    const open = groupToggles[g.key] ?? gi === 0;
+                  {versionGroups.map((g) => {
+                    // Collapsed by default — the applies/labels between saves
+                    // are detail; the saves are the story.
+                    const open = groupToggles[g.key] ?? false;
                     // Minors display OLDEST-FIRST inside the group so v2.1,
                     // v2.2, … read as the progression on top of v2.
                     const minorsAsc = [...g.minors].reverse();
@@ -1832,7 +2106,7 @@ export default function IntentWorkbench({
                           versionEntry(g.major, false)
                         ) : (
                           <p className="px-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
-                            Draft steps — not saved yet
+                            Draft steps — before the first save
                           </p>
                         )}
                         {g.minors.length > 0 && (
@@ -1855,24 +2129,11 @@ export default function IntentWorkbench({
                 </ul>
               </div>
             )}
-
-            {/* Archive — edit mode only; soft-delete, recorded and reversible. */}
-            {isEdit && (
-              <div className="border-t border-[hsl(var(--border))] pt-3">
-                <button
-                  onClick={archive}
-                  disabled={busy}
-                  className="inline-flex items-center gap-1 text-sm text-red-600 hover:underline disabled:opacity-50"
-                >
-                  <Trash2 className="w-3.5 h-3.5" /> Archive intent
-                </button>
-              </div>
-            )}
           </div>
         </div>
 
         {/* MIDDLE — In this intent (captured: clearly-in; pins live on the left) */}
-        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
+        <div className="relative rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
           {!data ? (
             <div className="flex-1 flex items-center justify-center p-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
               {busy
@@ -1882,13 +2143,33 @@ export default function IntentWorkbench({
                   : 'Define the intent, then Apply to rate the log against it.'}
             </div>
           ) : (
-            renderConvo('in') ?? (
-              <>
+            <>
+              {renderConvo('in')}
+              <div className="flex-1 min-h-0 flex flex-col">
                 <div className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
                   <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/60 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <span>In this intent · {inThisIntent.length}</span>
-                      {baseline && (
+                      {conflictRows.length > 0 && (
+                        <span
+                          className="rounded border border-amber-300 bg-amber-50 px-1 py-0.5 font-normal normal-case text-amber-800"
+                          title={
+                            'Questions you corrected whose folded definition no longer agrees. ' +
+                            'The teaching did not hold — correct them again, or edit the definition directly.'
+                          }
+                        >
+                          ⚠ {conflictRows.length} disagree{conflictRows.length === 1 ? 's' : ''} with your marks
+                        </span>
+                      )}
+                      {scopeLabel && (
+                        <span
+                          className="font-normal normal-case text-[hsl(var(--muted-foreground))]"
+                          title={`Only questions “${scopeLabel}” currently answers are shown and rated here — a nested intent can never answer a question its enclosing intent doesn't. The rest of the log rates in the background for the board's diagnostics.`}
+                        >
+                          within “{scopeLabel}”
+                        </span>
+                      )}
+                      {baseline && ((newlyIn?.size ?? 0) > 0 || leftRows.length > 0) && (
                         <span
                           className="font-normal normal-case text-[hsl(var(--muted-foreground))]"
                           title={`Membership change compared to ${diffBaseLabel} (the diff base — pick another in History)`}
@@ -1996,9 +2277,7 @@ export default function IntentWorkbench({
                   {(() => {
                     // New arrivals live in their strip above — the main list
                     // shows the rest of the captures.
-                    const rest = newlyIn
-                      ? inThisIntent.filter((r) => !newlyIn.has(r.messageId))
-                      : inThisIntent;
+                    const rest = inThisIntent.filter((r) => !newlyIn?.has(r.messageId));
                     const sorted = overlapsFirst(sortRows(rest, inSort, inSearch));
                     return sorted.length > 0 ? (
                       <ul className="divide-y divide-[hsl(var(--border))]/60">
@@ -2017,13 +2296,13 @@ export default function IntentWorkbench({
                     );
                   })()}
                 </div>
-              </>
-            )
+              </div>
+            </>
           )}
         </div>
 
         {/* RIGHT — Needs decision (model-uncertain; label in/out) */}
-        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
+        <div className="relative rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
           {!data ? (
             <div className="flex-1 flex items-center justify-center p-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
               <span className="max-w-[26ch]">
@@ -2031,12 +2310,22 @@ export default function IntentWorkbench({
               </span>
             </div>
           ) : (
-            renderConvo('nd') ?? (
-              <>
+            <>
+              {renderConvo('nd')}
+              <div className="flex-1 min-h-0 flex flex-col">
                 <div className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
                   <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                       Needs decision · {needsDecision.length}
+                      {scopeLabel && (
+                        <span
+                          className="font-normal normal-case"
+                          title={`Only questions “${scopeLabel}” currently answers are shown here.`}
+                        >
+                          {' '}
+                          within “{scopeLabel}”
+                        </span>
+                      )}
                     </span>
                     <span className="flex items-center gap-1 shrink-0">
                       {similarBusy && pinSorted && (
@@ -2112,20 +2401,21 @@ export default function IntentWorkbench({
                     );
                   })()}
                 </div>
-              </>
-            )
+              </div>
+            </>
           )}
         </div>
       </div>
 
-      {/* OUT-REASON PICKER — opens under the clicked "out" button: three
-          LLM-suggested reasons + a free-text "Other". Fixed-positioned so it
-          escapes the column's scroll clip; the backdrop cancels the out. */}
-      {outPicker &&
+      {/* WHY PICKER — opens under the clicked in/out button when the
+          correction overrules the classifier: three LLM-suggested reasons + a
+          free-text "Other". Fixed-positioned so it escapes the column's scroll
+          clip; the backdrop cancels the correction. */}
+      {reasonPicker &&
         (() => {
           const PW = 280;
           const M = 8; // viewport margin
-          const a = outPicker.anchor;
+          const a = reasonPicker.anchor;
           const left = Math.max(M, Math.min(a.left, window.innerWidth - PW - M));
           // Flip ABOVE the button when there isn't room below and there's more
           // above; either way, cap the height to the space on that side (with
@@ -2139,51 +2429,137 @@ export default function IntentWorkbench({
             : { left, top: a.bottom + 4, width: PW, maxHeight };
           return (
             <>
-              <div className="fixed inset-0 z-[59]" onClick={() => setOutPicker(null)} />
+              <div className="fixed inset-0 z-[59]" onClick={() => setReasonPicker(null)} />
               <div
                 className="fixed z-[60] overflow-y-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg p-2 space-y-1.5"
                 style={pos}
               >
                 <div className="flex items-center justify-between px-1">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-rose-700">
-                    Why is this out?
+                  <span
+                    className={`text-xs font-semibold uppercase tracking-wide ${
+                      reasonPicker.verdict === 'in' ? 'text-emerald-700' : 'text-rose-700'
+                    }`}
+                  >
+                    {reasonPicker.verdict === 'in' ? 'Why does this belong?' : 'Why is this out?'}
                   </span>
                   <button
-                    onClick={() => setOutPicker(null)}
+                    onClick={() => setReasonPicker(null)}
                     className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
                     aria-label="Cancel"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
-                {outPicker.loading ? (
+                <p className="px-1 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  Becomes a rule in the definition — state the principle, not this one question.
+                </p>
+                {reasonPicker.loading ? (
                   <p className="flex items-center gap-1.5 px-1 py-1 text-xs text-[hsl(var(--muted-foreground))]">
                     <Loader2 className="w-3 h-3 animate-spin" /> Suggesting reasons…
                   </p>
-                ) : outPicker.reasons.length > 0 ? (
-                  outPicker.reasons.map((rsn, i) => (
+                ) : reasonPicker.reasons.length > 0 ? (
+                  reasonPicker.reasons.map((rsn, i) => (
                     <button
                       key={i}
-                      onClick={() => pickOutReason(rsn)}
-                      className="w-full text-left px-2 py-1.5 rounded text-xs text-[hsl(var(--foreground))] border border-[hsl(var(--border))] hover:bg-rose-50 hover:border-rose-200"
+                      onClick={() => pickReason(rsn)}
+                      className={`w-full text-left px-2 py-1.5 rounded text-xs text-[hsl(var(--foreground))] border border-[hsl(var(--border))] ${
+                        reasonPicker.verdict === 'in'
+                          ? 'hover:bg-emerald-50 hover:border-emerald-200'
+                          : 'hover:bg-rose-50 hover:border-rose-200'
+                      }`}
                     >
                       {rsn}
                     </button>
                   ))
                 ) : (
                   <p className="px-1 text-xs text-[hsl(var(--muted-foreground))]">
-                    {outPicker.error ?? 'No suggestions — type your own below.'}
+                    {reasonPicker.error ?? 'No suggestions — type your own below.'}
                   </p>
                 )}
-                <OutReasonOther onSubmit={pickOutReason} />
+                <OutReasonOther onSubmit={pickReason} />
                 <button
-                  onClick={() => pickOutReason('')}
+                  onClick={() => pickReason('')}
                   className="w-full text-center px-2 py-0.5 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
                 >
-                  Exclude without a reason
+                  {reasonPicker.verdict === 'in' ? 'Include' : 'Exclude'} without a reason
                 </button>
               </div>
             </>
+          );
+        })()}
+
+      {/* REVIEW GATE — the fold's result, before anything is written. */}
+      {foldOpen && (
+        <FoldReviewModal
+          proposals={foldProposals}
+          loading={refining}
+          pending={{
+            title: title.trim() || 'this intent',
+            before: definition.trim(),
+            corrections: [...pinnedIn, ...pinnedOut].map((r) => ({
+              id: r.correctionId ?? r.messageId,
+              verdict: (r.pinned ?? 'in') as 'in' | 'out',
+              queryText: r.queryText,
+              reason: r.reason,
+            })),
+          }}
+          busy={foldBusy}
+          error={foldError}
+          onApply={applyFold}
+          onCancel={() => {
+            if (foldBusy) return;
+            // Closing drops the PROPOSAL only. The corrections stay pending, so
+            // the instructor can label more, edit the definition by hand, or
+            // simply try again — nothing they taught is lost by saying no.
+            setFoldOpen(false);
+            setFoldProposals(null);
+            setFoldError(null);
+          }}
+        />
+      )}
+
+      {/* LEAVE GUARD — the only state leaving can destroy is text typed but
+          not yet Applied (pins persist on click; an Apply persists the spec,
+          and a create is registered by its first Apply). */}
+      {leavePrompt &&
+        (() => {
+          if (!leaveLoss()) return null; // resolved meanwhile
+          const leave = () => {
+            const go = leavePrompt.action;
+            setLeavePrompt(null);
+            go();
+          };
+          return (
+            <div
+              className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4"
+              onClick={() => setLeavePrompt(null)}
+            >
+              <div
+                className="w-full max-w-sm rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Unapplied edits</h3>
+                <p className="mt-1.5 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+                  {intentId !== null
+                    ? 'The edited definition hasn’t been applied — leaving discards it. Everything you applied is saved.'
+                    : 'The typed definition hasn’t been applied — leaving discards it, and no intent is created.'}
+                </p>
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => setLeavePrompt(null)}
+                    className="px-2.5 py-1.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+                  >
+                    Keep working
+                  </button>
+                  <button
+                    onClick={leave}
+                    className="px-2.5 py-1.5 rounded border border-rose-300 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                  >
+                    Discard edits
+                  </button>
+                </div>
+              </div>
+            </div>
           );
         })()}
     </div>

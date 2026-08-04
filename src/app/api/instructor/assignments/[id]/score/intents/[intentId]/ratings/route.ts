@@ -26,7 +26,6 @@ import {
   type IntentConfigSnapshot,
 } from '@/lib/score/intent-store';
 import {
-  applyPinOverrides,
   compileChains,
   intentDefHash,
   isIncludedRating,
@@ -34,7 +33,7 @@ import {
   isScoreQueryType,
   ratingRank,
   TYPE_CLASSIFIER_VERSION,
-  selectPromptPins,
+  type MaterialSpan,
   type RatingLevel,
 } from '@/lib/score/intents';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
@@ -79,6 +78,7 @@ export async function GET(req: Request, { params }: RouteParams) {
         messageId: scoreDissections.messageId,
         materialKinds: scoreDissections.materialKinds,
         requests: scoreDissections.requests,
+        materials: scoreDissections.materials,
       })
       .from(scoreDissections)
       .where(eq(scoreDissections.assignmentId, id)),
@@ -87,8 +87,18 @@ export async function GET(req: Request, { params }: RouteParams) {
   // Effective spec for THIS intent: live, or the checked-out version's.
   let specTitle = intent.title;
   let specDefinition = intent.definition;
-  let pinRows: { messageId: number; verdict: string; queryText: string; reason?: string | null }[] =
-    state.pins.filter((p) => p.intentId === intentId);
+  // Live rows carry the correction fields; a version snapshot's do not (it
+  // predates them, and a checkout is read-only anyway — nothing there is
+  // consumable, so a missing id simply means "not actionable").
+  let pinRows: {
+    id?: number;
+    messageId: number;
+    verdict: string;
+    queryText: string;
+    reason?: string | null;
+    status?: string;
+    consumedAtVersion?: number | null;
+  }[] = state.pins.filter((p) => p.intentId === intentId);
   if (checkoutNo !== null) {
     if (!Number.isFinite(checkoutNo)) {
       return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
@@ -109,10 +119,7 @@ export async function GET(req: Request, { params }: RouteParams) {
     pinRows = (snapshot.pins ?? []).filter((p) => p.intentId === intentId);
   }
   const titleById = new Map(state.intents.map((i) => [i.id, i.title]));
-  const specHash = intentDefHash(
-    specDefinition,
-    selectPromptPins(pinRows.map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText, reason: p.reason })))
-  );
+  const specHash = intentDefHash(specDefinition);
   // Message dissection (Material vs Request) so the viewer can, on expand, show
   // the request(s) verbatim and collapse pasted material into a placeholder.
   const dissectionByMessage = new Map(
@@ -121,6 +128,7 @@ export async function GET(req: Request, { params }: RouteParams) {
       {
         materialKinds: (Array.isArray(d.materialKinds) ? d.materialKinds : []) as string[],
         requests: (Array.isArray(d.requests) ? d.requests : []) as string[],
+        materials: (Array.isArray(d.materials) ? d.materials : []) as MaterialSpan[],
       },
     ])
   );
@@ -163,14 +171,20 @@ export async function GET(req: Request, { params }: RouteParams) {
   wantedHash.set(intentId, specHash);
   const byMessage = pickDisplayRatings(ratingRows, wantedHash);
 
-  const pinByMessage = new Map(pinRows.map((p) => [p.messageId, p.verdict as 'in' | 'out']));
-  const reasonByMessage = new Map(pinRows.map((p) => [p.messageId, p.reason ?? null]));
-  // pinRows is already in the canonical prompt order (live: newest pin first,
-  // per listPins; checkout: the snapshot's stored array order). Ship that index
-  // so the client can reproduce selectPromptPins EXACTLY — its own row order is
-  // by rating strength, which would pick a different, weaker-rated set of pins
-  // than the classifier actually saw (preview = runtime, §1.9).
-  const pinRankByMessage = new Map(pinRows.map((p, i) => [p.messageId, i]));
+  // Corrections split by state. A PENDING one is live instructor teaching that
+  // the definition has not absorbed yet; a CONSUMED one is only a marker of
+  // teaching already folded in — it must never read as an active label, or the
+  // instructor would think a correction is still waiting when it is done.
+  const pendingByMessage = new Map<number, { id: number | null; verdict: 'in' | 'out'; reason: string | null }>();
+  const markerByMessage = new Map<number, { verdict: 'in' | 'out'; versionNo: number | null }>();
+  for (const p of pinRows) {
+    const verdict = p.verdict as 'in' | 'out';
+    if (p.status === 'consumed') {
+      markerByMessage.set(p.messageId, { verdict, versionNo: p.consumedAtVersion ?? null });
+    } else {
+      pendingByMessage.set(p.messageId, { id: p.id ?? null, verdict, reason: p.reason ?? null });
+    }
+  }
 
   /**
    * What this intent's workbench SHOWS. Judgment is unchanged — every set is
@@ -229,20 +243,17 @@ export async function GET(req: Request, { params }: RouteParams) {
     // Who takes this question BEFORE this intent gets a turn: the first earlier
     // chain node that matches. Stale ratings still count (same display
     // philosophy as classify force: show the previous state until overwritten);
-    // instructor pins override the judgment (§1.6) but never the order.
+    // Interception is decided by the JUDGMENT alone now. A correction used to
+    // override an earlier intent's verdict here, which quietly made the board
+    // show a routing that the deployed chatbot — judging from definitions —
+    // would not reproduce. The fix for an unwanted interception is to narrow
+    // the earlier intent's definition (see the send-here flow), not to hide it.
     const earlierMap = new Map<number, RatingLevel>();
     for (const oid of earlierIds) {
       const r = ratings?.get(oid);
       if (r && isRatingLevel(r.row.rating)) earlierMap.set(oid, r.row.rating);
     }
-    const earlierPins = new Map<number, 'in' | 'out'>();
-    for (const p of state.pins) {
-      if (p.messageId === rec.messageId && earlierIds.includes(p.intentId)) {
-        earlierPins.set(p.intentId, p.verdict as 'in' | 'out');
-      }
-    }
-    const effEarlier = applyPinOverrides(earlierMap, earlierPins);
-    const shadowedBy = earlierIds.find((oid) => isIncludedRating(effEarlier.get(oid))) ?? null;
+    const shadowedBy = earlierIds.find((oid) => isIncludedRating(earlierMap.get(oid))) ?? null;
 
     // Only a question this intent would actually claim can BE shadowed.
     if (mineRating && isIncludedRating(mineRating) && shadowedBy !== null) {
@@ -261,11 +272,16 @@ export async function GET(req: Request, { params }: RouteParams) {
       rating: mineRating,
       rationale: mineRow?.rationale ?? null,
       stale: !!mineRow && !mineFresh,
-      pinned: pinByMessage.get(rec.messageId) ?? null,
-      /** Instructor's out-reason for this pin (out pins only; null otherwise). */
-      reason: reasonByMessage.get(rec.messageId) ?? null,
-      /** Position among this intent's pins in prompt order; null when unpinned. */
-      pinRank: pinRankByMessage.get(rec.messageId) ?? null,
+      /** A PENDING correction on this question — the instructor overruled the
+       * judge and the definition has not been updated yet. Null otherwise. */
+      pinned: pendingByMessage.get(rec.messageId)?.verdict ?? null,
+      /** The pending correction's row id — what the fold consumes. */
+      correctionId: pendingByMessage.get(rec.messageId)?.id ?? null,
+      /** Why they overruled it (asked only when the correction disagreed). */
+      reason: pendingByMessage.get(rec.messageId)?.reason ?? null,
+      /** A correction already folded in, kept as a display marker. Its verdict
+       * vs the CURRENT rating is what surfaces a fold that did not hold. */
+      marker: markerByMessage.get(rec.messageId) ?? null,
       /** The earlier chain node that takes this question first, if any — the
        * successor of v6's "prior owner". Null = nothing shadows it here. */
       shadowedBy,

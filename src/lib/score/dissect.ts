@@ -17,8 +17,9 @@
  */
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { assignments, editorEvents } from '@/db/schema';
-import type { DissectionResult, MaterialKind } from './intents';
+import { assignments, editorEvents, studentSessions } from '@/db/schema';
+import { instructionToPlainText } from '@/lib/instruction-content';
+import type { DissectionResult, MaterialKind, MaterialSpan } from './intents';
 import { getQueryRecords, type QueryRecord } from './queries';
 
 const MIN_MATERIAL = 12; // ignore matches shorter than this (noise)
@@ -79,20 +80,55 @@ function blockText(doc: unknown): string {
   return normalize(out.join(' '));
 }
 
-function sourceToKind(sourceArea: string | null | undefined): MaterialKind {
+/** Markdown markers and list bullets removed, so text copied out of the RENDERED
+ * chat can be compared against the markdown a message is stored as. Mirrors
+ * copy-validator's stripMarkdown, plus the block-level markers a multi-line
+ * reply carries. */
+function stripMarkup(s: string): string {
+  return s
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The kind a paste's recorded sourceArea implies on its own.
+ *
+ * 'chat' is deliberately absent: it means "copied from the chat panel", which
+ * covers the bot's replies, the student's own earlier turns and the chat input
+ * box alike — ChatMessages and ChatPanel all record the same source — so it
+ * cannot name a kind by itself and is resolved from the content instead.
+ */
+function sourceToKind(sourceArea: string | null | undefined): MaterialKind | null {
   switch (sourceArea) {
     case 'editor':
       return 'student_draft';
     case 'instruction':
       return 'assignment_prompt';
     case 'chat':
-      return 'prior_bot_reply';
+      return null;
     default:
       return 'other';
   }
 }
 
-type Span = { start: number; end: number; kind: MaterialKind };
+type Span = {
+  start: number;
+  end: number;
+  kind: MaterialKind;
+  /** Recorded-paste span: its boundaries and its kind are both authoritative.
+   * A verbatim-match span is approximate on both counts (40-char windows). */
+  exact: boolean;
+  sourceChars: number | null;
+};
 
 /** Extend a span to whole-word boundaries so requests aren't cut mid-word. */
 function snapToWords(text: string, start: number, end: number): [number, number] {
@@ -103,15 +139,53 @@ function snapToWords(text: string, start: number, end: number): [number, number]
   return [s, e];
 }
 
-/** Merge overlapping spans and spans separated by ≤ `gap` (fallback windows
- * leave small holes at material↔request boundaries — close them). */
-function mergeClose(spans: Span[], gap: number): Span[] {
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
+/** Cut the spans down to a non-overlapping set, letting recorded pastes claim
+ * their region first: where a verbatim-match window overlaps a paste, the
+ * paste's attribution wins (a student who pasted the prompt into the editor
+ * makes the draft and the prompt match the same text — see the kind order in
+ * computeDissections). Remainders below MIN_MATERIAL are noise and dropped. */
+function resolveOverlaps(spans: Span[]): Span[] {
+  const ordered = [...spans].sort(
+    (a, b) => Number(b.exact) - Number(a.exact) || a.start - b.start || b.end - a.end
+  );
+  const claimed: Span[] = [];
+  for (const s of ordered) {
+    let pieces: [number, number][] = [[s.start, s.end]];
+    for (const c of claimed) {
+      const next: [number, number][] = [];
+      for (const [a, b] of pieces) {
+        if (c.end <= a || c.start >= b) next.push([a, b]);
+        else {
+          if (c.start > a) next.push([a, c.start]);
+          if (c.end < b) next.push([c.end, b]);
+        }
+      }
+      pieces = next;
+    }
+    for (const [a, b] of pieces) if (b - a >= MIN_MATERIAL) claimed.push({ ...s, start: a, end: b });
+  }
+  return claimed.sort((a, b) => a.start - b.start);
+}
+
+/** Merge each run of SAME-kind spans separated by ≤ `gap`, then hand any
+ * remaining sub-gap hole between two DIFFERENT kinds to the earlier run —
+ * that hole is window-granularity slack, not typed text, unless both sides are
+ * recorded pastes (whose boundaries are exact and may genuinely abut a
+ * request). Merging across kinds is what used to erase the per-run kind. */
+function mergeRuns(spans: Span[], gap: number): Span[] {
   const out: Span[] = [];
-  for (const s of sorted) {
+  for (const s of spans) {
     const last = out[out.length - 1];
-    if (last && s.start <= last.end + gap) last.end = Math.max(last.end, s.end);
-    else out.push({ ...s });
+    if (last && last.kind === s.kind && s.start <= last.end + gap) {
+      last.end = Math.max(last.end, s.end);
+      last.exact = last.exact && s.exact;
+      last.sourceChars = last.sourceChars ?? s.sourceChars;
+    } else out.push({ ...s });
+  }
+  for (let i = 0; i + 1 < out.length; i++) {
+    const a = out[i];
+    const b = out[i + 1];
+    if (b.start > a.end && b.start - a.end <= gap && !(a.exact && b.exact)) a.end = b.start;
   }
   return out;
 }
@@ -136,57 +210,149 @@ function gapsToRequests(text: string, spans: Span[]): string[] {
   return reqs;
 }
 
+export interface DissectSource {
+  text: string;
+  kind: MaterialKind;
+  /** Whether the verbatim sliding-window sweep may INFER this source from a
+   * match alone (default true). False = the source only attributes a recorded
+   * paste. The student's own earlier turns are false: two turns of a session
+   * routinely share a phrase, and inferring material there would quietly demote
+   * a genuine typed request to pasted material. */
+  inferable?: boolean;
+}
+
 /**
  * Dissect one message given its chat-pastes (in the composition window) and the
  * candidate source texts. Pure — positions are in the ORIGINAL message text.
+ *
+ * `sources` is ordered: the first source containing a matched window wins the
+ * attribution, so the caller decides the tie-break (see computeDissections).
  */
 export function dissectMessage(
   text: string,
   windowPastes: { content: string | null; sourceArea: string | null }[],
-  sources: { text: string; kind: MaterialKind }[]
+  sources: DissectSource[]
 ): DissectionResult {
   const { norm: nText, map } = normWithMap(text);
   const spans: Span[] = [];
+  const normSources = sources
+    .map((s) => ({
+      n: normalize(s.text),
+      stripped: stripMarkup(s.text),
+      kind: s.kind,
+      inferable: s.inferable !== false,
+    }))
+    .filter((s) => s.n.length > 0);
+
+  /** The source a pasted run came from: its kind (when the paste log could not
+   * name one) and its size, the denominator of the extent shown on the tag.
+   * Only a source that actually CONTAINS the run counts — comparing markup-free
+   * too, since the clipboard carries the RENDERED text while a chat message is
+   * stored as markdown. With no such source the extent stays unknown and the
+   * tag shows the kind alone rather than a percentage of the wrong thing. */
+  const resolvePaste = (
+    declared: MaterialKind | null,
+    content: string
+  ): { kind: MaterialKind; sourceChars: number | null } => {
+    const stripped = stripMarkup(content);
+    const hit = normSources.find(
+      (s) =>
+        (declared === null || s.kind === declared) &&
+        (s.n.includes(content) || s.stripped.includes(stripped))
+    );
+    if (hit) return { kind: hit.kind, sourceChars: hit.n.length };
+    // Unattributable: a chat paste that matches no stored turn (the chat INPUT
+    // box is copyable too, and its text was never a message) is 'other' rather
+    // than a guess at which side of the conversation it came from.
+    return { kind: declared ?? 'other', sourceChars: null };
+  };
 
   // 1. Pasted material — normalized match mapped back to one contiguous span.
   for (const p of windowPastes) {
     const c = normalize(p.content ?? '');
     if (c.length < MIN_MATERIAL) continue;
     const j = nText.indexOf(c);
-    if (j !== -1) spans.push({ start: map[j], end: map[j + c.length - 1] + 1, kind: sourceToKind(p.sourceArea) });
+    if (j === -1) continue;
+    const { kind, sourceChars } = resolvePaste(sourceToKind(p.sourceArea), c);
+    spans.push({
+      start: map[j],
+      end: map[j + c.length - 1] + 1,
+      kind,
+      exact: true,
+      sourceChars,
+    });
   }
 
   // 2. Re-typed / referenced material — sliding-window verbatim match vs sources.
-  const normSources = sources
-    .map((s) => ({ n: normalize(s.text), kind: s.kind }))
-    .filter((s) => s.n.length >= FALLBACK_WIN);
-  if (normSources.length && text.length >= FALLBACK_WIN) {
+  const matchable = normSources.filter((s) => s.inferable && s.n.length >= FALLBACK_WIN);
+  if (matchable.length && text.length >= FALLBACK_WIN) {
     for (let i = 0; i + FALLBACK_WIN <= text.length; i += FALLBACK_STEP) {
       const win = normalize(text.slice(i, i + FALLBACK_WIN));
-      const hit = normSources.find((s) => s.n.includes(win));
-      if (hit) spans.push({ start: i, end: i + FALLBACK_WIN, kind: hit.kind });
+      const hit = matchable.find((s) => s.n.includes(win));
+      if (hit) {
+        spans.push({
+          start: i,
+          end: i + FALLBACK_WIN,
+          kind: hit.kind,
+          exact: false,
+          sourceChars: hit.n.length,
+        });
+      }
     }
   }
 
   if (spans.length === 0) {
     const t = text.trim();
-    return { materialKinds: [], requests: t.length >= MIN_REQUEST ? [t] : [] };
+    return { materialKinds: [], requests: t.length >= MIN_REQUEST ? [t] : [], materials: [] };
   }
-  // Snap to whole words, then merge overlapping/near spans so requests are clean
-  // segments rather than window-boundary fragments.
+  // Snap to whole words, resolve overlaps (pastes first), then merge each
+  // same-kind run so requests are clean segments rather than window fragments.
   const snapped = spans.map((s) => {
     const [a, b] = snapToWords(text, s.start, s.end);
-    return { start: a, end: b, kind: s.kind };
+    return { ...s, start: a, end: b };
   });
-  const merged = mergeClose(snapped, GAP_MERGE);
-  const materialKinds = [...new Set(snapped.map((s) => s.kind))] as MaterialKind[];
-  return { materialKinds, requests: gapsToRequests(text, merged) };
+  const merged = mergeRuns(resolveOverlaps(snapped), GAP_MERGE);
+  const materials: MaterialSpan[] = merged.map((s) => {
+    const slice = text.slice(s.start, s.end);
+    return {
+      text: slice.trim(),
+      kind: s.kind,
+      chars: normalize(slice).length,
+      sourceChars: s.sourceChars,
+    };
+  });
+  return {
+    materialKinds: [...new Set(merged.map((s) => s.kind))],
+    requests: gapsToRequests(text, merged),
+    materials,
+  };
+}
+
+/**
+ * Whether this assignment has an editor-event log to reconstruct from at all.
+ *
+ * A study clone copies the master's message log and its cached dissections but
+ * NOT the events (see provision.ts) — so re-dissecting a clone would silently
+ * replace an evidence-based split with one that can find no pasted material at
+ * all. Callers must therefore treat a clone's stored dissection as final, the
+ * same way cloned query types are never re-judged.
+ */
+export async function hasEditorEventLog(assignmentId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: editorEvents.id })
+    .from(editorEvents)
+    .innerJoin(studentSessions, eq(studentSessions.id, editorEvents.sessionId))
+    .where(eq(studentSessions.assignmentId, assignmentId))
+    .limit(1);
+  return rows.length > 0;
 }
 
 /**
  * Compute deterministic dissections for the given messages of an assignment.
  * Loads the log records, the sessions' chat-paste + snapshot events, and the
- * assignment instructions; returns messageId → {materialKinds, requests}.
+ * assignment instructions; returns messageId → the split.
+ *
+ * PRECONDITION: the assignment owns its editor-event log (hasEditorEventLog).
  */
 export async function computeDissections(
   assignmentId: string,
@@ -217,6 +383,28 @@ export async function computeDissections(
     }
   }
 
+  // Everything the student could have copied out of the chat panel BEFORE this
+  // message: every earlier reply and every earlier turn of their own. The paste
+  // log records only that a paste came from the chat, so this is what decides
+  // WHICH of the two it was.
+  const priorTurns = new Map<number, { replies: string[]; questions: string[] }>();
+  const byConversation = new Map<string, QueryRecord[]>();
+  for (const r of records) {
+    const arr = byConversation.get(r.conversationId);
+    if (arr) arr.push(r);
+    else byConversation.set(r.conversationId, [r]);
+  }
+  for (const arr of byConversation.values()) {
+    arr.sort((a, b) => a.turnIndex - b.turnIndex || a.messageId - b.messageId);
+    const replies: string[] = [];
+    const questions: string[] = [];
+    for (const r of arr) {
+      priorTurns.set(r.messageId, { replies: [...replies], questions: [...questions] });
+      if (r.responseText) replies.push(r.responseText);
+      questions.push(r.queryText);
+    }
+  }
+
   const [pasteRows, snapRows, asgRows] = await Promise.all([
     db
       .select({ sessionId: editorEvents.sessionId, ts: editorEvents.timestamp, data: editorEvents.eventData })
@@ -232,12 +420,20 @@ export async function computeDissections(
       .from(editorEvents)
       .where(and(inArray(editorEvents.sessionId, sessions), eq(editorEvents.eventType, 'snapshot'))),
     db
-      .select({ instructions: assignments.instructions, base: assignments.customSystemPrompt })
+      .select({ instructions: assignments.instructions, criteria: assignments.criteria })
       .from(assignments)
       .where(eq(assignments.id, assignmentId)),
   ]);
 
-  const instructionText = normalize(`${asgRows[0]?.instructions ?? ''} ${asgRows[0]?.base ?? ''}`);
+  // The two texts the student can actually see and copy, as PLAIN TEXT: a
+  // BlockNote-authored prompt is stored as a JSON document, and matching a
+  // quoted sentence against that JSON only works by accident (inside a single
+  // text node, never across one). The instructor's AI guidance
+  // (customSystemPrompt) is deliberately NOT here — students never see it, so
+  // it cannot be pasted material, and counting it only inflated the prompt's
+  // size, which is now the denominator of the coverage shown on the tag.
+  const instructionText = normalize(instructionToPlainText(asgRows[0]?.instructions ?? ''));
+  const criteriaText = normalize(instructionToPlainText(asgRows[0]?.criteria ?? ''));
 
   // Chat-pastes per session (targetArea 'chat' only), sorted by time.
   const pastesBySession = new Map<string, { ts: Date; content: string | null; sourceArea: string | null }[]>();
@@ -282,10 +478,23 @@ export async function computeDissections(
     const windowPastes = (pastesBySession.get(r.sessionId) ?? []).filter(
       (p) => p.ts > start && p.ts <= r.queryTimestamp
     );
-    const sources: { text: string; kind: MaterialKind }[] = [
-      { text: latestSnapshotBefore(r.sessionId, r.queryTimestamp), kind: 'student_draft' },
+    // Order matters: the first source containing a matched window wins. The
+    // assignment prompt goes FIRST because students routinely paste it into
+    // their own draft, which would otherwise make every quote of the prompt
+    // read as "own draft" — the draft is the broader, less specific source.
+    // The student's own turns come LAST so that text the bot quoted back is
+    // still read as the bot's reply, which is where they copied it from.
+    const prior = priorTurns.get(r.messageId) ?? { replies: [], questions: [] };
+    const sources: DissectSource[] = [
       { text: instructionText, kind: 'assignment_prompt' },
-      { text: r.prevResponseText ?? '', kind: 'prior_bot_reply' },
+      { text: criteriaText, kind: 'assignment_prompt' },
+      { text: latestSnapshotBefore(r.sessionId, r.queryTimestamp), kind: 'student_draft' },
+      ...prior.replies.map((text) => ({ text, kind: 'prior_bot_reply' as const })),
+      ...prior.questions.map((text) => ({
+        text,
+        kind: 'own_question' as const,
+        inferable: false,
+      })),
     ];
     out.set(r.messageId, dissectMessage(r.queryText, windowPastes, sources));
   }

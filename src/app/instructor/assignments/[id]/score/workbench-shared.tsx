@@ -6,34 +6,61 @@
  * (the ablation's shell parity) with a single source of truth. Extracted
  * verbatim from IntentWorkbench — pure UI, no intent/search logic.
  */
+import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import { MaterialSegments, QuerySnippet, snippetOverflows, type Dissection } from './materials';
+import { useHeaderSlot } from './StudioShell';
 
-/** Workbench top bar: Back-to-board button + title + optional note. */
+/**
+ * A workbench's own bar: Back button + title + optional note + right-aligned
+ * actions. It renders INTO the page header (StudioShell), replacing the studio
+ * header for as long as the workbench is open — one page, one back button, and
+ * no Deploy/account controls hanging over a screen they do not act on.
+ */
 export function WorkbenchTopBar({
   title,
   note,
   onBack,
   backTitle,
+  backLabel = 'Board',
+  actions,
 }: {
   title: string;
-  note?: string | null;
+  note?: React.ReactNode;
   onBack: () => void;
   backTitle?: string;
+  /** Where Back goes, when it is not the board (e.g. Preview → revising). */
+  backLabel?: string;
+  /** Right-aligned controls belonging to THIS workbench (e.g. Preview). */
+  actions?: React.ReactNode;
 }) {
-  return (
-    <div className="shrink-0 flex items-center gap-3">
+  const slot = useHeaderSlot();
+  useEffect(() => {
+    if (!slot) return;
+    slot.claim(true);
+    return () => slot.claim(false);
+  }, [slot]);
+
+  const bar = (
+    <div className="flex items-center gap-3">
       <button
         onClick={onBack}
         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
         title={backTitle ?? 'Back to the board'}
       >
-        <ArrowLeft className="w-3.5 h-3.5" /> Board
+        <ArrowLeft className="w-3.5 h-3.5" /> {backLabel}
       </button>
       <h2 className="text-sm font-semibold truncate">{title}</h2>
       {note && <span className="text-xs text-[hsl(var(--muted-foreground))]">{note}</span>}
+      {actions && <span className="ml-auto shrink-0 flex items-center gap-2">{actions}</span>}
     </div>
   );
+
+  // Outside the shell (or before its slot exists) the bar stays where it is —
+  // the workbench still works, it just keeps its own header.
+  if (!slot) return <div className="shrink-0">{bar}</div>;
+  return slot.el ? createPortal(bar, slot.el) : null;
 }
 
 /** The definition editor: label + textarea, with an optional right-aligned
@@ -42,7 +69,7 @@ export function WorkbenchTopBar({
 export function DefinitionEditor({
   value,
   onChange,
-  label = 'When a student… (definition)',
+  label = 'When a student…',
   placeholder,
   rows = 5,
   action,
@@ -55,10 +82,11 @@ export function DefinitionEditor({
   action?: React.ReactNode;
 }) {
   return (
-    <label className="block text-sm">
+    <label className="block text-sm cursor-text">
       <span className="flex items-center justify-between gap-2">
         <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">{label}</span>
-        {action}
+        {/* Not part of the field's click target — keeps its own cursor. */}
+        {action && <span className="cursor-auto">{action}</span>}
       </span>
       <textarea
         value={value}

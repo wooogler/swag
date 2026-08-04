@@ -14,9 +14,10 @@
  * so previewing the whole log never fans out to hundreds of calls at once.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Check, Loader2, Plus, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, Plus, Sparkles, X } from 'lucide-react';
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments, QuerySnippet } from './materials';
+import { WorkbenchTopBar } from './workbench-shared';
 import { ResponseBody } from './conversation';
 
 /** Batch cap of the preview endpoint (MAX_PREVIEW_MESSAGES mirror). */
@@ -144,32 +145,31 @@ export default function RuleApplyPreview({
 
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
-      {/* TOP BAR — back, title, progress (review-only). */}
-      <div className="shrink-0 flex items-center gap-3">
-        <button
-          onClick={onClose}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-          title="Back to revising"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" /> Back
-        </button>
-        <h2 className="text-sm font-semibold truncate">
-          {promptMode ? 'Preview across the log' : `Preview across intent — ${intent.title}`}
-        </h2>
-        <span className="flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-          {!allVisibleDone && <Loader2 className="w-3 h-3 animate-spin" />}
-          <span className="tabular-nums">
-            {doneCount}/{visibleIds.length} shown
-            {moreToLoad ? ` · ${queryIds.length} total` : ''}
-            {failedCount > 0 ? ` · ${failedCount} failed` : ''}
+      {/* TOP BAR — back, title, progress (review-only). Takes the page header
+          over from the workbench underneath for as long as it is open. */}
+      <WorkbenchTopBar
+        title={promptMode ? 'Preview across the log' : `Preview across intent — ${intent.title}`}
+        onBack={onClose}
+        backLabel="Back"
+        backTitle="Back to revising"
+        note={
+          <span className="flex items-center gap-2">
+            <span className="flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+              {!allVisibleDone && <Loader2 className="w-3 h-3 animate-spin" />}
+              <span className="tabular-nums">
+                {doneCount}/{visibleIds.length} shown
+                {moreToLoad ? ` · ${queryIds.length} total` : ''}
+                {failedCount > 0 ? ` · ${failedCount} failed` : ''}
+              </span>
+            </span>
+            {error && (
+              <span className="flex items-center gap-1 text-[11px] text-red-600">
+                <AlertTriangle className="w-3.5 h-3.5" /> {error}
+              </span>
+            )}
           </span>
-        </span>
-        {error && (
-          <span className="flex items-center gap-1 text-[11px] text-red-600">
-            <AlertTriangle className="w-3.5 h-3.5" /> {error}
-          </span>
-        )}
-      </div>
+        }
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,320px)_minmax(0,1fr)_minmax(0,1fr)] gap-4 flex-1 min-h-0">
         {/* LEFT — scope + questions with generation status. */}

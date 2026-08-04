@@ -10,16 +10,14 @@
  * resolver (intents.ts) — nothing is stored; link/pin edits re-derive
  * instantly after router.refresh().
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  applyPinOverrides,
   compileChains,
   isIncludedRating,
   QUERY_TYPE_LABELS,
   resolveRoute,
   SCORE_QUERY_TYPES,
-  type MaterialKind,
   type RatingLevel,
   type RouteResolution,
   type ScoreQueryType,
@@ -28,23 +26,22 @@ import { SCORE_RATING_MODEL } from '@/lib/score/models';
 import { runShardedRate } from './rate-runner';
 import {
   AlertTriangle,
-  Archive,
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Loader2,
   Maximize2,
   MessageSquare,
   Minimize2,
   Pencil,
   Plus,
   RefreshCw,
-  RotateCcw,
   Search,
   Trash2,
   X,
 } from 'lucide-react';
 import { jelsonToIntent, jelsonTypeToIntent, type JelsonSuggestion } from '@/lib/score/jelson-suggest';
-import { MaterialSegments, QuerySnippet, StudentMessage } from './materials';
+import { MaterialSegments, QuerySnippet, StudentMessage, type Dissection } from './materials';
 import { ConversationThread, ResponseBody } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
@@ -84,7 +81,7 @@ export interface ScoreQueryRow {
    * query type's own rule answered. Null on replies from before v7 — they
    * predate the distinction and must not be relabelled as either. */
   appliedOutcome: string | null;
-  dissection: { materialKinds: MaterialKind[]; requests: string[] } | null;
+  dissection: Dissection | null;
   /** v7: which of the 4 fixed query types this message was classified into.
    * Null = not yet typed (or typed below TYPE_CLASSIFIER_VERSION) — such a
    * message has no chain to walk, so routing treats it as pending. */
@@ -191,17 +188,18 @@ function NewIntentRow({
   scope,
   onClick,
 }: {
-  scope: { label: string };
+  scope: { label: string; buttonLabel: string };
   onClick: () => void;
 }) {
   return (
-    <div className="pl-3 py-1 min-h-[28px] flex items-center">
+    <div className="pl-3 pr-2 py-1 min-h-[28px] flex items-center">
       <button
         onClick={onClick}
         title={scope.label}
-        className="inline-flex items-center gap-1 rounded border border-dashed border-[hsl(var(--primary))]/60 px-1.5 py-0.5 text-[11px] font-medium text-[hsl(var(--primary))] hover:border-solid hover:bg-[hsl(var(--primary))]/10"
+        className="inline-flex items-center gap-1 min-w-0 rounded border border-dashed border-[hsl(var(--primary))]/60 px-1.5 py-0.5 text-[11px] font-medium text-[hsl(var(--primary))] hover:border-solid hover:bg-[hsl(var(--primary))]/10"
       >
-        <Plus className="w-3 h-3" /> New intent
+        <Plus className="w-3 h-3 shrink-0" />
+        <span className="truncate">{scope.buttonLabel}</span>
       </button>
     </div>
   );
@@ -970,6 +968,25 @@ export default function IntentBoard({
   const intentById = useMemo(() => new Map(intents.map((i) => [i.id, i])), [intents]);
   const titleOf = (id: number) => intentById.get(id)?.title ?? `Intent ${id}`;
 
+  // Workbench-exit refresh, made VISIBLE: router.refresh() re-renders the whole
+  // page server-side (seconds on a big log), during which the stale board shows
+  // no trace of the just-saved intent. The transition's pending flag drives a
+  // status strip, and the saved intent is flagged (ring + scroll) once the
+  // fresh render lands, so "did my intent arrive?" has an answer both during
+  // and after the wait.
+  const [boardRefreshing, startBoardRefresh] = useTransition();
+  const [flagIntent, setFlagIntent] = useState<number | null>(null);
+  const flagRowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (flagIntent === null || boardRefreshing) return;
+    // The fresh render is on screen. Bring the row into view, hold the ring
+    // long enough to register, then let go. (A discarded/archived id simply
+    // never renders a row — the timer clears it all the same.)
+    flagRowRef.current?.scrollIntoView({ block: 'nearest' });
+    const t = setTimeout(() => setFlagIntent(null), 3000);
+    return () => clearTimeout(t);
+  }, [flagIntent, boardRefreshing]);
+
   // SCORE opens on the first type section — there is no global "All" any more,
   // and a fixed starting point gives every study participant the same first
   // screen. The baseline keeps All (its left column is searches, not types).
@@ -1175,60 +1192,32 @@ export default function IntentBoard({
     setConvoOpen(false);
   }, [selectedMessageId]);
 
-  // ---- Archived intents (soft-deleted; restore / hard-purge) --------------
-  const archivedIntents = useMemo(() => intents.filter((i) => i.archived), [intents]);
-  const [archivedOpen, setArchivedOpen] = useState(false);
-  const [restoringId, setRestoringId] = useState<number | null>(null);
-  // The intent(s) queued for irreversible hard-delete — one row's trash, or
-  // the header's "Delete all". A single confirm click executes (no typing).
-  const [purgeTarget, setPurgeTarget] = useState<{ intents: IntentSummary[]; all: boolean } | null>(
-    null
-  );
-  const [purgeBusy, setPurgeBusy] = useState(false);
+  // ---- Direct delete (no archive step) ------------------------------------
+  // The row's trash button queues the intent here; the confirm modal shows
+  // where its questions will fall before anything is destroyed.
+  const [deleteTarget, setDeleteTarget] = useState<IntentSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
-  async function restoreIntent(intent: IntentSummary) {
-    setRestoringId(intent.id);
+  async function deleteIntent() {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
     try {
-      const res = await fetch(`/api/instructor/assignments/${assignmentId}/score/intents/${intent.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ archived: false, autoTitle: false }),
-      });
+      // One call — the server cascades over the subtree in a transaction.
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${deleteTarget.id}?mode=purge`,
+        { method: 'DELETE' }
+      );
       if (!res.ok) {
-        window.alert('Failed to restore the intent.');
+        window.alert('Failed to delete the intent.');
+        setDeleteBusy(false);
         return;
       }
-      router.refresh();
-    } catch {
-      window.alert('Failed to restore the intent — network error.');
-    } finally {
-      setRestoringId(null);
-    }
-  }
-
-  async function purgeIntents() {
-    if (!purgeTarget) return;
-    setPurgeBusy(true);
-    try {
-      // Independent server-side transactions — fire together, report failures
-      // once everything settles (the ones that succeeded stay deleted).
-      const results = await Promise.allSettled(
-        purgeTarget.intents.map((intent) =>
-          fetch(`/api/instructor/assignments/${assignmentId}/score/intents/${intent.id}?mode=purge`, {
-            method: 'DELETE',
-          })
-        )
-      );
-      const failed = results.filter((r) => r.status === 'rejected' || !r.value.ok).length;
-      if (failed > 0) {
-        window.alert(`Failed to delete ${failed} of ${purgeTarget.intents.length} intent(s).`);
-      }
-      setPurgeTarget(null);
-      setPurgeBusy(false);
-      router.refresh();
+      setDeleteTarget(null);
+      setDeleteBusy(false);
+      startBoardRefresh(() => router.refresh()); // visible via the status strip
     } catch {
       window.alert('Failed to delete — network error.');
-      setPurgeBusy(false);
+      setDeleteBusy(false);
     }
   }
 
@@ -1458,15 +1447,21 @@ export default function IntentBoard({
     return map;
   }, [tree, activeIntents]);
 
-    /** Pin-overridden ratings for one row — pins fix a JUDGMENT, never the
-   * routing order (§3.6). Stale ratings still count, for display continuity. */
+  /**
+   * The ratings one row routes by — the JUDGMENT, nothing else. Stale ratings
+   * still count, for display continuity.
+   *
+   * Corrections used to override this. They no longer do: the board's job is to
+   * show what the DEPLOYED chatbot does, and the chatbot routes from the
+   * definitions alone. A correction that has not been folded into a definition
+   * yet has changed nothing for students, so counting it here made the board
+   * disagree with the runtime it exists to mirror — and a folded one would have
+   * gone on faking the routing forever, since a consumed marker is still a row.
+   */
   const effectiveRatings = (r: ScoreQueryRow): Map<number, RatingLevel> => {
     const ratings = new Map<number, RatingLevel>();
     for (const [idStr, v] of Object.entries(r.intentRatings)) ratings.set(Number(idStr), v.rating);
-    const pins = new Map<number, 'in' | 'out'>(
-      Object.entries(r.pinnedIntents).map(([k, v]) => [Number(k), v])
-    );
-    return applyPinOverrides(ratings, pins);
+    return ratings;
   };
 
   const resolutions = useMemo(() => {
@@ -1514,6 +1509,54 @@ export default function IntentBoard({
     );
   /** Queries with no type judgment yet — they cannot be routed at all. */
   const untypedCount = useMemo(() => rows.filter((r) => !r.queryType).length, [rows]);
+
+  /**
+   * The delete modal's core promise: BEFORE anything is destroyed, show where
+   * the questions this set (and its subsets) currently answers will fall.
+   * Same machinery as the live board — compile the chains WITHOUT the subtree
+   * and re-resolve every affected question — so the preview is exactly what
+   * the next render will show, not an estimate.
+   */
+  const deletePreview = useMemo(() => {
+    if (!deleteTarget) return null;
+    const subtree = new Set(subtreeIds.get(deleteTarget.id) ?? [deleteTarget.id]);
+    const nextChains = compileChains(
+      activeIntents
+        .filter((i) => !subtree.has(i.id))
+        .map((i) => ({
+          id: i.id,
+          kind: 'intent' as const,
+          type: i.type,
+          parentIntentId: i.parentIntentId,
+          position: i.position,
+        }))
+    );
+    // destination label → count, in first-seen order (chain order).
+    const dests = new Map<string, number>();
+    let total = 0;
+    for (const r of rows) {
+      const res = resolutions.get(r.messageId);
+      if (!res || res.kind !== 'matched' || !subtree.has(res.intentId)) continue;
+      total += 1;
+      const chain = r.queryType ? nextChains.get(r.queryType) : null;
+      const next = chain ? resolveRoute(chain, effectiveRatings(r)) : ({ kind: 'pending' } as const);
+      const label =
+        next.kind === 'matched'
+          ? `“${titleOf(next.intentId)}”`
+          : next.kind === 'type_default'
+            ? `the ${r.queryType ? QUERY_TYPE_LABELS[r.queryType] : 'type'} default rule`
+            : 'pending (unrated)';
+      dests.set(label, (dests.get(label) ?? 0) + 1);
+    }
+    return {
+      total,
+      dests: [...dests.entries()].sort((a, b) => b[1] - a[1]),
+      nestedCount: subtree.size - 1,
+      pinCount: [...subtree].reduce((n, id) => n + (intentById.get(id)?.pinCount ?? 0), 0),
+    };
+    // effectiveRatings/titleOf are pure helpers over rows/intents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deleteTarget, subtreeIds, activeIntents, rows, resolutions, intentById]);
 
   // ---- Middle column ------------------------------------------------------
   // Selection can outlive its target (intent archived, boundary resolved,
@@ -1711,7 +1754,7 @@ export default function IntentBoard({
       case 'pending':
         return 'Not yet categorized';
       case 'starter':
-        return `Starter set · ${selection.label}`;
+        return `Starter intent · ${selection.label}`;
       case 'search':
         return `Search · ${selection.label}`;
     }
@@ -1793,11 +1836,19 @@ export default function IntentBoard({
     const own = counts.perIntent.get(intent.id) ?? 0;
     // The new set would land INSIDE this one — so the button renders here.
     const createsHere = newIntentScope?.parentIntentId === intent.id;
+    // Just landed from the workbench: ring the saved intent so the eye finds
+    // it in the refreshed chain (cleared by the board's flag timer).
+    const flagged = flagIntent === intent.id;
     return (
       <div>
         <div
-          className={`group relative flex items-center gap-1 pl-3 pr-2 py-1 cursor-pointer ${
-            active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
+          ref={flagged ? flagRowRef : undefined}
+          className={`group relative flex items-center gap-1 pl-3 pr-2 py-1 cursor-pointer transition-shadow ${
+            flagged
+              ? 'ring-2 ring-inset ring-emerald-400 bg-emerald-50'
+              : active
+                ? 'bg-[hsl(var(--muted))]'
+                : 'hover:bg-[hsl(var(--muted))]/40'
           }`}
           onClick={() => setSelection({ kind: 'intent', id: intent.id })}
         >
@@ -1832,7 +1883,7 @@ export default function IntentBoard({
               {shadow && (
                 <SmallChip
                   className="bg-amber-50 text-amber-700 border-amber-200 shrink-0"
-                  title={`“${titleOf(shadow.intentId)}” comes earlier in ${QUERY_TYPE_LABELS[type]} and answers ${shadow.count} question${shadow.count === 1 ? '' : 's'} this set also matches. Narrow it, move this set above it, or nest this set inside it.`}
+                  title={`“${titleOf(shadow.intentId)}” comes earlier in ${QUERY_TYPE_LABELS[type]} and answers ${shadow.count} question${shadow.count === 1 ? '' : 's'} this intent also matches. Narrow it, move this intent above it, or nest this intent inside it.`}
                 >
                   <AlertTriangle className="w-3 h-3" /> {shadow.count}
                 </SmallChip>
@@ -1840,42 +1891,53 @@ export default function IntentBoard({
               {outsideCount > 0 && (
                 <SmallChip
                   className="bg-sky-50 text-sky-700 border-sky-200 shrink-0"
-                  title={`${outsideCount} question${outsideCount === 1 ? '' : 's'} this set matches sit outside “${titleOf(intent.parentIntentId ?? 0)}”. A subset only answers what the set around it answers, so these never reach it — widen the enclosing set, or drag this one out of it.`}
+                  title={`${outsideCount} question${outsideCount === 1 ? '' : 's'} this intent matches sit outside “${titleOf(intent.parentIntentId ?? 0)}”. A nested intent only answers what the intent around it answers, so these never reach it — widen the enclosing intent, or drag this one out of it.`}
                 >
                   ↗ {outsideCount}
                 </SmallChip>
               )}
             </div>
           </HoverReveal>
+          {/* Row actions, right of the text: [up] [down] [delete]. Order is
+              routing (the set above answers first), so the movers stay visible
+              on the row you are working with (§3.7); delete opens the confirm
+              that shows where this set's questions will fall. */}
+          <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void moveIntent(intent.id, { beforeIntentId: siblings[idx - 1]?.id ?? null });
+              }}
+              disabled={idx <= 0 || placementBusy !== null}
+              className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
+              title="Answer earlier than the intent above"
+            >
+              <ChevronUp className="w-3 h-3" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void moveIntent(intent.id, { beforeIntentId: siblings[idx + 2]?.id ?? null });
+              }}
+              disabled={idx < 0 || idx >= siblings.length - 1 || placementBusy !== null}
+              className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
+              title="Answer later than the intent below"
+            >
+              <ChevronDown className="w-3 h-3" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setDeleteTarget(intent);
+              }}
+              disabled={placementBusy !== null || boardRefreshing}
+              className="p-0.5 rounded disabled:opacity-30 text-[hsl(var(--muted-foreground))] hover:bg-rose-50 hover:text-rose-600"
+              title="Delete this intent — you’ll see where its questions go first"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </span>
           <div className="ml-auto flex items-center gap-0.5 shrink-0">
-            {/* Order is routing: the set above answers first. Shown, never
-                hidden (§3.7) — but only on the row you are working with. */}
-            {siblings.length > 1 && (
-              <span className="hidden group-hover:flex items-center">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void moveIntent(intent.id, { beforeIntentId: siblings[idx - 1]?.id ?? null });
-                  }}
-                  disabled={idx <= 0 || placementBusy !== null}
-                  className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
-                  title="Answer earlier than the set above"
-                >
-                  <ChevronUp className="w-3 h-3" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void moveIntent(intent.id, { beforeIntentId: siblings[idx + 2]?.id ?? null });
-                  }}
-                  disabled={idx < 0 || idx >= siblings.length - 1 || placementBusy !== null}
-                  className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
-                  title="Answer later than the set below"
-                >
-                  <ChevronDown className="w-3 h-3" />
-                </button>
-              </span>
-            )}
             <Badge n={subtreeCount(intent.id)} />
           </div>
         </div>
@@ -1902,7 +1964,7 @@ export default function IntentBoard({
                           ? 'bg-[hsl(var(--muted))] font-medium'
                           : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/40'
                       }`}
-                      title={`Questions “${intent.title}” answers itself — its subsets take the rest.`}
+                      title={`Questions “${intent.title}” answers itself — the intents nested inside it take the rest.`}
                     >
                       <span className="truncate italic">Uncategorized</span>
                       <Badge n={own} />
@@ -1960,6 +2022,10 @@ export default function IntentBoard({
     type: ScoreQueryType;
     parentIntentId: number | null;
     label: string;
+    /** On the button itself: WHERE the set lands, in words. The button's spot
+     * in the tree already says it, but position alone is easy to misread —
+     * the text makes the placement explicit. */
+    buttonLabel: string;
   } | null => {
     if (isBaseline) return null;
     const forScope = (scope: IntentSummary) =>
@@ -1967,14 +2033,16 @@ export default function IntentBoard({
         ? {
             type: scope.type,
             parentIntentId: scope.id,
-            label: `Create a subset of “${scope.title}”`,
+            label: `Create an intent inside “${scope.title}”`,
+            buttonLabel: `New intent inside “${scope.title}”`,
           }
         : null;
     if (selection.kind === 'type') {
       return {
         type: selection.typeKey,
         parentIntentId: null,
-        label: `Create a set inside ${QUERY_TYPE_LABELS[selection.typeKey]}`,
+        label: `Create an intent inside ${QUERY_TYPE_LABELS[selection.typeKey]}`,
+        buttonLabel: `New intent in ${QUERY_TYPE_LABELS[selection.typeKey]}`,
       };
     }
     if (selection.kind === 'residue') {
@@ -1983,7 +2051,8 @@ export default function IntentBoard({
         return {
           type: root.type,
           parentIntentId: null,
-          label: `Create a set for the questions ${QUERY_TYPE_LABELS[root.type]} does not cover yet`,
+          label: `Create an intent for the questions ${QUERY_TYPE_LABELS[root.type]} does not cover yet`,
+          buttonLabel: `New intent in ${QUERY_TYPE_LABELS[root.type]}`,
         };
       }
       const scope = intentById.get(selection.scopeId);
@@ -2017,6 +2086,23 @@ export default function IntentBoard({
     setNewIntentOpen(true);
   }
 
+  // The enclosing-intent chain of the open workbench's placement, nearest
+  // first. For an EDIT that is the edited intent's ancestors; for a CREATE the
+  // seed's parent IS the first enclosing intent. Type roots are not in
+  // intentById, so the walk stops at the type boundary on its own.
+  const workbenchScopeAncestors = useMemo(() => {
+    const start = editIntent ? editIntent.parentIntentId : newIntentSeed?.parentIntentId ?? null;
+    const out: number[] = [];
+    let cur = start ?? null;
+    for (let guard = 0; cur !== null && guard < 100; guard++) {
+      const node = intentById.get(cur);
+      if (!node) break;
+      out.push(node.id);
+      cur = node.parentIntentId;
+    }
+    return out;
+  }, [editIntent, newIntentSeed, intentById]);
+
   if (deployView) {
     return <DeployVersionBoard rows={rows} deployView={deployView} />;
   }
@@ -2035,8 +2121,14 @@ export default function IntentBoard({
       {/* Slim status strip — only mounts while a starter-set rating run is in
           flight (or failed); the old permanent control bar is gone (deploy +
           versions moved to the page header). */}
-      {(runError || (running && runProgress)) && (
+      {(runError || (running && runProgress) || boardRefreshing) && (
         <div className="shrink-0 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 flex items-center gap-3 text-xs">
+          {boardRefreshing && (
+            <span className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))]">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Updating the board…
+            </span>
+          )}
           {runError && (
             <span className="flex items-center gap-1 text-red-600">
               <AlertTriangle className="w-3.5 h-3.5" /> {runError}
@@ -2165,11 +2257,18 @@ export default function IntentBoard({
           rows={rows}
           isNirvana={isNirvana}
           mode={workbenchMode}
-          onExit={() => {
+          scopeAncestorIds={workbenchScopeAncestors}
+          scopeLabel={
+            workbenchScopeAncestors.length > 0
+              ? intentById.get(workbenchScopeAncestors[0])?.title ?? null
+              : null
+          }
+          onExit={(savedIntentId) => {
             setNewIntentOpen(false);
             setNewIntentSeed(null);
             setEditIntent(null);
-            router.refresh();
+            setFlagIntent(savedIntentId ?? null);
+            startBoardRefresh(() => router.refresh());
           }}
           // The overlap chips' shortcut: jump straight into the overlapping
           // intent's editor (re-keys this workbench onto it). Only while editing
@@ -2438,63 +2537,6 @@ export default function IntentBoard({
                 <p className="px-3 py-3 text-xs text-[hsl(var(--muted-foreground))]">
                   Preparing the query types…
                 </p>
-              )}
-            </div>
-          )}
-
-          {/* ARCHIVED — collapsible; restore or permanently delete */}
-          {archivedIntents.length > 0 && (
-            <div className="border-t border-[hsl(var(--border))]">
-              <div className="flex items-center hover:bg-[hsl(var(--muted))]/50">
-                <button
-                  onClick={() => setArchivedOpen((o) => !o)}
-                  className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]"
-                >
-                  <ChevronRight className={`w-3.5 h-3.5 transition-transform ${archivedOpen ? 'rotate-90' : ''}`} />
-                  <Archive className="w-3.5 h-3.5" /> Archived ({archivedIntents.length})
-                </button>
-                <button
-                  onClick={() => setPurgeTarget({ intents: archivedIntents, all: true })}
-                  disabled={purgeBusy}
-                  className="shrink-0 inline-flex items-center gap-1 px-2 pr-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))] hover:text-red-600 disabled:opacity-50"
-                  title="Delete every archived intent permanently"
-                >
-                  <Trash2 className="w-3.5 h-3.5" /> Delete all
-                </button>
-              </div>
-              {archivedOpen && (
-                <div className="pb-1">
-                  {archivedIntents.map((intent) => (
-                    <div
-                      key={intent.id}
-                      className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-[hsl(var(--border))]/40"
-                    >
-                      <span
-                        className="text-sm truncate text-[hsl(var(--muted-foreground))]"
-                        title={intent.definition}
-                      >
-                        {intent.title}
-                      </span>
-                      <span className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => restoreIntent(intent)}
-                          disabled={restoringId === intent.id}
-                          className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
-                          title="Restore — re-activate this intent"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => setPurgeTarget({ intents: [intent], all: false })}
-                          className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-red-600"
-                          title="Delete permanently"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </span>
-                    </div>
-                  ))}
-                </div>
               )}
             </div>
           )}
@@ -2789,32 +2831,6 @@ export default function IntentBoard({
                       </button>
                     );
                   })()}
-                  {/* Creating from the question itself: it lands inside
-                      whatever answers it today, so the candidates read as a
-                      refinement of that scope rather than a blank slate. */}
-                  {!isBaseline && (
-                    <button
-                      onClick={() =>
-                        selectedRow.queryType &&
-                        openIntentChooser(
-                          {
-                            type: selectedRow.queryType,
-                            parentIntentId: selectedOwner?.id ?? null,
-                          },
-                          selectedRow
-                        )
-                      }
-                      disabled={!selectedRow.queryType}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded border border-violet-300 text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-                      title={
-                        !selectedRow.queryType
-                          ? 'This question has no query type yet — Run to categorize it first'
-                          : 'Draft a new intent from this question'
-                      }
-                    >
-                      <Plus className="w-3.5 h-3.5" /> New intent for this query
-                    </button>
-                  )}
                 </div>
               </div>
               {/* Rule-version picker — view the response this question got
@@ -2954,11 +2970,13 @@ export default function IntentBoard({
         );
       })()}
 
-      {/* HARD DELETE — irreversible; one confirm click executes (no typing). */}
-      {purgeTarget && (
+      {/* DELETE CONFIRM — direct, irreversible; the modal's job is to show
+          where this set's questions FALL once its rule stops answering them
+          (recomputed with the real chain compiler, not estimated). */}
+      {deleteTarget && deletePreview && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => !purgeBusy && setPurgeTarget(null)}
+          onClick={() => !deleteBusy && setDeleteTarget(null)}
         >
           <div
             className="w-full max-w-md rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
@@ -2966,74 +2984,62 @@ export default function IntentBoard({
           >
             <div className="px-5 py-4 border-b border-[hsl(var(--border))] flex items-center gap-2 text-red-600">
               <AlertTriangle className="w-5 h-5" />
-              <h2 className="text-sm font-semibold">
-                {purgeTarget.all
-                  ? `Delete all ${purgeTarget.intents.length} archived intents permanently?`
-                  : 'Delete this intent permanently?'}
-              </h2>
+              <h2 className="text-sm font-semibold">Delete “{deleteTarget.title}”?</h2>
             </div>
-            <div className="px-5 py-4 space-y-3 text-xs text-[hsl(var(--foreground))]">
-              <p>
-                You are about to permanently delete{' '}
-                {purgeTarget.all ? (
+            <div className="px-5 py-4 space-y-3 text-sm text-[hsl(var(--foreground))]">
+              {deletePreview.nestedCount > 0 && (
+                <p>
+                  The{' '}
                   <span className="font-semibold">
-                    every archived intent ({purgeTarget.intents.length})
-                  </span>
-                ) : (
-                  <span className="font-semibold">“{purgeTarget.intents[0].title}”</span>
-                )}
-                . This <span className="font-semibold">cannot be undone</span> — it is different from
-                Archive.
-              </p>
-              {purgeTarget.all && (
-                <ul className="max-h-28 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-2 space-y-0.5 text-[hsl(var(--muted-foreground))]">
-                  {purgeTarget.intents.map((i) => (
-                    <li key={i.id} className="truncate" title={i.definition}>
-                      {i.title}
-                    </li>
-                  ))}
-                </ul>
+                    {deletePreview.nestedCount} intent{deletePreview.nestedCount === 1 ? '' : 's'} nested
+                    inside it
+                  </span>{' '}
+                  {deletePreview.nestedCount === 1 ? 'is' : 'are'} deleted with it — a nested intent
+                  only answers within this one.
+                </p>
               )}
-              <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-2">
-                <p className="mb-1 font-medium text-[hsl(var(--muted-foreground))]">This erases, forever:</p>
-                <ul className="list-disc pl-4 space-y-0.5 text-[hsl(var(--muted-foreground))]">
-                  <li>every classification rating for {purgeTarget.all ? 'these intents' : 'this intent'}</li>
-                  <li>
-                    all your in/out labels
-                    {(() => {
-                      const pins = purgeTarget.intents.reduce((n, i) => n + i.pinCount, 0);
-                      return pins > 0 ? ` (${pins})` : '';
-                    })()}
-                  </li>
-                  <li>tie-breakers to and from {purgeTarget.all ? 'them' : 'it'}</li>
-                  <li>cached rule previews</li>
-                  <li>{purgeTarget.all ? 'their' : 'this intent’s'} own version history</li>
-                </ul>
-              </div>
-              <p className="text-[hsl(var(--muted-foreground))]">
-                Your other intents — their ratings, labels, and shared history — are not affected.
+              {deletePreview.total > 0 ? (
+                <div className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-2">
+                  <p className="mb-1 font-medium">
+                    {deletePreview.total} question{deletePreview.total === 1 ? '' : 's'} this intent
+                    currently answers will be answered by:
+                  </p>
+                  <ul className="list-disc pl-4 space-y-0.5 text-[hsl(var(--muted-foreground))]">
+                    {deletePreview.dests.map(([label, n]) => (
+                      <li key={label}>
+                        {label} — {n} question{n === 1 ? '' : 's'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-[hsl(var(--muted-foreground))]">
+                  No question currently routes here — deleting it changes nothing for students.
+                </p>
+              )}
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                This <span className="font-semibold">cannot be undone</span> — this intent’s rule, its
+                ratings, your in/out labels
+                {deletePreview.pinCount > 0 ? ` (${deletePreview.pinCount})` : ''} and its version
+                history are erased.
               </p>
             </div>
             <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex items-center justify-end gap-2">
               <button
-                onClick={() => setPurgeTarget(null)}
-                disabled={purgeBusy}
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleteBusy}
                 className="px-3 py-1.5 text-xs rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 autoFocus
-                onClick={purgeIntents}
-                disabled={purgeBusy}
+                onClick={deleteIntent}
+                disabled={deleteBusy}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                {purgeBusy
-                  ? 'Deleting…'
-                  : purgeTarget.all
-                    ? `Delete all ${purgeTarget.intents.length}`
-                    : 'Delete permanently'}
+                {deleteBusy ? 'Deleting…' : 'Delete'}
               </button>
             </div>
           </div>

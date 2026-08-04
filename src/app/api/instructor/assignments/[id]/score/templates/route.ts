@@ -82,10 +82,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       // Repair path: a template re-created after being lost (e.g. consumed by
       // the old activate-by-flip behavior) can reuse ratings that any sibling
       // intent already produced for the SAME spec — defHash covers the rating
-      // version + definition + pins (templates have none), so equal hash ⇒
-      // byte-identical prompt. One donor row per message; zero LLM calls.
+      // version + definition, so equal hash ⇒ byte-identical prompt. One donor
+      // row per message; zero LLM calls.
       for (const t of created) {
-        const wantedHash = intentDefHash(t.definition, []);
+        const wantedHash = intentDefHash(t.definition);
         await tx.execute(sql`
           INSERT INTO "score_intent_ratings"
             ("assignment_id", "message_id", "intent_id", "rating", "rationale", "def_hash", "raw_response", "model", "rated_at")

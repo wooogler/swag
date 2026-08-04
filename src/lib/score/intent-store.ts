@@ -38,8 +38,6 @@ import {
   TYPE_CLASSIFIER_VERSION,
   intentDefHash,
   seedRuleVersionName,
-  selectPromptPins,
-  type PromptPin,
 } from './intents';
 
 /** db or a drizzle transaction — mutation helpers accept either so routes can
@@ -104,6 +102,9 @@ async function createIntentTables(): Promise<void> {
         "query_text" text NOT NULL,
         "reason" text,
         "source" text DEFAULT 'manual' NOT NULL,
+        "status" text DEFAULT 'pending' NOT NULL,
+        "consumed_at_version" integer,
+        "consumed_at" timestamp,
         "created_at" timestamp NOT NULL
       )
     `);
@@ -129,6 +130,7 @@ async function createIntentTables(): Promise<void> {
         "message_id" integer NOT NULL,
         "material_kinds" jsonb NOT NULL,
         "requests" jsonb NOT NULL,
+        "materials" jsonb,
         "version" integer NOT NULL,
         "raw_response" text,
         "model" text,
@@ -261,6 +263,40 @@ async function createIntentTables(): Promise<void> {
   if (pinCols.length === 0) {
     await db.execute(sql`ALTER TABLE "score_intent_pins" ADD COLUMN "reason" text`);
   }
+  // score_intent_pins.status / consumed_* — a pin became a CORRECTION: pending
+  // until folded into the definition, then kept as a display-only marker.
+  // Existing rows default to 'pending', which is what they are: labels that
+  // have not been folded (the fold mechanism did not exist when they were made).
+  const correctionCols = await db.execute<{ column_name: string }>(sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'score_intent_pins'
+      AND column_name IN ('status', 'consumed_at_version', 'consumed_at')
+  `);
+  const havePinCols = new Set(correctionCols.map((r) => r.column_name));
+  if (!havePinCols.has('status')) {
+    await db.execute(
+      sql`ALTER TABLE "score_intent_pins" ADD COLUMN "status" text DEFAULT 'pending' NOT NULL`
+    );
+  }
+  if (!havePinCols.has('consumed_at_version')) {
+    await db.execute(sql`ALTER TABLE "score_intent_pins" ADD COLUMN "consumed_at_version" integer`);
+  }
+  if (!havePinCols.has('consumed_at')) {
+    await db.execute(sql`ALTER TABLE "score_intent_pins" ADD COLUMN "consumed_at" timestamp`);
+  }
+
+  // score_dissections.materials — the per-run kind/coverage added in
+  // DISSECTION_VERSION 4. Nullable: rows written before it stay readable and
+  // are recomputed by the next rate batch (the viewer falls back to the
+  // message-wide kind set meanwhile).
+  const dissectionCols = await db.execute<{ column_name: string }>(sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'score_dissections'
+      AND column_name = 'materials'
+  `);
+  if (dissectionCols.length === 0) {
+    await db.execute(sql`ALTER TABLE "score_dissections" ADD COLUMN "materials" jsonb`);
+  }
   // v7 intent tree: kind / type / parent_intent_id / position on score_intents.
   // parent_intent_id gets no FK (the runtime CREATEs above declare none either);
   // position is double precision so a reorder can bisect between two siblings.
@@ -386,7 +422,7 @@ export async function listIntents(dbx: ScoreDb, assignmentId: string): Promise<S
     .orderBy(asc(scoreIntents.id));
 }
 
-/** All pins for the assignment, newest first (the order selectPromptPins expects). */
+/** All pins for the assignment, newest first. */
 export async function listPins(dbx: ScoreDb, assignmentId: string): Promise<ScoreIntentPin[]> {
   return dbx
     .select()
@@ -406,19 +442,18 @@ export async function latestVersionNo(dbx: ScoreDb, assignmentId: string): Promi
 /** One active intent prepared for prompting/staleness checks. */
 export interface PromptReadyIntent {
   intent: ScoreIntent;
-  promptPins: PromptPin[];
   defHash: string;
 }
 
 /**
- * Join active intents with the pins actually sent to the classifier and the
- * resulting defHash. This is THE staleness reference: a rating row is fresh
- * iff its stored def_hash equals this defHash.
+ * Active intents with their defHash. This is THE staleness reference: a rating
+ * row is fresh iff its stored def_hash equals this defHash.
+ *
+ * Labels no longer take part. They are transient corrections that change the
+ * DEFINITION and are then consumed, so the definition already carries whatever
+ * a label taught — and it is also the only thing the judge is shown.
  */
-export function buildPromptReadyIntents(
-  intents: ScoreIntent[],
-  pinsNewestFirst: ScoreIntentPin[]
-): PromptReadyIntent[] {
+export function buildPromptReadyIntents(intents: ScoreIntent[]): PromptReadyIntent[] {
   return intents
     // Only 'intent' rows are judged. The other two kinds are containers, not
     // classification intents, and leaving either in would make the resolver
@@ -430,14 +465,7 @@ export function buildPromptReadyIntents(
     // The title check stays as a belt-and-braces fallback for clones whose
     // holder predates the kind backfill.
     .filter((i) => !i.archived && i.kind === 'intent' && i.title !== PROMPT_HOLDER_TITLE)
-    .map((intent) => {
-      const promptPins = selectPromptPins(
-        pinsNewestFirst
-          .filter((p) => p.intentId === intent.id)
-          .map((p) => ({ verdict: p.verdict as 'in' | 'out', text: p.queryText, reason: p.reason }))
-      );
-      return { intent, promptPins, defHash: intentDefHash(intent.definition, promptPins) };
-    });
+    .map((intent) => ({ intent, defHash: intentDefHash(intent.definition) }));
 }
 
 export interface IntentState {
@@ -454,7 +482,7 @@ export async function loadIntentState(assignmentId: string): Promise<IntentState
     listPins(db, assignmentId),
     latestVersionNo(db, assignmentId),
   ]);
-  return { intents, pins, versionNo, promptReady: buildPromptReadyIntents(intents, pins) };
+  return { intents, pins, versionNo, promptReady: buildPromptReadyIntents(intents) };
 }
 
 /**
@@ -746,14 +774,20 @@ export async function recordConfigVersion(
       parentIntentId: i.parentIntentId,
       position: i.position,
     })),
-    pins: pins.map((p) => ({
-      intentId: p.intentId,
-      messageId: p.messageId,
-      verdict: p.verdict,
-      queryText: p.queryText,
-      reason: p.reason,
-      source: p.source,
-    })),
+    // PENDING corrections only. A consumed row is a marker of teaching already
+    // folded into the definition — the snapshot's own `intents[].definition`
+    // already carries it — so recording it here too made History count the same
+    // teaching twice and a checkout render it as still waiting.
+    pins: pins
+      .filter((p) => p.status !== 'consumed')
+      .map((p) => ({
+        intentId: p.intentId,
+        messageId: p.messageId,
+        verdict: p.verdict,
+        queryText: p.queryText,
+        reason: p.reason,
+        source: p.source,
+      })),
     ratingPromptVersion: INTENT_RATING_VERSION,
     dissectionVersion: DISSECTION_VERSION,
     typeClassifierVersion: TYPE_CLASSIFIER_VERSION,

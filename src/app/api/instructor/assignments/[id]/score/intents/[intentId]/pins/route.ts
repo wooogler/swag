@@ -1,20 +1,23 @@
 /**
- * SCORE v6 — Boundary Examples (pins) for one intent.
+ * SCORE — CORRECTIONS for one intent.
  *
- * POST   {messageId, verdict} → pin an in/out verdict (upsert; re-pinning
- *        flips the verdict and refreshes recency, which moves the pin to the
- *        head of the prompt's latest-first listing).
- * DELETE ?messageId=N → unpin.
- * DELETE ?all=1       → retire every label of this intent (post-refine).
+ * A correction is the instructor overruling the judge on one question. It is
+ * TRANSIENT: it waits as 'pending' until "Update definition" folds it into the
+ * definition text, and is then marked 'consumed' and kept only as a display
+ * marker ("you marked this in at v2").
  *
- * EVERY pin goes into the rating prompt (no cap — selectPromptPins), so any pin
- * change moves the intent's defHash and its ratings read as stale — the UI
- * offers a re-rate.
- * Labeling does NOT record a version: the label set is snapshotted on the next
- * Apply/Save, so the history is one entry per Apply, not one per label.
+ * POST   {messageId, verdict, reason?} → record/replace a correction. Re-labelling
+ *        a question whose earlier correction was consumed returns the row to
+ *        'pending' — you are teaching it again.
+ * DELETE ?messageId=N → withdraw a correction (and its marker).
+ * DELETE ?all=1       → withdraw every correction of this intent.
+ *
+ * A correction does NOT enter any prompt and is NOT part of intentDefHash, so
+ * recording one never makes ratings stale — the DEFINITION it produces does.
+ * Labelling records no version either: the fold that consumes it does.
  */
 import { NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentPins, scoreIntentRatings, scoreIntents } from '@/db/schema';
@@ -23,6 +26,7 @@ import {
   ensureIntentTables,
   getAssignmentMessageText,
   loadIntentState,
+  pickDisplayRatings,
 } from '@/lib/score/intent-store';
 import {
   compileChains,
@@ -37,13 +41,15 @@ const postSchema = z.object({
   messageId: z.number().int().positive(),
   verdict: z.enum(['in', 'out']),
   source: z.enum(['manual', 'ownership']).optional(),
-  /** Optional out-pin rationale — stored and injected into the rating prompt.
-   * Ignored for 'in' pins. */
+  /** Why the instructor overruled the judge. The UI asks only when the verdict
+   * DISAGREES with the current rating; that reason is the fold's main fuel, so
+   * it is kept for BOTH verdicts now (an in-correction's "why yes" generalizes
+   * exactly as an out-correction's "why not" does). */
   reason: z.string().trim().max(400).optional(),
-  /** v7 "send this question here": an IN pin fixes this intent's judgment but
-   * not the routing — an EARLIER set in the same chain still answers first. With
-   * this flag the server also pins the question OUT of every earlier set that
-   * currently matches it, in one transaction, so the question really lands here. */
+  /** v7 "send this question here": an earlier intent in the same chain answers
+   * this question first, and only NARROWING that intent can change it. So this
+   * records a second correction — out, on the intercepting intent — which the
+   * fold turns into an exclusion in ITS definition. Both land in one write. */
   routeHere: z.boolean().optional(),
 });
 
@@ -91,11 +97,15 @@ export async function POST(req: Request, { params }: RouteParams) {
   const set = {
     verdict: body.verdict,
     queryText,
-    // A reason only makes sense for an OUT example; clear it on an 'in' pin so a
-    // question flipped in→out→in never carries a stale rationale.
-    reason: body.verdict === 'out' ? body.reason?.trim() || null : null,
+    reason: body.reason?.trim() || null,
     source: body.source ?? 'manual',
-    createdAt: now, // refresh recency so re-pinned examples lead the prompt
+    createdAt: now,
+    // Recording a correction always makes it PENDING — including over a
+    // consumed marker, which is the "teach it again" case: the definition that
+    // absorbed the last correction evidently did not hold.
+    status: 'pending' as const,
+    consumedAtVersion: null,
+    consumedAt: null,
   };
   // Which earlier sets have to yield for this question to reach this intent.
   // Computed before the write so the whole action lands (or doesn't) at once.
@@ -118,7 +128,13 @@ export async function POST(req: Request, { params }: RouteParams) {
     if (chain && myIndex > 0) {
       const earlier = chain.order.slice(0, myIndex);
       const ratingRows = await db
-        .select({ intentId: scoreIntentRatings.intentId, rating: scoreIntentRatings.rating, defHash: scoreIntentRatings.defHash })
+        .select({
+          messageId: scoreIntentRatings.messageId,
+          intentId: scoreIntentRatings.intentId,
+          rating: scoreIntentRatings.rating,
+          defHash: scoreIntentRatings.defHash,
+          ratedAt: scoreIntentRatings.ratedAt,
+        })
         .from(scoreIntentRatings)
         .where(
           and(
@@ -126,25 +142,27 @@ export async function POST(req: Request, { params }: RouteParams) {
             eq(scoreIntentRatings.messageId, body.messageId)
           )
         );
+      // MUST use the same reading the board shows — pickDisplayRatings, which
+      // falls back to the newest row when no rating carries the current hash.
+      // Filtering to fresh-hash rows only looked equivalent and was not: after
+      // a rating-version bump EVERY row is stale, so this found no interceptor
+      // at all and "send here" silently did nothing, while the row on screen
+      // still read "taken by X". The rule is: if the UI says X takes it, this
+      // acts on X.
       const wanted = new Map(state.promptReady.map((p) => [p.intent.id, p.defHash]));
-      const ratingByIntent = new Map<number, string>();
-      for (const r of ratingRows) {
-        if (wanted.get(r.intentId) === r.defHash) ratingByIntent.set(r.intentId, r.rating);
-      }
-      const pinByIntent = new Map(
-        state.pins.filter((pin) => pin.messageId === body.messageId).map((pin) => [pin.intentId, pin.verdict])
-      );
+      const display = pickDisplayRatings(ratingRows, wanted).get(body.messageId);
+      // Judgment only: an intent intercepts this question iff its RATING
+      // claims it. A pending correction on that intent has changed nothing for
+      // students yet, so treating it as a claim (or a release) would make this
+      // disagree with what the deployed chatbot actually does.
       redirected = earlier.filter((oid) => {
-        const pin = pinByIntent.get(oid);
-        if (pin) return pin === 'in';
-        const rating = ratingByIntent.get(oid);
+        const rating = display?.get(oid)?.row.rating;
         return isRatingLevel(rating) && isIncludedRating(rating);
       });
     }
   }
 
-  // Labeling does NOT record a version — the label set is captured on the next
-  // Apply/Save (its snapshot's pins), so the history stays one entry per Apply.
+  // Recording a correction writes no version — the fold that consumes it does.
   await db.transaction(async (tx) => {
     await tx
       .insert(scoreIntentPins)
@@ -157,9 +175,14 @@ export async function POST(req: Request, { params }: RouteParams) {
       const outSet = {
         verdict: 'out' as const,
         queryText,
-        reason: `Answered by “${intent.title}” instead.`,
+        // Phrased as a boundary the fold can act on: it has to narrow THIS
+        // intent's definition, not merely note where the question went.
+        reason: `Belongs to “${intent.title}” — this intent should not claim it.`,
         source: 'route_here',
         createdAt: now,
+        status: 'pending' as const,
+        consumedAtVersion: null,
+        consumedAt: null,
       };
       await tx
         .insert(scoreIntentPins)
@@ -171,7 +194,20 @@ export async function POST(req: Request, { params }: RouteParams) {
     }
   });
 
-  return NextResponse.json({ verdict: body.verdict, messageId: body.messageId, redirected });
+  const titleById = new Map(
+    (await db
+      .select({ id: scoreIntents.id, title: scoreIntents.title })
+      .from(scoreIntents)
+      .where(and(eq(scoreIntents.assignmentId, id), inArray(scoreIntents.id, redirected.length ? redirected : [-1])))
+    ).map((r) => [r.id, r.title])
+  );
+  return NextResponse.json({
+    verdict: body.verdict,
+    messageId: body.messageId,
+    // Named, not just counted: the instructor needs to see that the OTHER
+    // intent is what changed — that is where the question actually moves from.
+    redirected: redirected.map((rid) => ({ intentId: rid, title: titleById.get(rid) ?? `Intent ${rid}` })),
+  });
 }
 
 export async function DELETE(req: Request, { params }: RouteParams) {
@@ -203,10 +239,35 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
   }
 
-  const rows = await db
-    .delete(scoreIntentPins)
-    .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, messageId)))
-    .returning({ queryText: scoreIntentPins.queryText });
+  // "Send here" is ONE action that writes two halves: the in-correction here and
+  // an out/route_here on each intent that currently answers the question. So
+  // withdrawing it withdraws both — otherwise the other half survives as a
+  // standing instruction to narrow an intent for a redirect that no longer
+  // exists, and it would be folded in silently the next time that intent is
+  // updated. Only PENDING halves are touched: a consumed one is already part of
+  // a definition and is now history, not an instruction.
+  const result = await db.transaction(async (tx) => {
+    const mineRows = await tx
+      .delete(scoreIntentPins)
+      .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, messageId)))
+      .returning({ verdict: scoreIntentPins.verdict });
+    const withdrewIn = mineRows.some((r) => r.verdict === 'in');
+    const paired = withdrewIn
+      ? await tx
+          .delete(scoreIntentPins)
+          .where(
+            and(
+              eq(scoreIntentPins.assignmentId, id),
+              eq(scoreIntentPins.messageId, messageId),
+              eq(scoreIntentPins.source, 'route_here'),
+              eq(scoreIntentPins.status, 'pending'),
+              ne(scoreIntentPins.intentId, intent.id)
+            )
+          )
+          .returning({ intentId: scoreIntentPins.intentId })
+      : [];
+    return { removed: mineRows.length > 0, alsoWithdrawn: paired.map((p) => p.intentId) };
+  });
 
-  return NextResponse.json({ removed: rows.length > 0, messageId });
+  return NextResponse.json({ ...result, messageId });
 }

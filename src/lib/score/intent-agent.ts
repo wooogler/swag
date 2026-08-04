@@ -4,13 +4,15 @@
  *  · generateIntentTitle — a short auto-title on every save, like git's
  *    auto-generated commit subject. Cheap model, never blocks a save
  *    (callers fall back to a definition-head title on failure).
- *  · refineDefinition — rewrite the definition FROM the instructor's labeled
- *    examples (Included/Excluded pins), so the boundary knowledge moves INTO
- *    the definition text. The pins are ALSO injected into the rating prompt
- *    (intent-prompts.ts), so the rewrite is what lets the instructor retire
- *    them afterwards — until then the two teach the boundary in parallel. Uses
- *    the stronger refine model with high reasoning effort; the prompt forces
- *    the model to reason example-by-example BEFORE committing to a rewrite.
+ *  · foldCorrections — rewrite the definition FROM the instructor's pending
+ *    corrections, so the boundary knowledge moves INTO the definition text.
+ *    This is the ONLY path by which a correction reaches the classifier: the
+ *    prompt carries definitions and nothing else, so a correction that this
+ *    rewrite fails to absorb has taught the system nothing. It therefore also
+ *    reports, per correction, WHICH sentence of the rewrite carries it — the
+ *    review modal shows that mapping, and a correction marked "not reflected"
+ *    is an honest admission rather than a silent loss. Uses the stronger model
+ *    with high reasoning effort.
  */
 import { callModel, extractJsonObject } from './classifier';
 import { pinPromptText } from './intents';
@@ -54,47 +56,95 @@ export async function generateIntentTitle(definition: string): Promise<string | 
   }
 }
 
-const REFINE_SYSTEM = `You maintain the intent definitions of SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT DEFINITION describes a category of student requests ("asks to ..."). The labeled examples below are currently handed to the classifier alongside the definition, and the instructor RETIRES them once your rewrite lands — from then on the classifier sees the definition ALONE. So every boundary those labels teach must survive inside the definition text itself.
+const REFINE_SYSTEM = `You maintain the intent definitions of SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT DEFINITION describes a category of student requests ("asks to ...").
 
-The instructor reviewed real student questions and hand-labeled them:
-- INCLUDED: belongs to this intent.
-- EXCLUDED: does NOT belong, even when it looks similar.
+The classifier sees the DEFINITION AND NOTHING ELSE — no examples are passed alongside it. The instructor's corrections below exist only until you fold them in; once your rewrite lands they are discarded. So every boundary a correction teaches must survive inside the definition text itself, or it is lost.
 
-Your task: rewrite the current definition so that, standing alone (without ever seeing these labels), it clearly INCLUDES every included example and clearly EXCLUDES every excluded example.
+Each CORRECTION is the instructor overruling the classifier on one real student question:
+- KEEP: belongs to this intent (the classifier said otherwise or hesitated).
+- DROP: does NOT belong, even though it looks similar.
+Many carry the instructor's own reason. A reason is the general principle behind the verdict — prefer folding in the PRINCIPLE, which covers questions you will never see, over a clause that only recognizes this one question.
 
 Reason through these steps IN ORDER in the "reasoning" field BEFORE writing anything else:
-1. For each INCLUDED example, name the essential action and object of the request (what is asked, of what).
-2. For each EXCLUDED example, name the one property that separates it from the included ones.
-3. State the common thread of the included examples, and the boundary conditions the excluded ones imply.
+1. For each KEEP, name the essential action and object of the request (what is asked, of what).
+2. For each DROP, name the one property that separates it from the kept ones.
+3. State the common thread of the kept corrections, and the boundary conditions the dropped ones imply.
 4. Audit the current definition against steps 1–3: what does it wrongly exclude, wrongly include, or leave vague?
 
 Then write the new definition:
 - One or two sentences, starting with "asks" (keep the current definition's style).
-- Generalize the common thread; make exclusions explicit as boundary clauses (e.g. "— but not when the student only ...").
-- Self-contained and concrete: no "etc.", no reference to "the examples", never quote an example verbatim.
-- Preserve the current definition's scope except where the labels contradict it.
-- If the labels do not actually require a change, return the current definition unchanged and say so in the reasoning.
+- Generalize; make exclusions explicit as boundary clauses (e.g. "— but not when the student only ...").
+- Self-contained and concrete: no "etc.", no reference to "the corrections", never quote a student question verbatim.
+- Preserve the current definition's scope except where the corrections contradict it.
+- Do not accumulate one clause per correction. Merge principles that overlap; a definition that reads like a list of special cases has failed.
+- If the corrections require no change, return the current definition unchanged and say so.
+
+Also write a SUMMARY for the instructor — one or two plain sentences naming what the definition now covers or excludes that it did not before, in their words. No step numbers, no correction ids, no meta-talk about the rewrite process. If nothing changed, say so.
+
+Finally, report the OUTCOME of each correction by its id, honestly:
+- "reflected" + the exact substring of YOUR NEW definition that carries it (quote it verbatim from the new text).
+- "already" if the current definition already handled it and needed no change.
+- "not_reflected" if you could not fold it in without breaking the definition — say why in note. Never claim a correction is reflected when it is not.
 
 Also return a short TITLE: an imperative noun phrase of at most 5 words, like a git commit subject.`;
 
 const REFINE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['reasoning', 'definition', 'title'],
+  required: ['reasoning', 'summary', 'definition', 'title', 'outcomes'],
   properties: {
     reasoning: {
       type: 'string',
-      description: 'steps 1-4, compact (~150 words max), written before the definition',
+      description:
+        'steps 1-4, compact (~150 words max), written before the definition. Internal working — never shown to the instructor.',
+    },
+    summary: {
+      type: 'string',
+      description: 'one or two plain sentences for the instructor: what the definition now covers or excludes',
     },
     definition: { type: 'string', description: 'the rewritten self-contained definition' },
     title: { type: 'string', description: 'at most 5 words, no trailing period' },
+    outcomes: {
+      type: 'array',
+      description: 'one entry per correction id given, same ids',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'outcome', 'span', 'note'],
+        properties: {
+          id: { type: 'number' },
+          outcome: { type: 'string', enum: ['reflected', 'already', 'not_reflected'] },
+          span: {
+            type: 'string',
+            description:
+              'verbatim substring of the NEW definition carrying this correction; empty string unless outcome is "reflected"',
+          },
+          note: { type: 'string', description: 'one short clause; required when not_reflected' },
+        },
+      },
+    },
   },
 };
 
+/** What the fold did with one correction — the review modal's ①② mapping. */
+export interface CorrectionOutcome {
+  id: number;
+  outcome: 'reflected' | 'already' | 'not_reflected';
+  /** Substring of the proposed definition carrying it — verified to occur. */
+  span: string | null;
+  note: string | null;
+}
+
 export interface RefineResult {
+  /** The model's own 4-step analysis. A quality device (reason before writing),
+   * NOT display copy — showing it raw put a numbered scratchpad in front of the
+   * instructor. Kept for debugging; the UI shows `summary`. */
   reasoning: string;
+  /** One or two sentences, written for the instructor. */
+  summary: string;
   definition: string;
   title: string | null;
+  outcomes: CorrectionOutcome[];
 }
 
 /**
@@ -102,17 +152,32 @@ export interface RefineResult {
  * failure (the route surfaces a clean error; nothing is persisted here —
  * the result is a DRAFT the instructor reviews and saves).
  */
-export async function refineDefinition(args: {
+export interface FoldCorrection {
+  id: number;
+  verdict: 'in' | 'out';
+  queryText: string;
+  /** The instructor's own reason, when they gave one. */
+  reason?: string | null;
+}
+
+export async function foldCorrections(args: {
   definition: string;
-  included: string[];
-  excluded: string[];
+  corrections: FoldCorrection[];
 }): Promise<RefineResult> {
-  const list = (items: string[]) =>
-    items.length > 0 ? items.map((t) => `- "${pinPromptText(t)}"`).join('\n') : '(none)';
+  const render = (verdict: 'in' | 'out') => {
+    const rows = args.corrections.filter((c) => c.verdict === verdict);
+    if (rows.length === 0) return '(none)';
+    return rows
+      .map((c) => {
+        const why = c.reason?.trim();
+        return `- [id ${c.id}] "${pinPromptText(c.queryText)}"${why ? `\n    instructor's reason: ${why}` : ''}`;
+      })
+      .join('\n');
+  };
   const user = [
     `CURRENT DEFINITION:\n${args.definition.trim()}`,
-    `INCLUDED examples (instructor-confirmed as THIS intent):\n${list(args.included)}`,
-    `EXCLUDED examples (instructor-confirmed as NOT this intent):\n${list(args.excluded)}`,
+    `KEEP corrections (instructor says these DO belong):\n${render('in')}`,
+    `DROP corrections (instructor says these do NOT belong):\n${render('out')}`,
   ].join('\n\n');
 
   const raw = await callModel(
@@ -131,9 +196,48 @@ export async function refineDefinition(args: {
     throw new Error('refine produced no usable definition');
   }
   const title = typeof parsed.title === 'string' ? parsed.title.trim().replace(/\.$/, '') : '';
+
+  // VERIFY the model's own mapping rather than trusting it: a "reflected" span
+  // that does not occur in the definition it just wrote is a hallucinated
+  // receipt, and the modal would use it to underline text that carries nothing.
+  // Downgrade those to 'not_reflected' — the instructor then sees an honest
+  // "couldn't fold this in" and can edit the text themselves.
+  const given = new Map(args.corrections.map((c) => [c.id, c]));
+  const rawOutcomes = Array.isArray(parsed.outcomes) ? parsed.outcomes : [];
+  const seen = new Set<number>();
+  const outcomes: CorrectionOutcome[] = [];
+  for (const o of rawOutcomes) {
+    const row = (o ?? {}) as Record<string, unknown>;
+    const id = typeof row.id === 'number' ? row.id : NaN;
+    if (!given.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    const span = typeof row.span === 'string' ? row.span.trim() : '';
+    const claimed = row.outcome === 'reflected' || row.outcome === 'already' ? row.outcome : 'not_reflected';
+    const spanHolds = span.length > 0 && definition.includes(span);
+    const note = typeof row.note === 'string' ? row.note.trim() : '';
+    outcomes.push(
+      claimed === 'reflected' && !spanHolds
+        ? { id, outcome: 'not_reflected', span: null, note: note || 'the rewrite does not visibly carry this' }
+        : {
+            id,
+            outcome: claimed,
+            span: claimed === 'reflected' ? span : null,
+            note: note || null,
+          }
+    );
+  }
+  // A correction the model simply omitted is unaccounted for, not absorbed.
+  for (const c of args.corrections) {
+    if (!seen.has(c.id)) {
+      outcomes.push({ id: c.id, outcome: 'not_reflected', span: null, note: 'not addressed by the rewrite' });
+    }
+  }
+
   return {
     reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning.trim() : '',
+    summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
     definition,
     title: title.length > 0 && title.length <= 120 ? title : null,
+    outcomes,
   };
 }

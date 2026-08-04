@@ -20,7 +20,6 @@ import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { cosineSimilarity, getQueryEmbeddings } from '@/lib/score/embeddings';
 import { ensureIntentTables, loadIntentState, pickDisplayRatings } from '@/lib/score/intent-store';
 import {
-  applyPinOverrides,
   compileChains,
   isRatingLevel,
   isScoreQueryType,
@@ -116,11 +115,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const group = records.filter((rec) => {
     // Out-of-type (or not-yet-typed) messages never walk this chain.
     if (typeByMessage.get(rec.messageId) !== intent.type) return false;
-    const eff = applyPinOverrides(
-      ratingsByMessage.get(rec.messageId) ?? new Map(),
-      pinsByMessage.get(rec.messageId) ?? new Map()
-    );
-    const res = resolveRoute(myChain, eff);
+    // Judgment alone — the deployed chatbot routes from definitions, so a
+    // correction must not make this group show questions the runtime would
+    // send elsewhere.
+    const res = resolveRoute(myChain, ratingsByMessage.get(rec.messageId) ?? new Map());
     return res.kind === 'matched' && res.intentId === intentId;
   });
 

@@ -25,7 +25,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowUp,
   Eye,
   HelpCircle,
@@ -43,6 +42,7 @@ import {
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
+import { WorkbenchTopBar } from './workbench-shared';
 import ChatMessages from '@/components/chat/ChatMessages';
 import { FEEDBACK_CHIPS } from '@/lib/score/feedback-chips';
 import { seedRuleVersionName } from '@/lib/score/intents';
@@ -850,40 +850,36 @@ export default function RuleWorkbench({
 
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
-      {/* TOP BAR */}
-      <div className="shrink-0 flex items-center gap-3">
-        <button
-          onClick={() => onClose(savedAnyRef.current)}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-          title="Back to the board"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" /> Board
-        </button>
-        <h2 className="text-sm font-semibold truncate">
-          {promptMode
+      {/* TOP BAR — rendered into the page header (see StudioShell). */}
+      <WorkbenchTopBar
+        title={
+          promptMode
             ? scopeLabel
               ? `Revise rule — ${scopeLabel}`
               : 'Revise the system prompt'
-            : `Revise rule — ${intent.title}`}
-        </h2>
-        {/* Preview the SAVED rule across many questions before deploying —
-            SCORE across the intent's questions, baseline across the whole log
-            (10 at a time). Review-only; edits happen on the left, deploy on the board. */}
-        <button
-          onClick={() => setPreviewOpen(true)}
-          disabled={boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving}
-          className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-          title={
-            boxEdited
-              ? 'Apply your edit first, then Preview'
-              : promptMode
-                ? 'Preview these rules across the log (10 questions at a time)'
-                : "Preview this rule across the intent's questions"
-          }
-        >
-          <Eye className="w-3.5 h-3.5" /> Preview
-        </button>
-      </div>
+            : `Revise rule — ${intent.title}`
+        }
+        onBack={() => onClose(savedAnyRef.current)}
+        actions={
+          /* Preview the SAVED rule across many questions before deploying —
+             SCORE across the intent's questions, baseline across the whole log
+             (10 at a time). Review-only; edits happen on the left, deploy on the board. */
+          <button
+            onClick={() => setPreviewOpen(true)}
+            disabled={boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+            title={
+              boxEdited
+                ? 'Apply your edit first, then Preview'
+                : promptMode
+                  ? 'Preview these rules across the log (10 questions at a time)'
+                  : "Preview this rule across the intent's questions"
+            }
+          >
+            <Eye className="w-3.5 h-3.5" /> Preview
+          </button>
+        }
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)_minmax(300px,380px)] gap-4 flex-1 min-h-0">
         {/* LEFT — WHEN (read-only) · THEN (editable rule) · rule history */}

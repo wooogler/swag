@@ -7,8 +7,8 @@
  * runtime is a design invariant (§1.9).
  *
  * Prompt-cache shape: the system prompt carries the shared instructions plus
- * the intent definitions/pins — identical for every question rated against
- * the same intent set, so OpenAI prompt caching applies across a batch. The
+ * the intent definitions — identical for every question rated against the
+ * same intent set, so OpenAI prompt caching applies across a batch. The
  * user message is the per-question variable part (buildQueryContent from
  * prompts.ts, i.e. prior context + the student query).
  *
@@ -16,18 +16,11 @@
  * INTENT_RATING_VERSION (ratings) or DISSECTION_VERSION (dissection) in
  * intents.ts, or cached rows silently stay marked fresh.
  */
-import {
-  MATERIAL_KINDS,
-  pinPromptText,
-  PROMPT_RATING_LEVELS,
-  type PromptPin,
-} from './intents';
+import { MATERIAL_KINDS, PROMPT_RATING_LEVELS } from './intents';
 
 export interface PromptIntent {
   id: number;
   definition: string;
-  /** Pins actually sent, in prompt order — pass through selectPromptPins(). */
-  pins: PromptPin[];
 }
 
 /** Ratings are keyed "intent_<id>" in the structured output so the schema
@@ -41,30 +34,18 @@ export function parseIntentKey(key: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-// Pins render via pinPromptText so the prompt string and intentDefHash input
-// are byte-identical (see intents.ts).
-function quote(text: string): string {
-  return `"${pinPromptText(text)}"`;
-}
-
+/**
+ * One intent, as the judge sees it: its DEFINITION and nothing else.
+ *
+ * Instructor labels used to ride along here as Included/Excluded examples. They
+ * no longer do — a label is now a transient CORRECTION that the "Update
+ * definition" step folds into this text and then consumes, so the definition on
+ * screen is the whole of what the classifier reads. That is the point: an
+ * intent whose behaviour came from invisible examples could not be debugged by
+ * reading it.
+ */
 function intentBlock(intent: PromptIntent): string {
-  const lines = [`### ${intentKey(intent.id)}`, `Definition: ${intent.definition.trim()}`];
-  const ins = intent.pins.filter((p) => p.verdict === 'in');
-  const outs = intent.pins.filter((p) => p.verdict === 'out');
-  if (ins.length > 0) {
-    lines.push('Included examples (instructor-confirmed as THIS intent):');
-    for (const p of ins) lines.push(`- ${quote(p.text)}`);
-  }
-  if (outs.length > 0) {
-    lines.push('Excluded examples (instructor-confirmed as NOT this intent):');
-    for (const p of outs) {
-      // The instructor's reason (when given) follows the quote — matches the
-      // trimmed form intentDefHash hashes, so prompt and hash stay byte-identical.
-      const reason = p.reason?.trim();
-      lines.push(reason ? `- ${quote(p.text)} — why not: ${reason}` : `- ${quote(p.text)}`);
-    }
-  }
-  return lines.join('\n');
+  return `### ${intentKey(intent.id)}\nDefinition: ${intent.definition.trim()}`;
 }
 
 const DISSECTION_INSTRUCTIONS = `DISSECTION — split the message into REQUEST(s) and MATERIAL:
@@ -85,8 +66,9 @@ const RATING_INSTRUCTIONS = `RATINGS — rate the student's REQUEST(s) against E
 Rules:
 - Judge only the request(s). Pasted material and the prior-context block only disambiguate what the request operates on — never rate them.
 - For every intent, write the rationale FIRST (10 words or fewer), then the rating. The rationale must cite what the request asks for, not restate the intent.
-- Instructor-confirmed examples mark an intent's boundary: "Included" examples belong to it, "Excluded" examples do not. Generalize from them when the definition alone is ambiguous.
-- Intents may sound related; rate each strictly by ITS OWN definition and examples. Do not balance ratings across intents.
+- The definition is the WHOLE of each intent: judge by its text alone, including any examples and exclusions written into it. There is no other source of truth.
+- Intents may sound related; rate each strictly by ITS OWN definition. Do not balance ratings across intents.
+- A request that restates one of an intent's definition examples — near-verbatim or a trivial variation — is clearly_in for THAT intent: an example in the definition is the instructor naming that exact ask. This never softens other intents' ratings: several intents may each be clearly_in on the same request, and "several fit" is NOT doubt about any one of them.
 - If the message contains several requests, rate an intent by whether ANY of its requests falls under it.
 - Pasted material is NEVER a request. If the message is bare pasted material, or the student's only typed text is a lead-in to pasted material with no instruction of its own ("Here is the prompt:", "This is my essay:", "This is the full prompt: …"), do NOT invent an implicit request from that material — rate every intent probably_out or clearly_out. (A pasted assignment prompt is context; it is not a "write the essay" request.) Only a genuine short imperative that refers to the prior context ("make it longer", "keep going", "shorten it") is a real implied request — rate that.
 - If genuinely torn, use probably_in or probably_out — reserve clearly_* for cases with no real doubt.`;

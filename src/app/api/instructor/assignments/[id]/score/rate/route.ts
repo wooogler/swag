@@ -29,7 +29,7 @@ import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
 import { classifyMessageType } from '@/lib/score/type-classifier';
-import { computeDissections } from '@/lib/score/dissect';
+import { computeDissections, hasEditorEventLog } from '@/lib/score/dissect';
 import {
   ensureIntentTables,
   loadIntentState,
@@ -40,6 +40,7 @@ import {
   TYPE_CLASSIFIER_VERSION,
   type DissectionResult,
   type MaterialKind,
+  type MaterialSpan,
 } from '@/lib/score/intents';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
@@ -66,6 +67,12 @@ const bodySchema = z.object({
   force: z.boolean().optional(),
   // Scope the run (and force) to these intents — e.g. the New Intent flow.
   intentIds: z.array(z.number().int().positive()).max(50).optional(),
+  // Scope the run to these messages — the workbench's two-phase Apply rates
+  // the queries the instructor is LOOKING AT first (a nested intent's
+  // enclosing scope), then sweeps the rest in the background without them.
+  // total/rated/remaining then describe only this subset, so the progress
+  // bar is the visible scope's bar.
+  messageIds: z.array(z.number().int().positive()).max(5000).optional(),
   // Deterministic parallel sharding: this POST only handles messages whose
   // (messageId % shardCount) === shardIndex. The client dispatches shardCount
   // POSTs at once so the whole log is rated in one wave. Defaults = no shard.
@@ -108,14 +115,20 @@ async function loadRateStatus(
   assignmentId: string,
   promptReady: PromptReadyIntent[],
   scopedIntentIds: number[] | null,
-  shard: Shard = NO_SHARD
+  shard: Shard = NO_SHARD,
+  messageIds: number[] | null = null
 ) {
   const allRecords = await getQueryRecords(assignmentId);
   // Restrict to this shard's disjoint slice so parallel POSTs never rate the
   // same message twice; `total`/`remaining` then reflect the shard (the client
-  // sums across shards for the aggregate progress bar).
-  const records =
-    shard.count > 1 ? allRecords.filter((r) => inShard(r.messageId, shard)) : allRecords;
+  // sums across shards for the aggregate progress bar). A message scope cuts
+  // further: the run covers (and counts) only those messages.
+  const msgScope = messageIds ? new Set(messageIds) : null;
+  const records = allRecords.filter(
+    (r) =>
+      (shard.count <= 1 || inShard(r.messageId, shard)) &&
+      (msgScope === null || msgScope.has(r.messageId))
+  );
   const wanted = scopedIntentIds
     ? promptReady.filter((p) => scopedIntentIds.includes(p.intent.id))
     : promptReady;
@@ -123,7 +136,7 @@ async function loadRateStatus(
   // would churn the whole log for a viewer nicety). Type work still applies.
   const noIntents = wanted.length === 0;
 
-  const [ratingRows, dissectionRows, typeRows] = await Promise.all([
+  const [ratingRows, dissectionRows, typeRows, ownsEventLog] = await Promise.all([
     noIntents
       ? Promise.resolve([])
       : db
@@ -146,6 +159,7 @@ async function loadRateStatus(
       })
       .from(scoreQueryTypes)
       .where(eq(scoreQueryTypes.assignmentId, assignmentId)),
+    hasEditorEventLog(assignmentId),
   ]);
 
   // Hash-keyed history: a (message, intent) can hold rows for several specs.
@@ -210,8 +224,17 @@ async function loadRateStatus(
     // A message being typed gets its dissection first: the split is deterministic
     // (no LLM cost) and it materially steers the type call, whose verdict is then
     // cached for the message's lifetime.
+    //
+    // `ownsEventLog` is the hard gate: a study clone holds the master's cached
+    // dissections but none of the editor events they were reconstructed from, so
+    // re-running the dissector there would find no pasted material at all and
+    // overwrite a good split with an empty one. A clone's rows are therefore
+    // final across DISSECTION_VERSION bumps — exactly like its cloned query
+    // types — and the improvement reaches participants by re-copying from the
+    // re-dissected master (scripts/score/redissect.ts).
     const needsDissection =
       dissectionStale &&
+      ownsEventLog &&
       (needsType || (!noIntents && (scopedIntentIds ? staleIntents.length > 0 : true)));
     if (staleIntents.length > 0 || needsDissection || needsType) {
       jobs.push({ record, staleIntents, needsDissection, needsType });
@@ -342,7 +365,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Server config wins: the rating model comes from SCORE_RATING_MODEL (env),
   // not the client — the picker is gone and body.model is now vestigial.
   const model = getDefaultScoreModel();
-  const status = await loadRateStatus(id, state.promptReady, scoped, shard);
+  const status = await loadRateStatus(id, state.promptReady, scoped, shard, body.messageIds ?? null);
 
   // Call-bounded batch: 1 call per message job (always at least one job so we
   // make progress even when a single job exceeds the leftover budget).
@@ -363,6 +386,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       const values = {
         materialKinds: d.materialKinds,
         requests: d.requests,
+        materials: d.materials,
         version: DISSECTION_VERSION,
         rawResponse: null,
         model: 'deterministic',
@@ -421,6 +445,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         messageId: scoreDissections.messageId,
         materialKinds: scoreDissections.materialKinds,
         requests: scoreDissections.requests,
+        materials: scoreDissections.materials,
       })
       .from(scoreDissections)
       .where(
@@ -433,6 +458,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       dissectionByMsg.set(s.messageId, {
         materialKinds: (s.materialKinds ?? []) as MaterialKind[],
         requests: (s.requests ?? []) as string[],
+        materials: (Array.isArray(s.materials) ? s.materials : []) as MaterialSpan[],
       });
     }
   }
@@ -491,7 +517,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             intents: job.staleIntents.map((p) => ({
               id: p.intent.id,
               definition: p.intent.definition,
-              pins: p.promptPins,
             })),
             includeDissection: false,
             dissection: dissectionByMsg.get(rec.messageId) ?? null,
@@ -552,7 +577,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const succeeded = progressed.size;
   failed = batch.length - succeeded;
 
-  const after = await loadRateStatus(id, state.promptReady, scoped, shard);
+  const after = await loadRateStatus(id, state.promptReady, scoped, shard, body.messageIds ?? null);
   if (batch.length > 0) await logStudyEvent(id, 'rating_run', { condition: 'score', processed: batch.length, intentIds: scoped ?? null });
   return NextResponse.json({
     processed: batch.length,

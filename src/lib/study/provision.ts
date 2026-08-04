@@ -241,8 +241,8 @@ async function cloneStarterSet(
   // 10) score_dissections — message-scoped.
   await tx.execute(sql`
     INSERT INTO score_dissections
-      (assignment_id, message_id, material_kinds, requests, version, raw_response, model, created_at)
-    SELECT ${newAssignmentId}, mm.new_id, d.material_kinds, d.requests, d.version, d.raw_response,
+      (assignment_id, message_id, material_kinds, requests, materials, version, raw_response, model, created_at)
+    SELECT ${newAssignmentId}, mm.new_id, d.material_kinds, d.requests, d.materials, d.version, d.raw_response,
            d.model, d.created_at
     FROM score_dissections d JOIN _msg_map mm ON mm.old_id = d.message_id
     WHERE d.assignment_id = ${sourceAssignmentId}
@@ -290,8 +290,10 @@ async function cloneStarterSet(
   //     a reordered tiebreak would diverge the hash and needlessly re-rate.
   await tx.execute(sql`
     INSERT INTO score_intent_pins
-      (assignment_id, intent_id, message_id, verdict, query_text, source, created_at)
-    SELECT ${newAssignmentId}, im.new_id, mm.new_id, p.verdict, p.query_text, p.source, p.created_at
+      (assignment_id, intent_id, message_id, verdict, query_text, reason, source,
+       status, consumed_at_version, consumed_at, created_at)
+    SELECT ${newAssignmentId}, im.new_id, mm.new_id, p.verdict, p.query_text, p.reason, p.source,
+           p.status, p.consumed_at_version, p.consumed_at, p.created_at
     FROM score_intent_pins p
     JOIN _intent_map im ON im.old_id = p.intent_id
     JOIN _msg_map    mm ON mm.old_id = p.message_id

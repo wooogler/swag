@@ -57,7 +57,7 @@ export async function probeBatch(
   description: string,
   limit?: number
 ): Promise<ProbeResult> {
-  const defHash = intentDefHash(description, []);
+  const defHash = intentDefHash(description);
   const records = await getQueryRecords(assignmentId);
 
   const cached = await db
@@ -100,7 +100,7 @@ export async function probeBatch(
               queryText: rec.queryText,
               prevQueryText: rec.prevQueryText,
               prevResponseText: rec.prevResponseText,
-              intents: [{ id: PROBE_INTENT_ID, definition: description, pins: [] }],
+              intents: [{ id: PROBE_INTENT_ID, definition: description }],
               includeDissection: false,
               dissection: dByMsg.get(rec.messageId) ?? null,
               model,
@@ -142,12 +142,12 @@ export async function listPresets(assignmentId: string): Promise<{ intentId: num
 }
 
 /** A preset's clearly_in — read straight from the copied intent ratings (instant).
- * Template intents carry no pins in the study clones, so their current defHash is
- * intentDefHash(definition, []). */
+ * A template's defHash is intentDefHash(definition) — the rating version plus
+ * the definition, nothing else. */
 export async function getPresetClearlyIn(assignmentId: string, intentId: number): Promise<ClearlyInRow[]> {
   const intent = await db.query.scoreIntents.findFirst({ where: eq(scoreIntents.id, intentId) });
   if (!intent || intent.assignmentId !== assignmentId) return [];
-  const defHash = intentDefHash(intent.definition, []);
+  const defHash = intentDefHash(intent.definition);
   const rows = await db
     .select({ messageId: scoreIntentRatings.messageId, queryText: chatMessages.content })
     .from(scoreIntentRatings)

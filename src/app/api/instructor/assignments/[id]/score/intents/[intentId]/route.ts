@@ -14,7 +14,7 @@
  *          (versions touching another intent too) are left intact.
  */
 import { NextResponse } from 'next/server';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
 import {
@@ -31,7 +31,6 @@ import { SCORE_QUERY_TYPES } from '@/lib/score/intents';
 import {
   ensureIntentTables,
   recordConfigVersion,
-  type IntentConfigSnapshot,
   type VersionSummary,
 } from '@/lib/score/intent-store';
 
@@ -55,17 +54,24 @@ const patchSchema = z
     // unreachable and invisible.
     type: z.enum(SCORE_QUERY_TYPES).optional(),
     parentIntentId: z.number().int().positive().nullable().optional(),
-    // Auto-generate the title from the definition on save (git-commit style).
-    // Ignored when an explicit title is sent.
+    // Auto-generate the title from the definition on save (git-commit style)
+    // and APPLY it. Ignored when an explicit title is sent. Reserved for an
+    // intent that has no title of its own yet — see suggestTitle.
     autoTitle: z.boolean().optional(),
+    // Generate the same title but return it as a SUGGESTION, leaving the stored
+    // title alone. Renaming an intent the instructor already named makes a
+    // definition tweak read as "a new intent appeared", so refining a titled
+    // intent offers the new name instead of taking it.
+    suggestTitle: z.boolean().optional(),
     // false → update WITHOUT a version entry. Default true keeps callers versioned.
     recordVersion: z.boolean().optional(),
     // Record as a MINOR version (an Apply — revertible but not a Save; the
     // history accordion folds these under their preceding major).
     minorVersion: z.boolean().optional(),
-    // Version rollback: replace this intent's pins with the set snapshotted in
-    // that config version (order preserved so the prompt/defHash reproduce
-    // byte-identically → the stored ratings for that spec re-attach instantly).
+    // LEGACY, accepted and ignored. Restoring a version used to restore its pin
+    // set because pins were part of the spec; the spec is the definition alone
+    // now, so a rollback that also rewound corrections would delete the markers
+    // recording what the instructor taught.
     pinsFromVersion: z.number().int().positive().optional(),
     // Save-time counts from the modal, recorded on the version for history.
     stats: z
@@ -142,11 +148,17 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   // Auto-title (git-commit style): regenerate from the definition on save.
   // Best-effort — a failed LLM call must never fail the save.
   let autoTitled = false;
-  if (body.autoTitle && body.title === undefined && isOpenAIConfigured()) {
+  let titleSuggestion: string | null = null;
+  if ((body.autoTitle || body.suggestTitle) && body.title === undefined && isOpenAIConfigured()) {
     const generated = await generateIntentTitle(body.definition ?? existing.definition);
     if (generated) {
-      set.title = generated;
-      autoTitled = true;
+      if (body.autoTitle) {
+        set.title = generated;
+        autoTitled = true;
+      } else if (generated !== existing.title) {
+        // Offered, not taken — the caller decides whether to adopt it.
+        titleSuggestion = generated;
+      }
     }
   }
 
@@ -181,51 +193,12 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     stats: body.stats,
   };
 
-  // Version rollback: pins are part of the spec, so restoring a version means
-  // restoring its pin set too. Load the snapshot up front (outside the tx).
-  let rollbackPins: { messageId: number; verdict: string; queryText: string; source: string }[] | null =
-    null;
-  if (body.pinsFromVersion !== undefined) {
-    const versionRows = await db
-      .select({ snapshot: scoreConfigVersions.snapshot })
-      .from(scoreConfigVersions)
-      .where(
-        and(
-          eq(scoreConfigVersions.assignmentId, id),
-          eq(scoreConfigVersions.versionNo, body.pinsFromVersion)
-        )
-      );
-    const snapshot = versionRows[0]?.snapshot as IntentConfigSnapshot | undefined;
-    if (!snapshot) return NextResponse.json({ error: 'version_not_found' }, { status: 404 });
-    rollbackPins = (snapshot.pins ?? []).filter((p) => p.intentId === intentId);
-  }
-
   const result = await db.transaction(async (tx) => {
     const rows = await tx
       .update(scoreIntents)
       .set(set)
       .where(and(eq(scoreIntents.id, intentId), eq(scoreIntents.assignmentId, id)))
       .returning();
-    if (rollbackPins !== null) {
-      await tx.delete(scoreIntentPins).where(eq(scoreIntentPins.intentId, intentId));
-      if (rollbackPins.length > 0) {
-        // Snapshot pins are stored newest-first; stagger createdAt descending so
-        // the restored recency order (and thus the prompt-pin selection and
-        // defHash) reproduces the original spec byte-for-byte.
-        const base = Date.now();
-        await tx.insert(scoreIntentPins).values(
-          rollbackPins.map((p, i) => ({
-            assignmentId: id,
-            intentId,
-            messageId: p.messageId,
-            verdict: p.verdict,
-            queryText: p.queryText,
-            source: p.source ?? 'manual',
-            createdAt: new Date(base - i * 1000),
-          }))
-        );
-      }
-    }
     const versionNo =
       body.recordVersion === false
         ? null
@@ -243,6 +216,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
       updatedAt: result.intent.updatedAt.toISOString(),
     },
     versionNo: result.versionNo,
+    titleSuggestion,
   });
 }
 
@@ -263,45 +237,72 @@ export async function DELETE(req: Request, { params }: RouteParams) {
 
   // Hard delete: irreversibly remove the intent and all rows referencing it.
   // No version is recorded — the intent is gone, so a snapshot pointing at it
-  // would be meaningless. Children go first (FK: ratings/pins/links → intent).
+  // would be meaningless. The delete takes the whole SUBTREE with it: a subset
+  // only ever answers within its enclosing set (v7 §nesting), so orphaning
+  // children would silently WIDEN their scope to the whole type — deleting a
+  // set means deleting the refinements that lived inside it.
   const mode = new URL(req.url).searchParams.get('mode');
   if (mode === 'purge') {
+    // Collect the subtree ids (assignment-scoped; parent_intent_id has no FK).
+    const all = await db
+      .select({ id: scoreIntents.id, parentIntentId: scoreIntents.parentIntentId })
+      .from(scoreIntents)
+      .where(eq(scoreIntents.assignmentId, id));
+    const childrenOf = new Map<number, number[]>();
+    for (const row of all) {
+      if (row.parentIntentId === null) continue;
+      const list = childrenOf.get(row.parentIntentId);
+      if (list) list.push(row.id);
+      else childrenOf.set(row.parentIntentId, [row.id]);
+    }
+    const ids: number[] = [];
+    const queue = [intentId];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      if (ids.includes(cur)) continue;
+      ids.push(cur);
+      queue.push(...(childrenOf.get(cur) ?? []));
+    }
+
     const deleted = await db.transaction(async (tx) => {
       const ratings = (
         await tx
           .delete(scoreIntentRatings)
-          .where(and(eq(scoreIntentRatings.assignmentId, id), eq(scoreIntentRatings.intentId, intentId)))
+          .where(and(eq(scoreIntentRatings.assignmentId, id), inArray(scoreIntentRatings.intentId, ids)))
           .returning({ id: scoreIntentRatings.id })
       ).length;
       const pins = (
         await tx
           .delete(scoreIntentPins)
-          .where(and(eq(scoreIntentPins.assignmentId, id), eq(scoreIntentPins.intentId, intentId)))
+          .where(and(eq(scoreIntentPins.assignmentId, id), inArray(scoreIntentPins.intentId, ids)))
           .returning({ id: scoreIntentPins.id })
       ).length;
       const previews = (
         await tx
           .delete(scoreRulePreviews)
-          .where(and(eq(scoreRulePreviews.assignmentId, id), eq(scoreRulePreviews.intentId, intentId)))
+          .where(and(eq(scoreRulePreviews.assignmentId, id), inArray(scoreRulePreviews.intentId, ids)))
           .returning({ id: scoreRulePreviews.id })
       ).length;
-      // Only versions SOLELY about this intent — shared entries (e.g. an
+      // Only versions SOLELY about one deleted intent — shared entries (e.g. an
       // ownership decision touching two intents) keep the other intent's history.
-      const versions = (
-        await tx
-          .delete(scoreConfigVersions)
-          .where(
-            and(
-              eq(scoreConfigVersions.assignmentId, id),
-              sql`${scoreConfigVersions.summary}->'intentIds' = ${JSON.stringify([intentId])}::jsonb`
+      let versions = 0;
+      for (const iid of ids) {
+        versions += (
+          await tx
+            .delete(scoreConfigVersions)
+            .where(
+              and(
+                eq(scoreConfigVersions.assignmentId, id),
+                sql`${scoreConfigVersions.summary}->'intentIds' = ${JSON.stringify([iid])}::jsonb`
+              )
             )
-          )
-          .returning({ id: scoreConfigVersions.id })
-      ).length;
+            .returning({ id: scoreConfigVersions.id })
+        ).length;
+      }
       await tx
         .delete(scoreIntents)
-        .where(and(eq(scoreIntents.id, intentId), eq(scoreIntents.assignmentId, id)));
-      return { ratings, pins, previews, versions };
+        .where(and(eq(scoreIntents.assignmentId, id), inArray(scoreIntents.id, ids)));
+      return { ratings, pins, previews, versions, intents: ids.length };
     });
     return NextResponse.json({ purged: true, deleted });
   }

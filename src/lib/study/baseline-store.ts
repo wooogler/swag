@@ -82,7 +82,7 @@ export async function createBaselineSearch(
   assignmentId: string,
   description: string
 ): Promise<{ id: string; defHash: string }> {
-  const defHash = intentDefHash(description, []);
+  const defHash = intentDefHash(description);
   const id = randomUUID();
   await db.insert(baselineSearches).values({ id, assignmentId, description, defHash, createdAt: new Date() });
   return { id, defHash };
