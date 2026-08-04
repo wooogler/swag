@@ -229,7 +229,7 @@ export default function ProposalPreviewModal({
                     }}
                     disabled={busy}
                     className="w-full inline-flex items-center justify-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                    title="Record this variant as the next step (nothing is saved to the live rule until Save)"
+                    title="Record this variant as the next step (the live rule changes only when you Apply)"
                   >
                     {busy && isChosen ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />

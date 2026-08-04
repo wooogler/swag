@@ -120,7 +120,7 @@ function reconstructChat(list: RuleVersion[]): Omit<ChatEntry, 'id'>[] {
     } else if (!v.minor) {
       entries.push({
         role: 'event',
-        text: `Saved${v.name ? ` · ${v.name}` : ''}`,
+        text: `Applied${v.name ? ` · ${v.name}` : ''}`,
         versionNo: v.versionNo,
       });
     } else {
@@ -1056,7 +1056,7 @@ export default function RuleWorkbench({
           // The timeline's Save milestone — same row reconstruction produces.
           pushChat({
             role: 'event',
-            text: `Saved${latest.name ? ` · ${latest.name}` : ''}`,
+            text: `Applied${latest.name ? ` · ${latest.name}` : ''}`,
             versionNo: saved.versionNo,
           });
         }
@@ -1255,7 +1255,7 @@ export default function RuleWorkbench({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
               title={
                 boxEdited
-                  ? 'Apply your edit first, then Preview'
+                  ? 'Try your edit first, then Preview'
                   : 'Preview these rules across the log (10 questions at a time)'
               }
             >
@@ -1325,7 +1325,7 @@ export default function RuleWorkbench({
                 </p>
                 {!readOnly && dirty && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
-                    not saved yet
+                    not applied yet
                   </span>
                 )}
               </div>
@@ -1400,34 +1400,36 @@ export default function RuleWorkbench({
                     readOnly
                       ? 'Viewing an old step — Revert to make it live, or return to the latest to edit'
                       : boxEdited
-                        ? 'Apply this edit — regenerates the response and records a step'
-                        : 'Edit the rule text to apply a change'
+                        ? 'Try this edit — regenerates the response and records a step (students are not affected)'
+                        : 'Edit the rule text to try a change'
                   }
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
                 >
                   {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-                  Apply edit
+                  Try edit
                 </button>
-                {/* Save is THE consequential action here — it makes this rule
-                    the intent's live rule, visible on the board the moment you
-                    go back. Filled primary + explicit label so it reads as
-                    "this leaves the workbench", not as a local file-save. */}
+                {/* APPLY is THE consequential action here — it makes this
+                    rule the intent's live rule, visible on the board the
+                    moment you go back. Same verb as the intent workbench's
+                    live-making Apply; the simulate button is "Try edit" so
+                    the two never share a word (the old "Apply edit"/"Save"
+                    pair put the live boundary on opposite verbs per bench). */}
                 <button
                   onClick={() => void saveVersion()}
                   disabled={!dirty || !viewingLatest || boxEdited || saving || proposing || simulating}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 disabled:opacity-50"
                   title={
                     boxEdited
-                      ? 'Apply the edited rule first, then save'
+                      ? 'Try the edited rule first, then apply'
                       : !viewingLatest
                         ? 'Viewing an old step — Revert to make it live instead'
                         : dirty
                           ? "Make this the intent's live rule — the board shows it as soon as you go back"
-                          : 'Nothing to save — apply a change first'
+                          : 'Nothing to apply — try a change first'
                   }
                 >
                   {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
-                  Save to board
+                  {promptMode && !fixedWhen ? 'Apply rules' : 'Apply rule'}
                 </button>
               </div>
             </div>
@@ -2016,12 +2018,12 @@ export default function RuleWorkbench({
                 onClick={(e) => e.stopPropagation()}
               >
                 <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
-                  {loss === 'edit' ? 'Un-applied edit' : 'Not on the board yet'}
+                  {loss === 'edit' ? 'Untried edit' : 'Not applied yet'}
                 </h3>
                 <p className="mt-1.5 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
                   {loss === 'edit'
-                    ? 'The rule text you edited hasn’t been applied — leaving discards it.'
-                    : 'Your latest steps are simulations — students still get the old rule. Save to board to make this the intent’s live rule; if you leave, the steps stay here as drafts you can save later.'}
+                    ? 'The rule text you edited hasn’t been tried yet — leaving discards it.'
+                    : 'Your latest steps are simulations — the intent still runs its old rule. Apply to make this the live rule; if you leave, the steps stay here as drafts you can apply later.'}
                 </p>
                 <div className="mt-3 flex items-center justify-end gap-2">
                   <button
@@ -2037,7 +2039,7 @@ export default function RuleWorkbench({
                     }}
                     className="px-2.5 py-1.5 rounded border border-rose-300 text-xs font-medium text-rose-700 hover:bg-rose-50"
                   >
-                    {loss === 'edit' ? 'Discard & leave' : 'Leave without saving'}
+                    {loss === 'edit' ? 'Discard & leave' : 'Leave without applying'}
                   </button>
                   {canSaveNow && (
                     <button
@@ -2054,7 +2056,7 @@ export default function RuleWorkbench({
                       className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-[hsl(var(--primary))] text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
                     >
                       {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
-                      Save to board &amp; leave
+                      Apply &amp; leave
                     </button>
                   )}
                 </div>
