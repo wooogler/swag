@@ -432,6 +432,10 @@ export const scoreRuleVersions = pgTable('score_rule_versions', {
   anchorMessageId: integer('anchor_message_id'),
   source: text('source').notNull(), // 'direct' | 'feedback' | 'rewrite' | 'manual'
   note: text('note'),
+  // The instructor input that produced this step, verbatim — the feedback text,
+  // or the confirmed intents behind a rewrite. The feedback chat is
+  // reconstructed from versions on reopen, and this is the user half of it.
+  instruction: text('instruction'),
   // MINOR version: a simulated preview (feedback / direct edit / rewrite) —
   // checkout-able and revertible, but not a Save. Majors advance the live rule.
   minor: boolean('minor').default(false).notNull(),

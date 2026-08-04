@@ -44,6 +44,10 @@ const bodySchema = z.object({
   // direct edit has none → we auto-title from the rule below.
   name: z.string().trim().max(120).optional(),
   note: z.string().trim().max(2000).optional(),
+  /** The instructor input that produced this step, verbatim (feedback text /
+   * confirmed rewrite intents / "Edited the rule directly."). The workbench
+   * chat is reconstructed from versions on reopen; this is its user half. */
+  instruction: z.string().trim().max(4000).optional(),
   anchorMessageId: z.number().int().positive().optional(),
   // MINOR = a simulated preview, not a Save: recorded for checkout/revert but
   // does NOT touch the live intent rule or the per-version response store.
@@ -129,6 +133,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
       anchorMessageId: r.anchorMessageId,
       source: r.source,
       note: r.note,
+      instruction: r.instruction,
       minor: r.minor,
       major: numbered.get(r.id)?.major ?? 0,
       minorNo: numbered.get(r.id)?.minorNo ?? null,
@@ -199,6 +204,7 @@ export async function POST(req: Request, { params }: RouteParams) {
           anchorMessageId: body.anchorMessageId ?? null,
           source: body.source,
           note: body.note ?? null,
+          instruction: body.instruction ?? null,
           minor: body.minor ?? false,
           createdBy: auth.instructor.id,
           createdAt: now,
@@ -256,6 +262,7 @@ export async function POST(req: Request, { params }: RouteParams) {
       anchorMessageId: row.anchorMessageId,
       source: row.source,
       note: row.note,
+      instruction: row.instruction,
       minor: row.minor,
       createdAt: row.createdAt.toISOString(),
     },

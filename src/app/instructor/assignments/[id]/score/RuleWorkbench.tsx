@@ -49,7 +49,7 @@ import { seedRuleVersionName } from '@/lib/score/intents';
 import RuleApplyPreview from './RuleApplyPreview';
 import QueryPicker from './QueryPicker';
 import ProposalPreviewModal, { type ProposalVariant } from './ProposalPreviewModal';
-import { timeAgo } from './IntentWorkbench';
+import { RuleDiff } from './rule-diff';
 
 type RuleSource = 'direct' | 'feedback' | 'rewrite' | 'manual' | 'seed';
 
@@ -64,37 +64,119 @@ interface RuleVersion {
   anchorMessageId: number | null;
   source: RuleSource;
   note: string | null;
+  /** The instructor input that produced this step, verbatim — the user half of
+   * the reconstructed timeline. */
+  instruction: string | null;
   minor: boolean;
   major: number;
   minorNo: number | null;
   createdAt: string;
 }
 
-/** One exchange in the feedback panel (session-local, not persisted). */
+/**
+ * One entry of the feedback TIMELINE — the workbench's single history. Session
+ * exchanges append live; on reopen the whole thing is RECONSTRUCTED from the
+ * persisted rule versions (each step stores the instruction that made it), so
+ * chat and version history are one axis, not two.
+ */
 interface ChatEntry {
   id: number;
-  role: 'user' | 'agent';
+  /** 'event' = a milestone row (the v1 baseline, a Save), rendered as a
+   * divider rather than a bubble. */
+  role: 'user' | 'agent' | 'event';
   text: string;
   /** Agent entries: the proposed rule's short name. */
   name?: string;
   /** The rule text this exchange produced (agent proposals) — shown inline so
    * the feedback history reads as a self-contained changelog. */
   rule?: string | null;
-  /** The recorded step this exchange produced — chip links to History. */
+  /** The rule this exchange STARTED from — the diff's left side. */
+  baseRule?: string | null;
+  /** The recorded step this exchange produced — chip checks it out. */
   versionNo?: number;
 }
 
-const SOURCE_LABEL: Record<RuleSource, string> = {
-  direct: 'edited',
-  feedback: 'feedback',
-  rewrite: 'rewrite',
-  manual: 'saved',
-  seed: 'baseline',
-};
+/**
+ * The timeline as the persisted versions tell it (ascending): the seed and
+ * each Save as event rows; each minor as the instruction that asked for it
+ * plus (for agent steps) the proposal card that answered. Reverted steps are
+ * gone from `list`, exactly as the live git-reset semantics delete them.
+ */
+function reconstructChat(list: RuleVersion[]): Omit<ChatEntry, 'id'>[] {
+  const entries: Omit<ChatEntry, 'id'>[] = [];
+  let prevRule: string | null = null;
+  for (const v of [...list].reverse()) {
+    // list arrives newest-first
+    if (v.source === 'seed') {
+      entries.push({
+        role: 'event',
+        text: v.name ? `Starting rule — ${v.name}` : 'Starting rule',
+        versionNo: v.versionNo,
+      });
+    } else if (!v.minor) {
+      entries.push({
+        role: 'event',
+        text: `Saved${v.name ? ` · ${v.name}` : ''}`,
+        versionNo: v.versionNo,
+      });
+    } else {
+      entries.push({
+        role: 'user',
+        text:
+          v.instruction?.trim() ||
+          (v.source === 'direct'
+            ? 'Edited the rule directly.'
+            : v.source === 'rewrite'
+              ? 'Rewrote the response — infer the rule change.'
+              : 'Feedback on the response.'),
+        ...(v.source === 'direct' ? { versionNo: v.versionNo } : {}),
+      });
+      if (v.source !== 'direct') {
+        entries.push({
+          role: 'agent',
+          name: v.name ?? 'Revised rule',
+          text: v.note ?? '',
+          rule: v.rule,
+          baseRule: prevRule,
+          versionNo: v.versionNo,
+        });
+      }
+    }
+    prevRule = v.rule;
+  }
+  return entries;
+}
 
 /** "v2" for majors, "v2.3" for simulated minors. */
 function versionLabel(v: RuleVersion): string {
   return v.minor ? `v${v.major}.${v.minorNo}` : `v${v.major}`;
+}
+
+/** The rule an agent card carries: the DIFF against the step it revised (what
+ * changed is the point — full text a toggle away). */
+function ChatRuleBlock({ rule, baseRule }: { rule: string | null; baseRule: string | null }) {
+  const [full, setFull] = useState(false);
+  return (
+    <div className="mt-1">
+      <div className="max-h-40 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 text-xs leading-relaxed">
+        {rule === null ? (
+          <span className="italic text-[hsl(var(--foreground))]">(no rule yet)</span>
+        ) : full ? (
+          <span className="whitespace-pre-wrap text-[hsl(var(--foreground))]">{rule}</span>
+        ) : (
+          <RuleDiff before={baseRule} after={rule} />
+        )}
+      </div>
+      {rule !== null && (
+        <button
+          onClick={() => setFull((v) => !v)}
+          className="mt-0.5 text-[10px] font-medium text-[hsl(var(--primary))] hover:underline"
+        >
+          {full ? 'Show what changed' : 'Show full text'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 
@@ -191,6 +273,9 @@ export default function RuleWorkbench({
     mode: 'feedback' | 'rewrite';
     origin: 'feedback' | 'rewrite';
     baseRule: string | null;
+    /** The instructor input behind this proposal — stored on whichever variant
+     * gets recorded, so the reopened timeline replays it verbatim. */
+    instruction: string;
   } | null>(null);
   // The rewrite-intent confirmation step: before proposing from a rewrite, the
   // agent reads the edit and offers what it might MEAN; the instructor
@@ -251,15 +336,22 @@ export default function RuleWorkbench({
         }
       })();
     void (async () => {
-      const list = await loadVersions();
+      let list = await loadVersions();
       if (!live()) return;
       if (list && list.length === 0) {
         // First open for this intent → seed v1: the CURRENT rule, with the
         // anchor's delivered response as its response — the "original" is
         // simply v1.
-        await seedV1();
+        list = await seedV1();
       } else if (viewVersion && list?.some((v) => v.versionNo === viewVersion.versionNo)) {
         setViewNo(viewVersion.versionNo);
+      }
+      // The timeline picks up where the last session left off — reconstructed
+      // from the persisted versions. Chat and version history are ONE axis:
+      // every step stores the instruction that made it.
+      if (live() && list && list.length > 0) {
+        const entries = reconstructChat(list);
+        setChat(entries.map((e) => ({ ...e, id: ++chatIdRef.current })));
       }
     })();
     // SCORE: seed the tab strip with the intent's top edge cases by default
@@ -282,6 +374,10 @@ export default function RuleWorkbench({
   function pushChat(entry: Omit<ChatEntry, 'id'>) {
     setChat((prev) => [...prev, { ...entry, id: ++chatIdRef.current }]);
   }
+
+  // "Fresh" = no exchange yet, only milestone rows (the reconstructed v1
+  // baseline). Drives the six-element guide's auto-show.
+  const chatFresh = chat.every((m) => m.role === 'event');
 
   /* ---- versions ----------------------------------------------------------- */
 
@@ -323,7 +419,7 @@ export default function RuleWorkbench({
     return null;
   }
 
-  async function seedV1() {
+  async function seedV1(): Promise<RuleVersion[] | null> {
     // While the rule is still the one this target STARTED from — the copy it
     // was seeded with, or nothing at all (NIRVANA) — the anchor's delivered
     // response is exactly what that rule produced, so v1 keeps it verbatim.
@@ -342,10 +438,11 @@ export default function RuleWorkbench({
         }),
         signal: signal(),
       });
-      if (res.ok && live()) await loadVersions();
+      if (res.ok && live()) return await loadVersions();
     } catch {
       /* seeding is best-effort — the first simulation creates v1 implicitly */
     }
+    return null;
   }
 
   /* ---- active tab --------------------------------------------------------- */
@@ -483,13 +580,16 @@ export default function RuleWorkbench({
    * LLM output never vanishes). The new step becomes the viewed state.
    * `precomputed` skips the regeneration when the caller already holds this
    * question's response under `rule` (the variant chooser generated it).
+   * `instruction` is the instructor input that asked for this step, stored on
+   * the version so the timeline reconstructs verbatim on reopen.
    */
   async function simulate(
     rule: string | null,
     source: RuleSource,
     name?: string,
     note?: string,
-    precomputed?: string
+    precomputed?: string,
+    instruction?: string
   ): Promise<{ versionNo: number } | null> {
     if (simulating) return null;
     setSimulating(true);
@@ -514,6 +614,7 @@ export default function RuleWorkbench({
           source,
           name,
           note,
+          instruction,
           minor: true,
         }),
         signal: signal(),
@@ -537,14 +638,32 @@ export default function RuleWorkbench({
    * strength variants; nothing is recorded here — the chooser modal opens and
    * only the variant the instructor picks becomes a step (chooseVariant).
    */
-  async function propose(payload: object, origin: 'feedback' | 'rewrite'): Promise<void> {
+  async function propose(
+    payload: object,
+    origin: 'feedback' | 'rewrite',
+    instruction: string
+  ): Promise<void> {
     setProposing(true);
     setError(null);
+    // What was already asked and done in this session, from the persisted
+    // steps (oldest first) — so "stronger" means stronger than the last step,
+    // and repeated feedback compounds instead of re-litigating.
+    const priorExchanges = (versions ?? [])
+      .filter((v) => v.minor && v.source !== 'seed' && v.instruction?.trim())
+      .slice(0, 6)
+      .reverse()
+      .map((v) => ({
+        instruction: v.instruction as string,
+        ...(v.note ? { note: v.note } : {}),
+      }));
     try {
       const res = await fetch(`${base}/intents/${intent.id}/propose`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          ...(priorExchanges.length > 0 ? { priorExchanges } : {}),
+        }),
         signal: signal(),
       });
       const data = await res.json().catch(() => ({}));
@@ -562,6 +681,7 @@ export default function RuleWorkbench({
         // submit time (draftRule), not whatever is viewed when the modal
         // renders.
         baseRule: viewed?.rule ?? null,
+        instruction,
       });
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
@@ -608,13 +728,11 @@ export default function RuleWorkbench({
 
   /** Rewrite step 2: propose, carrying the confirmed intents (possibly none). */
   function submitRewrite(intents: string[]) {
-    pushChat({
-      role: 'user',
-      text:
-        intents.length > 0
-          ? `Rewrote the response — meaning:\n${intents.map((s) => `· ${s}`).join('\n')}`
-          : 'Rewrote the response — infer the rule change.',
-    });
+    const instruction =
+      intents.length > 0
+        ? `Rewrote the response — meaning:\n${intents.map((s) => `· ${s}`).join('\n')}`
+        : 'Rewrote the response — infer the rule change.';
+    pushChat({ role: 'user', text: instruction });
     void propose(
       {
         mode: 'rewrite',
@@ -625,7 +743,8 @@ export default function RuleWorkbench({
         ...(viewed?.rule ? { draftRule: viewed.rule } : {}),
         ...(intents.length > 0 ? { changeIntents: intents } : {}),
       },
-      'rewrite'
+      'rewrite',
+      instruction
     );
   }
 
@@ -639,7 +758,8 @@ export default function RuleWorkbench({
       proposal.mode,
       v.title || undefined,
       v.note || undefined,
-      previewText ?? undefined
+      previewText ?? undefined,
+      proposal.instruction || undefined
     );
     if (created && live()) {
       pushChat({
@@ -647,6 +767,7 @@ export default function RuleWorkbench({
         name: v.title || 'Revised rule',
         text: v.note || '',
         rule: v.revisedRule,
+        baseRule: proposal.baseRule,
         versionNo: created.versionNo,
       });
       if (proposal.origin === 'feedback') setFeedback('');
@@ -668,7 +789,8 @@ export default function RuleWorkbench({
         currentResponse: displayedResponse ?? undefined,
         ...(viewed?.rule ? { draftRule: viewed.rule } : {}),
       },
-      'feedback'
+      'feedback',
+      text
     );
   }
 
@@ -731,6 +853,14 @@ export default function RuleWorkbench({
       }
       if (live()) {
         savedAnyRef.current = true;
+        if (saved) {
+          // The timeline's Save milestone — same row reconstruction produces.
+          pushChat({
+            role: 'event',
+            text: `Saved${latest.name ? ` · ${latest.name}` : ''}`,
+            versionNo: saved.versionNo,
+          });
+        }
         await loadVersions();
         setViewNo(null);
       }
@@ -815,36 +945,13 @@ export default function RuleWorkbench({
     await generateUpdated(need, ruleParamFor(viewed), gen);
   }
 
-  /* ---- history accordion --------------------------------------------------- */
+  /* ---- timeline checkout --------------------------------------------------- */
 
-  // Group minors under their preceding major (newest-first walk, same shape as
-  // the intent workbench history).
-  const versionGroups = useMemo(() => {
-    if (!versions) return [];
-    const groups: { key: string; major: RuleVersion | null; minors: RuleVersion[] }[] = [];
-    let pending: RuleVersion[] = [];
-    for (const v of versions) {
-      if (v.minor) {
-        pending.push(v);
-      } else {
-        groups.push({ key: `v${v.versionNo}`, major: v, minors: pending });
-        pending = [];
-      }
-    }
-    if (pending.length > 0) groups.push({ key: 'draft', major: null, minors: pending });
-    return groups;
-  }, [versions]);
-  const [groupToggles, setGroupToggles] = useState<Record<string, boolean>>({});
-
-  /** Check out a step from a feedback-history chip: view it AND expand the
-   * accordion group it sits in so History shows where you landed. */
+  /** Check out a step from a timeline chip — its rule and response load in
+   * place (the chat IS the history; there is no separate accordion). */
   function jumpToVersion(versionNo: number) {
     if (!versions) return;
     setViewNo(latest && versionNo === latest.versionNo ? null : versionNo);
-    const g = versionGroups.find(
-      (grp) => grp.major?.versionNo === versionNo || grp.minors.some((m) => m.versionNo === versionNo)
-    );
-    if (g) setGroupToggles((t) => ({ ...t, [g.key]: true }));
   }
 
   /** The chip linking a feedback exchange to its recorded step. A step wiped
@@ -865,7 +972,7 @@ export default function RuleWorkbench({
     return (
       <button
         onClick={() => jumpToVersion(versionNo)}
-        title="Open this step in History (its rule and response load in place)"
+        title="Check this step out — its rule and response load in place"
         className={`shrink-0 rounded border px-1 py-0.5 font-mono text-xs font-medium ${
           isViewed
             ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
@@ -874,77 +981,6 @@ export default function RuleWorkbench({
       >
         {versionLabel(v)}
       </button>
-    );
-  };
-
-  const versionEntry = (v: RuleVersion, compact: boolean) => {
-    const isNewest = latest !== null && v.versionNo === latest.versionNo;
-    const isViewed = viewed !== null && v.versionNo === viewed.versionNo;
-    const busyAny = saving || simulating || proposing;
-    return (
-      <div
-        key={v.versionNo}
-        role="button"
-        tabIndex={0}
-        onClick={() => !busyAny && setViewNo(isNewest ? null : v.versionNo)}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter' && e.key !== ' ') return;
-          e.preventDefault();
-          if (!busyAny) setViewNo(isNewest ? null : v.versionNo);
-        }}
-        title={
-          isNewest
-            ? 'The current working state — click to return to it'
-            : 'View this step — its rule and response load instantly'
-        }
-        className={`w-full cursor-pointer text-left rounded border text-xs ${
-          compact ? 'px-2 py-1' : 'px-2 py-1.5'
-        } ${
-          isViewed
-            ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5'
-            : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]/40'
-        } ${busyAny ? 'opacity-50 pointer-events-none' : ''}`}
-      >
-        <div className="flex items-center justify-between gap-2 text-[hsl(var(--muted-foreground))]">
-          <span className="shrink-0 font-mono">
-            {versionLabel(v)}
-            {isNewest && viewNo === null && (
-              <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 py-px font-sans text-[11px] font-semibold text-[hsl(var(--primary))]">
-                current
-              </span>
-            )}
-          </span>
-          <span className="min-w-0 flex-1 truncate font-medium text-[hsl(var(--foreground))]">
-            {v.name || (v.rule ? 'Untitled rule' : 'No rule')}
-          </span>
-          <span className="shrink-0 flex items-center gap-1.5">
-            <span className="rounded bg-[hsl(var(--muted))] px-1 py-0.5 text-xs">
-              {SOURCE_LABEL[v.source]}
-            </span>
-            <span title={new Date(v.createdAt).toLocaleString()}>{timeAgo(v.createdAt)}</span>
-          </span>
-        </div>
-        {!compact && v.note && (
-          <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">{v.note}</p>
-        )}
-        {/* Which logged question this change was made from — lets you trace (and
-            revert) a version back to the query that motivated it. */}
-        {v.anchorMessageId != null &&
-          (() => {
-            const ar = rows.find((r) => r.messageId === v.anchorMessageId);
-            if (!ar) return null;
-            return (
-              <p
-                className="mt-0.5 truncate text-xs text-[hsl(var(--muted-foreground))]"
-                title={ar.queryText.replace(/\s+/g, ' ').trim()}
-              >
-                from <span className="font-mono">{ar.participantToken}{ar.turnNumber > 0 ? ` · T${ar.turnNumber}` : ''}</span>
-                {' · '}
-                {ar.queryText.replace(/\s+/g, ' ').trim().slice(0, 48)}
-              </p>
-            );
-          })()}
-      </div>
     );
   };
 
@@ -1044,8 +1080,29 @@ export default function RuleWorkbench({
                     : `Then… (rule${viewed ? ` · ${versionLabel(viewed)}` : ''})`}
                 </p>
                 {readOnly ? (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
-                    read-only — viewing {viewed ? versionLabel(viewed) : 'an old step'}
+                  /* Checked out on an old step (from a timeline chip). The two
+                     ways forward used to live in the History accordion; they
+                     sit with the badge now that the timeline IS the history. */
+                  <span className="flex items-center gap-1.5">
+                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
+                      viewing {viewed ? versionLabel(viewed) : 'an old step'}
+                    </span>
+                    <button
+                      onClick={revertToViewed}
+                      disabled={saving || simulating || proposing}
+                      title="Make this step the live rule and delete the later steps (asks first)"
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Revert here
+                    </button>
+                    <button
+                      onClick={() => setViewNo(null)}
+                      disabled={saving || simulating || proposing}
+                      title="Back to the latest step"
+                      className="px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-xs font-medium hover:bg-[hsl(var(--muted))] disabled:opacity-40"
+                    >
+                      Latest
+                    </button>
                   </span>
                 ) : dirty ? (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
@@ -1111,71 +1168,6 @@ export default function RuleWorkbench({
                   Save
                 </button>
               </div>
-            </div>
-
-            {/* RULE HISTORY — majors with their simulated minors folded in
-                (accordion, same mental model as the intent workbench). */}
-            <div className="space-y-1.5 border-t border-[hsl(var(--border))] pt-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  History
-                  {viewed && !viewingLatest && (
-                    <span className="ml-1.5 normal-case font-normal text-amber-700">
-                      viewing {versionLabel(viewed)}
-                    </span>
-                  )}
-                </p>
-                {viewed && !viewingLatest && (
-                  <button
-                    onClick={revertToViewed}
-                    disabled={saving || simulating || proposing}
-                    title="Make this step the live rule and delete the later steps (asks first)"
-                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-40"
-                  >
-                    <RotateCcw className="w-3 h-3" /> Revert to {versionLabel(viewed)}
-                  </button>
-                )}
-              </div>
-              {versions === null ? (
-                <p className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Loading history…
-                </p>
-              ) : versionGroups.length === 0 ? (
-                <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                  No versions yet — the first simulation records one.
-                </p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {versionGroups.map((g, gi) => {
-                    const open = groupToggles[g.key] ?? gi === 0;
-                    const minorsAsc = [...g.minors].reverse();
-                    return (
-                      <li key={g.key} className="space-y-1">
-                        {g.major ? (
-                          versionEntry(g.major, false)
-                        ) : (
-                          <p className="px-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
-                            Simulated steps — not saved yet
-                          </p>
-                        )}
-                        {g.minors.length > 0 && (
-                          <div className="ml-3 border-l border-[hsl(var(--border))] pl-2 space-y-1">
-                            <button
-                              onClick={() => setGroupToggles((t) => ({ ...t, [g.key]: !open }))}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                              title="Simulated steps on top of this version"
-                            >
-                              {open ? '▾' : '▸'} {g.minors.length} step{g.minors.length === 1 ? '' : 's'}
-                              {g.major ? ` since ${versionLabel(g.major)}` : ''}
-                            </button>
-                            {open && minorsAsc.map((v) => versionEntry(v, true))}
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
             </div>
           </div>
         </div>
@@ -1480,12 +1472,12 @@ export default function RuleWorkbench({
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
           <div className="shrink-0 px-3 py-2 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-              <Sparkles className="w-3.5 h-3.5" /> Feedback
+              <Sparkles className="w-3.5 h-3.5" /> Feedback & history
               <button
-                onClick={() => setGuideOpen((v) => !(v ?? chat.length === 0))}
+                onClick={() => setGuideOpen((v) => !(v ?? chatFresh))}
                 title="What makes a strong rule: the six elements"
                 className={`inline-flex items-center p-0.5 rounded hover:text-[hsl(var(--foreground))] ${
-                  (guideOpen ?? chat.length === 0) ? 'text-[hsl(var(--primary))]' : ''
+                  (guideOpen ?? chatFresh) ? 'text-[hsl(var(--primary))]' : ''
                 }`}
               >
                 <HelpCircle className="w-3.5 h-3.5" />
@@ -1494,7 +1486,7 @@ export default function RuleWorkbench({
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-            {(guideOpen ?? chat.length === 0) && (
+            {(guideOpen ?? chatFresh) && (
               <div className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
                 {/* Rule-authoring guide: the six elements a strong rule sets,
                     one-to-one with the feedback chips (see
@@ -1534,7 +1526,16 @@ export default function RuleWorkbench({
               </div>
             )}
             {chat.map((m) =>
-              m.role === 'user' ? (
+              m.role === 'event' ? (
+                /* Milestone row — the v1 baseline or a Save. The chip checks
+                   the step out; a step wiped by a revert renders 'removed'. */
+                <div key={m.id} className="flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  <span className="flex-1 border-t border-[hsl(var(--border))]" aria-hidden />
+                  {m.versionNo !== undefined && versionChip(m.versionNo)}
+                  <span className="shrink-0">{m.text}</span>
+                  <span className="flex-1 border-t border-[hsl(var(--border))]" aria-hidden />
+                </div>
+              ) : m.role === 'user' ? (
                 <div key={m.id} className="flex flex-col items-end gap-1">
                   <p className="max-w-[90%] rounded-2xl rounded-tr-sm bg-[hsl(var(--muted))] px-3 py-2 text-sm whitespace-pre-wrap">
                     {m.text}
@@ -1551,13 +1552,9 @@ export default function RuleWorkbench({
                   {m.text && (
                     <p className="mt-0.5 whitespace-pre-wrap text-[hsl(var(--muted-foreground))]">{m.text}</p>
                   )}
-                  {/* The rule this exchange produced — the feedback panel reads
-                      as a self-contained changelog. */}
-                  {m.rule !== undefined && (
-                    <div className="mt-1 max-h-40 overflow-y-auto rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 text-xs leading-relaxed whitespace-pre-wrap text-[hsl(var(--foreground))]">
-                      {m.rule ?? <span className="italic">(no rule yet)</span>}
-                    </div>
-                  )}
+                  {/* What this exchange did to the rule — a diff by default,
+                      so the panel reads as a self-contained changelog. */}
+                  {m.rule !== undefined && <ChatRuleBlock rule={m.rule} baseRule={m.baseRule ?? null} />}
                 </div>
               )
             )}

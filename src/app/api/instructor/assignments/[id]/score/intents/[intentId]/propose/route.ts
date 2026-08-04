@@ -28,6 +28,20 @@ import { logStudyEvent } from '@/lib/study/events';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+/** What was already asked for and done in this revision session (oldest
+ * first). The agent used to be stateless across exchanges — "stronger than
+ * last time" meant nothing, and repeated feedback silently re-litigated
+ * ground the current rule already reflects. */
+const priorExchangesSchema = z
+  .array(
+    z.object({
+      instruction: z.string().trim().min(1).max(4000),
+      note: z.string().trim().max(2000).optional(),
+    })
+  )
+  .max(8)
+  .optional();
+
 const bodySchema = z.discriminatedUnion('mode', [
   z.object({
     mode: z.literal('feedback'),
@@ -41,6 +55,7 @@ const bodySchema = z.discriminatedUnion('mode', [
      * incremental hardening loop (§1.10) folds feedback into the pending
      * DRAFT before anything is applied. */
     draftRule: z.string().trim().max(8000).nullable().optional(),
+    priorExchanges: priorExchangesSchema,
   }),
   z.object({
     mode: z.literal('rewrite'),
@@ -53,6 +68,7 @@ const bodySchema = z.discriminatedUnion('mode', [
      * as their evidence. A before/after pair alone underdetermines what the
      * instructor meant; these pin it down. */
     changeIntents: z.array(z.string().trim().min(1).max(200)).max(6).optional(),
+    priorExchanges: priorExchangesSchema,
   }),
 ]);
 
@@ -171,6 +187,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }`,
     `ANCHOR QUESTION:\n${anchor.queryText}`,
   ];
+  if (body.priorExchanges && body.priorExchanges.length > 0) {
+    parts.push(
+      `REVISIONS ALREADY MADE THIS SESSION (oldest first — the current prompt reflects them; do not undo them, and read the new input in their context, e.g. "stronger" means stronger than the last step):\n${body.priorExchanges
+        .map((x) => `- asked: ${x.instruction}${x.note ? `\n  did: ${x.note}` : ''}`)
+        .join('\n')}`
+    );
+  }
   if (body.currentResponse) {
     parts.push(`RESPONSE THE INSTRUCTOR IS LOOKING AT:\n${body.currentResponse}`);
   }

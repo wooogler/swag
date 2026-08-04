@@ -205,6 +205,7 @@ async function createIntentTables(): Promise<void> {
         "anchor_message_id" integer,
         "source" text NOT NULL,
         "note" text,
+        "instruction" text,
         "minor" boolean DEFAULT false NOT NULL,
         "created_by" text,
         "created_at" timestamp NOT NULL
@@ -240,11 +241,12 @@ async function createIntentTables(): Promise<void> {
       sql`ALTER TABLE "score_intents" ADD COLUMN "is_template" boolean DEFAULT false NOT NULL`
     );
   }
-  // score_rule_versions.name / .minor were added after the table's first CREATE.
+  // score_rule_versions.name / .minor / .instruction were added after the
+  // table's first CREATE.
   const ruleVersionCols = await db.execute<{ column_name: string }>(sql`
     SELECT column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'score_rule_versions'
-      AND column_name IN ('name', 'minor')
+      AND column_name IN ('name', 'minor', 'instruction')
   `);
   const haveRuleCols = new Set(ruleVersionCols.map((r) => r.column_name));
   if (!haveRuleCols.has('name')) {
@@ -254,6 +256,9 @@ async function createIntentTables(): Promise<void> {
     await db.execute(
       sql`ALTER TABLE "score_rule_versions" ADD COLUMN "minor" boolean DEFAULT false NOT NULL`
     );
+  }
+  if (!haveRuleCols.has('instruction')) {
+    await db.execute(sql`ALTER TABLE "score_rule_versions" ADD COLUMN "instruction" text`);
   }
   // score_intent_pins.reason — an optional out-pin rationale added after v6.
   const pinCols = await db.execute<{ column_name: string }>(sql`
