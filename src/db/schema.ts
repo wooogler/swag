@@ -338,6 +338,24 @@ export const scoreRulePreviews = pgTable('score_rule_previews', {
   ),
 }));
 
+// Conversation digests: the thread BEFORE an anchor message, compacted into a
+// context brief for preview generation (chatbot voice stripped, the referenced
+// draft re-attributed to the student). Rule-independent — one row per anchor,
+// reused across every rule/variant preview of that anchor. `version` is
+// CONVERSATION_DIGEST_VERSION at write time; bumping it regenerates.
+export const scoreConversationDigests = pgTable('score_conversation_digests', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull().references(() => assignments.id),
+  messageId: integer('message_id').notNull().references(() => chatMessages.id),
+  digest: text('digest').notNull(),
+  model: text('model'),
+  version: integer('version').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  assignmentIdx: index('score_conversation_digests_assignment_idx').on(table.assignmentId),
+  messageUnique: uniqueIndex('score_conversation_digests_message_unique').on(table.messageId),
+}));
+
 // Query embeddings (P3): one vector per student message, used to order the
 // Revise modal's edge-case sweep (semantic distance from the anchor question)
 // at zero LLM cost per sweep. Stored as a jsonb number[] — assignment logs

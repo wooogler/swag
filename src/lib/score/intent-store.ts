@@ -58,7 +58,7 @@ async function createIntentTables(): Promise<void> {
   const existing = await db.execute<{ tablename: string }>(sql`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_conversation_digests','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const has = new Set(existing.map((r) => r.tablename));
   if (!has.has('score_intents')) {
@@ -163,6 +163,19 @@ async function createIntentTables(): Promise<void> {
         "prompt_hash" text NOT NULL,
         "response" text NOT NULL,
         "model" text,
+        "created_at" timestamp NOT NULL
+      )
+    `);
+  }
+  if (!has.has('score_conversation_digests')) {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "score_conversation_digests" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "assignment_id" text NOT NULL,
+        "message_id" integer NOT NULL,
+        "digest" text NOT NULL,
+        "model" text,
+        "version" integer NOT NULL,
         "created_at" timestamp NOT NULL
       )
     `);
@@ -387,11 +400,16 @@ async function createIntentTables(): Promise<void> {
       sql`CREATE INDEX IF NOT EXISTS "score_rule_version_responses_assignment_idx" ON "score_rule_version_responses" USING btree ("assignment_id")`],
     ['score_rule_version_responses', 'score_rule_version_responses_version_message_unique',
       sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_rule_version_responses_version_message_unique" ON "score_rule_version_responses" USING btree ("rule_version_id", "message_id")`],
+    ['score_conversation_digests', 'score_conversation_digests_assignment_idx',
+      sql`CREATE INDEX IF NOT EXISTS "score_conversation_digests_assignment_idx" ON "score_conversation_digests" USING btree ("assignment_id")`],
+    // The digest cache upsert targets this — one digest per anchor message.
+    ['score_conversation_digests', 'score_conversation_digests_message_unique',
+      sql`CREATE UNIQUE INDEX IF NOT EXISTS "score_conversation_digests_message_unique" ON "score_conversation_digests" USING btree ("message_id")`],
   ];
   const idx = await db.execute<{ indexname: string }>(sql`
     SELECT indexname FROM pg_indexes
     WHERE schemaname = 'public' AND tablename IN
-      ('score_intents','score_intent_ratings','score_intent_pins','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
+      ('score_intents','score_intent_ratings','score_intent_pins','score_config_versions','score_dissections','score_query_types','score_rule_previews','score_conversation_digests','score_query_embeddings','score_chat_deploys','score_rule_versions','score_rule_version_responses')
   `);
   const have = new Set(idx.map((r) => r.indexname));
   // Ratings were re-keyed from (message, intent) to (message, intent, def_hash)

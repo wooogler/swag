@@ -3,8 +3,17 @@
  *
  * One place turns (base prompt, rule, question) into "what the chatbot would
  * answer": the ownership comparison (P2), the Revise before/after (P3), and
- * any later preview surface all go through here so preview = runtime holds
- * everywhere by construction.
+ * any later preview surface all go through here.
+ *
+ * CONTEXT SHAPE (v4): the prior thread is fed as a DIGEST — a compact brief
+ * with the referenced draft re-attributed to the student — not as replayed
+ * turns. Replaying old-rule turns made the model imitate its own precedent
+ * over the new rule (docs/RULE_WORKBENCH_V2_PLAN.md §9), and it simulated a
+ * situation deployment never produces: deploy happens after the term, so a
+ * future conversation starts fresh under the new rule. The preview therefore
+ * approximates the FUTURE runtime, not a replay of the past one; /api/chat
+ * itself is untouched. Digest generation failure falls back to the old
+ * verbatim replay.
  *
  * Two modes:
  *  - SAVED-rule previews are cached in score_rule_previews per
@@ -18,6 +27,7 @@ import OpenAI from 'openai';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { scoreRulePreviews, type ScoreIntent } from '@/db/schema';
+import { getConversationDigests } from './conversation-digest';
 import { buildInjectedSystemPrompt, rulePreviewHash } from './injection';
 import { createLimiter, SCORE_CONCURRENCY } from './limiter';
 import { getConversationHistories, type ChatTurn, type QueryRecord } from './queries';
@@ -37,30 +47,39 @@ function getClient(): OpenAI {
   return cachedClient;
 }
 
-/** One non-streaming chatbot turn under the injected prompt — the same input
- * shape /api/chat sends (system + full prior thread + user). `history` is the
- * reconstructed conversation before the anchor (getConversationHistories); when
- * absent we fall back to the stored prior pair, which for a single-turn
- * exchange IS the full context. No reasoning/temperature overrides: /api/chat
- * sets none either (§1.9). */
+/** One non-streaming chatbot turn under the injected prompt. `digest` is the
+ * compacted prior-thread brief (see the module header) — when present, the
+ * input is system + one user message (context brief + the question), the shape
+ * a fresh future conversation approximates. When the digest is missing (no
+ * prior turns, or generation failed) we fall back to the verbatim replay, and
+ * failing that to the stored prior pair. No reasoning/temperature overrides:
+ * /api/chat sets none either (§1.9). */
 async function generatePreview(
   systemPrompt: string,
   rec: QueryRecord,
   model: string,
-  history: ChatTurn[] | undefined
+  history: ChatTurn[] | undefined,
+  digest: string | null | undefined
 ): Promise<string> {
   // An empty base prompt with no rule → no system message at all (NIRVANA
   // parity), exactly as /api/chat does, so preview = runtime holds even at the
   // "no guidance" baseline.
   const input: { role: 'system' | 'user' | 'assistant'; content: string }[] = [];
   if (systemPrompt.trim()) input.push({ role: 'system', content: systemPrompt });
-  if (history && history.length > 0) {
-    for (const turn of history) input.push({ role: turn.role, content: turn.content });
+  if (digest) {
+    input.push({
+      role: 'user',
+      content: `CONTEXT (summary of the conversation so far):\n${digest}\n\nSTUDENT'S NEW MESSAGE:\n${rec.queryText}`,
+    });
   } else {
-    if (rec.prevQueryText) input.push({ role: 'user', content: rec.prevQueryText });
-    if (rec.prevResponseText) input.push({ role: 'assistant', content: rec.prevResponseText });
+    if (history && history.length > 0) {
+      for (const turn of history) input.push({ role: turn.role, content: turn.content });
+    } else {
+      if (rec.prevQueryText) input.push({ role: 'user', content: rec.prevQueryText });
+      if (rec.prevResponseText) input.push({ role: 'assistant', content: rec.prevResponseText });
+    }
+    input.push({ role: 'user', content: rec.queryText });
   }
-  input.push({ role: 'user', content: rec.queryText });
 
   const response = await getClient().responses.create({ model, input });
   return (response.output_text ?? '').trim();
@@ -107,14 +126,29 @@ export async function getCachedRulePreviews(args: {
   const limit = createLimiter(SCORE_CONCURRENCY);
   const now = new Date();
   const toGenerate = records.filter((rec) => !responses.has(rec.messageId));
-  // Full prior thread per anchor → runtime parity (the cache key already covers
-  // model/base/rule; history is deterministic per message, so it needs no key).
+  // Prior-thread digest per anchor (rule-independent, cached per message — no
+  // preview cache key needed; the rule preview cache key already covers
+  // model/base/rule).
   const histories = await getConversationHistories(assignmentId, toGenerate.map((r) => r.messageId));
+  const digests = await getConversationDigests(
+    assignmentId,
+    toGenerate.map((rec) => ({
+      messageId: rec.messageId,
+      queryText: rec.queryText,
+      history: histories.get(rec.messageId) ?? [],
+    }))
+  );
   await Promise.all(
     toGenerate.map((rec) =>
       limit(async () => {
         try {
-          const response = await generatePreview(system, rec, model, histories.get(rec.messageId));
+          const response = await generatePreview(
+            system,
+            rec,
+            model,
+            histories.get(rec.messageId),
+            digests.get(rec.messageId)
+          );
           if (!response) throw new Error('empty preview response');
           const values = { promptHash: hash, response, model, createdAt: now };
           await db
@@ -153,11 +187,25 @@ export async function getDraftPreviews(args: {
 
   const limit = createLimiter(SCORE_CONCURRENCY);
   const histories = await getConversationHistories(assignmentId, records.map((r) => r.messageId));
+  const digests = await getConversationDigests(
+    assignmentId,
+    records.map((rec) => ({
+      messageId: rec.messageId,
+      queryText: rec.queryText,
+      history: histories.get(rec.messageId) ?? [],
+    }))
+  );
   await Promise.all(
     records.map((rec) =>
       limit(async () => {
         try {
-          const response = await generatePreview(system, rec, model, histories.get(rec.messageId));
+          const response = await generatePreview(
+            system,
+            rec,
+            model,
+            histories.get(rec.messageId),
+            digests.get(rec.messageId)
+          );
           if (!response) throw new Error('empty preview response');
           responses.set(rec.messageId, response);
         } catch (error) {

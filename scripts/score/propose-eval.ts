@@ -88,12 +88,12 @@ async function main() {
   const { and, eq } = await import('drizzle-orm');
   const { scoreIntents } = await import('@/db/schema');
   const { getQueryRecords, getConversationHistories } = await import('@/lib/score/queries');
-  const { buildInjectedSystemPrompt, getChatModel } = await import('@/lib/score/injection');
+  const { getChatModel } = await import('@/lib/score/injection');
+  const { getDraftPreviews } = await import('@/lib/score/preview-service');
   const { callModel, extractJsonObject } = await import('@/lib/score/classifier');
   const { getDefaultScoreModel } = await import('@/lib/score/models');
   const { buildProposeSystemPrompt, buildProposeUserContent, PROPOSAL_SCHEMA, PROPOSAL_STRENGTHS } =
     await import('@/lib/score/propose-prompt');
-  const { default: OpenAI } = await import('openai');
 
   const assignmentId = arg('assignment') ?? DEFAULTS.assignment;
   const messageId = Number(arg('message') ?? DEFAULTS.message);
@@ -117,21 +117,22 @@ async function main() {
 
   const chatModel = getChatModel();
   const scoreModel = getDefaultScoreModel();
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 1, timeout: 60_000 });
 
   console.log(`anchor ${messageId} · history ${history.length} turns · chat=${chatModel} score=${scoreModel}`);
   console.log(`intent ${intentId} "${intent.title}" rule=${intent.rule?.trim() ? `${intent.rule.length} chars` : '(empty)'}\n`);
 
-  // Replicates preview-service.generatePreview: system (only if non-empty) +
-  // full prior thread + the anchor, no sampling overrides.
+  // THE production path, not a replica: getDraftPreviews builds the exact
+  // input the workbench/modal previews send (digest context as of v4, with
+  // the replay fallback), so what this harness measures is what ships.
   async function generateUnder(rule: string): Promise<string> {
-    const system = buildInjectedSystemPrompt(rule);
-    const input: { role: 'system' | 'user' | 'assistant'; content: string }[] = [];
-    if (system.trim()) input.push({ role: 'system', content: system });
-    for (const turn of history) input.push({ role: turn.role, content: turn.content });
-    input.push({ role: 'user', content: anchor!.queryText });
-    const res = await openai.responses.create({ model: chatModel, input });
-    return (res.output_text ?? '').trim();
+    const result = await getDraftPreviews({
+      assignmentId,
+      records: [anchor!],
+      rule: rule || null,
+      basePrompt: '',
+      model: chatModel,
+    });
+    return result.responses.get(anchor!.messageId) ?? '';
   }
 
   interface RunRecord {

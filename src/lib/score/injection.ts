@@ -28,8 +28,12 @@ import { stableHash } from './config';
  * v2: previews now feed the FULL prior conversation, not just the prior pair.
  * v3: v7 dropped the base-prompt fallback below — an empty rule now means NO
  *     system message, so every preview generated under the old fallback (which
- *     silently showed base-prompt behaviour) is wrong and must regenerate. */
-export const PREVIEW_VERSION = 3;
+ *     silently showed base-prompt behaviour) is wrong and must regenerate.
+ * v4: the prior thread is fed as a DIGEST brief instead of replayed turns —
+ *     replay made the model imitate its old-rule outputs over the new rule,
+ *     and deploy-after-term means future conversations start fresh anyway
+ *     (preview ≈ FUTURE runtime; see preview-service + plan §9). */
+export const PREVIEW_VERSION = 4;
 
 /**
  * The injected system prompt IS the rule, verbatim — nothing is concatenated,
