@@ -1145,7 +1145,7 @@ export default function RuleWorkbench({
                     ? 'Empty — the chatbot answers with no rules at all.'
                     : 'Empty — this intent has no rule of its own yet.'
                 }
-                title={readOnly ? 'Viewing an old step — Revert to make it live, or click the newest step to edit' : undefined}
+                title={readOnly ? 'Viewing an old step — Revert to make it live, or Latest to edit' : undefined}
                 className={`mt-1 w-full text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
                   readOnly ? 'bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--background))]'
                 }`}
@@ -1660,7 +1660,7 @@ export default function RuleWorkbench({
                 disabled={readOnly}
                 placeholder={
                   readOnly
-                    ? `Viewing ${viewed ? versionLabel(viewed) : 'an old step'} (read-only) — Revert to make it live, or click the newest step to continue.`
+                    ? `Viewing ${viewed ? versionLabel(viewed) : 'an old step'} (read-only) — Revert to make it live, or Latest (by the rule box) to continue.`
                     : "What's wrong with this response? (Enter to send, Shift+Enter for a new line)"
                 }
                 className="w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2.5 py-2 pr-10 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:bg-[hsl(var(--muted))]/40"
