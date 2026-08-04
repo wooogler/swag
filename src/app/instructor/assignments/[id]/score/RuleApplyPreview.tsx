@@ -1,12 +1,15 @@
 'use client';
 
 /**
- * The cross-query PREVIEW workbench: review the saved rule's response across many
- * questions before it goes live. Review-only (edits happen back in Revise; deploy
- * on the board).
+ * The cross-query PREVIEW workbench: review the working rule's response across
+ * many questions — and (SCORE) pull the ones that need fixing straight into the
+ * workbench as example tabs. This is the merged "Preview + Add example": you
+ * see a bad response FIRST, then bring its question in to revise against,
+ * instead of picking blind from a list.
  *
  *   LEFT   the questions in scope with generation status — SCORE: the intent's
- *          questions; baseline (promptMode): the WHOLE log, 10 at a time
+ *          questions (each checkable as an example); baseline (promptMode): the
+ *          WHOLE log, 10 at a time, review-only
  *   MIDDLE the CURRENT rule pinned on top · the selected question · original response
  *   RIGHT  the NEW rule pinned on top · the regenerated response under it
  *
@@ -45,6 +48,12 @@ interface RuleApplyPreviewProps {
   /** Already-generated responses under `afterRule` (anchor simulation etc.). */
   seed: Map<number, string | null>;
   onClose: () => void;
+  /** SCORE: bring checked questions into the workbench as example tabs,
+   * carrying the responses generated here so the tabs open instantly. Absent
+   * (baseline) → review-only, no checkboxes. */
+  onAddExamples?: (ids: number[], responses: Map<number, string | null>) => void;
+  /** Questions already open as tabs — not offered again. */
+  existingIds?: Set<number>;
 }
 
 export default function RuleApplyPreview({
@@ -61,6 +70,8 @@ export default function RuleApplyPreview({
   isNirvana,
   seed,
   onClose,
+  onAddExamples,
+  existingIds,
 }: RuleApplyPreviewProps) {
   const base = `/api/instructor/assignments/${assignmentId}/score`;
   const [selectedId, setSelectedId] = useState(anchorId);
@@ -70,6 +81,8 @@ export default function RuleApplyPreview({
   const genRef = useRef(gen);
   genRef.current = gen;
   const [error, setError] = useState<string | null>(null);
+  // Questions checked to become example tabs (SCORE only).
+  const [picked, setPicked] = useState<Set<number>>(new Set());
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
   const selectedRow = rowById.get(selectedId) ?? null;
@@ -209,32 +222,55 @@ export default function RuleApplyPreview({
               if (!r) return null;
               const state = gen.has(id) ? (gen.get(id) ? 'done' : 'failed') : 'pending';
               const active = id === selectedId;
+              // Checkable as a new example tab: not the anchor, not open already.
+              const canPick = !!onAddExamples && id !== anchorId && !existingIds?.has(id);
               return (
                 <li key={id}>
-                  <button
-                    onClick={() => setSelectedId(id)}
-                    className={`w-full px-3 py-2 text-left ${active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'}`}
+                  <div
+                    className={`flex items-start gap-0 ${active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'}`}
                   >
-                    <span className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
-                      <span className="font-mono">
-                        {id === anchorId ? '★ ' : ''}
-                        {r.participantToken || '—'}
-                        {r.turnNumber > 0 ? ` · T${r.turnNumber}` : ''}
+                    {canPick && (
+                      <input
+                        type="checkbox"
+                        className="ml-3 mt-2.5 shrink-0"
+                        checked={picked.has(id)}
+                        onChange={() =>
+                          setPicked((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(id)) next.delete(id);
+                            else next.add(id);
+                            return next;
+                          })
+                        }
+                        aria-label="Add this question as an example tab"
+                        title="Add this question as an example tab"
+                      />
+                    )}
+                    <button
+                      onClick={() => setSelectedId(id)}
+                      className={`min-w-0 flex-1 py-2 text-left ${canPick ? 'pl-2 pr-3' : 'px-3'}`}
+                    >
+                      <span className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+                        <span className="font-mono">
+                          {id === anchorId ? '★ ' : ''}
+                          {r.participantToken || '—'}
+                          {r.turnNumber > 0 ? ` · T${r.turnNumber}` : ''}
+                        </span>
+                        <span className="ml-auto shrink-0">
+                          {state === 'pending' ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : state === 'failed' ? (
+                            <X className="w-3 h-3 text-rose-600" />
+                          ) : (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          )}
+                        </span>
                       </span>
-                      <span className="ml-auto shrink-0">
-                        {state === 'pending' ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : state === 'failed' ? (
-                          <X className="w-3 h-3 text-rose-600" />
-                        ) : (
-                          <Check className="w-3 h-3 text-emerald-600" />
-                        )}
-                      </span>
-                    </span>
-                    <p className="mt-0.5 text-xs leading-snug text-[hsl(var(--foreground))]">
-                      <QuerySnippet text={r.queryText} dissection={r.dissection} max={90} />
-                    </p>
-                  </button>
+                      <p className="mt-0.5 text-xs leading-snug text-[hsl(var(--foreground))]">
+                        <QuerySnippet text={r.queryText} dissection={r.dissection} max={90} />
+                      </p>
+                    </button>
+                  </div>
                 </li>
               );
             })}
@@ -249,6 +285,28 @@ export default function RuleApplyPreview({
               </li>
             )}
           </ul>
+          {/* The merge's second half: checked questions become example tabs,
+              carrying the responses generated here (no second generation). */}
+          {onAddExamples && (
+            <div className="shrink-0 border-t border-[hsl(var(--border))] px-3 py-2 flex items-center justify-between gap-2">
+              <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                {picked.size} checked
+              </span>
+              <button
+                onClick={() =>
+                  onAddExamples(
+                    [...picked],
+                    new Map([...picked].map((id) => [id, gen.get(id) ?? null]))
+                  )
+                }
+                disabled={picked.size === 0}
+                className="inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2 py-1 text-[11px] font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+                title="Open these as example tabs and revise the rule against them"
+              >
+                <Plus className="w-3 h-3" /> Add as examples
+              </button>
+            </div>
+          )}
         </div>
 
         {/* MIDDLE — current rule (sticky) · question · original response */}

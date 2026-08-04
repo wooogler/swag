@@ -945,6 +945,26 @@ export default function RuleWorkbench({
     await generateUpdated(need, ruleParamFor(viewed), gen);
   }
 
+  /** SCORE: from the cross-query preview — open checked questions as example
+   * tabs, seeding the responses generated THERE so the tabs open instantly
+   * (the preview runs under the same working rule, viewingLatest-gated). */
+  function addExamplesFromPreview(ids: number[], responses: Map<number, string | null>) {
+    setPreviewOpen(false);
+    if (ids.length === 0) return;
+    setUpdated((prev) => {
+      const next = { ...prev };
+      for (const id of ids) {
+        const t = responses.get(id);
+        if (t && next[id] === undefined) next[id] = { text: t, loading: false };
+      }
+      return next;
+    });
+    const existing = caseIds ?? [row.messageId];
+    const fresh = ids.filter((id) => !existing.includes(id));
+    if (fresh.length > 0) setCaseIds([...existing, ...fresh]);
+    selectTab(ids[0]);
+  }
+
   /* ---- timeline checkout --------------------------------------------------- */
 
   /** Check out a step from a timeline chip — its rule and response load in
@@ -1019,6 +1039,11 @@ export default function RuleWorkbench({
         isNirvana={isNirvana}
         seed={seed}
         onClose={() => setPreviewOpen(false)}
+        // SCORE: the preview doubles as the example picker — a bad response
+        // here is one checkbox away from being a tab to fix. Baseline stays
+        // review-only (its review set is built by hand, part of the ablation).
+        onAddExamples={promptMode ? undefined : addExamplesFromPreview}
+        existingIds={new Set(caseIds ?? [row.messageId])}
       />
     );
   }
@@ -1048,7 +1073,7 @@ export default function RuleWorkbench({
                 ? 'Apply your edit first, then Preview'
                 : promptMode
                   ? 'Preview these rules across the log (10 questions at a time)'
-                  : "Preview this rule across the intent's questions"
+                  : "Preview this rule across the intent's questions — and pull any in as examples to fix"
             }
           >
             <Eye className="w-3.5 h-3.5" /> Preview
@@ -1199,9 +1224,21 @@ export default function RuleWorkbench({
                 );
               })}
             <button
-              onClick={() => setPickerOpen(true)}
-              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-              title="Pull in more logged questions to try the rule against"
+              // SCORE: adding an example goes THROUGH the preview — see the
+              // rule across the intent's questions, check the ones to fix.
+              // Baseline keeps the blind picker (its hand-built review set is
+              // part of the ablation).
+              onClick={() => (promptMode ? setPickerOpen(true) : setPreviewOpen(true))}
+              disabled={
+                !promptMode &&
+                (boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving)
+              }
+              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+              title={
+                promptMode
+                  ? 'Pull in more logged questions to try the rule against'
+                  : "See this rule across the intent's questions and pull any in as examples"
+              }
             >
               <Plus className="w-3 h-3" /> Add example
             </button>
