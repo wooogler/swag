@@ -590,12 +590,36 @@ export default function RuleWorkbench({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(typeof data?.message === 'string' ? data.message : 'Save failed.');
+      const saved = (data.version as RuleVersion) ?? null;
+      // Persist this session's already-generated previews onto the saved
+      // version (store-only, no LLM cost) — the board's per-question version
+      // dropdown reads score_rule_version_responses, and without this only the
+      // anchor ever showed the rule's effect. Best-effort: a failure loses
+      // nothing but board evidence.
+      if (saved) {
+        const responses = Object.entries(updated)
+          .filter(([id, e]) => e.text && Number(id) !== (latest.anchorMessageId ?? row.messageId))
+          .map(([id, e]) => ({ messageId: Number(id), response: e.text as string }))
+          .slice(0, 50);
+        if (responses.length > 0) {
+          try {
+            await fetch(`${base}/intents/${intent.id}/rule-versions/${saved.versionNo}/apply`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ responses }),
+              signal: signal(),
+            });
+          } catch {
+            /* the anchor row (stored by the save itself) still lands */
+          }
+        }
+      }
       if (live()) {
         savedAnyRef.current = true;
         await loadVersions();
         setViewNo(null);
       }
-      return (data.version as RuleVersion) ?? null;
+      return saved;
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
       return null;

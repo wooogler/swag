@@ -1667,11 +1667,15 @@ export default function IntentBoard({
   const selectedOwnerId = useMemo(() => {
     if (selectedMessageId === null) return null;
     const res = resolutions.get(selectedMessageId);
-    // Only a matched INTENT owns a rule the viewer can revise here. A query
-    // answered by its type's default rule has an owner too (the type root) —
-    // editing that is the type-section affordance, wired in P3.
-    return res?.kind === 'matched' ? res.intentId : null;
-  }, [selectedMessageId, resolutions]);
+    // v7: every routed question has an owner — a matched intent, or the TYPE
+    // ROOT whose default rule answers it. Both keep a rule history, so both
+    // get the version dropdown.
+    if (res?.kind === 'matched') return res.intentId;
+    if (res?.kind === 'type_default' && selectedRow?.queryType) {
+      return typeRoots.find((t) => t.type === selectedRow.queryType)?.id ?? null;
+    }
+    return null;
+  }, [selectedMessageId, resolutions, selectedRow, typeRoots]);
   useEffect(() => {
     setViewerVersions(null);
     setViewedVersionNo(null);
@@ -2165,10 +2169,15 @@ export default function IntentBoard({
           deployedRule={deployedRuleByIntent.get(reviseTarget.intent.id) ?? null}
           viewVersion={reviseTarget.viewVersion}
           onClose={(changed) => {
+            const savedIntentId = reviseTarget.intent.id;
             setReviseTarget(null);
             if (changed) {
               setViewerVersionsNonce((n) => n + 1); // refetch the viewer dropdown
-              router.refresh();
+              // Visible refresh (status strip + ring on the revised intent's
+              // row) — a bare refresh leaves the stale board unchanged for
+              // seconds with no trace of the save.
+              setFlagIntent(savedIntentId);
+              startBoardRefresh(() => router.refresh());
             }
           }}
         />
@@ -2202,7 +2211,7 @@ export default function IntentBoard({
             setPromptReviseTarget(null);
             if (changed) {
               void syncPromptFromHolder();
-              router.refresh();
+              startBoardRefresh(() => router.refresh());
             }
           }}
         />
@@ -2245,7 +2254,12 @@ export default function IntentBoard({
           scopeLabel={QUERY_TYPE_LABELS[rootReviseTarget.root.type]}
           onClose={(changed) => {
             setRootReviseTarget(null);
-            if (changed) router.refresh();
+            if (changed) {
+              // The dropdown now covers type_default questions too (owner =
+              // the type root) — refetch it, and refresh visibly.
+              setViewerVersionsNonce((n) => n + 1);
+              startBoardRefresh(() => router.refresh());
+            }
           }}
         />
       ) : workbenchMode ? (
@@ -2611,6 +2625,16 @@ export default function IntentBoard({
                         No rule yet
                       </span>
                     )}
+                    {/* Proof a Save landed: the latest saved rule version. */}
+                    {intent.latestRuleVersion && (
+                      <SmallChip
+                        className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200"
+                        title={`Latest saved rule version${intent.latestRuleVersion.name ? ` — ${intent.latestRuleVersion.name}` : ''}`}
+                      >
+                        v{intent.latestRuleVersion.versionNo}
+                        {intent.latestRuleVersion.name ? ` · ${intent.latestRuleVersion.name}` : ''}
+                      </SmallChip>
+                    )}
                     <HeaderAction
                       onClick={() => anchor && setReviseTarget({ row: anchor, intent, viewVersion: null })}
                       disabled={!anchor}
@@ -2624,6 +2648,56 @@ export default function IntentBoard({
                       Edit Rule
                     </HeaderAction>
                   </div>
+                </div>
+              );
+            }
+            if (selection.kind === 'type' || selection.kind === 'residue') {
+              // The TYPE ROOT's rule — what answers every question here that no
+              // set claims. Shown like an intent's Then row so a saved root
+              // rule is visible on the board at all (it used to be nowhere).
+              const root =
+                selection.kind === 'type'
+                  ? typeRoots.find((t) => t.type === selection.typeKey)
+                  : typeRoots.find((t) => t.id === selection.scopeId);
+              if (!root) return null;
+              // Revise opens on a question this rule actually answers.
+              const anchor =
+                sortedRows.find(
+                  (r) =>
+                    r.queryType === root.type &&
+                    resolutions.get(r.messageId)?.kind === 'type_default'
+                ) ?? null;
+              return (
+                <div className="px-3 py-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20 flex items-start gap-2">
+                  <DetailLabel>Then</DetailLabel>
+                  {root.rule?.trim() ? (
+                    <ClampedText text={root.rule} />
+                  ) : (
+                    <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
+                      No rule yet — these questions get no system prompt
+                    </span>
+                  )}
+                  {root.latestRuleVersion && (
+                    <SmallChip
+                      className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200"
+                      title={`Latest saved rule version${root.latestRuleVersion.name ? ` — ${root.latestRuleVersion.name}` : ''}`}
+                    >
+                      v{root.latestRuleVersion.versionNo}
+                      {root.latestRuleVersion.name ? ` · ${root.latestRuleVersion.name}` : ''}
+                    </SmallChip>
+                  )}
+                  <HeaderAction
+                    onClick={() => anchor && setRootReviseTarget({ row: anchor, root })}
+                    disabled={!anchor}
+                    title={
+                      anchor
+                        ? `Edit the ${QUERY_TYPE_LABELS[root.type]} rule — how unclaimed questions here are answered`
+                        : 'Every question here is claimed by a set — edit those rules instead'
+                    }
+                    icon={<Pencil className="w-3 h-3" />}
+                  >
+                    Edit Rule
+                  </HeaderAction>
                 </div>
               );
             }
