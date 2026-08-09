@@ -726,6 +726,19 @@ export const studyGeneratedResponses = pgTable('study_generated_responses', {
   participantIdx: index('study_generated_responses_participant_idx').on(table.participantId),
 }));
 
+// The curated review set, per STUDY assignment (a reduced master and every
+// clone of it). A reduced master keeps whole threads so each curated question
+// can be read in its context — and those earlier turns are questions too, so
+// without this mark the board would list them as material to review.
+// No rows for an ordinary assignment → the board filters nothing there.
+export const studyReviewQuestions = pgTable('study_review_questions', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  messageId: integer('message_id').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('study_review_questions_unique').on(table.assignmentId, table.messageId),
+}));
+
 // Block test: the participant predicts whether their configuration will answer
 // as they intend, THEN sees the frozen answer, THEN rates the fit. The
 // prediction is stored before the answer is released, so guessed_at < rated_at

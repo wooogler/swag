@@ -236,6 +236,12 @@ interface IntentBoardProps {
   /** The rule each intent currently deploys to students (latest chat deploy) —
    * the Revise Preview compares the working rule against this. */
   deployedRules?: { id: number; rule: string | null }[];
+  /** STUDY only: the curated review set's message ids. When present the board
+   * LISTS and COUNTS only these — the surrounding turns of the same threads are
+   * context, not material to review — while the conversation viewer still shows
+   * every turn. Absent for ordinary assignments, which therefore behave as
+   * before. */
+  reviewSet?: number[] | null;
   openaiConfigured: boolean;
   /** Jelson taxonomy subtypes → fuzzy suggestions in the New Intent modal. */
   jelsonSuggestions: JelsonSuggestion[];
@@ -939,9 +945,17 @@ export default function IntentBoard({
   isNirvana,
   deployView,
   deployedRules,
+  reviewSet = null,
 }: IntentBoardProps) {
   const router = useRouter();
   const isBaseline = condition === 'baseline';
+  // What the board treats as the log. `rows` stays whole so a conversation can
+  // be read in full; everything that lists or counts questions works off this.
+  const reviewIds = useMemo(() => (reviewSet ? new Set(reviewSet) : null), [reviewSet]);
+  const listRows = useMemo(
+    () => (reviewIds ? rows.filter((r) => reviewIds.has(r.messageId)) : rows),
+    [rows, reviewIds]
+  );
   // intentId → the rule currently deployed to students (latest chat deploy).
   const deployedRuleByIntent = useMemo(
     () => new Map((deployedRules ?? []).map((d) => [d.id, d.rule])),
@@ -1362,7 +1376,7 @@ export default function IntentBoard({
 
   const resolutions = useMemo(() => {
     const map = new Map<number, RouteResolution>();
-    for (const r of rows) {
+    for (const r of listRows) {
       // No type yet → no chain to walk. Don't guess: the message is pending
       // until the next run types it (D9).
       const chain = r.queryType ? chains.get(r.queryType) : null;
@@ -1383,7 +1397,7 @@ export default function IntentBoard({
     const residueByType = new Map<ScoreQueryType, number>();
     let unassigned = 0;
     let pending = 0;
-    for (const r of rows) {
+    for (const r of listRows) {
       const res = resolutions.get(r.messageId);
       if (!res) continue;
       if (res.kind === 'matched') perIntent.set(res.intentId, (perIntent.get(res.intentId) ?? 0) + 1);
@@ -1393,7 +1407,7 @@ export default function IntentBoard({
       } else pending += 1;
     }
     return { perIntent, residueByType, unassigned, pending };
-  }, [rows, resolutions]);
+  }, [listRows, resolutions]);
 
   /** A set's badge: everything its subtree answers (its own residue + every
    * subset's), so a parent's number always equals its children plus its own
@@ -1404,7 +1418,7 @@ export default function IntentBoard({
       0
     );
   /** Queries with no type judgment yet — they cannot be routed at all. */
-  const untypedCount = useMemo(() => rows.filter((r) => !r.queryType).length, [rows]);
+  const untypedCount = useMemo(() => listRows.filter((r) => !r.queryType).length, [listRows]);
 
   /**
    * The delete modal's core promise: BEFORE anything is destroyed, show where
@@ -1473,7 +1487,7 @@ export default function IntentBoard({
   }, [selection, activeIntents, untypedCount, typeRoots]);
 
   const filteredRows = useMemo(() => {
-    return rows.filter((r) => {
+    return listRows.filter((r) => {
       const res = resolutions.get(r.messageId);
       if (!res) return false;
       switch (selection.kind) {
@@ -1502,7 +1516,7 @@ export default function IntentBoard({
           return selection.ids.includes(r.messageId);
       }
     });
-  }, [rows, resolutions, selection, subtreeIds, typeRoots]);
+  }, [listRows, resolutions, selection, subtreeIds, typeRoots]);
 
   const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -2032,7 +2046,8 @@ export default function IntentBoard({
         <RuleWorkbench
           key={`${reviseTarget.intent.id}-${reviseTarget.row.messageId}`}
           assignmentId={assignmentId}
-          rows={rows}
+          rows={listRows}
+          contextRows={rows}
           row={reviseTarget.row}
           intent={reviseTarget.intent}
           seedRule={seedRuleFor(reviseTarget.intent)}
@@ -2067,7 +2082,8 @@ export default function IntentBoard({
         <FilterWorkbench
           key={searchMode.kind === 'saved' ? `saved-${searchMode.searchId}` : `new-${searchMode.definition}`}
           assignmentId={assignmentId}
-          rows={rows}
+          rows={listRows}
+          contextRows={rows}
           isNirvana={isNirvana}
           mode={searchMode}
           typeLabel={searchMode.type ? QUERY_TYPE_LABELS[searchMode.type] : null}
@@ -2085,7 +2101,8 @@ export default function IntentBoard({
         <RuleWorkbench
           key={`prompt-revise-${promptReviseTarget.messageId}`}
           assignmentId={assignmentId}
-          rows={rows}
+          rows={listRows}
+          contextRows={rows}
           row={promptReviseTarget}
           intent={promptHolder}
           seedRule={basePrompt}
@@ -2110,7 +2127,8 @@ export default function IntentBoard({
         <RuleWorkbench
           key={`root-${rootReviseTarget.root.id}-${rootReviseTarget.row.messageId}`}
           assignmentId={assignmentId}
-          rows={rows}
+          rows={listRows}
+          contextRows={rows}
           row={rootReviseTarget.row}
           intent={{
             id: rootReviseTarget.root.id,
@@ -2157,7 +2175,8 @@ export default function IntentBoard({
           assignmentId={assignmentId}
           model={selectedModel}
           openaiConfigured={openaiConfigured}
-          rows={rows}
+          rows={listRows}
+          contextRows={rows}
           isNirvana={isNirvana}
           mode={workbenchMode}
           scopeAncestorIds={workbenchScopeAncestors}
@@ -2243,7 +2262,7 @@ export default function IntentBoard({
                the ONLY scrolling region of the baseline left column. */
             <div className="flex-1 min-h-0 overflow-y-auto pb-1">
               <BaselineFilterTree
-                rows={rows}
+                rows={listRows}
                 filters={savedSearches}
                 untypedCount={untypedCount}
                 selection={selection}

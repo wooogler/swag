@@ -163,6 +163,19 @@ export async function ensureStudyTables(): Promise<void> {
           "locked_by" text
         )`);
 
+      // Which questions of a STUDY assignment are the curated review set. A
+      // reduced master keeps whole threads so a question can be read in
+      // context, and those earlier turns are questions too — this is what
+      // separates "material to review" from "context to read". Absent for every
+      // ordinary assignment, which is exactly why the board is unaffected there.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_review_questions" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL,
+          "message_id" integer NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_review_questions_unique" ON "study_review_questions" ("assignment_id","message_id")`);
+
       // ── Study measurement: frozen question bank + frozen responses ───────
       // The block-test and A/B questions are NOT part of any clone's log, so
       // they live here as frozen text (context turns + question) rather than

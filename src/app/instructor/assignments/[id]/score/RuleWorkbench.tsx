@@ -345,6 +345,10 @@ interface RuleWorkbenchProps {
   assignmentId: string;
   /** Every question row — conversation threads and the intent's question list. */
   rows: ScoreQueryRow[];
+  /** Every turn of the threads the rows belong to. Lists narrow to the review
+   * set; a conversation must still be readable in full. Defaults to rows. */
+  contextRows?: ScoreQueryRow[];
+
   row: ScoreQueryRow; // anchor question (assigned to `intent`)
   intent: IntentSummary;
   /** The assignment's default prompt — the text a fresh intent's rule is
@@ -408,6 +412,7 @@ interface RuleWorkbenchProps {
 export default function RuleWorkbench({
   assignmentId,
   rows,
+  contextRows,
   row,
   intent,
   seedRule,
@@ -1519,7 +1524,7 @@ export default function RuleWorkbench({
                 )}
               </div>
               <ConversationThread
-                rows={rows}
+                rows={contextRows ?? rows}
                 current={activeRow}
                 isNirvana={isNirvana}
                 overrideResponse={

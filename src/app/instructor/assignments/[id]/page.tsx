@@ -10,7 +10,6 @@ import AssignmentTabs from './AssignmentTabs';
 import { getInstructor, isAdministrator } from '@/lib/auth';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { getParticipantClones } from '@/lib/study/store';
-import { STUDY_DATASETS } from '@/lib/study/config';
 import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 
 interface PageProps {

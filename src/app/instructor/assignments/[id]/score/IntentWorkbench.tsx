@@ -209,6 +209,10 @@ interface IntentWorkbenchProps {
   openaiConfigured: boolean;
   /** The whole log — sizes the rate fan-out and backs the conversation view. */
   rows: ScoreQueryRow[];
+  /** Every turn of the threads the rows belong to. Lists narrow to the review
+   * set; a conversation must still be readable in full. Defaults to rows. */
+  contextRows?: ScoreQueryRow[];
+
   isNirvana: boolean;
   mode: WorkbenchMode;
   /** The enclosing intents of this workbench's placement, nearest first —
@@ -235,6 +239,7 @@ export default function IntentWorkbench({
   model,
   openaiConfigured,
   rows,
+  contextRows,
   isNirvana,
   mode,
   scopeAncestorIds,
@@ -1835,7 +1840,7 @@ export default function IntentWorkbench({
         {boardRow ? (
           // ChatMessages owns the scroll (flex-1 overflow-y-auto), so the
           // thread scrolls inside the pane under the sticky Exit header.
-          <ConversationThread rows={rows} current={boardRow} isNirvana={isNirvana} expandMaterials />
+          <ConversationThread rows={contextRows ?? rows} current={boardRow} isNirvana={isNirvana} expandMaterials />
         ) : (
           <p className="p-4 text-sm text-[hsl(var(--muted-foreground))]">
             The conversation for this question is not available.

@@ -35,6 +35,10 @@ export type FilterMode =
 interface FilterWorkbenchProps {
   assignmentId: string;
   rows: ScoreQueryRow[];
+  /** Every turn of the threads the rows belong to. Lists narrow to the review
+   * set; a conversation must still be readable in full. Defaults to rows. */
+  contextRows?: ScoreQueryRow[];
+
   isNirvana: boolean;
   mode: FilterMode;
   /** The type's display accents, passed from the board so the top bar names
@@ -49,6 +53,7 @@ type FilterSort = 'newest' | 'oldest';
 export default function FilterWorkbench({
   assignmentId,
   rows,
+  contextRows,
   isNirvana,
   mode,
   typeLabel,
@@ -252,7 +257,7 @@ export default function FilterWorkbench({
                   <Minimize2 className="w-3.5 h-3.5" /> Exit conversation
                 </button>
               </div>
-              <ConversationThread rows={rows} current={convoRow} isNirvana={isNirvana} expandMaterials />
+              <ConversationThread rows={contextRows ?? rows} current={convoRow} isNirvana={isNirvana} expandMaterials />
             </div>
           )}
           {inThisFilter === null || visibleRows === null ? (

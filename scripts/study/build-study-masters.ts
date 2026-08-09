@@ -141,6 +141,11 @@ async function main() {
         newTitle: `${dataset.label} (study)`,
         includeEditorEvents: false,
         restrictTo,
+        // The curated questions, marked. The threads around them come along as
+        // context, so without this the board would list those earlier turns as
+        // material to review and the per-type balance would be whatever the
+        // threads happened to contain.
+        markReviewSourceMessageIds: review.map((r) => r.messageId),
       });
       // The study forbids the assignment description reaching the prompt; a
       // reduced master must never re-enable it by inheritance.
@@ -176,24 +181,29 @@ async function report(newId: string, sourceId: string, expectedQuestions: number
     SELECT 'ratings', count(*)::int FROM score_intent_ratings WHERE assignment_id = ${newId}
     UNION ALL
     SELECT 'types', count(*)::int FROM score_query_types WHERE assignment_id = ${newId}
+    UNION ALL
+    SELECT 'review-set', count(*)::int FROM study_review_questions WHERE assignment_id = ${newId}
   `);
   for (const row of counts) console.log(`    ${row.label.padEnd(10)} ${row.n}`);
 
+  // Per type over the MARKED questions — what the board will actually list.
   const byType = await db.execute<{ type: string; n: number }>(sql`
     SELECT t.type, count(*)::int AS n
     FROM score_query_types t
-    JOIN chat_messages m ON m.id = t.message_id
-    WHERE t.assignment_id = ${newId} AND m.role = 'user'
+    JOIN study_review_questions rq ON rq.message_id = t.message_id AND rq.assignment_id = ${newId}
+    WHERE t.assignment_id = ${newId}
     GROUP BY t.type ORDER BY t.type
   `);
-  console.log(`    per type   ${byType.map((r) => `${r.type}=${r.n}`).join(' ')}`);
+  console.log(`    per type   ${byType.map((r) => `${r.type}=${r.n}`).join(' ')} (review set)`);
 
   const questions = counts.find((c) => c.label === 'questions')?.n ?? 0;
-  if (questions !== expectedQuestions) {
-    console.log(
-      `    NOTE: ${questions} questions vs ${expectedQuestions} curated — the extra are earlier turns of the same threads, which the participant needs as context.`
-    );
+  const marked = counts.find((c) => c.label === 'review-set')?.n ?? 0;
+  if (marked !== expectedQuestions) {
+    console.log(`    ✗ marked ${marked} but curated ${expectedQuestions} — the board would list the wrong set.`);
   }
+  console.log(
+    `    ${questions} messages in the log, ${marked} listed as review material; the rest are context inside those threads.`
+  );
 
   // Template pins copy through _msg_map, so a starter boundary example pinned
   // to a question outside the review set is dropped. Not fatal — but it changes

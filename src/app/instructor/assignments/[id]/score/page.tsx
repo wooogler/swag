@@ -4,6 +4,7 @@ import {
   scoreConfigVersions,
   scoreQueryTypes,
   studentSessions,
+  studyReviewQuestions,
 } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { redirect, notFound } from 'next/navigation';
@@ -148,6 +149,16 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         .from(scoreQueryTypes)
         .where(eq(scoreQueryTypes.assignmentId, id)),
     ]);
+
+  // STUDY assignments carry a curated review set: the questions that ARE the
+  // material, as opposed to the earlier turns of the same threads, which the
+  // reduced master keeps only so each question can be read in context. No rows
+  // for an ordinary assignment → the board lists everything, as it always has.
+  const reviewMarks = await db
+    .select({ messageId: studyReviewQuestions.messageId })
+    .from(studyReviewQuestions)
+    .where(eq(studyReviewQuestions.assignmentId, id));
+  const reviewSet = reviewMarks.length > 0 ? reviewMarks.map((r) => r.messageId) : null;
 
   // Chat deploy versions — the header dropdown, and (?chatv=N) the read-only
   // version view of a past deploy.
@@ -421,6 +432,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               : undefined
           }
           deployedRules={deployedRules}
+        reviewSet={reviewSet}
           openaiConfigured={isOpenAIConfigured()}
           jelsonSuggestions={jelsonSuggestions}
           // NIRVANA responses are raw GPT text (single-newline line breaks that

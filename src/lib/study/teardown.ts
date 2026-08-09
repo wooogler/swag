@@ -39,6 +39,7 @@ const SCORE_TABLES_BY_ASSIGNMENT = [
   'baseline_prompt_versions',
   'baseline_previews',
   'review_set_items',
+  'study_review_questions',
   'study_events',
 ] as const;
 

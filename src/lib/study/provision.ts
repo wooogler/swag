@@ -72,9 +72,13 @@ export async function cloneStarterSet(
     newTitle: string;
     includeEditorEvents: boolean;
     restrictTo?: CloneRestriction[];
+    /** Source message ids to mark as the curated review set on the new
+     * assignment. Used when BUILDING a reduced master; a clone of one inherits
+     * its marks automatically (below) and passes nothing here. */
+    markReviewSourceMessageIds?: number[];
   }
 ): Promise<CloneCounts> {
-  const { sourceAssignmentId, newAssignmentId, newInstructorId, shareToken, newTitle, includeEditorEvents, restrictTo } = opts;
+  const { sourceAssignmentId, newAssignmentId, newInstructorId, shareToken, newTitle, includeEditorEvents, restrictTo, markReviewSourceMessageIds } = opts;
   const counts: CloneCounts = {};
   const restricted = Array.isArray(restrictTo);
 
@@ -369,6 +373,35 @@ export async function cloneStarterSet(
     WHERE rp.assignment_id = ${sourceAssignmentId}
   `);
   counts.score_rule_previews = await assignmentCount(tx, 'score_rule_previews', newAssignmentId);
+
+  // 16) Review-set marks. Two sources, both remapped through _msg_map while it
+  //     still exists: an explicit list (building a reduced master) and the
+  //     source's own marks (cloning one for a participant). A source with no
+  //     marks contributes none, so ordinary clones stay unmarked.
+  if (markReviewSourceMessageIds && markReviewSourceMessageIds.length > 0) {
+    const ids = sql.join(
+      markReviewSourceMessageIds.map((id) => sql`${id}`),
+      sql`, `
+    );
+    await tx.execute(sql`
+      INSERT INTO study_review_questions (assignment_id, message_id)
+      SELECT ${newAssignmentId}, mm.new_id
+      FROM _msg_map mm WHERE mm.old_id IN (${ids})
+      ON CONFLICT DO NOTHING
+    `);
+  }
+  await tx.execute(sql`
+    INSERT INTO study_review_questions (assignment_id, message_id)
+    SELECT ${newAssignmentId}, mm.new_id
+    FROM study_review_questions rq
+    JOIN _msg_map mm ON mm.old_id = rq.message_id
+    WHERE rq.assignment_id = ${sourceAssignmentId}
+    ON CONFLICT DO NOTHING
+  `);
+  counts.study_review_questions = await countExpr(
+    tx,
+    sql`SELECT count(*)::int AS n FROM study_review_questions WHERE assignment_id = ${newAssignmentId}`
+  );
 
   await tx.execute(sql`DROP TABLE IF EXISTS _sess_map, _conv_map, _msg_map, _intent_map, _keep`);
   return counts;
