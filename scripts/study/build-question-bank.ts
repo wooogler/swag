@@ -16,7 +16,7 @@
  *   npx tsx --env-file=.env scripts/study/build-question-bank.ts          # plan only
  *   npx tsx --env-file=.env scripts/study/build-question-bank.ts --apply
  */
-import { eq, inArray, sql } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import { chatMessages, studyGeneratedResponses, studyQuestionBank } from '../../src/db/schema';
 
