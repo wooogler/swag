@@ -659,6 +659,61 @@ export const studyCurationMeta = pgTable('study_curation_meta', {
   lockedBy: text('locked_by'),
 });
 
+// ---------------------------------------------------------------------------
+// Study measurement (block test + blind A/B). Both read FROZEN text: the
+// questions never belong to a participant's log, and the responses are
+// generated once after deploy and never regenerated — generation has no
+// temperature or seed control, so re-running would silently change what a
+// participant was shown.
+// ---------------------------------------------------------------------------
+
+// The block-test and A/B questions, frozen out of the ORIGINAL master at build
+// time. `context` is the prior turns verbatim ([{role, content}, …]) so a
+// question stays presentable and answerable no matter what the study masters
+// were later rebuilt from.
+export const studyQuestionBank = pgTable('study_question_bank', {
+  id: serial('id').primaryKey(),
+  datasetKey: text('dataset_key').notNull(),
+  kind: text('kind').notNull(), // 'test' | 'ab'
+  position: integer('position').notNull(), // presentation order (A/B: balanced blocks)
+  sourceMessageId: integer('source_message_id'), // provenance only
+  context: jsonb('context').notNull(),
+  question: text('question').notNull(),
+  queryType: text('query_type'),
+  subtype: text('subtype'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  slotUnique: uniqueIndex('study_question_bank_slot_unique').on(
+    table.datasetKey,
+    table.kind,
+    table.position
+  ),
+}));
+
+// One participant configuration's answer to one bank question, frozen.
+// config_ref pins WHICH configuration produced it ({deployId} for SCORE,
+// {baselineVersionNo} for baseline) so a later redeploy is detectable rather
+// than silently changing the meaning of a stored answer.
+export const studyGeneratedResponses = pgTable('study_generated_responses', {
+  id: serial('id').primaryKey(),
+  participantId: text('participant_id').notNull(),
+  cloneAssignmentId: text('clone_assignment_id').notNull(),
+  bankItemId: integer('bank_item_id').notNull(),
+  purpose: text('purpose').notNull(), // 'test' | 'ab'
+  configRef: jsonb('config_ref').notNull(),
+  applied: jsonb('applied'), // SCORE routing audit: intent, outcome, type
+  outcome: text('outcome').notNull(), // 'routed' | 'empty_config' (never fail_open)
+  response: text('response').notNull(),
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('study_generated_responses_unique').on(
+    table.cloneAssignmentId,
+    table.bankItemId
+  ),
+  participantIdx: index('study_generated_responses_participant_idx').on(table.participantId),
+}));
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
@@ -737,3 +792,5 @@ export type ReviewSetItem = typeof reviewSetItems.$inferSelect;
 export type StudyEvent = typeof studyEvents.$inferSelect;
 export type StudySetMember = typeof studySetMembers.$inferSelect;
 export type StudyCurationMeta = typeof studyCurationMeta.$inferSelect;
+export type StudyQuestionBankItem = typeof studyQuestionBank.$inferSelect;
+export type StudyGeneratedResponse = typeof studyGeneratedResponses.$inferSelect;

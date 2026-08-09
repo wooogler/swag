@@ -337,6 +337,27 @@ export interface DeployedPromptResult {
  * when that rule is empty (which means "no system message", exactly as an
  * unruled assignment behaves today).
  */
+/**
+ * Why a resolution ended the way it did. The distinction matters to callers
+ * that must NOT accept a fallback answer: 'empty_config' (a real deploy whose
+ * rules are all empty) and 'fail_open' (machinery failed) both end up sending
+ * no rule of the instructor's, but only the second is a defect. They are
+ * otherwise indistinguishable — an empty basePrompt makes their prompts equal,
+ * and a type root seeded from the base prompt makes text comparison unsound.
+ */
+export type ResolutionOutcome = 'routed' | 'empty_config' | 'fail_open';
+
+export type FailOpenReason =
+  | 'legacy_snapshot'
+  | 'unusable_type'
+  | 'no_chain'
+  | 'pending_rating';
+
+type SnapshotResolution =
+  | { outcome: 'routed'; systemPrompt: string; applied: DeployedPromptResult['applied'] }
+  | { outcome: 'empty_config'; systemPrompt: string; applied: null }
+  | { outcome: 'fail_open'; reason: FailOpenReason };
+
 async function resolveAgainstSnapshot(args: {
   snapshot: ChatDeploySnapshot;
   basePrompt: string;
@@ -344,11 +365,11 @@ async function resolveAgainstSnapshot(args: {
   prevQueryText: string | null;
   prevResponseText: string | null;
   callOptions?: { timeoutMs: number; maxRetries: number };
-}): Promise<{ systemPrompt: string; applied: DeployedPromptResult['applied'] } | null> {
+}): Promise<SnapshotResolution> {
   const { snapshot } = args;
   // A pre-v7 snapshot has no types and no tree — nothing to route with. The
   // instructor re-deploys once and it becomes routable (D5).
-  if (isLegacySnapshot(snapshot)) return null;
+  if (isLegacySnapshot(snapshot)) return { outcome: 'fail_open', reason: 'legacy_snapshot' };
 
   const { judged, roots } = splitSnapshot(snapshot);
   const anyRule =
@@ -357,7 +378,7 @@ async function resolveAgainstSnapshot(args: {
     // Nothing anywhere would change the answer. Skip both calls and return the
     // routed-else outcome with an empty prompt — NOT the base prompt, which is
     // reserved for errors (an empty rule means no system message at all).
-    return { systemPrompt: '', applied: null };
+    return { outcome: 'empty_config', systemPrompt: '', applied: null };
   }
 
   const callOptions = args.callOptions ?? { timeoutMs: 15_000, maxRetries: 0 };
@@ -392,7 +413,7 @@ async function resolveAgainstSnapshot(args: {
 
   // No usable type → no chain to walk. Fail open rather than guess: a wrong
   // type is unrecoverable (the query would only ever see that type's sets).
-  if (!typeResult.type) return null;
+  if (!typeResult.type) return { outcome: 'fail_open', reason: 'unusable_type' };
   const queryType = typeResult.type;
 
   const chains = compileChains(
@@ -405,7 +426,7 @@ async function resolveAgainstSnapshot(args: {
     }))
   );
   const chain = chains.get(queryType);
-  if (!chain) return null;
+  if (!chain) return { outcome: 'fail_open', reason: 'no_chain' };
 
   const ratings = new Map<number, RatingLevel>();
   if (ratingResult) for (const [id, r] of ratingResult.ratings) ratings.set(id, r.rating);
@@ -413,7 +434,7 @@ async function resolveAgainstSnapshot(args: {
   const resolution = resolveRoute(chain, ratings);
   // A gap BEFORE the winner means the rating call came back partial and the
   // real owner is unknowable — don't promote a later set, fail open (D4).
-  if (resolution.kind === 'pending') return null;
+  if (resolution.kind === 'pending') return { outcome: 'fail_open', reason: 'pending_rating' };
 
   const ownerId =
     resolution.kind === 'matched' ? resolution.intentId : resolution.intentId ?? null;
@@ -421,6 +442,7 @@ async function resolveAgainstSnapshot(args: {
   const rule = owner?.rule?.trim() ?? '';
   const outcome = resolution.kind === 'matched' ? ('intent' as const) : ('type_default' as const);
   return {
+    outcome: 'routed',
     systemPrompt: buildInjectedSystemPrompt(rule || null),
     applied: owner
       ? { intentId: owner.id, intentTitle: owner.title, rule, outcome, type: queryType }
@@ -446,11 +468,11 @@ export async function resolveDeployedChatPrompt(args: {
     if (!latest) return { systemPrompt: basePrompt, applied: null, deployVersion: null };
     const { snapshot, versionNo } = latest;
     const resolved = await resolveAgainstSnapshot({ ...args, snapshot, basePrompt });
-    if (!resolved) {
+    if (resolved.outcome === 'fail_open') {
       // Legacy snapshot, unusable type, or a partial rating response.
       return { systemPrompt: basePrompt, applied: null, deployVersion: versionNo };
     }
-    return { ...resolved, deployVersion: versionNo };
+    return { systemPrompt: resolved.systemPrompt, applied: resolved.applied, deployVersion: versionNo };
   } catch (error) {
     // Fail-open: the student gets the plain base prompt; log server-side only.
     console.error('SCORE deployed-prompt resolution failed (falling back to base):', error);
@@ -461,7 +483,13 @@ export async function resolveDeployedChatPrompt(args: {
 /**
  * Resolve the injected prompt for one message against a GIVEN snapshot — the
  * instructor TEST-CHAT answering under the CURRENT DRAFT rather than the latest
- * deploy. Same core as the student runtime, so preview = runtime holds.
+ * deploy, and the study's batch generation answering under a FROZEN deploy.
+ * Same core as the student runtime, so preview = runtime holds.
+ *
+ * Unlike the student path this reports HOW it resolved. A study batch must not
+ * store an answer the participant's configuration never produced, so it needs
+ * to tell "the config genuinely says nothing" from "the classifier timed out";
+ * the prompt text alone cannot (see ResolutionOutcome).
  */
 export async function resolveChatPromptFromSnapshot(args: {
   snapshot: ChatDeploySnapshot;
@@ -470,7 +498,24 @@ export async function resolveChatPromptFromSnapshot(args: {
   prevQueryText: string | null;
   prevResponseText: string | null;
   callOptions?: { timeoutMs: number; maxRetries: number };
-}): Promise<{ systemPrompt: string; applied: DeployedPromptResult['applied'] }> {
+}): Promise<{
+  systemPrompt: string;
+  applied: DeployedPromptResult['applied'];
+  outcome: ResolutionOutcome;
+  reason?: FailOpenReason;
+}> {
   const resolved = await resolveAgainstSnapshot(args);
-  return resolved ?? { systemPrompt: args.basePrompt, applied: null };
+  if (resolved.outcome === 'fail_open') {
+    return {
+      systemPrompt: args.basePrompt,
+      applied: null,
+      outcome: 'fail_open',
+      reason: resolved.reason,
+    };
+  }
+  return {
+    systemPrompt: resolved.systemPrompt,
+    applied: resolved.applied,
+    outcome: resolved.outcome,
+  };
 }

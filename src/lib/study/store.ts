@@ -150,6 +150,42 @@ export async function ensureStudyTables(): Promise<void> {
           "locked_by" text
         )`);
 
+      // ── Study measurement: frozen question bank + frozen responses ───────
+      // The block-test and A/B questions are NOT part of any clone's log, so
+      // they live here as frozen text (context turns + question) rather than
+      // as message ids a clone could resolve.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_question_bank" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "dataset_key" text NOT NULL,
+          "kind" text NOT NULL,
+          "position" integer NOT NULL,
+          "source_message_id" integer,
+          "context" jsonb NOT NULL,
+          "question" text NOT NULL,
+          "query_type" text,
+          "subtype" text,
+          "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_question_bank_slot_unique" ON "study_question_bank" ("dataset_key","kind","position")`);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_generated_responses" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "participant_id" text NOT NULL,
+          "clone_assignment_id" text NOT NULL,
+          "bank_item_id" integer NOT NULL,
+          "purpose" text NOT NULL,
+          "config_ref" jsonb NOT NULL,
+          "applied" jsonb,
+          "outcome" text NOT NULL,
+          "response" text NOT NULL,
+          "model" text,
+          "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_generated_responses_unique" ON "study_generated_responses" ("clone_assignment_id","bank_item_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_generated_responses_participant_idx" ON "study_generated_responses" ("participant_id")`);
+
       // FK-column indexes on core tables that Postgres does NOT auto-create.
       // Without them, deleting a clone's sessions/conversations/messages forces
       // a full seq-scan of the referencing table per row to validate the FK —
