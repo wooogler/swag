@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { instructors, studyParticipants } from '@/db/schema';
 import {
+  STUDY_ADMIN_CODES,
   STUDY_PASSCODE,
   STUDY_SESSION_MAX_AGE_SECONDS,
 } from '@/lib/study/config';
@@ -77,6 +78,16 @@ export async function POST(request: Request) {
     if (!isValidParticipantNumber(number)) {
       return NextResponse.json(
         { error: 'Participant ID may use only letters, digits, "-" and "_" (max 32).' },
+        { status: 400 }
+      );
+    }
+    // A researcher code is not a participant number. Without this, a researcher
+    // who lands on the participant door and types their own code gets a
+    // participant account — clones and all — sitting in the roster as if it
+    // were a session. Point them at their own door instead.
+    if (STUDY_ADMIN_CODES.includes(number)) {
+      return NextResponse.json(
+        { error: 'That is a researcher code — sign in at /study/admin instead.' },
         { status: 400 }
       );
     }
