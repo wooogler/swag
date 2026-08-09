@@ -436,7 +436,7 @@ export default function CurationBoard({
           checks, so they are shown as the work rather than as a list of
           errors — a count list of twelve had to be truncated, which hid the
           one violation that was not a count. */}
-      <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+      <div className="mb-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
         {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
           const have = setCounts.get(kind) ?? 0;
           const want = targets[kind] * SCORE_QUERY_TYPES.length;
@@ -476,7 +476,7 @@ export default function CurationBoard({
                   ◐ {boundaryHave}/{boundaryWant}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-4 gap-y-0.5">
                 {SCORE_QUERY_TYPES.map((type) => {
                   const n = setCounts.get(`${kind}:${type}`) ?? 0;
                   const target = targets[kind];
