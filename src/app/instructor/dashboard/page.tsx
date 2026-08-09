@@ -20,8 +20,14 @@ export default async function DashboardPage() {
     redirect('/login');
   }
 
-  // Study participant? → header gets a "reset all my workspaces" control.
+  // A study participant never belongs on the dashboard: it lists BOTH of their
+  // clones at once, which would hand them the second block's material before
+  // its tutorial, plus New Assignment / share-link controls that are not part
+  // of the study. Their home is the phase-gated session page.
   const studyParticipant = await getCurrentStudyParticipant();
+  if (studyParticipant) {
+    redirect('/study/session');
+  }
 
   const isAdmin = isAdministrator(instructor);
   const assignmentsQuery = db
@@ -90,7 +96,6 @@ export default async function DashboardPage() {
             </div>
             <InstructorHeaderActions
               email={instructor.email}
-              studyReset={studyParticipant ? { scope: 'all' } : undefined}
             />
           </div>
         </div>

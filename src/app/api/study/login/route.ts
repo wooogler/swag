@@ -100,12 +100,14 @@ export async function POST(request: Request) {
       path: '/',
     });
 
-    // Land on the dashboard, which lists all of this participant's dataset boards.
+    // Land on the session page, which shows only what the current phase allows.
+    // (The instructor dashboard lists BOTH clones at once, which would hand a
+    // participant the second block's material before its tutorial.)
     return NextResponse.json({
       success: true,
       participantNumber: participant.participantNumber,
       datasets: clones.map((c) => c.datasetKey),
-      redirect: '/instructor/dashboard',
+      redirect: '/study/session',
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

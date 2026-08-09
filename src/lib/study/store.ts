@@ -121,6 +121,19 @@ export async function ensureStudyTables(): Promise<void> {
           "assignment_id" text NOT NULL, "event_type" text NOT NULL, "payload" jsonb, "created_at" timestamp NOT NULL
         )`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_events_assignment_idx" ON "study_events" ("assignment_id")`);
+      // Phase transitions belong to the PARTICIPANT, not to one clone (break,
+      // A/B and done span both), so the assignment becomes optional and the
+      // participant becomes recordable.
+      await db.execute(sql`ALTER TABLE "study_events" ADD COLUMN IF NOT EXISTS "participant_id" text`);
+      await db.execute(sql`ALTER TABLE "study_events" ALTER COLUMN "assignment_id" DROP NOT NULL`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_events_participant_idx" ON "study_events" ("participant_id")`);
+
+      // Session state: the counterbalancing cell (derived from the number, but
+      // RECORDED so the analysis never has to re-derive it) and the phase the
+      // facilitator has advanced the participant to.
+      await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "cell" integer`);
+      await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "block_order" text`);
+      await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "phase" text NOT NULL DEFAULT 'not_started'`);
 
       // ── Set curation (researcher admin tool) ────────────────────────────
       // Which MASTER question sits in which curated set. Keyed by master

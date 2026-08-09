@@ -1,46 +1,21 @@
 /**
- * Reset the CURRENT study participant's workspace from the header UI.
+ * Participant self-reset — CLOSED.
  *
- * Authorized only for a session that belongs to a study participant. With a
- * `datasetKey` it resets just that dataset's board (returns the new board URL);
- * without one it resets ALL of the participant's datasets (returns the
- * dashboard). Resetting discards the participant's SCORE work and re-clones the
- * current master(s) — the new clones have fresh assignment ids, so the client
- * must navigate to the returned `redirect`.
+ * This used to let a participant re-clone their own workspace from the header.
+ * During a moderated session that is a foot-gun: a reset mid-block silently
+ * discards the work being measured, and any frozen block-test or A/B answers
+ * would suddenly refer to a workspace that no longer exists (their clone gets a
+ * fresh assignment id). Resets now belong to the facilitator console
+ * (/api/study/admin/participants/manage), which records who did it and when.
+ *
+ * The route stays so that any client still calling it gets a clear refusal
+ * rather than a 404 that reads like a bug.
  */
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
-import { STUDY_DATASETS } from '@/lib/study/config';
-import { getCurrentStudyParticipant } from '@/lib/study/session';
-import { resetParticipant, resetParticipantDataset } from '@/lib/study/provision';
 
-const schema = z.object({ datasetKey: z.string().optional() });
-
-export async function POST(request: Request) {
-  try {
-    const participant = await getCurrentStudyParticipant();
-    if (!participant) {
-      return NextResponse.json({ error: 'Not a study participant' }, { status: 403 });
-    }
-
-    const body = await request.json().catch(() => ({}));
-    const { datasetKey } = schema.parse(body ?? {});
-
-    if (datasetKey) {
-      if (!STUDY_DATASETS.some((d) => d.key === datasetKey)) {
-        return NextResponse.json({ error: 'Unknown dataset' }, { status: 400 });
-      }
-      const clone = await resetParticipantDataset(participant, datasetKey);
-      return NextResponse.json({
-        success: true,
-        redirect: `/instructor/assignments/${clone.assignmentId}`,
-      });
-    }
-
-    await resetParticipant(participant);
-    return NextResponse.json({ success: true, redirect: '/instructor/dashboard' });
-  } catch (error) {
-    console.error('Study reset error:', error);
-    return NextResponse.json({ error: 'Reset failed' }, { status: 500 });
-  }
+export async function POST() {
+  return NextResponse.json(
+    { error: 'Resets are handled by the study facilitator.' },
+    { status: 403 }
+  );
 }

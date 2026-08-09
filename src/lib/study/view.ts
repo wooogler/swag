@@ -11,11 +11,13 @@ export function resolveStudioView(opts: {
   viewParam: string | null; // ?view=score|baseline
   isParticipant: boolean; // getCurrentStudyParticipant() != null
 }): StudioView {
-  // ── PHASE 2 (enable before the study launches): participants are locked to
-  //    their assigned condition and cannot use ?view to peek at the other tool.
-  // if (opts.isParticipant) return opts.storedCondition ?? 'score';
+  // ── PHASE 2 (live): a participant sees the condition assigned to this clone
+  //    and nothing else. ?view is ignored for them — seeing the other tool
+  //    would collapse the within-subject comparison the study is built on.
+  //    Administrators keep the override: previewing both is how the research
+  //    team checks parity, and they are never a data point.
+  if (opts.isParticipant) return opts.storedCondition ?? 'score';
 
-  // ── PHASE 1 (current — dev/pilot): open. Anyone can preview either via ?view.
   if (opts.viewParam === 'score' || opts.viewParam === 'baseline') return opts.viewParam;
   return opts.storedCondition ?? 'score';
 }

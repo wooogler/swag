@@ -502,6 +502,14 @@ export const studyParticipants = pgTable('study_participants', {
   participantNumber: text('participant_number').notNull(),
   instructorId: text('instructor_id').notNull().references(() => instructors.id),
   label: text('label'),
+  // Counterbalancing cell (1-4) and the dataset order it implies. Both are
+  // DERIVED from the participant number, but recorded at provisioning so the
+  // analysis reads what a session actually ran as rather than re-deriving it
+  // from a rule that might later change.
+  cell: integer('cell'),
+  blockOrder: text('block_order'), // e.g. 'swag,nirvana'
+  // Where the facilitator has advanced this participant to (StudyPhase).
+  phase: text('phase').notNull().default('not_started'),
   createdAt: timestamp('created_at').notNull(),
   lastLoginAt: timestamp('last_login_at'),
 }, (table) => ({
@@ -612,14 +620,18 @@ export const reviewSetItems = pgTable('review_set_items', {
 }));
 
 // Behavioral event log (both conditions) — the source of process metrics.
+// assignment_id is nullable because phase transitions belong to the
+// participant: break, A/B and done span both clones and sit on neither.
 export const studyEvents = pgTable('study_events', {
   id: serial('id').primaryKey(),
-  assignmentId: text('assignment_id').notNull(),
+  assignmentId: text('assignment_id'),
+  participantId: text('participant_id'),
   eventType: text('event_type').notNull(),
   payload: jsonb('payload'),
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({
   assignmentIdx: index('study_events_assignment_idx').on(table.assignmentId),
+  participantIdx: index('study_events_participant_idx').on(table.participantId),
 }));
 
 // ---------------------------------------------------------------------------

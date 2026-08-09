@@ -4,32 +4,16 @@ import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 import { Settings, LogOut } from 'lucide-react';
 import Link from 'next/link';
-import StudyResetButton from '@/components/study/StudyResetButton';
-
 interface InstructorHeaderActionsProps {
     email: string;
-    /** Present only for study participants → renders the workspace reset control. */
-    studyReset?: {
-        scope: 'dataset' | 'all';
-        datasetKey?: string;
-        datasetLabel?: string;
-    };
 }
 
-export default function InstructorHeaderActions({ email, studyReset }: InstructorHeaderActionsProps) {
+export default function InstructorHeaderActions({ email }: InstructorHeaderActionsProps) {
     return (
         <div className="flex items-center gap-2">
             <span className="text-sm text-[hsl(var(--muted-foreground))] mr-2 hidden sm:inline-block">
                 {email}
             </span>
-
-            {studyReset && (
-                <StudyResetButton
-                    scope={studyReset.scope}
-                    datasetKey={studyReset.datasetKey}
-                    datasetLabel={studyReset.datasetLabel}
-                />
-            )}
 
             {/* Settings */}
             <Link href="/instructor/settings" passHref>

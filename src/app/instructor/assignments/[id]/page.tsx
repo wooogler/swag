@@ -25,16 +25,14 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
     redirect('/login');
   }
 
-  // Study participants shouldn't see the (inherited master) deadline, and get a
-  // per-dataset "Reset" control in the header for this dataset's board.
+  // Study participants shouldn't see the (inherited master) deadline. The
+  // per-dataset Reset control is gone from their header: resetting mid-session
+  // discards the block being measured, so it belongs to the facilitator console.
   const studyParticipant = await getCurrentStudyParticipant();
-  let studyReset: { scope: 'dataset'; datasetKey: string; datasetLabel: string } | undefined;
   if (studyParticipant) {
     const clones = await getParticipantClones(studyParticipant.id);
-    const thisClone = clones.find((c) => c.assignmentId === id);
-    if (thisClone) {
-      const label = STUDY_DATASETS.find((d) => d.key === thisClone.datasetKey)?.label ?? 'this dataset';
-      studyReset = { scope: 'dataset', datasetKey: thisClone.datasetKey, datasetLabel: label };
+    if (!clones.some((c) => c.assignmentId === id)) {
+      redirect('/study/session');
     }
   }
 
@@ -156,20 +154,33 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {/* PHASE 1 (dev/pilot): both conditions openly reachable. PHASE 2
-                  will gate these behind resolveStudioView for participants. */}
-              <Link href={`/instructor/assignments/${id}/score?view=score`}>
-                <Button variant="outline">
-                  <BarChart3 className="w-4 h-4 mr-2" />
-                  SCORE
-                </Button>
-              </Link>
-              <Link href={`/instructor/assignments/${id}/score?view=baseline`}>
-                <Button variant="outline">
-                  <FileText className="w-4 h-4 mr-2" />
-                  Baseline
-                </Button>
-              </Link>
+              {/* PHASE 2: a participant gets ONE neutrally-named door — naming
+                  the two conditions, or offering both, tells them which tool is
+                  the researchers' and invites comparison the design measures
+                  another way. Administrators keep both preview buttons. */}
+              {studyParticipant ? (
+                <Link href={`/instructor/assignments/${id}/score`}>
+                  <Button variant="outline">
+                    <BarChart3 className="w-4 h-4 mr-2" />
+                    Chatbot Studio
+                  </Button>
+                </Link>
+              ) : (
+                <>
+                  <Link href={`/instructor/assignments/${id}/score?view=score`}>
+                    <Button variant="outline">
+                      <BarChart3 className="w-4 h-4 mr-2" />
+                      SCORE
+                    </Button>
+                  </Link>
+                  <Link href={`/instructor/assignments/${id}/score?view=baseline`}>
+                    <Button variant="outline">
+                      <FileText className="w-4 h-4 mr-2" />
+                      Baseline
+                    </Button>
+                  </Link>
+                </>
+              )}
               {canEdit && (
                 <Link href={`/instructor/assignments/${id}/edit`}>
                   <Button variant="outline">
@@ -178,7 +189,7 @@ export default async function AssignmentDetailPage({ params }: PageProps) {
                   </Button>
                 </Link>
               )}
-              <InstructorHeaderActions email={instructor.email} studyReset={studyReset} />
+              <InstructorHeaderActions email={instructor.email} />
             </div>
           </div>
         </div>

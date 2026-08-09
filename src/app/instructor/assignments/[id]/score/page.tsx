@@ -48,6 +48,7 @@ import IntentBoard, {
   type TypeRootSummary,
 } from './IntentBoard';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
+import { allowedAssignmentIds } from '@/lib/study/console-store';
 import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
 import { ensureStudyTables } from '@/lib/study/store';
@@ -83,6 +84,19 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     getCloneCondition(id),
     getCurrentStudyParticipant(),
   ]);
+  // Phase gate: a participant may only open the clone their CURRENT phase is
+  // about. Reaching the other block's board early exposes the second
+  // condition's material before its tutorial; reopening a finished block's
+  // board lets them edit a configuration the measurements are already frozen
+  // against. Both are silent data corruption, so this redirects rather than
+  // rendering a warning.
+  if (participant) {
+    const allowed = await allowedAssignmentIds(participant);
+    if (!allowed.includes(id)) {
+      redirect('/study/session');
+    }
+  }
+
   const studioView = resolveStudioView({
     storedCondition,
     viewParam: view ?? null,

@@ -38,6 +38,7 @@ import {
   normalizeParticipantNumber,
 } from './store';
 import { deleteParticipantClones, deleteParticipantCloneByDataset } from './teardown';
+import { blockPlan, cellForParticipant } from './phases';
 
 export type CloneCounts = Record<string, number>;
 
@@ -430,11 +431,32 @@ export async function ensureParticipantSetup(
   await Promise.all([ensureScoreTable(), ensureIntentTables(), ensureStudyTables()]);
 
   const participant = await ensureParticipantAccount(number);
+  await recordCounterbalancing(participant);
   const clones: StudyClone[] = [];
   for (const dataset of STUDY_DATASETS) {
     clones.push(await ensureClone(participant, dataset));
   }
   return { participant, clones };
+}
+
+/**
+ * Stamp the counterbalancing cell + block order onto the participant row.
+ *
+ * Both are pure functions of the participant number, so this records rather
+ * than decides — but recording is what lets the analysis read the cell a
+ * session actually ran as, instead of re-deriving it from a rule that may have
+ * been edited since. Idempotent; never overwrites an already-stamped row.
+ */
+async function recordCounterbalancing(participant: StudyParticipant): Promise<void> {
+  if (participant.cell != null && participant.blockOrder) return;
+  const plan = blockPlan(participant.participantNumber);
+  await db
+    .update(studyParticipants)
+    .set({
+      cell: cellForParticipant(participant.participantNumber),
+      blockOrder: plan.map((p) => p.datasetKey).join(','),
+    })
+    .where(eq(studyParticipants.id, participant.id));
 }
 
 /**
