@@ -622,6 +622,43 @@ export const studyEvents = pgTable('study_events', {
   assignmentIdx: index('study_events_assignment_idx').on(table.assignmentId),
 }));
 
+// ---------------------------------------------------------------------------
+// Set curation (researcher admin tool, docs/CURATION_ADMIN_UI_PLAN.md).
+// Rows key MASTER questions — the participant clones never see these tables;
+// the curated sets reach them by being BUILT INTO the reduced study masters.
+// ---------------------------------------------------------------------------
+
+// Which master question belongs to which curated set. The unique index on
+// (dataset, message) IS the exclusivity rule: review / test / ab cannot overlap.
+export const studySetMembers = pgTable('study_set_members', {
+  id: serial('id').primaryKey(),
+  datasetKey: text('dataset_key').notNull(),
+  setKind: text('set_kind').notNull(), // 'review' | 'test' | 'ab'
+  sourceMessageId: integer('source_message_id').notNull(),
+  position: doublePrecision('position'),
+  // Classification snapshot AT ASSIGNMENT TIME. Kept denormalized so a later
+  // re-classification cannot silently rewrite what a set was balanced on, and
+  // so post-session analysis can slice by type/subtype without re-deriving.
+  queryType: text('query_type'),
+  subtype: text('subtype'),
+  rating: text('rating'), // 'clearly_in' | 'probably_in' at assignment time
+  addedBy: text('added_by'), // researcher code
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('study_set_members_unique').on(table.datasetKey, table.sourceMessageId),
+  kindIdx: index('study_set_members_kind_idx').on(table.datasetKey, table.setKind),
+}));
+
+// Per-dataset curation state: the isolated demo subtype and the confirm lock.
+export const studyCurationMeta = pgTable('study_curation_meta', {
+  datasetKey: text('dataset_key').primaryKey(),
+  // Subtype TITLE (not an intent id): template rows are per-assignment, but the
+  // demo subtype must be excluded from BOTH datasets, and titles are shared.
+  demoSubtype: text('demo_subtype'),
+  lockedAt: timestamp('locked_at'),
+  lockedBy: text('locked_by'),
+});
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
@@ -698,3 +735,5 @@ export type BaselinePromptVersion = typeof baselinePromptVersions.$inferSelect;
 export type BaselinePreview = typeof baselinePreviews.$inferSelect;
 export type ReviewSetItem = typeof reviewSetItems.$inferSelect;
 export type StudyEvent = typeof studyEvents.$inferSelect;
+export type StudySetMember = typeof studySetMembers.$inferSelect;
+export type StudyCurationMeta = typeof studyCurationMeta.$inferSelect;

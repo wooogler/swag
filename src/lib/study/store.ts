@@ -122,6 +122,34 @@ export async function ensureStudyTables(): Promise<void> {
         )`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_events_assignment_idx" ON "study_events" ("assignment_id")`);
 
+      // ── Set curation (researcher admin tool) ────────────────────────────
+      // Which MASTER question sits in which curated set. Keyed by master
+      // message id; the unique index below is the set-exclusivity rule (a
+      // question can be review OR test OR ab, never two).
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_set_members" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "dataset_key" text NOT NULL,
+          "set_kind" text NOT NULL,
+          "source_message_id" integer NOT NULL,
+          "position" double precision,
+          "query_type" text,
+          "subtype" text,
+          "rating" text,
+          "added_by" text,
+          "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_set_members_unique" ON "study_set_members" ("dataset_key","source_message_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_set_members_kind_idx" ON "study_set_members" ("dataset_key","set_kind")`);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_curation_meta" (
+          "dataset_key" text PRIMARY KEY NOT NULL,
+          "demo_subtype" text,
+          "locked_at" timestamp,
+          "locked_by" text
+        )`);
+
       // FK-column indexes on core tables that Postgres does NOT auto-create.
       // Without them, deleting a clone's sessions/conversations/messages forces
       // a full seq-scan of the referencing table per row to validate the FK —

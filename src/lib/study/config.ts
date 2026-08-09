@@ -46,6 +46,50 @@ export const STUDY_DATASETS: StudyDataset[] = [
 // Keeps typos from spawning junk clones; still permissive (e.g. P01, 7, A12).
 export const PARTICIPANT_NUMBER_RE = /^[A-Z0-9][A-Z0-9_-]{0,31}$/;
 
+// ── Set curation (researcher-side admin tool) ─────────────────────────────
+// Pre-registered researcher codes; only these may sign in at /study/admin.
+// Empty (unset env) = the tool is closed.
+export const STUDY_ADMIN_CODES: string[] = (process.env.STUDY_ADMIN_CODES ?? '')
+  .split(',')
+  .map((c) => c.trim().toUpperCase())
+  .filter(Boolean);
+
+export const STUDY_ADMIN_PASSCODE = process.env.STUDY_ADMIN_PASSCODE ?? '';
+
+// Internal email domain for the auto-created researcher accounts.
+export const ADMIN_EMAIL_DOMAIN = 'admin.score.local';
+
+/**
+ * The masters curation reads from — deliberately SEPARATE from STUDY_DATASETS.
+ * Curation always works on the FULL logs (507/348); STUDY_DATASETS points at
+ * whatever participants clone, which becomes the reduced study masters once
+ * they are built. Pointing curation at STUDY_DATASETS would silently re-scope
+ * it to the 60-question subset after that switch.
+ */
+export interface CurationDataset {
+  key: string;
+  label: string;
+  masterAssignmentId: string;
+}
+
+export const CURATION_DATASETS: CurationDataset[] = [
+  { key: 'swag', label: 'SWAG', masterAssignmentId: '03201d5d-08c7-4db1-8e5c-f5edc6563d9a' },
+  { key: 'nirvana', label: 'NIRVANA', masterAssignmentId: 'ea905a40-ad5d-4fe5-bbf8-91d6b1998331' },
+];
+
+export function curationDataset(key: string): CurationDataset | undefined {
+  return CURATION_DATASETS.find((d) => d.key === key);
+}
+
+/** Per-QUERY-TYPE target size of each curated set (design §4). */
+export const SET_TARGETS_PER_TYPE = { review: 15, test: 2, ab: 2 } as const;
+export type CurationSetKind = keyof typeof SET_TARGETS_PER_TYPE;
+export const CURATION_SET_KINDS = Object.keys(SET_TARGETS_PER_TYPE) as CurationSetKind[];
+
+export function isCurationSetKind(v: unknown): v is CurationSetKind {
+  return typeof v === 'string' && (CURATION_SET_KINDS as string[]).includes(v);
+}
+
 // Study session cookie lifetime. Short (1 day) vs the 30-day instructor
 // default — a lab session is bounded, and participants get a real
 // instructor-role account, so we don't want long-lived sessions lingering.

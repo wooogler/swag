@@ -1,0 +1,768 @@
+/**
+ * Set curation — the researcher-side assembly of the study's question sets.
+ *
+ * Reads the MASTER logs through the classification the system already has:
+ *   • 4-type multiclass  → score_query_types (one verdict per message, ever)
+ *   • starter subtypes   → score_intent_ratings on the master's TEMPLATE intents
+ * so there is no cold start and no human labelling pass. The judge's grades are
+ * the curation vocabulary too: clearly_in reads as "certain", probably_in as
+ * "boundary" (design §4's certain/boundary split, derived rather than voted).
+ *
+ * Writes only study_set_members / study_curation_meta. The curated sets reach
+ * participants by being BUILT INTO the reduced study masters (M6), never by
+ * this table being read at study time.
+ */
+import { and, eq, inArray } from 'drizzle-orm';
+import { db } from '@/db/db';
+import {
+  chatConversations,
+  chatMessages,
+  scoreDissections,
+  scoreIntentRatings,
+  scoreIntents,
+  scoreQueryTypes,
+  studentSessions,
+  studyCurationMeta,
+  studySetMembers,
+} from '@/db/schema';
+import { getQueryRecords } from '@/lib/score/queries';
+import {
+  SCORE_QUERY_TYPES,
+  TYPE_CLASSIFIER_VERSION,
+  type DissectionResult,
+  type MaterialKind,
+  type ScoreQueryType,
+} from '@/lib/score/intents';
+import { classifyMessageType } from '@/lib/score/type-classifier';
+import { isOpenAIConfigured } from '@/lib/score/classifier';
+import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
+import { getDefaultScoreModel } from '@/lib/score/models';
+import { DEFAULT_SCORE_CONFIG } from '@/lib/score/default-config';
+import { flattenSubtypes } from '@/lib/score/config';
+import { LEGACY_TYPE_TO_QUERY_TYPE } from '@/lib/score/jelson-suggest';
+import {
+  CURATION_SET_KINDS,
+  SET_TARGETS_PER_TYPE,
+  curationDataset,
+  type CurationSetKind,
+} from './config';
+import { ensureStudyTables } from './store';
+
+/** Judge grades curation exposes. Everything else is "not in this subtype". */
+export type CurationGrade = 'clearly_in' | 'probably_in';
+
+export interface CurationSubtype {
+  intentId: number;
+  title: string;
+  type: ScoreQueryType | null; // via the starter taxonomy, not the intent row
+  clearlyIn: number;
+  probablyIn: number;
+  /** False for the master's four TYPE-LEVEL starter sets ("Planning", "All", …)
+   * and any renamed row: they claim questions across a whole type, so they
+   * browse fine but must not drive the certain/boundary arithmetic. */
+  isSubtype: boolean;
+}
+
+/**
+ * Per-question certainty, the machine reading of design §4's certain/boundary
+ * split (which was defined by labeller agreement):
+ *   certain   — exactly one subtype claims it clearly_in
+ *   boundary  — nothing claims it clearly but something claims it probably,
+ *               OR two+ subtypes claim it clearly (competing claims)
+ *   unmatched — no subtype claims it at either grade
+ * Computed over real subtypes only (isSubtype), so the type-level starters
+ * cannot make every question look boundary.
+ */
+export type QuestionGrade = 'certain' | 'boundary' | 'unmatched';
+
+export interface CurationQuestion {
+  messageId: number;
+  participantToken: string;
+  turnIndex: number;
+  queryText: string;
+  queryType: ScoreQueryType | null;
+  /** subtype intentId → grade, only for the two grades curation shows. */
+  matches: Record<number, CurationGrade>;
+  grade: QuestionGrade;
+}
+
+export interface CurationMember {
+  messageId: number;
+  setKind: CurationSetKind;
+  queryType: string | null;
+  subtype: string | null;
+  /** QuestionGrade frozen at assignment time (stored in the `rating` column). */
+  grade: string | null;
+  position: number | null;
+}
+
+export interface CurationState {
+  dataset: { key: string; label: string; assignmentId: string };
+  questions: CurationQuestion[];
+  subtypes: CurationSubtype[];
+  members: CurationMember[];
+  meta: { demoSubtype: string | null; lockedAt: string | null; lockedBy: string | null };
+  /** Questions blocked from assignment: the demo subtype's students (design §4
+   * isolates the whole student, in BOTH datasets). */
+  excludedMessageIds: number[];
+  typeCounts: Record<string, number>;
+  /** Messages with no usable type verdict — what [Refresh classification] fixes. */
+  missingTypeCount: number;
+  /** Boundary share of the CLASSIFIED log (boundary / (certain + boundary)) —
+   * the natural ratio each set is measured against (design §4). */
+  naturalBoundaryRatio: number;
+  gradeCounts: Record<QuestionGrade, number>;
+}
+
+/** Starter-taxonomy subtype label → query type (the mapping the chooser uses). */
+function subtypeTypeByLabel(): Map<string, ScoreQueryType> {
+  const map = new Map<string, ScoreQueryType>();
+  for (const { type, subtype } of flattenSubtypes(DEFAULT_SCORE_CONFIG)) {
+    const qt = LEGACY_TYPE_TO_QUERY_TYPE[type.key];
+    if (qt) map.set(subtype.label.trim().toLowerCase(), qt);
+  }
+  return map;
+}
+
+function isGrade(rating: string): rating is CurationGrade {
+  return rating === 'clearly_in' || rating === 'probably_in';
+}
+
+/**
+ * Everything the curation screen renders, in one round trip.
+ *
+ * The subtype verdicts are read NEWEST-PER-(message,intent) REGARDLESS OF
+ * def_hash — the templates were rated when the master was prepared, and a
+ * rating-harness version bump since then changes the hash without changing the
+ * definition text. Same rule probe.ts uses when it seeds a filter from a
+ * starter suggestion; reading only the current hash would show empty subtypes.
+ */
+export async function getCurationState(datasetKey: string): Promise<CurationState> {
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  await ensureStudyTables();
+  const assignmentId = dataset.masterAssignmentId;
+
+  const [records, sessions, templates, typeRows, ratingRows, memberRows, metaRows] =
+    await Promise.all([
+      getQueryRecords(assignmentId),
+      db
+        .select({ id: studentSessions.id, participantToken: studentSessions.participantToken })
+        .from(studentSessions)
+        .where(eq(studentSessions.assignmentId, assignmentId)),
+      db
+        .select({ id: scoreIntents.id, title: scoreIntents.title })
+        .from(scoreIntents)
+        .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true))),
+      db
+        .select({
+          messageId: scoreQueryTypes.messageId,
+          type: scoreQueryTypes.type,
+          version: scoreQueryTypes.version,
+        })
+        .from(scoreQueryTypes)
+        .where(eq(scoreQueryTypes.assignmentId, assignmentId)),
+      db
+        .select({
+          messageId: scoreIntentRatings.messageId,
+          intentId: scoreIntentRatings.intentId,
+          rating: scoreIntentRatings.rating,
+          ratedAt: scoreIntentRatings.ratedAt,
+        })
+        .from(scoreIntentRatings)
+        .innerJoin(scoreIntents, eq(scoreIntents.id, scoreIntentRatings.intentId))
+        .where(
+          and(
+            eq(scoreIntentRatings.assignmentId, assignmentId),
+            eq(scoreIntents.isTemplate, true)
+          )
+        ),
+      db.select().from(studySetMembers).where(eq(studySetMembers.datasetKey, datasetKey)),
+      db.select().from(studyCurationMeta).where(eq(studyCurationMeta.datasetKey, datasetKey)),
+    ]);
+
+  const tokenBySession = new Map(sessions.map((s) => [s.id, s.participantToken]));
+  const typeByMessage = new Map<number, ScoreQueryType>();
+  for (const row of typeRows) {
+    if (row.version >= TYPE_CLASSIFIER_VERSION && (SCORE_QUERY_TYPES as readonly string[]).includes(row.type)) {
+      typeByMessage.set(row.messageId, row.type as ScoreQueryType);
+    }
+  }
+
+  const labelToType = subtypeTypeByLabel();
+  const subtypeById = new Map<number, CurationSubtype>();
+  for (const t of templates) {
+    const type = labelToType.get(t.title.trim().toLowerCase()) ?? null;
+    subtypeById.set(t.id, {
+      intentId: t.id,
+      title: t.title,
+      type,
+      clearlyIn: 0,
+      probablyIn: 0,
+      isSubtype: type !== null,
+    });
+  }
+
+  // Newest verdict per (message, template), ACROSS hash generations — see the
+  // function's doc comment. Same reduction probe.ts does when seeding.
+  const newest = new Map<string, (typeof ratingRows)[number]>();
+  for (const r of ratingRows) {
+    const key = `${r.messageId}:${r.intentId}`;
+    const prev = newest.get(key);
+    if (!prev || r.ratedAt > prev.ratedAt) newest.set(key, r);
+  }
+
+  const matchesByMessage = new Map<number, Record<number, CurationGrade>>();
+  for (const raw of newest.values()) {
+    if (!isGrade(raw.rating)) continue;
+    const subtype = subtypeById.get(raw.intentId);
+    if (!subtype) continue;
+    if (raw.rating === 'clearly_in') subtype.clearlyIn += 1;
+    else subtype.probablyIn += 1;
+    const bag = matchesByMessage.get(raw.messageId) ?? {};
+    bag[raw.intentId] = raw.rating;
+    matchesByMessage.set(raw.messageId, bag);
+  }
+
+  const questions: CurationQuestion[] = records.map((r) => {
+    const matches = matchesByMessage.get(r.messageId) ?? {};
+    return {
+      messageId: r.messageId,
+      participantToken: tokenBySession.get(r.sessionId) ?? '',
+      turnIndex: r.turnIndex,
+      queryText: r.queryText,
+      queryType: typeByMessage.get(r.messageId) ?? null,
+      matches,
+      grade: gradeOf(matches, subtypeById),
+    };
+  });
+
+  const gradeCounts: Record<QuestionGrade, number> = { certain: 0, boundary: 0, unmatched: 0 };
+  for (const q of questions) gradeCounts[q.grade] += 1;
+
+  const typeCounts: Record<string, number> = {};
+  for (const t of SCORE_QUERY_TYPES) typeCounts[t] = 0;
+  let missingTypeCount = 0;
+  for (const q of questions) {
+    if (q.queryType) typeCounts[q.queryType] += 1;
+    else missingTypeCount += 1;
+  }
+
+  const meta = metaRows[0];
+  const demoSubtype = meta?.demoSubtype ?? null;
+  const excludedMessageIds = demoSubtype
+    ? demoIsolatedMessageIds(questions, subtypeById, demoSubtype)
+    : [];
+
+  const classified = gradeCounts.certain + gradeCounts.boundary;
+
+  return {
+    dataset: { key: dataset.key, label: dataset.label, assignmentId },
+    questions,
+    subtypes: [...subtypeById.values()].sort((a, b) => a.title.localeCompare(b.title)),
+    members: memberRows.map((m) => ({
+      messageId: m.sourceMessageId,
+      setKind: m.setKind as CurationSetKind,
+      queryType: m.queryType,
+      subtype: m.subtype,
+      grade: m.rating,
+      position: m.position,
+    })),
+    meta: {
+      demoSubtype,
+      lockedAt: meta?.lockedAt ? meta.lockedAt.toISOString() : null,
+      lockedBy: meta?.lockedBy ?? null,
+    },
+    excludedMessageIds,
+    typeCounts,
+    missingTypeCount,
+    naturalBoundaryRatio: classified > 0 ? gradeCounts.boundary / classified : 0,
+    gradeCounts,
+  };
+}
+
+/** See QuestionGrade. Counts only real subtypes, never the type-level starters. */
+function gradeOf(
+  matches: Record<number, CurationGrade>,
+  subtypeById: Map<number, CurationSubtype>
+): QuestionGrade {
+  let clearly = 0;
+  let probably = 0;
+  for (const [intentId, grade] of Object.entries(matches)) {
+    if (!subtypeById.get(Number(intentId))?.isSubtype) continue;
+    if (grade === 'clearly_in') clearly += 1;
+    else probably += 1;
+  }
+  if (clearly === 1) return 'certain';
+  if (clearly > 1 || probably > 0) return 'boundary';
+  return 'unmatched';
+}
+
+/**
+ * Every question belonging to a student who asked anything in the demo subtype.
+ * Whole-student, because a participant who met that student in the tutorial
+ * would recognize their thread in the study material (design §4 step 1).
+ */
+function demoIsolatedMessageIds(
+  questions: CurationQuestion[],
+  subtypeById: Map<number, CurationSubtype>,
+  demoSubtypeTitle: string
+): number[] {
+  const demoIds = new Set(
+    [...subtypeById.values()]
+      .filter((s) => s.title === demoSubtypeTitle)
+      .map((s) => s.intentId)
+  );
+  if (demoIds.size === 0) return [];
+  const tokens = new Set<string>();
+  for (const q of questions) {
+    for (const [intentId, grade] of Object.entries(q.matches)) {
+      if (grade === 'clearly_in' && demoIds.has(Number(intentId))) tokens.add(q.participantToken);
+    }
+  }
+  return questions.filter((q) => tokens.has(q.participantToken)).map((q) => q.messageId);
+}
+
+/* ------------------------------------------------------------------ */
+/* Mutations                                                          */
+/* ------------------------------------------------------------------ */
+
+export interface AssignInput {
+  datasetKey: string;
+  messageId: number;
+  setKind: CurationSetKind | null; // null = unassign
+  addedBy: string;
+}
+
+/**
+ * The classification snapshot frozen onto a member row. Derived server-side
+ * for the one question being assigned (cheap) rather than taken from the
+ * client, so the stored record cannot drift from what the judge actually said.
+ */
+async function classifyOne(
+  assignmentId: string,
+  messageId: number
+): Promise<{ queryType: string | null; subtype: string | null; grade: QuestionGrade }> {
+  const [typeRows, ratingRows] = await Promise.all([
+    db
+      .select({ type: scoreQueryTypes.type, version: scoreQueryTypes.version })
+      .from(scoreQueryTypes)
+      .where(eq(scoreQueryTypes.messageId, messageId)),
+    db
+      .select({
+        intentId: scoreIntentRatings.intentId,
+        rating: scoreIntentRatings.rating,
+        ratedAt: scoreIntentRatings.ratedAt,
+        title: scoreIntents.title,
+      })
+      .from(scoreIntentRatings)
+      .innerJoin(scoreIntents, eq(scoreIntents.id, scoreIntentRatings.intentId))
+      .where(
+        and(
+          eq(scoreIntentRatings.messageId, messageId),
+          eq(scoreIntents.assignmentId, assignmentId),
+          eq(scoreIntents.isTemplate, true)
+        )
+      ),
+  ]);
+
+  const typeRow = typeRows.find((r) => r.version >= TYPE_CLASSIFIER_VERSION);
+  const labelToType = subtypeTypeByLabel();
+
+  const newest = new Map<number, (typeof ratingRows)[number]>();
+  for (const r of ratingRows) {
+    const prev = newest.get(r.intentId);
+    if (!prev || r.ratedAt > prev.ratedAt) newest.set(r.intentId, r);
+  }
+
+  let clearly = 0;
+  let probably = 0;
+  let best: string | null = null;
+  for (const r of newest.values()) {
+    if (!isGrade(r.rating)) continue;
+    if (!labelToType.has(r.title.trim().toLowerCase())) continue; // real subtypes only
+    if (r.rating === 'clearly_in') {
+      clearly += 1;
+      if (!best) best = r.title;
+    } else {
+      probably += 1;
+      if (!best) best = r.title;
+    }
+  }
+  const grade: QuestionGrade =
+    clearly === 1 ? 'certain' : clearly > 1 || probably > 0 ? 'boundary' : 'unmatched';
+
+  return { queryType: typeRow?.type ?? null, subtype: best, grade };
+}
+
+/**
+ * Whether one question is blocked by demo isolation — the cheap check the
+ * assign route needs (recomputing the whole state per click would read the
+ * entire log for one boolean).
+ */
+export async function isDemoIsolated(datasetKey: string, messageId: number): Promise<boolean> {
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) return false;
+
+  const [meta] = await db
+    .select({ demoSubtype: studyCurationMeta.demoSubtype })
+    .from(studyCurationMeta)
+    .where(eq(studyCurationMeta.datasetKey, datasetKey));
+  const demoSubtype = meta?.demoSubtype;
+  if (!demoSubtype) return false;
+
+  const demoIntents = await db
+    .select({ id: scoreIntents.id })
+    .from(scoreIntents)
+    .where(
+      and(
+        eq(scoreIntents.assignmentId, dataset.masterAssignmentId),
+        eq(scoreIntents.isTemplate, true),
+        eq(scoreIntents.title, demoSubtype)
+      )
+    );
+  if (demoIntents.length === 0) return false;
+
+  // The student this question belongs to …
+  const [owner] = await db
+    .select({ sessionId: chatConversations.sessionId })
+    .from(chatMessages)
+    .innerJoin(chatConversations, eq(chatConversations.id, chatMessages.conversationId))
+    .where(eq(chatMessages.id, messageId));
+  if (!owner) return false;
+
+  // … and whether ANY of that student's questions is clearly in the demo subtype.
+  const hit = await db
+    .select({ messageId: scoreIntentRatings.messageId })
+    .from(scoreIntentRatings)
+    .innerJoin(chatMessages, eq(chatMessages.id, scoreIntentRatings.messageId))
+    .innerJoin(chatConversations, eq(chatConversations.id, chatMessages.conversationId))
+    .where(
+      and(
+        eq(chatConversations.sessionId, owner.sessionId),
+        eq(scoreIntentRatings.rating, 'clearly_in'),
+        inArray(
+          scoreIntentRatings.intentId,
+          demoIntents.map((i) => i.id)
+        )
+      )
+    )
+    .limit(1);
+
+  return hit.length > 0;
+}
+
+/** Assign a master question to a set (or clear it). Idempotent per question. */
+export async function setSetMember(input: AssignInput): Promise<void> {
+  const { datasetKey, messageId, setKind, addedBy } = input;
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  await ensureStudyTables();
+
+  if (await isLocked(datasetKey)) throw new Error('curation_locked');
+
+  if (setKind === null) {
+    await db
+      .delete(studySetMembers)
+      .where(
+        and(
+          eq(studySetMembers.datasetKey, datasetKey),
+          eq(studySetMembers.sourceMessageId, messageId)
+        )
+      );
+    return;
+  }
+
+  const snapshot = await classifyOne(dataset.masterAssignmentId, messageId);
+
+  await db
+    .insert(studySetMembers)
+    .values({
+      datasetKey,
+      setKind,
+      sourceMessageId: messageId,
+      queryType: snapshot.queryType,
+      subtype: snapshot.subtype,
+      rating: snapshot.grade,
+      addedBy,
+      createdAt: new Date(),
+    })
+    // Re-assigning MOVES the question between sets rather than erroring — the
+    // unique index is on (dataset, message), so a set change is an update.
+    .onConflictDoUpdate({
+      target: [studySetMembers.datasetKey, studySetMembers.sourceMessageId],
+      set: {
+        setKind,
+        queryType: snapshot.queryType,
+        subtype: snapshot.subtype,
+        rating: snapshot.grade,
+        addedBy,
+        createdAt: new Date(),
+      },
+    });
+}
+
+export async function setDemoSubtype(datasetKey: string, demoSubtype: string | null): Promise<void> {
+  await ensureStudyTables();
+  if (await isLocked(datasetKey)) throw new Error('curation_locked');
+  await db
+    .insert(studyCurationMeta)
+    .values({ datasetKey, demoSubtype })
+    .onConflictDoUpdate({ target: studyCurationMeta.datasetKey, set: { demoSubtype } });
+}
+
+export async function isLocked(datasetKey: string): Promise<boolean> {
+  const [row] = await db
+    .select({ lockedAt: studyCurationMeta.lockedAt })
+    .from(studyCurationMeta)
+    .where(eq(studyCurationMeta.datasetKey, datasetKey));
+  return !!row?.lockedAt;
+}
+
+export async function setLock(datasetKey: string, by: string | null, locked: boolean): Promise<void> {
+  await ensureStudyTables();
+  const values = locked
+    ? { lockedAt: new Date(), lockedBy: by }
+    : { lockedAt: null, lockedBy: null };
+  await db
+    .insert(studyCurationMeta)
+    .values({ datasetKey, ...values })
+    .onConflictDoUpdate({ target: studyCurationMeta.datasetKey, set: values });
+}
+
+/* ------------------------------------------------------------------ */
+/* Validation (shared by the confirm button and the build scripts)     */
+/* ------------------------------------------------------------------ */
+
+export interface CurationViolation {
+  code: 'count' | 'isolation' | 'ab_balance' | 'missing_type' | 'boundary_ratio';
+  severity: 'error' | 'warning';
+  message: string;
+  messageIds?: number[];
+}
+
+/**
+ * Whether the sets are shippable. Counts / isolation / A-B balance are errors
+ * (they break the design's arithmetic); the boundary-ratio drift is a warning —
+ * design §4 asks the sets to FOLLOW the natural ratio, but with 2 items per
+ * type per test set exact proportionality is not achievable.
+ */
+export function validateCuration(state: CurationState): CurationViolation[] {
+  const out: CurationViolation[] = [];
+
+  for (const kind of CURATION_SET_KINDS) {
+    const target = SET_TARGETS_PER_TYPE[kind];
+    for (const type of SCORE_QUERY_TYPES) {
+      const have = state.members.filter(
+        (m) => m.setKind === kind && questionType(state, m.messageId) === type
+      ).length;
+      if (have !== target) {
+        out.push({
+          code: 'count',
+          severity: 'error',
+          message: `${kind} · ${type}: ${have}/${target}`,
+        });
+      }
+    }
+  }
+
+  const excluded = new Set(state.excludedMessageIds);
+  const violating = state.members.filter((m) => excluded.has(m.messageId)).map((m) => m.messageId);
+  if (violating.length > 0) {
+    out.push({
+      code: 'isolation',
+      severity: 'error',
+      message: `데모 격리 위반 ${violating.length}건 — 격리된 학생의 질문이 세트에 있습니다`,
+      messageIds: violating,
+    });
+  }
+
+  const untyped = state.members
+    .filter((m) => !questionType(state, m.messageId))
+    .map((m) => m.messageId);
+  if (untyped.length > 0) {
+    out.push({
+      code: 'missing_type',
+      severity: 'error',
+      message: `분류 없는 질문 ${untyped.length}건이 세트에 있습니다 — [분류 갱신] 후 다시 확인하세요`,
+      messageIds: untyped,
+    });
+  }
+
+  // A/B needs 2 per type so the cross-dataset item order can be built in
+  // balanced blocks (every 4 consecutive items = both datasets, rotating
+  // types), which is what keeps a 16→12→8 pilot truncation unbiased.
+  const abPerType = SCORE_QUERY_TYPES.map(
+    (type) =>
+      state.members.filter((m) => m.setKind === 'ab' && questionType(state, m.messageId) === type)
+        .length
+  );
+  if (abPerType.some((n) => n !== SET_TARGETS_PER_TYPE.ab)) {
+    out.push({
+      code: 'ab_balance',
+      severity: 'error',
+      message: 'A/B 균형 블록 불가 — 유형당 정확히 2문항이어야 합니다',
+    });
+  }
+
+  for (const kind of CURATION_SET_KINDS) {
+    const rows = state.members.filter((m) => m.setKind === kind);
+    if (rows.length === 0) continue;
+    const boundary = rows.filter((m) => m.grade === 'boundary').length / rows.length;
+    const drift = Math.abs(boundary - state.naturalBoundaryRatio);
+    if (drift > 0.15) {
+      out.push({
+        code: 'boundary_ratio',
+        severity: 'warning',
+        message: `${kind} 경계비율 ${(boundary * 100).toFixed(0)}% vs 자연비율 ${(
+          state.naturalBoundaryRatio * 100
+        ).toFixed(0)}%`,
+      });
+    }
+  }
+
+  return out;
+}
+
+function questionType(state: CurationState, messageId: number): ScoreQueryType | null {
+  const q = state.questions.find((x) => x.messageId === messageId);
+  return q?.queryType ?? null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Classification top-up                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fill in missing 4-type verdicts on a master, using the same primitives the
+ * board's rate route uses (stored dissection steer, staleness by
+ * TYPE_CLASSIFIER_VERSION, upsert on message_id). Idempotent — a fully typed
+ * master costs zero calls, which is why the button is safe to press twice.
+ *
+ * Subtype verdicts are deliberately NOT topped up here: they belong to the
+ * prepared starter set, and re-rating 31 templates × the whole log is a batch
+ * job, not a click (scripts/score/… own that).
+ */
+export async function classifyMissingTypes(
+  datasetKey: string,
+  limit = 200
+): Promise<{ pending: number; classified: number; failed: number }> {
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  const assignmentId = dataset.masterAssignmentId;
+
+  const [records, typeRows] = await Promise.all([
+    getQueryRecords(assignmentId),
+    db
+      .select({ messageId: scoreQueryTypes.messageId, version: scoreQueryTypes.version })
+      .from(scoreQueryTypes)
+      .where(eq(scoreQueryTypes.assignmentId, assignmentId)),
+  ]);
+  const fresh = new Set(
+    typeRows.filter((t) => t.version >= TYPE_CLASSIFIER_VERSION).map((t) => t.messageId)
+  );
+  const pending = records.filter((r) => !fresh.has(r.messageId));
+  if (pending.length === 0) return { pending: 0, classified: 0, failed: 0 };
+  if (!isOpenAIConfigured()) throw new Error('openai_not_configured');
+
+  const batch = pending.slice(0, limit);
+  const ids = batch.map((b) => b.messageId);
+  const stored = await db
+    .select({
+      messageId: scoreDissections.messageId,
+      materialKinds: scoreDissections.materialKinds,
+      requests: scoreDissections.requests,
+    })
+    .from(scoreDissections)
+    .where(
+      and(eq(scoreDissections.assignmentId, assignmentId), inArray(scoreDissections.messageId, ids))
+    );
+  const dissectionByMsg = new Map<number, DissectionResult>(
+    stored.map((s) => [
+      s.messageId,
+      {
+        materialKinds: (s.materialKinds ?? []) as MaterialKind[],
+        requests: (s.requests ?? []) as string[],
+      },
+    ])
+  );
+
+  const model = getDefaultScoreModel();
+  const run = createLimiter(SCORE_CONCURRENCY);
+  const now = new Date();
+  let classified = 0;
+  let failed = 0;
+
+  await Promise.all(
+    batch.map((rec) =>
+      run(async () => {
+        try {
+          const result = await classifyMessageType({
+            queryText: rec.queryText,
+            prevQueryText: rec.prevQueryText,
+            prevResponseText: rec.prevResponseText,
+            dissection: dissectionByMsg.get(rec.messageId) ?? null,
+            model,
+          });
+          if (!result.type) {
+            failed += 1;
+            return;
+          }
+          const values = {
+            type: result.type,
+            rationale: result.rationale || null,
+            version: TYPE_CLASSIFIER_VERSION,
+            rawResponse: result.raw,
+            model,
+            createdAt: now,
+          };
+          await db
+            .insert(scoreQueryTypes)
+            .values({ assignmentId, messageId: rec.messageId, ...values })
+            .onConflictDoUpdate({ target: scoreQueryTypes.messageId, set: values });
+          classified += 1;
+        } catch {
+          failed += 1;
+        }
+      })
+    )
+  );
+
+  return { pending: pending.length, classified, failed };
+}
+
+/* ------------------------------------------------------------------ */
+/* Read helpers for the build scripts (M6)                             */
+/* ------------------------------------------------------------------ */
+
+/** Confirmed members of one set, in position order. Throws unless locked. */
+export async function getConfirmedSet(
+  datasetKey: string,
+  setKind: CurationSetKind
+): Promise<{ messageId: number; queryType: string | null; subtype: string | null }[]> {
+  if (!(await isLocked(datasetKey))) throw new Error('curation_not_locked');
+  const rows = await db
+    .select()
+    .from(studySetMembers)
+    .where(and(eq(studySetMembers.datasetKey, datasetKey), eq(studySetMembers.setKind, setKind)));
+  return rows
+    .sort((a, b) => (a.position ?? a.sourceMessageId) - (b.position ?? b.sourceMessageId))
+    .map((r) => ({ messageId: r.sourceMessageId, queryType: r.queryType, subtype: r.subtype }));
+}
+
+/** Conversation ids the review set anchors live in (M6 truncation input). */
+export async function getReviewAnchors(
+  datasetKey: string
+): Promise<{ messageId: number; conversationId: string }[]> {
+  const rows = await db
+    .select()
+    .from(studySetMembers)
+    .where(and(eq(studySetMembers.datasetKey, datasetKey), eq(studySetMembers.setKind, 'review')));
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.sourceMessageId);
+  const msgs = await db
+    .select({ id: chatMessages.id, conversationId: chatMessages.conversationId })
+    .from(chatMessages)
+    .where(inArray(chatMessages.id, ids));
+  return msgs.map((m) => ({ messageId: m.id, conversationId: m.conversationId }));
+}
