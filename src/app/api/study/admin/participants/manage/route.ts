@@ -54,7 +54,7 @@ export async function POST(req: Request) {
   // whole session, and a mis-aimed click during a live study is unrecoverable.
   if (parsed.confirm?.trim().toUpperCase() !== participant.participantNumber) {
     return NextResponse.json(
-      { error: 'confirm_mismatch', message: '참가자 번호를 정확히 입력해야 실행됩니다.' },
+      { error: 'confirm_mismatch', message: 'Type the participant number exactly to confirm.' },
       { status: 400 }
     );
   }

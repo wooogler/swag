@@ -152,6 +152,12 @@ export default function CurationBoard({
       const grade = questionById.get(m.messageId)?.grade ?? m.grade;
       if (grade === 'boundary') {
         counts.set(`${m.setKind}:boundary`, (counts.get(`${m.setKind}:boundary`) ?? 0) + 1);
+        if (type) {
+          counts.set(
+            `${m.setKind}:${type}:boundary`,
+            (counts.get(`${m.setKind}:${type}:boundary`) ?? 0) + 1
+          );
+        }
       }
     }
     return counts;
@@ -173,7 +179,7 @@ export default function CurationBoard({
         const titles = Object.entries(q?.matches ?? {})
           .filter(([id, grade]) => grade === 'clearly_in' && subtypeById.get(Number(id))?.isSubtype)
           .map(([id]) => subtypeById.get(Number(id))!.title);
-        if (titles.length === 0) titles.push('(어느 subtype에도 안 걸림)');
+        if (titles.length === 0) titles.push('(no subtype claims it)');
         for (const t of titles) tally.set(t, (tally.get(t) ?? 0) + 1);
       }
       return [...tally].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -202,7 +208,7 @@ export default function CurationBoard({
   const assign = useCallback(
     async (messageId: number, setKind: CurationSetKind | null) => {
       if (locked) {
-        setError('확정된 세트입니다 — 잠금을 해제한 뒤 수정하세요.');
+        setError('These sets are confirmed — unlock before editing.');
         return;
       }
       setError(null);
@@ -232,7 +238,7 @@ export default function CurationBoard({
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.message ?? '배정에 실패했습니다.');
+        setError(data.message ?? 'Could not assign.');
       }
       await refresh();
     },
@@ -251,8 +257,8 @@ export default function CurationBoard({
       const data = await res.json().catch(() => ({}));
       setError(
         data.error === 'openai_not_configured'
-          ? 'OPENAI_API_KEY가 설정되지 않았습니다.'
-          : '분류 갱신에 실패했습니다.'
+          ? 'OPENAI_API_KEY is not configured.'
+          : 'Refresh failed.'
       );
     }
     await refresh();
@@ -271,9 +277,9 @@ export default function CurationBoard({
       const data = await res.json().catch(() => ({}));
       if (data.error === 'validation_failed') {
         setViolations(data.violations ?? []);
-        setError('검증을 통과하지 못했습니다 — 아래 위반 항목을 해결하세요.');
+        setError('Validation failed — clear the items below.');
       } else {
-        setError('잠금 변경에 실패했습니다.');
+        setError('Could not change the lock.');
       }
     }
     await refresh();
@@ -289,7 +295,7 @@ export default function CurationBoard({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ datasetKey: state.dataset.key, demoSubtype: title }),
       });
-      if (!res.ok) setError('데모 subtype 지정에 실패했습니다.');
+      if (!res.ok) setError('Could not set the demo subtype.');
       await refresh();
       setBusy(null);
     },
@@ -391,7 +397,7 @@ export default function CurationBoard({
             ))}
         </select>
         {state.meta.demoSubtype && (
-          <Chip tone="violet">격리 {state.excludedMessageIds.length}문항</Chip>
+          <Chip tone="violet">{state.excludedMessageIds.length} isolated</Chip>
         )}
         <div className="flex-1" />
         <button
@@ -400,17 +406,17 @@ export default function CurationBoard({
           className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
         >
           {busy === 'classify' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-          분류 갱신
-          <Badge tone={state.missingTypeCount > 0 ? 'warn' : 'plain'}>누락 {state.missingTypeCount}</Badge>
+          Refresh classification
+          <Badge tone={state.missingTypeCount > 0 ? 'warn' : 'plain'}>{state.missingTypeCount} missing</Badge>
         </button>
         <button
           onClick={() => setSettingsOpen(true)}
           disabled={busy !== null}
-          title="세트 개수 설정"
+          title="Set sizes"
           className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
         >
           <Settings className="w-3 h-3" />
-          개수 설정
+          Set sizes
         </button>
         <button
           onClick={toggleLock}
@@ -428,7 +434,7 @@ export default function CurationBoard({
           ) : (
             <Lock className="w-3 h-3" />
           )}
-          {locked ? '잠금 해제' : '확정 · 잠금'}
+          {locked ? 'Unlock' : 'Confirm · lock'}
         </button>
       </div>
 
@@ -458,7 +464,7 @@ export default function CurationBoard({
                   : 'border-[hsl(var(--border))] bg-[hsl(var(--card))]'
               }`}
             >
-              <div className="flex items-baseline gap-2 mb-1.5">
+              <div className="flex items-baseline gap-2 mb-1">
                 <span className="text-[11px] font-bold uppercase tracking-wide">
                   {SET_LABELS[kind]}
                 </span>
@@ -470,26 +476,40 @@ export default function CurationBoard({
                   {have}/{want}
                 </span>
                 <span
-                  className="ml-auto text-[10.5px] tabular-nums text-[hsl(var(--muted-foreground))]"
-                  title={`경계 질문 ${boundaryHave}개 — 로그의 자연 비율(${(state.naturalBoundaryRatio * 100).toFixed(0)}%)대로면 ${boundaryWant}개`}
+                  className="text-[10.5px] tabular-nums text-[hsl(var(--muted-foreground))]"
+                  title={`${boundaryHave} boundary question(s) — the log's natural ratio (${(state.naturalBoundaryRatio * 100).toFixed(0)}%) implies ${boundaryWant}`}
                 >
                   ◐ {boundaryHave}/{boundaryWant}
                 </span>
+                {/* A set's own note rides on its header line rather than adding
+                    a row: the panel is read at a glance, above the work. */}
+                {setNotes.map((v, i) => (
+                  <span
+                    key={i}
+                    className={`ml-auto truncate text-[10px] font-semibold ${
+                      v.severity === 'error' ? 'text-rose-700' : 'text-amber-700'
+                    }`}
+                    title={v.message}
+                  >
+                    {v.severity === 'error' ? '✗' : '⚠'} {v.message}
+                  </span>
+                ))}
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-4 gap-y-0.5">
+              <div className="grid grid-cols-2 gap-x-4">
                 {SCORE_QUERY_TYPES.map((type) => {
                   const n = setCounts.get(`${kind}:${type}`) ?? 0;
+                  const nBoundary = setCounts.get(`${kind}:${type}:boundary`) ?? 0;
                   const target = targets[kind];
                   const mix = subtypeMixFor(kind, type);
                   return (
                     <div
                       key={type}
-                      className="flex items-center gap-1.5 text-[10.5px]"
+                      className="flex items-center gap-1.5 text-[10.5px] leading-5"
                       title={
                         mix.length > 0
-                          ? `${QUERY_TYPE_LABELS[type]} — 담긴 subtype\n` +
+                          ? `${QUERY_TYPE_LABELS[type]} — subtypes in this slot\n` +
                             mix.map(([t, c]) => `  ${t} ${c}`).join('\n')
-                          : `${QUERY_TYPE_LABELS[type]} — 아직 없음`
+                          : `${QUERY_TYPE_LABELS[type]} — nothing yet`
                       }
                     >
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TYPE_DOT[type]}`} />
@@ -503,20 +523,13 @@ export default function CurationBoard({
                       >
                         {n}/{target}
                       </span>
+                      <span className="tabular-nums text-amber-600 w-6 text-right">
+                        ◐{nBoundary}
+                      </span>
                     </div>
                   );
                 })}
               </div>
-              {setNotes.map((v, i) => (
-                <p
-                  key={i}
-                  className={`mt-1.5 text-[10px] font-semibold ${
-                    v.severity === 'error' ? 'text-rose-700' : 'text-amber-700'
-                  }`}
-                >
-                  {v.severity === 'error' ? '✗' : '⚠'} {v.message}
-                </p>
-              ))}
             </div>
           );
         })}
@@ -526,7 +539,7 @@ export default function CurationBoard({
         <div className="mb-3 space-y-1.5">
           {locked && (
             <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-4 py-2 text-xs font-semibold text-violet-800">
-              🔒 확정됨 · {new Date(state.meta.lockedAt!).toLocaleString()} · {state.meta.lockedBy} — 스터디 마스터·문항 뱅크 빌드에 이 세트가 사용됩니다.
+              🔒 Confirmed · {new Date(state.meta.lockedAt!).toLocaleString()} · {state.meta.lockedBy} — these sets feed the study-master and question-bank builds.
             </div>
           )}
           {error && (
@@ -555,7 +568,7 @@ export default function CurationBoard({
         <div className="border border-[hsl(var(--border))] rounded-lg bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px]">
           <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/60 border-b border-[hsl(var(--border))]">
             <span className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-              세트 보기
+              Sets
             </span>
           </div>
           <div className="py-1 border-b border-[hsl(var(--border))]">
@@ -586,7 +599,7 @@ export default function CurationBoard({
                   : 'hover:bg-[hsl(var(--muted))]/40'
               }`}
             >
-              <span className="flex-1">미배정</span>
+              <span className="flex-1">Unassigned</span>
               <span className="text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]">
                 {state.questions.length - state.members.length}
               </span>
@@ -646,9 +659,10 @@ export default function CurationBoard({
           </div>
 
           <div className="px-3 py-2 border-t border-[hsl(var(--border))] text-[10.5px] text-[hsl(var(--muted-foreground))] tabular-nums">
-            확실 {state.gradeCounts.certain} · 경계 {state.gradeCounts.boundary} · 미매칭 {state.gradeCounts.unmatched}
+            certain {state.gradeCounts.certain} · boundary {state.gradeCounts.boundary} · unmatched{' '}
+            {state.gradeCounts.unmatched}
             <br />
-            자연 경계비율 {(state.naturalBoundaryRatio * 100).toFixed(1)}%
+            natural boundary ratio {(state.naturalBoundaryRatio * 100).toFixed(1)}%
           </div>
         </div>
 
@@ -664,10 +678,10 @@ export default function CurationBoard({
                 onChange={(e) => setGradeFilter(e.target.value as 'all' | QuestionGrade)}
                 className="text-xs border border-[hsl(var(--border))] rounded px-1.5 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
               >
-                <option value="all">전체</option>
-                <option value="certain">● 확실만</option>
-                <option value="boundary">◐ 경계만</option>
-                <option value="unmatched">미매칭만</option>
+                <option value="all">All</option>
+                <option value="certain">● Certain</option>
+                <option value="boundary">◐ Boundary</option>
+                <option value="unmatched">Unmatched</option>
               </select>
               <SortSelect value={sort} onChange={setSort} />
             </div>
@@ -702,11 +716,11 @@ export default function CurationBoard({
                     onOpen={() => setSelectedId(row.messageId)}
                   />
                   <div className="mt-1 flex flex-wrap gap-1 items-center">
-                    {q?.grade === 'certain' && <Chip tone="ok">● 확실</Chip>}
-                    {q?.grade === 'boundary' && <Chip tone="warn">◐ 경계</Chip>}
-                    {q?.grade === 'unmatched' && <Chip>미매칭</Chip>}
+                    {q?.grade === 'certain' && <Chip tone="ok">● certain</Chip>}
+                    {q?.grade === 'boundary' && <Chip tone="warn">◐ boundary</Chip>}
+                    {q?.grade === 'unmatched' && <Chip>unmatched</Chip>}
                     {member && <Chip tone="violet">{SET_LABELS[member.setKind]}</Chip>}
-                    {isExcluded && <Chip tone="violet">데모 격리</Chip>}
+                    {isExcluded && <Chip tone="violet">Demo-isolated</Chip>}
                   </div>
                   {!locked && !isExcluded && (
                     <div className="absolute right-2 top-1.5 z-10 flex items-center gap-0.5 rounded-md bg-[hsl(var(--card))] px-1 py-0.5 shadow-sm ring-1 ring-[hsl(var(--border))] opacity-0 group-hover:opacity-100 focus-within:opacity-100">
@@ -723,7 +737,7 @@ export default function CurationBoard({
                               : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
                           }`}
                         >
-                          {kind === 'review' ? '검토' : kind === 'test' ? '블록' : 'A/B'}
+                          {kind === 'review' ? 'Review' : kind === 'test' ? 'Test' : 'A/B'}
                         </button>
                       ))}
                     </div>
@@ -733,7 +747,7 @@ export default function CurationBoard({
             })}
             {visible.length === 0 && (
               <li className="px-3 py-8 text-center text-xs text-[hsl(var(--muted-foreground))]">
-                이 조건에 해당하는 질문이 없습니다.
+                No questions match this filter.
               </li>
             )}
           </ul>
@@ -745,7 +759,7 @@ export default function CurationBoard({
             <>
               <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/60 border-b border-[hsl(var(--border))] flex items-center justify-between">
                 <span className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  {selectedRow.participantToken} · 대화
+                  {selectedRow.participantToken} · conversation
                 </span>
                 <Chip>Turn {selectedRow.turnNumber}</Chip>
               </div>
@@ -755,7 +769,7 @@ export default function CurationBoard({
 
               <div className="border-t border-[hsl(var(--border))] px-3 py-2">
                 <div className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
-                  기계 분류
+                  Classification
                 </div>
                 <div className="flex flex-wrap gap-1.5 items-center">
                   {selectedQuestion?.queryType ? (
@@ -764,7 +778,7 @@ export default function CurationBoard({
                       {QUERY_TYPE_LABELS[selectedQuestion.queryType]}
                     </Chip>
                   ) : (
-                    <Chip tone="bad">분류 없음</Chip>
+                    <Chip tone="bad">Not classified</Chip>
                   )}
                   {Object.entries(selectedQuestion?.matches ?? {}).map(([intentId, grade]) => {
                     const s = subtypeById.get(Number(intentId));
@@ -777,7 +791,7 @@ export default function CurationBoard({
                   })}
                   {Object.keys(selectedQuestion?.matches ?? {}).length === 0 && (
                     <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
-                      어떤 starter subtype에도 걸리지 않음
+                      No starter subtype claims this
                     </span>
                   )}
                 </div>
@@ -786,10 +800,10 @@ export default function CurationBoard({
               <div className="border-t border-[hsl(var(--border))] px-3 py-2.5">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                    배정
+                    Assign
                   </span>
                   {excluded.has(selectedRow.messageId) && (
-                    <Chip tone="violet">데모 격리 — 배정 불가</Chip>
+                    <Chip tone="violet">Demo-isolated — cannot assign</Chip>
                   )}
                 </div>
                 <div className="flex gap-2">
@@ -814,14 +828,14 @@ export default function CurationBoard({
                     onClick={() => assign(selectedRow.messageId, null)}
                     className="px-3 text-xs font-semibold py-2 rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"
                   >
-                    해제
+                    Clear
                   </button>
                 </div>
               </div>
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-[hsl(var(--muted-foreground))] px-6 text-center">
-              질문을 선택하면 대화 맥락과 분류가 여기에 표시되고, 세트에 배정할 수 있습니다.
+              Pick a question to see its conversation and classification, and to assign it.
             </div>
           )}
         </div>
@@ -874,7 +888,7 @@ function SetTargetsModal({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.message ?? '저장에 실패했습니다.');
+        setError(data.message ?? 'Could not save.');
         return;
       }
       onSaved(data.targets as SetTargets);
@@ -893,10 +907,10 @@ function SetTargetsModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
-          <h2 className="text-sm font-bold">세트 개수 설정</h2>
+          <h2 className="text-sm font-bold">Set sizes</h2>
           <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
-            각 세트가 <strong>질문 유형당</strong> 몇 문항인지. 네 유형에 모두 적용되므로 전체
-            개수는 4배가 됩니다. 두 데이터셋에 함께 적용됩니다.
+            How many questions each set holds <strong>per query type</strong>. It applies to
+            all four types, so the total is four times this — and to both datasets.
           </p>
         </div>
 
@@ -918,21 +932,21 @@ function SetTargetsModal({
                   className="w-20 border border-[hsl(var(--border))] rounded px-2 py-1 text-sm text-right tabular-nums bg-[hsl(var(--card))] disabled:opacity-50"
                 />
                 <span className="w-28 text-[11px] text-[hsl(var(--muted-foreground))] tabular-nums">
-                  × 4유형 = {draft[kind] * 4}문항
+                  × 4 types = {draft[kind] * 4}
                 </span>
               </div>
             );
           })}
 
           <p className="text-[10.5px] text-[hsl(var(--muted-foreground))] leading-relaxed pt-1">
-            A/B는 양쪽 데이터셋에서 뽑으므로 참가자가 보는 문항은 그 2배(
-            {draft.ab * 8}문항)이고, 순서가 균형 블록으로 짜여 파일럿에서 뒤쪽부터 잘라도 홈·원정이
-            맞습니다.
+            A/B is drawn from both datasets, so a participant sees twice that (
+            {draft.ab * 8}); the order is built in balanced blocks, so truncating from
+            the end during the pilot keeps home and away even.
           </p>
 
           {locked && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
-              확정된 데이터셋이 있어 바꿀 수 없습니다. 잠금을 해제한 뒤 다시 시도하세요.
+              A dataset is confirmed, so the sizes are fixed. Unlock it and try again.
             </p>
           )}
           {error && (
@@ -944,21 +958,21 @@ function SetTargetsModal({
 
         <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex items-center justify-between gap-2">
           <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
-            이미 배정한 문항은 지워지지 않습니다 — 목표치만 바뀝니다.
+            Assigned questions are kept — only the targets move.
           </span>
           <div className="flex gap-2">
             <button
               onClick={onClose}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-[hsl(var(--border))]"
             >
-              취소
+              Cancel
             </button>
             <button
               onClick={save}
               disabled={locked || busy}
               className="text-xs font-semibold px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-white disabled:opacity-40"
             >
-              {busy ? '저장 중…' : '저장'}
+              {busy ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>
@@ -1009,7 +1023,7 @@ function selectionLabel(selection: Selection, subtypes: Map<number, CurationSubt
     case 'set':
       return SET_LABELS[selection.setKind];
     case 'unassigned':
-      return '미배정';
+      return 'Unassigned';
     case 'type':
       return QUERY_TYPE_LABELS[selection.type];
     case 'subtype':

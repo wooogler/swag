@@ -33,7 +33,7 @@ export async function PUT(req: Request) {
   try {
     if (parsed.setKind !== null && (await isDemoIsolated(parsed.datasetKey, parsed.messageId))) {
       return NextResponse.json(
-        { error: 'demo_isolated', message: '데모 subtype으로 격리된 학생의 질문입니다.' },
+        { error: 'demo_isolated', message: 'This question belongs to a student isolated by the demo subtype.' },
         { status: 409 }
       );
     }
@@ -48,7 +48,7 @@ export async function PUT(req: Request) {
   } catch (err) {
     if (err instanceof Error && err.message === 'curation_locked') {
       return NextResponse.json(
-        { error: 'locked', message: '확정된 세트입니다 — 잠금을 해제한 뒤 수정하세요.' },
+        { error: 'locked', message: 'These sets are confirmed — unlock before editing.' },
         { status: 409 }
       );
     }

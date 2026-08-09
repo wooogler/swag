@@ -44,7 +44,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error: 'locked',
-          message: '확정된 데이터셋이 있습니다 — 잠금을 해제한 뒤 개수를 바꾸세요.',
+          message: 'A dataset is confirmed — unlock it before changing the sizes.',
         },
         { status: 409 }
       );

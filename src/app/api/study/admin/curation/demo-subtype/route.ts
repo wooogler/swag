@@ -34,7 +34,7 @@ export async function POST(req: Request) {
   } catch (err) {
     if (err instanceof Error && err.message === 'curation_locked') {
       return NextResponse.json(
-        { error: 'locked', message: '확정된 세트입니다 — 잠금을 해제한 뒤 수정하세요.' },
+        { error: 'locked', message: 'These sets are confirmed — unlock before editing.' },
         { status: 409 }
       );
     }

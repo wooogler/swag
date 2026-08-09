@@ -45,13 +45,13 @@ function Chip({
   );
 }
 
-/** "3분 전" — a facilitator reads elapsed time, not a wall clock. */
+/** "3m ago" — a facilitator reads elapsed time, not a wall clock. */
 function sinceLabel(iso: string): string {
   const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
-  if (minutes < 1) return '방금';
-  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}시간 전` : `${Math.floor(hours / 24)}일 전`;
+  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
 }
 
 /** Green once every measurement this participant owes has been answered. */
@@ -117,8 +117,8 @@ export default function SessionConsole({
           setMessage({
             tone: 'bad',
             text: data.blockers
-              ? `진행 차단: ${(data.blockers as string[]).join(' · ')}`
-              : data.message ?? data.error ?? '실패했습니다.',
+              ? `Blocked: ${(data.blockers as string[]).join(' · ')}`
+              : data.message ?? data.error ?? 'Failed.',
           });
           return data;
         }
@@ -150,8 +150,8 @@ export default function SessionConsole({
       );
       setMessage(
         failed.length === 0
-          ? { tone: 'ok', text: `${kind} 응답 생성 완료` }
-          : { tone: 'bad', text: `일부 실패: ${failed.map((f) => f.error ?? `${f.failed}건`).join(', ')}` }
+          ? { tone: 'ok', text: `${kind} responses generated` }
+          : { tone: 'bad', text: `Some failed: ${failed.map((f) => f.error ?? `${f.failed} item(s)`).join(', ')}` }
       );
     }
   };
@@ -173,7 +173,7 @@ export default function SessionConsole({
       `${confirmFor.participantId}:${confirmFor.action}`
     );
     if (data?.success) {
-      setMessage({ tone: 'ok', text: `${confirmFor.number}: ${confirmFor.action} 완료` });
+      setMessage({ tone: 'ok', text: `${confirmFor.number}: ${confirmFor.action} done` });
       setConfirmFor(null);
       setConfirmText('');
     }
@@ -193,13 +193,13 @@ export default function SessionConsole({
               onChange={(e) => setAutoRefresh(e.target.checked)}
               className="accent-[hsl(var(--primary))]"
             />
-            15초마다 자동
+            auto every 15s
           </label>
           <button
             onClick={refresh}
             className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
           >
-            <RefreshCw className="w-3 h-3" /> 새로고침
+            <RefreshCw className="w-3 h-3" /> Refresh
           </button>
           <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
             researcher <span className="font-semibold text-[hsl(var(--foreground))]">{actor}</span>
@@ -222,7 +222,7 @@ export default function SessionConsole({
 
         {participants.length === 0 && (
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
-            아직 로그인한 참가자가 없습니다. 참가자가 /study 에서 번호로 로그인하면 여기에 나타납니다.
+            No participants yet. They appear here once someone signs in at /study with their number.
           </p>
         )}
 
@@ -236,7 +236,7 @@ export default function SessionConsole({
                 <button
                   onClick={() => toggleExpanded(p.id)}
                   className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                  title={isOpen(p.id) ? '접기' : '펼치기'}
+                  title={isOpen(p.id) ? 'Collapse' : 'Expand'}
                 >
                   {isOpen(p.id) ? (
                     <ChevronDown className="w-3.5 h-3.5" />
@@ -253,7 +253,7 @@ export default function SessionConsole({
                   {p.phaseMinutes !== null && (
                     <span className={p.phaseMinutes >= 30 ? 'text-rose-700 font-bold' : 'opacity-70'}>
                       {' '}
-                      {p.phaseMinutes}분
+                      {p.phaseMinutes}m
                     </span>
                   )}
                 </Chip>
@@ -271,13 +271,13 @@ export default function SessionConsole({
                     </span>{' '}
                     {c.condition === 'score'
                       ? `intent ${c.work.intents}`
-                      : `filter ${c.work.filters} · ${c.work.rulesChars}자`}
+                      : `${c.work.filters} filter(s) · ${c.work.rulesChars} chars`}
                     {' · '}
-                    수정 {c.work.ruleEdits} · 배포 {c.work.deploys}
+                    {c.work.ruleEdits} edit(s) · {c.work.deploys} deploy(s)
                   </span>
                 ))}
                 <Chip tone={measurementTone(p)}>
-                  테스트 {p.clones.reduce((n, c) => n + c.testAnswered, 0)}/
+                  test {p.clones.reduce((n, c) => n + c.testAnswered, 0)}/
                   {p.clones.reduce((n, c) => n + c.testTotal, 0)} · A/B {p.ab.answered}/{p.ab.total}
                 </Chip>
                 {p.lastActivityAt && (
@@ -308,7 +308,7 @@ export default function SessionConsole({
                   disabled={busy !== null}
                   className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
                 >
-                  <ChevronLeft className="w-3 h-3" /> 이전
+                  <ChevronLeft className="w-3 h-3" /> Back
                 </button>
                 <button
                   onClick={() => advance(p, 'next')}
@@ -320,14 +320,14 @@ export default function SessionConsole({
                   ) : (
                     <ChevronRight className="w-3 h-3" />
                   )}
-                  다음 페이즈
+                  Next phase
                 </button>
               </div>
 
               {p.blockers.length > 0 && (
                 <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2 flex-wrap">
                   <span className="text-[10.5px] font-bold uppercase tracking-wide text-amber-700">
-                    다음 페이즈 차단
+                    Next phase blocked
                   </span>
                   {p.blockers.map((b, i) => (
                     <Chip key={i} tone="warn">
@@ -338,7 +338,7 @@ export default function SessionConsole({
                     onClick={() => advance(p, 'next', true)}
                     className="ml-auto text-[10.5px] font-semibold px-2 py-0.5 rounded border border-amber-300 text-amber-800 hover:bg-amber-100"
                   >
-                    무시하고 진행
+                    Override
                   </button>
                 </div>
               )}
@@ -367,7 +367,7 @@ export default function SessionConsole({
               {isOpen(p.id) && (
               <div className="px-4 py-2 flex items-center gap-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
                 <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
-                  세션 관리
+                  Session management
                 </span>
                 <div className="flex-1" />
                 <button
@@ -377,7 +377,7 @@ export default function SessionConsole({
                   disabled={busy !== null}
                   className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
                 >
-                  <RotateCcw className="w-3 h-3" /> 전체 워크스페이스 리셋
+                  <RotateCcw className="w-3 h-3" /> Reset all workspaces
                 </button>
                 <button
                   onClick={() =>
@@ -386,7 +386,7 @@ export default function SessionConsole({
                   disabled={busy !== null}
                   className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded border border-rose-300 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                 >
-                  <Trash2 className="w-3 h-3" /> 참가자 삭제
+                  <Trash2 className="w-3 h-3" /> Remove participant
                 </button>
               </div>
               )}
@@ -410,20 +410,20 @@ export default function SessionConsole({
             <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
               <h2 className="text-sm font-bold text-rose-700">
                 {confirmFor.action === 'remove'
-                  ? '참가자를 완전히 삭제합니다'
+                  ? 'Remove this participant entirely'
                   : confirmFor.action === 'reset_all'
-                    ? '모든 워크스페이스를 리셋합니다'
-                    : `${confirmFor.datasetKey} 워크스페이스를 리셋합니다`}
+                    ? 'Reset every workspace'
+                    : `Reset the ${confirmFor.datasetKey} workspace`}
               </h2>
             </div>
             <div className="px-5 py-4 space-y-3">
               <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">
                 {confirmFor.action === 'remove'
-                  ? '계정과 두 클론, 그동안의 모든 설정 작업이 사라집니다. 되돌릴 수 없습니다.'
-                  : '이 참가자의 설정 작업(intent·rule·필터·배포)이 사라지고 마스터에서 다시 복제됩니다. 참가자 번호는 그대로 유지됩니다.'}
+                  ? 'The account, both clones and every bit of configuration work go. This cannot be undone.'
+                  : 'Their configuration work (sets, rules, filters, deploys) goes and the workspace is re-cloned from the master. Their participant number stays valid.'}
               </p>
               <label className="block text-[11px] font-semibold text-[hsl(var(--muted-foreground))]">
-                확인을 위해 참가자 번호 <span className="font-mono text-[hsl(var(--foreground))]">{confirmFor.number}</span> 를 입력하세요
+                Type the participant number <span className="font-mono text-[hsl(var(--foreground))]">{confirmFor.number}</span> to confirm
               </label>
               <input
                 autoFocus
@@ -441,14 +441,14 @@ export default function SessionConsole({
                 }}
                 className="text-xs font-semibold px-3 py-1.5 rounded border border-[hsl(var(--border))]"
               >
-                취소
+                Cancel
               </button>
               <button
                 onClick={runConfirmed}
                 disabled={confirmText.trim().toUpperCase() !== confirmFor.number || busy !== null}
                 className="text-xs font-semibold px-3 py-1.5 rounded bg-rose-600 text-white disabled:opacity-40"
               >
-                {busy?.startsWith(confirmFor.participantId) ? '실행 중…' : '실행'}
+                {busy?.startsWith(confirmFor.participantId) ? 'Running…' : 'Run'}
               </button>
             </div>
           </div>
@@ -471,13 +471,13 @@ function CloneCard({
 }) {
   const readiness = (r: { missing: number; stale: number; current: boolean }) =>
     r.current ? (
-      <Chip tone="ok">준비됨</Chip>
+      <Chip tone="ok">ready</Chip>
     ) : (
       <Chip tone="warn">
-        {r.missing > 0 && `없음 ${r.missing}`}
+        {r.missing > 0 && `${r.missing} missing`}
         {r.missing > 0 && r.stale > 0 && ' · '}
         {r.stale > 0 && `stale ${r.stale}`}
-        {r.missing === 0 && r.stale === 0 && '문항 없음'}
+        {r.missing === 0 && r.stale === 0 && 'no bank items'}
       </Chip>
     );
 
@@ -491,7 +491,7 @@ function CloneCard({
         {clone.deployed ? (
           <Chip tone="ok">{clone.deployLabel}</Chip>
         ) : (
-          <Chip tone="bad">미배포</Chip>
+          <Chip tone="bad">not deployed</Chip>
         )}
         <a
           href={`/instructor/assignments/${clone.assignmentId}/score`}
@@ -499,22 +499,22 @@ function CloneCard({
           rel="noreferrer"
           // study_events carries no actor, so anything done here is recorded as
           // if the participant did it. Fine between sessions, not during one.
-          title="세션 중에는 열지 마세요 — 이 보드에서 한 행동이 참가자 행동으로 기록됩니다."
+          title="Do not open during a session — anything done here is recorded as the participant\u2019s."
           className="text-[10.5px] underline text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
         >
-          보드 열기 ⚠
+          Open board ⚠
         </a>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap text-[11px]">
-        <span className="text-[hsl(var(--muted-foreground))] w-14">블록 테스트</span>
+        <span className="text-[hsl(var(--muted-foreground))] w-14">Block test</span>
         {readiness(clone.test)}
         <button
           onClick={() => onGenerate('test')}
           disabled={busy !== null || !clone.deployed}
           className="text-[10.5px] font-semibold px-2 py-0.5 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"
         >
-          생성
+          Generate
         </button>
       </div>
 
@@ -526,14 +526,14 @@ function CloneCard({
           disabled={busy !== null || !clone.deployed}
           className="text-[10.5px] font-semibold px-2 py-0.5 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"
         >
-          생성 (양 데이터셋)
+          Generate (both)
         </button>
         <button
           onClick={onReset}
           disabled={busy !== null}
           className="ml-auto text-[10.5px] font-semibold px-2 py-0.5 rounded border border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"
         >
-          이 클론 리셋
+          Reset clone
         </button>
       </div>
     </div>

@@ -627,7 +627,7 @@ export function validateCuration(
     out.push({
       code: 'isolation',
       severity: 'error',
-      message: `데모 격리 위반 ${violating.length}건 — 격리된 학생의 질문이 세트에 있습니다`,
+      message: `${violating.length} demo-isolation violation(s) — questions from an isolated student are in a set`,
       messageIds: violating,
     });
   }
@@ -639,7 +639,7 @@ export function validateCuration(
     out.push({
       code: 'missing_type',
       severity: 'error',
-      message: `분류 없는 질문 ${untyped.length}건이 세트에 있습니다 — [분류 갱신] 후 다시 확인하세요`,
+      message: `${untyped.length} unclassified question(s) in a set — run Refresh classification`,
       messageIds: untyped,
     });
   }
@@ -656,7 +656,7 @@ export function validateCuration(
     out.push({
       code: 'ab_balance',
       severity: 'error',
-      message: 'A/B 균형 블록 불가 — 유형당 정확히 2문항이어야 합니다',
+      message: `A/B blocks unbalanced — needs exactly ${targets.ab} per type`,
     });
   }
 
@@ -669,7 +669,7 @@ export function validateCuration(
       out.push({
         code: 'boundary_ratio',
         severity: 'warning',
-        message: `${kind} 경계비율 ${(boundary * 100).toFixed(0)}% vs 자연비율 ${(
+        message: `${kind} boundary ${(boundary * 100).toFixed(0)}% vs natural ${(
           state.naturalBoundaryRatio * 100
         ).toFixed(0)}%`,
       });
