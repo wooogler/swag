@@ -40,6 +40,19 @@ async function main() {
 
   for (const dataset of CURATION_DATASETS) {
     await setLock(dataset.key, null, false);
+    // DESTRUCTIVE: this wipes real curation work too. Say what is going.
+    const existing = await db
+      .select()
+      .from(studySetMembers)
+      .where(eq(studySetMembers.datasetKey, dataset.key));
+    const byHand = existing.filter((m) => m.addedBy !== 'FIXTURE');
+    if (byHand.length > 0) {
+      console.log(
+        `  ⚠ ${dataset.key}: discarding ${byHand.length} hand-assigned question(s) — ${byHand
+          .map((m) => `${m.setKind}:${m.sourceMessageId}`)
+          .join(', ')}`
+      );
+    }
     await db.delete(studySetMembers).where(eq(studySetMembers.datasetKey, dataset.key));
 
     const state = await getCurationState(dataset.key);

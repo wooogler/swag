@@ -7,13 +7,18 @@
  * is the study's, not the UI's: a test phase entered without current answers
  * would measure a configuration the participant no longer has.
  */
-import { and, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   baselinePromptVersions,
   scoreChatDeploys,
+  studyAbAnswers,
   studyClones,
+  studyEvents,
   studyParticipants,
+  studyQuestionBank,
+  studySurveyAnswers,
+  studyTestAnswers,
   type StudyParticipant,
 } from '@/db/schema';
 import { STUDY_DATASETS } from './config';
@@ -26,6 +31,27 @@ import {
   type StudyPhase,
 } from './phases';
 import { logParticipantEvent } from './events';
+import { SURVEY_ITEMS } from './survey-items';
+
+/**
+ * What a participant has actually BUILT in one workspace, read out of the
+ * state the session leaves behind rather than from any new instrumentation.
+ * Deliberately per-condition: an intent count means nothing for a baseline
+ * clone, and a rules-document length means nothing for a SCORE one.
+ */
+export interface CloneWork {
+  /** SCORE: sets the participant authored (their own, not the type roots). */
+  intents: number;
+  nestedIntents: number;
+  corrections: number;
+  /** Baseline: saved filters, and the size of the one rules document. */
+  filters: number;
+  rulesChars: number;
+  /** Both: how many times a rule was revised, and deploys made. */
+  ruleEdits: number;
+  deploys: number;
+  lastDeployAt: string | null;
+}
 
 export interface CloneStatus {
   datasetKey: string;
@@ -37,6 +63,12 @@ export interface CloneStatus {
   /** Frozen-answer readiness, per bank kind. */
   test: { missing: number; stale: number; current: boolean };
   ab: { missing: number; stale: number; current: boolean };
+  work: CloneWork;
+  /** Block test answered / total, for this clone's own dataset. */
+  testAnswered: number;
+  testTotal: number;
+  surveyAnswered: number;
+  surveyTotal: number;
 }
 
 export interface ParticipantStatus {
@@ -49,6 +81,13 @@ export interface ParticipantStatus {
   clones: CloneStatus[];
   /** Blocking reasons for advancing out of the CURRENT phase, if any. */
   blockers: string[];
+  /** When the facilitator moved them into the current phase, and how long ago —
+   * the 30-minute work cap is watched with this. */
+  phaseSince: string | null;
+  phaseMinutes: number | null;
+  /** The most recent trace of them doing anything at all. */
+  lastActivityAt: string | null;
+  ab: { answered: number; total: number };
 }
 
 function conditionOf(clone: { condition: string }): 'score' | 'baseline' {
@@ -80,6 +119,164 @@ async function deployStateFor(clone: {
     .orderBy(desc(scoreChatDeploys.versionNo))
     .limit(1);
   return { deployed: !!latest, label: latest ? `chat v${latest.versionNo}` : null };
+}
+
+/**
+ * One round trip per clone for everything a facilitator watches. Counting in
+ * SQL rather than pulling rows: a mid-session poll should not drag a whole
+ * intent tree and every rule version across the wire.
+ */
+async function workFor(assignmentId: string): Promise<CloneWork> {
+  const [row] = await db.execute<{
+    intents: number;
+    nested: number;
+    corrections: number;
+    filters: number;
+    rules_chars: number;
+    rule_edits: number;
+    deploys: number;
+    last_deploy: Date | null;
+  }>(sql`
+    SELECT
+      (SELECT count(*)::int FROM score_intents
+        WHERE assignment_id = ${assignmentId} AND kind = 'intent'
+          AND NOT is_template AND NOT archived) AS intents,
+      (SELECT count(*)::int FROM score_intents
+        WHERE assignment_id = ${assignmentId} AND kind = 'intent'
+          AND NOT is_template AND NOT archived AND parent_intent_id IS NOT NULL) AS nested,
+      (SELECT count(*)::int FROM score_intent_pins WHERE assignment_id = ${assignmentId}) AS corrections,
+      (SELECT count(*)::int FROM baseline_searches WHERE assignment_id = ${assignmentId}) AS filters,
+      -- The rules document as WRITTEN: the holder carries the working text,
+      -- but a participant who deployed and then had their clone re-read would
+      -- show zero if only the holder were counted.
+      GREATEST(
+        (SELECT coalesce(max(length(rule)), 0)::int FROM score_intents
+          WHERE assignment_id = ${assignmentId} AND kind = 'prompt_holder'),
+        (SELECT coalesce(max(length(prompt)), 0)::int FROM baseline_prompt_versions
+          WHERE assignment_id = ${assignmentId})
+      ) AS rules_chars,
+      (SELECT count(*)::int FROM score_rule_versions WHERE assignment_id = ${assignmentId}) AS rule_edits,
+      (SELECT count(*)::int FROM score_chat_deploys WHERE assignment_id = ${assignmentId})
+        + (SELECT count(*)::int FROM baseline_prompt_versions
+            WHERE assignment_id = ${assignmentId} AND deployed_at IS NOT NULL) AS deploys,
+      GREATEST(
+        (SELECT max(created_at) FROM score_chat_deploys WHERE assignment_id = ${assignmentId}),
+        (SELECT max(deployed_at) FROM baseline_prompt_versions WHERE assignment_id = ${assignmentId})
+      ) AS last_deploy
+  `);
+  return {
+    intents: row?.intents ?? 0,
+    nestedIntents: row?.nested ?? 0,
+    corrections: row?.corrections ?? 0,
+    filters: row?.filters ?? 0,
+    rulesChars: row?.rules_chars ?? 0,
+    ruleEdits: row?.rule_edits ?? 0,
+    deploys: row?.deploys ?? 0,
+    lastDeployAt: row?.last_deploy ? new Date(row.last_deploy).toISOString() : null,
+  };
+}
+
+/** Block-test progress for one clone: rated items over the bank's size. */
+async function answeredFor(
+  cloneAssignmentId: string,
+  datasetKey: string
+): Promise<{ answered: number; total: number }> {
+  const bank = await db
+    .select({ id: studyQuestionBank.id })
+    .from(studyQuestionBank)
+    .where(and(eq(studyQuestionBank.datasetKey, datasetKey), eq(studyQuestionBank.kind, 'test')));
+  if (bank.length === 0) return { answered: 0, total: 0 };
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(studyTestAnswers)
+    .where(
+      and(
+        eq(studyTestAnswers.cloneAssignmentId, cloneAssignmentId),
+        isNotNull(studyTestAnswers.rating),
+        inArray(
+          studyTestAnswers.bankItemId,
+          bank.map((b) => b.id)
+        )
+      )
+    );
+  return { answered: row?.n ?? 0, total: bank.length };
+}
+
+/** A/B progress: choices made over the bank's size (both datasets). */
+async function abProgressFor(participantId: string): Promise<{ answered: number; total: number }> {
+  const [[bank], [answered]] = await Promise.all([
+    db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(studyQuestionBank)
+      .where(eq(studyQuestionBank.kind, 'ab')),
+    db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(studyAbAnswers)
+      .where(eq(studyAbAnswers.participantId, participantId)),
+  ]);
+  return { answered: answered?.n ?? 0, total: bank?.n ?? 0 };
+}
+
+/** When the facilitator last moved them — the clock the 30-minute cap runs on. */
+async function lastPhaseChange(participantId: string): Promise<Date | null> {
+  const [row] = await db
+    .select({ createdAt: studyEvents.createdAt })
+    .from(studyEvents)
+    .where(
+      and(
+        eq(studyEvents.participantId, participantId),
+        eq(studyEvents.eventType, 'phase_advance')
+      )
+    )
+    .orderBy(desc(studyEvents.createdAt))
+    .limit(1);
+  return row?.createdAt ?? null;
+}
+
+/**
+ * The freshest trace of the participant doing something. Server-side events
+ * are thin by design (the study reads behaviour from DB state, not a click
+ * stream), so this takes the latest of what IS recorded: their board events,
+ * their deploys, and their measurement answers.
+ */
+async function lastActivityFor(
+  participant: StudyParticipant,
+  clones: CloneStatus[]
+): Promise<Date | null> {
+  const assignmentIds = clones.map((c) => c.assignmentId);
+  const candidates: (Date | null)[] = [
+    participant.lastLoginAt,
+    ...clones.map((c) => (c.work.lastDeployAt ? new Date(c.work.lastDeployAt) : null)),
+  ];
+
+  if (assignmentIds.length > 0) {
+    const [row] = await db
+      .select({ createdAt: studyEvents.createdAt })
+      .from(studyEvents)
+      .where(inArray(studyEvents.assignmentId, assignmentIds))
+      .orderBy(desc(studyEvents.createdAt))
+      .limit(1);
+    candidates.push(row?.createdAt ?? null);
+
+    const [rated] = await db
+      .select({ ratedAt: studyTestAnswers.ratedAt })
+      .from(studyTestAnswers)
+      .where(inArray(studyTestAnswers.cloneAssignmentId, assignmentIds))
+      .orderBy(desc(studyTestAnswers.ratedAt))
+      .limit(1);
+    candidates.push(rated?.ratedAt ?? null);
+  }
+
+  const [answered] = await db
+    .select({ answeredAt: studyAbAnswers.answeredAt })
+    .from(studyAbAnswers)
+    .where(eq(studyAbAnswers.participantId, participant.id))
+    .orderBy(desc(studyAbAnswers.answeredAt))
+    .limit(1);
+  candidates.push(answered?.answeredAt ?? null);
+
+  const times = candidates.filter((d): d is Date => !!d).map((d) => d.getTime());
+  return times.length > 0 ? new Date(Math.max(...times)) : null;
 }
 
 export async function getParticipantStatus(
@@ -117,6 +314,20 @@ export async function getParticipantStatus(
         stale: abParts.reduce((n, p) => n + p.stale, 0),
         current: abParts.every((p) => p.current),
       };
+      const [work, testProgress, surveyCount] = await Promise.all([
+        workFor(clone.assignmentId),
+        answeredFor(clone.assignmentId, clone.datasetKey),
+        db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(studySurveyAnswers)
+          .where(
+            and(
+              eq(studySurveyAnswers.participantId, participant.id),
+              eq(studySurveyAnswers.block, block ?? 0)
+            )
+          ),
+      ]);
+
       return {
         datasetKey: clone.datasetKey,
         assignmentId: clone.assignmentId,
@@ -126,9 +337,20 @@ export async function getParticipantStatus(
         deployLabel: deploy.label,
         test,
         ab,
+        work,
+        testAnswered: testProgress.answered,
+        testTotal: testProgress.total,
+        surveyAnswered: surveyCount[0]?.n ?? 0,
+        surveyTotal: SURVEY_ITEMS.length,
       };
     })
   );
+
+  const [phaseSince, lastActivityAt, abProgress] = await Promise.all([
+    lastPhaseChange(participant.id),
+    lastActivityFor(participant, cloneStatuses),
+    abProgressFor(participant.id),
+  ]);
 
   return {
     id: participant.id,
@@ -139,6 +361,10 @@ export async function getParticipantStatus(
     lastLoginAt: participant.lastLoginAt ? participant.lastLoginAt.toISOString() : null,
     clones: cloneStatuses.sort((a, b) => (a.block ?? 9) - (b.block ?? 9)),
     blockers: advanceBlockers(phase, cloneStatuses),
+    phaseSince: phaseSince ? phaseSince.toISOString() : null,
+    phaseMinutes: phaseSince ? Math.floor((Date.now() - phaseSince.getTime()) / 60_000) : null,
+    lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+    ab: abProgress,
   };
 }
 

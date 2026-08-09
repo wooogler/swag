@@ -9,8 +9,17 @@
  * generate them, advance, or (when a run goes wrong) reset or remove.
  */
 
-import { useCallback, useState } from 'react';
-import { Loader2, RefreshCw, ChevronRight, ChevronLeft, Trash2, RotateCcw } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Loader2,
+  RefreshCw,
+  ChevronRight,
+  ChevronLeft,
+  ChevronDown,
+  ChevronRight as ChevronRightIcon,
+  Trash2,
+  RotateCcw,
+} from 'lucide-react';
 import AdminNav from '@/components/study/AdminNav';
 import type { ParticipantStatus, CloneStatus } from '@/lib/study/console-store';
 import { PHASE_LABELS, type StudyPhase } from '@/lib/study/phases';
@@ -36,6 +45,24 @@ function Chip({
   );
 }
 
+/** "3분 전" — a facilitator reads elapsed time, not a wall clock. */
+function sinceLabel(iso: string): string {
+  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return '방금';
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}시간 전` : `${Math.floor(hours / 24)}일 전`;
+}
+
+/** Green once every measurement this participant owes has been answered. */
+function measurementTone(p: ParticipantStatus): 'plain' | 'ok' {
+  const testTotal = p.clones.reduce((n, c) => n + c.testTotal, 0);
+  const testDone = p.clones.reduce((n, c) => n + c.testAnswered, 0);
+  const complete =
+    testTotal > 0 && testDone === testTotal && p.ab.total > 0 && p.ab.answered === p.ab.total;
+  return complete ? 'ok' : 'plain';
+}
+
 export default function SessionConsole({
   initial,
   phases,
@@ -55,6 +82,10 @@ export default function SessionConsole({
     datasetKey?: string;
   } | null>(null);
   const [confirmText, setConfirmText] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Sessions are watched, not clicked through: without this a facilitator has
+  // to keep pressing refresh to see a participant reach the next step.
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const refresh = useCallback(async () => {
     const res = await fetch('/api/study/admin/participants');
@@ -62,6 +93,14 @@ export default function SessionConsole({
     const data = await res.json();
     setParticipants(data.participants);
   }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => {
+      void refresh();
+    }, 15_000);
+    return () => clearInterval(id);
+  }, [autoRefresh, refresh]);
 
   const post = useCallback(
     async (url: string, body: unknown, label: string) => {
@@ -117,6 +156,15 @@ export default function SessionConsole({
     }
   };
 
+  const isOpen = (id: string) => expanded.has(id);
+  const toggleExpanded = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const runConfirmed = async () => {
     if (!confirmFor) return;
     const data = await post(
@@ -138,6 +186,15 @@ export default function SessionConsole({
           <h1 className="text-sm font-semibold">Session Console</h1>
           <AdminNav current="console" />
           <div className="flex-1" />
+          <label className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+              className="accent-[hsl(var(--primary))]"
+            />
+            15초마다 자동
+          </label>
           <button
             onClick={refresh}
             className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
@@ -176,13 +233,56 @@ export default function SessionConsole({
               className="border border-[hsl(var(--border))] rounded-xl bg-[hsl(var(--card))] overflow-hidden"
             >
               <div className="px-4 py-3 flex items-center gap-3 flex-wrap border-b border-[hsl(var(--border))]">
-                <span className="font-mono text-sm font-bold">{p.participantNumber}</span>
+                <button
+                  onClick={() => toggleExpanded(p.id)}
+                  className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                  title={isOpen(p.id) ? '접기' : '펼치기'}
+                >
+                  {isOpen(p.id) ? (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronRightIcon className="w-3.5 h-3.5" />
+                  )}
+                  <span className="font-mono text-sm font-bold text-[hsl(var(--foreground))]">
+                    {p.participantNumber}
+                  </span>
+                </button>
                 <Chip tone="violet">cell {p.cell}</Chip>
-                <Chip>{p.blockOrder}</Chip>
-                <Chip tone="ok">{PHASE_LABELS[p.phase as StudyPhase] ?? p.phase}</Chip>
-                {p.lastLoginAt && (
+                <Chip tone="ok">
+                  {PHASE_LABELS[p.phase as StudyPhase] ?? p.phase}
+                  {p.phaseMinutes !== null && (
+                    <span className={p.phaseMinutes >= 30 ? 'text-rose-700 font-bold' : 'opacity-70'}>
+                      {' '}
+                      {p.phaseMinutes}분
+                    </span>
+                  )}
+                </Chip>
+                {/* What they have actually built, per block — the question a
+                    facilitator has while watching, which the phase alone does
+                    not answer. */}
+                {p.clones.map((c) => (
+                  <span
+                    key={c.assignmentId}
+                    className="text-[10.5px] text-[hsl(var(--muted-foreground))] tabular-nums"
+                    title={`${c.datasetKey} · ${c.condition}`}
+                  >
+                    <span className="font-semibold text-[hsl(var(--foreground))]">
+                      B{c.block ?? '?'}
+                    </span>{' '}
+                    {c.condition === 'score'
+                      ? `intent ${c.work.intents}`
+                      : `filter ${c.work.filters} · ${c.work.rulesChars}자`}
+                    {' · '}
+                    수정 {c.work.ruleEdits} · 배포 {c.work.deploys}
+                  </span>
+                ))}
+                <Chip tone={measurementTone(p)}>
+                  테스트 {p.clones.reduce((n, c) => n + c.testAnswered, 0)}/
+                  {p.clones.reduce((n, c) => n + c.testTotal, 0)} · A/B {p.ab.answered}/{p.ab.total}
+                </Chip>
+                {p.lastActivityAt && (
                   <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
-                    last login {new Date(p.lastLoginAt).toLocaleString()}
+                    {sinceLabel(p.lastActivityAt)}
                   </span>
                 )}
                 <div className="flex-1" />
@@ -243,6 +343,7 @@ export default function SessionConsole({
                 </div>
               )}
 
+              {isOpen(p.id) && (
               <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-[hsl(var(--border))]">
                 {p.clones.map((clone) => (
                   <CloneCard
@@ -261,7 +362,9 @@ export default function SessionConsole({
                   />
                 ))}
               </div>
+              )}
 
+              {isOpen(p.id) && (
               <div className="px-4 py-2 flex items-center gap-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
                 <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
                   세션 관리
@@ -286,6 +389,7 @@ export default function SessionConsole({
                   <Trash2 className="w-3 h-3" /> 참가자 삭제
                 </button>
               </div>
+              )}
             </div>
           ))}
         </div>
@@ -391,9 +495,14 @@ function CloneCard({
         )}
         <a
           href={`/instructor/assignments/${clone.assignmentId}/score`}
+          target="_blank"
+          rel="noreferrer"
+          // study_events carries no actor, so anything done here is recorded as
+          // if the participant did it. Fine between sessions, not during one.
+          title="세션 중에는 열지 마세요 — 이 보드에서 한 행동이 참가자 행동으로 기록됩니다."
           className="text-[10.5px] underline text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
         >
-          보드 열기
+          보드 열기 ⚠
         </a>
       </div>
 
