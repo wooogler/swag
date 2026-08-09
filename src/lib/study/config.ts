@@ -81,10 +81,23 @@ export function curationDataset(key: string): CurationDataset | undefined {
   return CURATION_DATASETS.find((d) => d.key === key);
 }
 
-/** Per-QUERY-TYPE target size of each curated set (design §4). */
-export const SET_TARGETS_PER_TYPE = { review: 15, test: 2, ab: 2 } as const;
-export type CurationSetKind = keyof typeof SET_TARGETS_PER_TYPE;
-export const CURATION_SET_KINDS = Object.keys(SET_TARGETS_PER_TYPE) as CurationSetKind[];
+/**
+ * Per-QUERY-TYPE size of each curated set (design §4) — the SEED value only.
+ * The live figures are settings a researcher edits (study_set_targets): the
+ * design marks review-set size and A/B item count as things the pilot settles,
+ * and a pilot that needs a redeploy to try 12 instead of 16 will not try it.
+ */
+export const DEFAULT_SET_TARGETS = { review: 15, test: 2, ab: 2 } as const;
+export type CurationSetKind = keyof typeof DEFAULT_SET_TARGETS;
+export type SetTargets = Record<CurationSetKind, number>;
+export const CURATION_SET_KINDS = Object.keys(DEFAULT_SET_TARGETS) as CurationSetKind[];
+
+/** Sanity bounds for the editable targets. */
+export const SET_TARGET_LIMITS: Record<CurationSetKind, { min: number; max: number }> = {
+  review: { min: 1, max: 40 },
+  test: { min: 1, max: 10 },
+  ab: { min: 1, max: 10 },
+};
 
 export function isCurationSetKind(v: unknown): v is CurationSetKind {
   return typeof v === 'string' && (CURATION_SET_KINDS as string[]).includes(v);

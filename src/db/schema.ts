@@ -726,6 +726,18 @@ export const studyGeneratedResponses = pgTable('study_generated_responses', {
   participantIdx: index('study_generated_responses_participant_idx').on(table.participantId),
 }));
 
+// Per-type size of each curated set, as a researcher currently has it. One row
+// (id = 1): the design requires both datasets to carry matching set sizes, so
+// a per-dataset figure would be a way to break that by accident.
+export const studySetTargets = pgTable('study_set_targets', {
+  id: integer('id').primaryKey().default(1),
+  review: integer('review').notNull(),
+  test: integer('test').notNull(),
+  ab: integer('ab').notNull(),
+  updatedAt: timestamp('updated_at').notNull(),
+  updatedBy: text('updated_by'),
+});
+
 // The curated review set, per STUDY assignment (a reduced master and every
 // clone of it). A reduced master keeps whole threads so each curated question
 // can be read in its context — and those earlier turns are questions too, so

@@ -163,6 +163,20 @@ export async function ensureStudyTables(): Promise<void> {
           "locked_by" text
         )`);
 
+      // Set sizes, editable by a researcher. Singleton: the design requires the
+      // two datasets to carry matching set sizes, so this is deliberately NOT
+      // per-dataset — a per-dataset figure could silently break that.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_set_targets" (
+          "id" integer PRIMARY KEY NOT NULL DEFAULT 1,
+          "review" integer NOT NULL,
+          "test" integer NOT NULL,
+          "ab" integer NOT NULL,
+          "updated_at" timestamp NOT NULL,
+          "updated_by" text,
+          CONSTRAINT "study_set_targets_singleton" CHECK (id = 1)
+        )`);
+
       // Which questions of a STUDY assignment are the curated review set. A
       // reduced master keeps whole threads so a question can be read in
       // context, and those earlier turns are questions too — this is what

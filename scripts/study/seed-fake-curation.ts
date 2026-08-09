@@ -17,11 +17,12 @@ const APPLY = process.argv.includes('--apply');
 const CLEAR = process.argv.includes('--clear');
 
 async function main() {
-  const { CURATION_DATASETS, SET_TARGETS_PER_TYPE } = await import('../../src/lib/study/config');
-  const { getCurationState, setSetMember, setLock, validateCuration } = await import(
+  const { CURATION_DATASETS } = await import('../../src/lib/study/config');
+  const { getCurationState, getSetTargets, setSetMember, setLock, validateCuration } = await import(
     '../../src/lib/study/curation'
   );
   const { SCORE_QUERY_TYPES } = await import('../../src/lib/score/intents');
+  const SET_TARGETS_PER_TYPE = await getSetTargets();
 
   if (CLEAR) {
     for (const d of CURATION_DATASETS) {
@@ -75,7 +76,7 @@ async function main() {
     }
 
     const after = await getCurationState(dataset.key);
-    const violations = validateCuration(after).filter((v) => v.severity === 'error');
+    const violations = validateCuration(after, SET_TARGETS_PER_TYPE).filter((v) => v.severity === 'error');
     if (violations.length > 0) {
       console.log(`  ✗ still blocking: ${violations.map((v) => v.message).join(' · ')}`);
       continue;

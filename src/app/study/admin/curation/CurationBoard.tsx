@@ -15,14 +15,14 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, Lock, Unlock, RefreshCw } from 'lucide-react';
+import { Loader2, Lock, Unlock, RefreshCw, Settings } from 'lucide-react';
 import type { ScoreQueryRow } from '@/app/instructor/assignments/[id]/score/IntentBoard';
 import { ConversationThread } from '@/app/instructor/assignments/[id]/score/conversation';
 import { PaneSearch, QueryTextButton } from '@/app/instructor/assignments/[id]/score/workbench-shared';
 import { SortSelect, sortQueryRows, type QuerySortMode } from '@/app/instructor/assignments/[id]/score/query-list';
 import StudioShell from '@/app/instructor/assignments/[id]/score/StudioShell';
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
-import type { CurationSetKind } from '@/lib/study/config';
+import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
 import type {
   CurationState,
   CurationSubtype,
@@ -93,7 +93,7 @@ export default function CurationBoard({
   initialState,
   initialViolations,
   datasets,
-  targets,
+  targets: initialTargets,
   actor,
   isNirvana,
 }: {
@@ -101,13 +101,15 @@ export default function CurationBoard({
   initialState: CurationState;
   initialViolations: CurationViolation[];
   datasets: { key: string; label: string }[];
-  targets: Record<CurationSetKind, number>;
+  targets: SetTargets;
   actor: string;
   isNirvana: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
   const [violations, setViolations] = useState(initialViolations);
+  const [targets, setTargets] = useState<SetTargets>(initialTargets);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selection, setSelection] = useState<Selection>({ kind: 'type', type: 'planning' });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
@@ -191,6 +193,7 @@ export default function CurationBoard({
     const data = await res.json();
     setState(data.state);
     setViolations(data.violations);
+    if (data.targets) setTargets(data.targets);
   }, [state.dataset.key]);
 
   /** Assign / clear. Optimistic so the click feels instant; the refetch is what
@@ -397,6 +400,15 @@ export default function CurationBoard({
           {busy === 'classify' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           분류 갱신
           <Badge tone={state.missingTypeCount > 0 ? 'warn' : 'plain'}>누락 {state.missingTypeCount}</Badge>
+        </button>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          disabled={busy !== null}
+          title="세트 개수 설정"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+        >
+          <Settings className="w-3 h-3" />
+          개수 설정
         </button>
         <button
           onClick={toggleLock}
@@ -812,7 +824,144 @@ export default function CurationBoard({
           )}
         </div>
       </div>
+
+      {settingsOpen && (
+        <SetTargetsModal
+          targets={targets}
+          locked={locked}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={(next) => {
+            setTargets(next);
+            setSettingsOpen(false);
+            void refresh();
+          }}
+        />
+      )}
     </StudioShell>
+  );
+}
+
+/**
+ * Set sizes. Per QUERY TYPE, because that is the unit the design specifies and
+ * the unit the checks use — showing only a total would let a researcher set 60
+ * and wonder why four counters still read 0/15.
+ */
+function SetTargetsModal({
+  targets,
+  locked,
+  onClose,
+  onSaved,
+}: {
+  targets: SetTargets;
+  locked: boolean;
+  onClose: () => void;
+  onSaved: (next: SetTargets) => void;
+}) {
+  const [draft, setDraft] = useState<SetTargets>(targets);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/study/admin/curation/targets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.message ?? '저장에 실패했습니다.');
+        return;
+      }
+      onSaved(data.targets as SetTargets);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
+          <h2 className="text-sm font-bold">세트 개수 설정</h2>
+          <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
+            각 세트가 <strong>질문 유형당</strong> 몇 문항인지. 네 유형에 모두 적용되므로 전체
+            개수는 4배가 됩니다. 두 데이터셋에 함께 적용됩니다.
+          </p>
+        </div>
+
+        <div className="px-5 py-4 space-y-3">
+          {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
+            const { min, max } = SET_TARGET_LIMITS[kind];
+            return (
+              <div key={kind} className="flex items-center gap-3">
+                <label className="text-xs font-semibold flex-1">{SET_LABELS[kind]}</label>
+                <input
+                  type="number"
+                  min={min}
+                  max={max}
+                  disabled={locked || busy}
+                  value={draft[kind]}
+                  onChange={(e) =>
+                    setDraft((prev) => ({ ...prev, [kind]: Number(e.target.value) }))
+                  }
+                  className="w-20 border border-[hsl(var(--border))] rounded px-2 py-1 text-sm text-right tabular-nums bg-[hsl(var(--card))] disabled:opacity-50"
+                />
+                <span className="w-28 text-[11px] text-[hsl(var(--muted-foreground))] tabular-nums">
+                  × 4유형 = {draft[kind] * 4}문항
+                </span>
+              </div>
+            );
+          })}
+
+          <p className="text-[10.5px] text-[hsl(var(--muted-foreground))] leading-relaxed pt-1">
+            A/B는 양쪽 데이터셋에서 뽑으므로 참가자가 보는 문항은 그 2배(
+            {draft.ab * 8}문항)이고, 순서가 균형 블록으로 짜여 파일럿에서 뒤쪽부터 잘라도 홈·원정이
+            맞습니다.
+          </p>
+
+          {locked && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
+              확정된 데이터셋이 있어 바꿀 수 없습니다. 잠금을 해제한 뒤 다시 시도하세요.
+            </p>
+          )}
+          {error && (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex items-center justify-between gap-2">
+          <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
+            이미 배정한 문항은 지워지지 않습니다 — 목표치만 바뀝니다.
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="text-xs font-semibold px-3 py-1.5 rounded border border-[hsl(var(--border))]"
+            >
+              취소
+            </button>
+            <button
+              onClick={save}
+              disabled={locked || busy}
+              className="text-xs font-semibold px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-white disabled:opacity-40"
+            >
+              {busy ? '저장 중…' : '저장'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -24,6 +24,7 @@ import {
   studentSessions,
   studyCurationMeta,
   studySetMembers,
+  studySetTargets,
 } from '@/db/schema';
 import { getQueryRecords } from '@/lib/score/queries';
 import {
@@ -41,10 +42,13 @@ import { DEFAULT_SCORE_CONFIG } from '@/lib/score/default-config';
 import { flattenSubtypes } from '@/lib/score/config';
 import { LEGACY_TYPE_TO_QUERY_TYPE } from '@/lib/score/jelson-suggest';
 import {
+  CURATION_DATASETS,
   CURATION_SET_KINDS,
-  SET_TARGETS_PER_TYPE,
+  DEFAULT_SET_TARGETS,
+  SET_TARGET_LIMITS,
   curationDataset,
   type CurationSetKind,
+  type SetTargets,
 } from './config';
 import { ensureStudyTables } from './store';
 
@@ -531,6 +535,54 @@ export async function setLock(datasetKey: string, by: string | null, locked: boo
 }
 
 /* ------------------------------------------------------------------ */
+/* Set sizes                                                           */
+/* ------------------------------------------------------------------ */
+
+/** The current per-type set sizes, seeded from the design's figures. */
+export async function getSetTargets(): Promise<SetTargets> {
+  await ensureStudyTables();
+  const [row] = await db.select().from(studySetTargets).where(eq(studySetTargets.id, 1));
+  if (!row) return { ...DEFAULT_SET_TARGETS };
+  return { review: row.review, test: row.test, ab: row.ab };
+}
+
+export function clampSetTargets(input: Partial<SetTargets>): SetTargets {
+  const out = { ...DEFAULT_SET_TARGETS } as SetTargets;
+  for (const kind of CURATION_SET_KINDS) {
+    const { min, max } = SET_TARGET_LIMITS[kind];
+    const raw = input[kind];
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      out[kind] = Math.min(max, Math.max(min, Math.round(raw)));
+    }
+  }
+  return out;
+}
+
+/**
+ * Change the set sizes. Refused while any dataset is confirmed: the lock means
+ * "these sets are the study material", and moving the target under it would
+ * leave a locked set that no longer satisfies its own rule.
+ */
+export async function saveSetTargets(
+  input: Partial<SetTargets>,
+  updatedBy: string
+): Promise<SetTargets> {
+  await ensureStudyTables();
+  for (const dataset of CURATION_DATASETS) {
+    if (await isLocked(dataset.key)) throw new Error('curation_locked');
+  }
+  const targets = clampSetTargets(input);
+  await db
+    .insert(studySetTargets)
+    .values({ id: 1, ...targets, updatedAt: new Date(), updatedBy })
+    .onConflictDoUpdate({
+      target: studySetTargets.id,
+      set: { ...targets, updatedAt: new Date(), updatedBy },
+    });
+  return targets;
+}
+
+/* ------------------------------------------------------------------ */
 /* Validation (shared by the confirm button and the build scripts)     */
 /* ------------------------------------------------------------------ */
 
@@ -547,11 +599,14 @@ export interface CurationViolation {
  * design §4 asks the sets to FOLLOW the natural ratio, but with 2 items per
  * type per test set exact proportionality is not achievable.
  */
-export function validateCuration(state: CurationState): CurationViolation[] {
+export function validateCuration(
+  state: CurationState,
+  targets: SetTargets
+): CurationViolation[] {
   const out: CurationViolation[] = [];
 
   for (const kind of CURATION_SET_KINDS) {
-    const target = SET_TARGETS_PER_TYPE[kind];
+    const target = targets[kind];
     for (const type of SCORE_QUERY_TYPES) {
       const have = state.members.filter(
         (m) => m.setKind === kind && questionType(state, m.messageId) === type
@@ -597,7 +652,7 @@ export function validateCuration(state: CurationState): CurationViolation[] {
       state.members.filter((m) => m.setKind === 'ab' && questionType(state, m.messageId) === type)
         .length
   );
-  if (abPerType.some((n) => n !== SET_TARGETS_PER_TYPE.ab)) {
+  if (abPerType.some((n) => n !== targets.ab)) {
     out.push({
       code: 'ab_balance',
       severity: 'error',
