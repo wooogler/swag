@@ -23,7 +23,12 @@ import { SortSelect, sortQueryRows, type QuerySortMode } from '@/app/instructor/
 import StudioShell from '@/app/instructor/assignments/[id]/score/StudioShell';
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
 import type { CurationSetKind } from '@/lib/study/config';
-import type { CurationState, CurationSubtype, CurationViolation } from '@/lib/study/curation';
+import type {
+  CurationState,
+  CurationSubtype,
+  CurationViolation,
+  QuestionGrade,
+} from '@/lib/study/curation';
 
 /* ── atoms (the board's, copied because they are module-private there) ── */
 
@@ -107,7 +112,10 @@ export default function CurationBoard({
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<QuerySortMode>('participant-asc');
-  const [boundaryOnly, setBoundaryOnly] = useState(false);
+  // Certainty filter. Assembling a set that follows the log's natural
+  // certain/boundary mix (design §4) means being able to go looking for each
+  // kind, not just for the ambiguous ones.
+  const [gradeFilter, setGradeFilter] = useState<'all' | QuestionGrade>('all');
   const [expanded, setExpanded] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -135,9 +143,23 @@ export default function CurationBoard({
       const type = questionById.get(m.messageId)?.queryType ?? m.queryType;
       counts.set(m.setKind, (counts.get(m.setKind) ?? 0) + 1);
       if (type) counts.set(`${m.setKind}:${type}`, (counts.get(`${m.setKind}:${type}`) ?? 0) + 1);
+      // Boundary questions per set: the design asks each set to follow the
+      // log's natural certain/boundary mix, and that is far easier to hit while
+      // assigning than to repair at the end.
+      const grade = questionById.get(m.messageId)?.grade ?? m.grade;
+      if (grade === 'boundary') {
+        counts.set(`${m.setKind}:boundary`, (counts.get(`${m.setKind}:boundary`) ?? 0) + 1);
+      }
     }
     return counts;
   }, [state.members, questionById]);
+
+  /** How many of a set's questions SHOULD be boundary, at the natural ratio. */
+  const boundaryTargetFor = useCallback(
+    (kind: CurationSetKind) =>
+      Math.round(state.naturalBoundaryRatio * targets[kind] * SCORE_QUERY_TYPES.length),
+    [state.naturalBoundaryRatio, targets]
+  );
 
   const refresh = useCallback(async () => {
     const res = await fetch(`/api/study/admin/curation/state?ds=${state.dataset.key}`);
@@ -261,13 +283,15 @@ export default function CurationBoard({
         .map((q) => q.messageId);
     }
     let list = ids.map((id) => rowById.get(id)).filter((r): r is ScoreQueryRow => !!r);
-    if (boundaryOnly) list = list.filter((r) => questionById.get(r.messageId)?.grade === 'boundary');
+    if (gradeFilter !== 'all') {
+      list = list.filter((r) => questionById.get(r.messageId)?.grade === gradeFilter);
+    }
     if (search.trim()) {
       const needle = search.trim().toLowerCase();
       list = list.filter((r) => r.queryText.toLowerCase().includes(needle));
     }
     return sortQueryRows(list, sort);
-  }, [selection, state.members, state.questions, memberByMessage, rowById, boundaryOnly, search, sort, questionById]);
+  }, [selection, state.members, state.questions, memberByMessage, rowById, gradeFilter, search, sort, questionById]);
 
   const selectedRow = selectedId !== null ? rowById.get(selectedId) ?? null : null;
   const selectedQuestion = selectedId !== null ? questionById.get(selectedId) ?? null : null;
@@ -321,9 +345,17 @@ export default function CurationBoard({
         {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
           const have = setCounts.get(kind) ?? 0;
           const want = targets[kind] * SCORE_QUERY_TYPES.length;
+          const boundaryHave = setCounts.get(`${kind}:boundary`) ?? 0;
+          const boundaryWant = boundaryTargetFor(kind);
           return (
             <Chip key={kind} tone={have === want ? 'ok' : 'warn'}>
               {SET_LABELS[kind]} {have}/{want}
+              <span
+                className="opacity-70 font-normal"
+                title={`경계 질문 ${boundaryHave}개 (자연 비율대로면 ${boundaryWant}개)`}
+              >
+                ◐{boundaryHave}/{boundaryWant}
+              </span>
             </Chip>
           );
         })}
@@ -523,15 +555,16 @@ export default function CurationBoard({
               {selectionLabel(selection, subtypeById)} · {visible.length}
             </span>
             <div className="flex items-center gap-2 shrink-0">
-              <label className="flex items-center gap-1 text-[10.5px] text-[hsl(var(--muted-foreground))]">
-                <input
-                  type="checkbox"
-                  checked={boundaryOnly}
-                  onChange={(e) => setBoundaryOnly(e.target.checked)}
-                  className="accent-[hsl(var(--primary))]"
-                />
-                ◐ 경계만
-              </label>
+              <select
+                value={gradeFilter}
+                onChange={(e) => setGradeFilter(e.target.value as 'all' | QuestionGrade)}
+                className="text-xs border border-[hsl(var(--border))] rounded px-1.5 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
+              >
+                <option value="all">전체</option>
+                <option value="certain">● 확실만</option>
+                <option value="boundary">◐ 경계만</option>
+                <option value="unmatched">미매칭만</option>
+              </select>
               <SortSelect value={sort} onChange={setSort} />
             </div>
           </div>
