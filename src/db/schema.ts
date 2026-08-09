@@ -552,11 +552,19 @@ export const scoreProbeRatings = pgTable('score_probe_ratings', {
   assignmentIdx: index('score_probe_ratings_assignment_idx').on(table.assignmentId),
 }));
 
-// Baseline saved custom searches. Presets come from is_template intents (no row
-// here). Label = description prefix; NO title field (intentional).
+// Baseline saved filters ("searches" server-side, "Filters" in the UI). Every
+// filter is created through the same chooser SCORE creates intents in
+// (candidate-chooser.tsx), which carries a name box — so a filter has a name of
+// its own instead of being labelled by the first 60 characters of its
+// description. `type` is the query type it was created under: it groups the
+// filter in the left column and scopes which questions its results SHOW —
+// nothing more (no rule, no ownership). Both nullable: rows saved before these
+// columns fall back to the description prefix / ungrouped whole-log display.
 export const baselineSearches = pgTable('baseline_searches', {
   id: text('id').primaryKey(),
   assignmentId: text('assignment_id').notNull(),
+  name: text('name'),
+  type: text('type'),
   description: text('description').notNull(),
   defHash: text('def_hash').notNull(),
   createdAt: timestamp('created_at').notNull(),

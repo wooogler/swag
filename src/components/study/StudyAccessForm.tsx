@@ -45,7 +45,7 @@ export default function StudyAccessForm() {
         <CardHeader className="space-y-1 text-center">
           <CardTitle className="text-3xl font-bold tracking-tight">SCORE</CardTitle>
           <CardDescription>
-            Enter your participant number and the study passcode. Your dataset
+            Enter your participant ID and the study passcode. Your dataset
             workspaces are prepared automatically the first time you sign in.
           </CardDescription>
         </CardHeader>
@@ -53,13 +53,13 @@ export default function StudyAccessForm() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <label
-                htmlFor="participant-number"
+                htmlFor="participant-id"
                 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
               >
-                Participant number
+                Participant ID
               </label>
               <Input
-                id="participant-number"
+                id="participant-id"
                 name="participantNumber"
                 type="text"
                 autoComplete="off"
@@ -104,7 +104,7 @@ export default function StudyAccessForm() {
         </CardContent>
         <CardFooter className="justify-center border-t border-[hsl(var(--border))] pt-6">
           <p className="text-xs text-[hsl(var(--muted-foreground))] text-center">
-            Trouble signing in? Ask the study facilitator for your number and passcode.
+            Trouble signing in? Ask the study facilitator for your ID and passcode.
           </p>
         </CardFooter>
       </Card>

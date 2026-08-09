@@ -81,10 +81,15 @@ export async function ensureStudyTables(): Promise<void> {
       await db.execute(sql`
         CREATE TABLE IF NOT EXISTS "baseline_searches" (
           "id" text PRIMARY KEY NOT NULL,
-          "assignment_id" text NOT NULL, "description" text NOT NULL, "def_hash" text NOT NULL,
+          "assignment_id" text NOT NULL, "name" text, "type" text, "description" text NOT NULL, "def_hash" text NOT NULL,
           "created_at" timestamp NOT NULL, "last_run_at" timestamp
         )`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "baseline_searches_assignment_idx" ON "baseline_searches" ("assignment_id")`);
+      // Added with the shared create-chooser (name) and the per-type filter
+      // tree (type): clones provisioned before them have the table but not the
+      // columns.
+      await db.execute(sql`ALTER TABLE "baseline_searches" ADD COLUMN IF NOT EXISTS "name" text`);
+      await db.execute(sql`ALTER TABLE "baseline_searches" ADD COLUMN IF NOT EXISTS "type" text`);
 
       await db.execute(sql`
         CREATE TABLE IF NOT EXISTS "baseline_prompt_versions" (

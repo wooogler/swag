@@ -70,13 +70,13 @@ export async function POST(request: Request) {
     const { participantNumber, passcode } = loginSchema.parse(body);
 
     if (!safeEqual(passcode, STUDY_PASSCODE)) {
-      return NextResponse.json({ error: 'Invalid participant number or passcode' }, { status: 401 });
+      return NextResponse.json({ error: 'Invalid participant ID or passcode' }, { status: 401 });
     }
 
     const number = normalizeParticipantNumber(participantNumber);
     if (!isValidParticipantNumber(number)) {
       return NextResponse.json(
-        { error: 'Participant number may use only letters, digits, "-" and "_" (max 32).' },
+        { error: 'Participant ID may use only letters, digits, "-" and "_" (max 32).' },
         { status: 400 }
       );
     }
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
-        { error: 'Enter both a participant number and the study passcode' },
+        { error: 'Enter both a participant ID and the study passcode' },
         { status: 400 }
       );
     }

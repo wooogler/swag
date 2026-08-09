@@ -6,13 +6,15 @@
  * the same verdicts; results cache in score_probe_ratings keyed by
  * intentDefHash(definition, []) — the same keyspace preset (template) ratings use.
  *
- * Presets are the clone's template intents; their clearly_in is read straight
- * from the copied score_intent_ratings (instant, zero LLM).
+ * The clone's prepared TEMPLATE intents feed this cache rather than being
+ * browsable in their own right (spec S-6b/S-6c): the first probe of a text that
+ * matches a template definition copies that template's standing verdicts in,
+ * so a filter seeded from a starter suggestion opens with its questions already
+ * there instead of re-rating the whole log.
  */
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
-  chatMessages,
   scoreDissections,
   scoreIntentRatings,
   scoreIntents,
@@ -24,8 +26,9 @@ import { getDefaultScoreModel } from '@/lib/score/models';
 import { getQueryRecords } from '@/lib/score/queries';
 import {
   intentDefHash,
-  type DissectionResult,
   type MaterialKind,
+  type MaterialSpan,
+  type PromptDissection,
 } from '@/lib/score/intents';
 
 // Synthetic intent id for the single-definition probe call.
@@ -66,6 +69,72 @@ export async function probeBatch(
     .where(and(eq(scoreProbeRatings.assignmentId, assignmentId), eq(scoreProbeRatings.defHash, defHash)));
   const ratingByMsg = new Map<number, string>(cached.map((r) => [r.messageId, r.rating]));
 
+  // A prepared TEMPLATE with this exact definition already carries a full
+  // rating pass over the log — in score_intent_ratings, not here. Copy it into
+  // the probe cache the first time the text is probed, so a filter seeded from
+  // a starter suggestion opens with its questions already there (the chooser
+  // promises "questions appear immediately") instead of re-rating ~everything.
+  // The two keyspaces share intentDefHash(definition), so a copied row is the
+  // same verdict the probe would have produced.
+  if (ratingByMsg.size < records.length) {
+    const templates = await db
+      .select({ id: scoreIntents.id, definition: scoreIntents.definition })
+      .from(scoreIntents)
+      .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true)));
+    const template = templates.find((t) => intentDefHash(t.definition) === defHash);
+    if (template) {
+      // Deliberately NOT filtered to the current defHash: the templates were
+      // rated when the clone was prepared, and a rating-harness version bump
+      // since then changes the hash without changing the definition text. The
+      // template's standing verdicts are the whole point of the prepared set
+      // (spec S-6a) — so take the newest rating per message, whatever hash
+      // generation it was stored under.
+      const tRows = await db
+        .select({
+          messageId: scoreIntentRatings.messageId,
+          rating: scoreIntentRatings.rating,
+          rawResponse: scoreIntentRatings.rawResponse,
+          model: scoreIntentRatings.model,
+          ratedAt: scoreIntentRatings.ratedAt,
+        })
+        .from(scoreIntentRatings)
+        .where(
+          and(
+            eq(scoreIntentRatings.assignmentId, assignmentId),
+            eq(scoreIntentRatings.intentId, template.id)
+          )
+        );
+      const newestByMsg = new Map<number, (typeof tRows)[number]>();
+      for (const r of tRows) {
+        const prev = newestByMsg.get(r.messageId);
+        if (!prev || r.ratedAt > prev.ratedAt) newestByMsg.set(r.messageId, r);
+      }
+      // Sorted so two concurrent seeds of the same defHash take the unique
+      // index's row locks in the same order — unordered bulk upserts of ~500
+      // rows are a deadlock shape in Postgres.
+      const fresh = [...newestByMsg.values()]
+        .filter((r) => !ratingByMsg.has(r.messageId))
+        .sort((a, b) => a.messageId - b.messageId);
+      if (fresh.length > 0) {
+        await db
+          .insert(scoreProbeRatings)
+          .values(
+            fresh.map((r) => ({
+              assignmentId,
+              defHash,
+              messageId: r.messageId,
+              rating: r.rating,
+              rawResponse: r.rawResponse,
+              model: r.model,
+              ratedAt: r.ratedAt,
+            }))
+          )
+          .onConflictDoNothing();
+        for (const r of fresh) ratingByMsg.set(r.messageId, r.rating);
+      }
+    }
+  }
+
   const uncached = records.filter((r) => !ratingByMsg.has(r.messageId));
   const batchSize = Math.min(limit ?? PROBE_CALLS_PER_BATCH, PROBE_CALLS_PER_BATCH);
   const batch = uncached.slice(0, batchSize);
@@ -77,15 +146,23 @@ export async function probeBatch(
         messageId: scoreDissections.messageId,
         materialKinds: scoreDissections.materialKinds,
         requests: scoreDissections.requests,
+        // The baseline judge must read the same markers the treatment judge
+        // does. The column is already populated in every clone — only this
+        // SELECT separated the two arms.
+        materials: scoreDissections.materials,
       })
       .from(scoreDissections)
       .where(
         and(eq(scoreDissections.assignmentId, assignmentId), inArray(scoreDissections.messageId, batch.map((r) => r.messageId)))
       );
-    const dByMsg = new Map<number, DissectionResult>(
+    const dByMsg = new Map<number, PromptDissection>(
       dRows.map((d) => [
         d.messageId,
-        { materialKinds: (d.materialKinds ?? []) as MaterialKind[], requests: (d.requests ?? []) as string[] },
+        {
+          materialKinds: (d.materialKinds ?? []) as MaterialKind[],
+          requests: (d.requests ?? []) as string[],
+          materials: (Array.isArray(d.materials) ? d.materials : []) as MaterialSpan[],
+        },
       ])
     );
 
@@ -130,35 +207,4 @@ export async function probeBatch(
     .map((r) => ({ messageId: r.messageId, queryText: r.queryText }));
   const rated = ratingByMsg.size;
   return { defHash, total: records.length, rated, remaining: records.length - rated, ratedThisBatch, clearlyIn };
-}
-
-/** The clone's template intents, shown as read-only search presets. */
-export async function listPresets(assignmentId: string): Promise<{ intentId: number; title: string; definition: string }[]> {
-  return db
-    .select({ intentId: scoreIntents.id, title: scoreIntents.title, definition: scoreIntents.definition })
-    .from(scoreIntents)
-    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true), eq(scoreIntents.archived, false)))
-    .orderBy(asc(scoreIntents.id));
-}
-
-/** A preset's clearly_in — read straight from the copied intent ratings (instant).
- * A template's defHash is intentDefHash(definition) — the rating version plus
- * the definition, nothing else. */
-export async function getPresetClearlyIn(assignmentId: string, intentId: number): Promise<ClearlyInRow[]> {
-  const intent = await db.query.scoreIntents.findFirst({ where: eq(scoreIntents.id, intentId) });
-  if (!intent || intent.assignmentId !== assignmentId) return [];
-  const defHash = intentDefHash(intent.definition);
-  const rows = await db
-    .select({ messageId: scoreIntentRatings.messageId, queryText: chatMessages.content })
-    .from(scoreIntentRatings)
-    .innerJoin(chatMessages, eq(scoreIntentRatings.messageId, chatMessages.id))
-    .where(
-      and(
-        eq(scoreIntentRatings.assignmentId, assignmentId),
-        eq(scoreIntentRatings.intentId, intentId),
-        eq(scoreIntentRatings.defHash, defHash),
-        eq(scoreIntentRatings.rating, 'clearly_in')
-      )
-    );
-  return rows;
 }

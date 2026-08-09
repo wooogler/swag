@@ -5,7 +5,7 @@
  * assignment's live base prompt. DDL lives in store.ts. See spec §5.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, isNotNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   assignments,
@@ -16,6 +16,7 @@ import {
   chatMessages,
   reviewSetItems,
   scoreIntents,
+  scoreProbeRatings,
   studentSessions,
   studyClones,
   type BaselineSearch,
@@ -70,21 +71,78 @@ export async function getOrCreateBaselinePreview(
 /* Saved custom searches                                               */
 /* ------------------------------------------------------------------ */
 
-export async function listBaselineSearches(assignmentId: string): Promise<BaselineSearch[]> {
-  return db
+/** Saved filters plus, per filter, the clearly-in messageIds already in the
+ * probe cache under its defHash. The board list renders counts and filters the
+ * question list from these WITHOUT re-running anything — the cache was written
+ * when the filter was run in its workbench. Oldest first, so the left-column
+ * tree appends new filters at the bottom, next to the create row. */
+export async function listBaselineSearches(
+  assignmentId: string
+): Promise<(BaselineSearch & { clearlyInIds: number[] })[]> {
+  const searches = await db
     .select()
     .from(baselineSearches)
     .where(eq(baselineSearches.assignmentId, assignmentId))
-    .orderBy(desc(baselineSearches.createdAt));
+    .orderBy(asc(baselineSearches.createdAt));
+  if (searches.length === 0) return [];
+  const hashes = [...new Set(searches.map((s) => s.defHash))];
+  const cached = await db
+    .select({ defHash: scoreProbeRatings.defHash, messageId: scoreProbeRatings.messageId })
+    .from(scoreProbeRatings)
+    .where(
+      and(
+        eq(scoreProbeRatings.assignmentId, assignmentId),
+        inArray(scoreProbeRatings.defHash, hashes),
+        eq(scoreProbeRatings.rating, 'clearly_in')
+      )
+    );
+  const byHash = new Map<string, number[]>();
+  for (const r of cached) {
+    const list = byHash.get(r.defHash);
+    if (list) list.push(r.messageId);
+    else byHash.set(r.defHash, [r.messageId]);
+  }
+  return searches.map((s) => ({ ...s, clearlyInIds: byHash.get(s.defHash) ?? [] }));
 }
 
-export async function createBaselineSearch(
+/**
+ * Save a filter. With an `id` this REPLACES that row rather than adding a
+ * second one — reopening a saved filter and pressing Save is an edit, and
+ * before this it silently left the old wording behind as a duplicate entry.
+ * `type` is the query type it lives under (see the schema note).
+ */
+export async function saveBaselineSearch(
   assignmentId: string,
-  description: string
+  search: { id?: string; description: string; name?: string | null; type?: string | null }
 ): Promise<{ id: string; defHash: string }> {
-  const defHash = intentDefHash(description);
+  const defHash = intentDefHash(search.description);
+  if (search.id) {
+    const updated = await db
+      .update(baselineSearches)
+      // Both optional fields behave the same way on an edit: a field the caller
+      // did not mention keeps its stored value; only a value that was actually
+      // sent overwrites (an empty name being the way to clear one).
+      .set({
+        description: search.description,
+        defHash,
+        ...(search.name !== undefined ? { name: search.name?.trim() || null } : {}),
+        ...(search.type !== undefined ? { type: search.type } : {}),
+      })
+      .where(and(eq(baselineSearches.id, search.id), eq(baselineSearches.assignmentId, assignmentId)))
+      .returning({ id: baselineSearches.id });
+    if (updated[0]) return { id: updated[0].id, defHash };
+    // Deleted from another tab while it was open — fall through and re-create.
+  }
   const id = randomUUID();
-  await db.insert(baselineSearches).values({ id, assignmentId, description, defHash, createdAt: new Date() });
+  await db.insert(baselineSearches).values({
+    id,
+    assignmentId,
+    name: search.name?.trim() || null,
+    type: search.type ?? null,
+    description: search.description,
+    defHash,
+    createdAt: new Date(),
+  });
   return { id, defHash };
 }
 
