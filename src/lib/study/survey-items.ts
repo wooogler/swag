@@ -23,7 +23,10 @@ export interface SurveyItem {
 }
 
 export const SURVEY_SCALE_MIN = 1;
-export const SURVEY_SCALE_MAX = 7;
+/** Default top of the scale; the live value is a setting (survey-store). */
+export const DEFAULT_SURVEY_SCALE_MAX = 7;
+/** The scales the design would plausibly use — 5-point or 7-point Likert. */
+export const SURVEY_SCALE_CHOICES = [5, 7] as const;
 
 export const DEFAULT_SURVEY_ITEMS: SurveyItem[] = [
   // Sense of control (design: 3-4 items)

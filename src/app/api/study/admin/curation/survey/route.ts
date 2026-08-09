@@ -8,12 +8,12 @@
 import { NextResponse } from 'next/server';
 import {
   answeredItemKeys,
-  getSurveyItems,
+  getSurveyConfig,
   resetSurveyItems,
   saveSurveyItems,
   surveyRespondentCount,
 } from '@/lib/study/survey-store';
-import { SURVEY_SCALE_MAX, SURVEY_SCALE_MIN } from '@/lib/study/survey-items';
+import { SURVEY_SCALE_CHOICES, SURVEY_SCALE_MIN } from '@/lib/study/survey-items';
 import { requireAdmin } from '@/lib/study/admin-guard';
 
 export const dynamic = 'force-dynamic';
@@ -21,16 +21,16 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const gate = await requireAdmin();
   if (gate.response) return gate.response;
-  const [items, answered, respondents] = await Promise.all([
-    getSurveyItems(),
+  const [config, answered, respondents] = await Promise.all([
+    getSurveyConfig(),
     answeredItemKeys(),
     surveyRespondentCount(),
   ]);
   return NextResponse.json({
-    items,
+    items: config.items,
     answeredKeys: answered,
     respondents,
-    scale: { min: SURVEY_SCALE_MIN, max: SURVEY_SCALE_MAX },
+    scale: { min: SURVEY_SCALE_MIN, max: config.scaleMax, choices: SURVEY_SCALE_CHOICES },
   });
 }
 
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
   const gate = await requireAdmin();
   if (gate.response) return gate.response;
 
-  let body: { items?: unknown; reset?: boolean };
+  let body: { items?: unknown; reset?: boolean; scaleMax?: number };
   try {
     body = await req.json();
   } catch {
@@ -47,12 +47,25 @@ export async function POST(req: Request) {
 
   try {
     if (body.reset) {
-      const items = await resetSurveyItems(gate.actor.code);
-      return NextResponse.json({ success: true, items, orphanedKeys: [] });
+      const result = await resetSurveyItems(gate.actor.code);
+      return NextResponse.json({ success: true, ...result });
     }
-    const result = await saveSurveyItems(body.items, gate.actor.code);
+    const result = await saveSurveyItems(body.items, gate.actor.code, body.scaleMax);
     return NextResponse.json({ success: true, ...result });
   } catch (err) {
+    if (err instanceof Error && err.message === 'scale_locked') {
+      return NextResponse.json(
+        {
+          error: 'scale_locked',
+          message:
+            'Answers already exist on the current scale — a 5 there is not a 5 on a different one. Wording can still be edited.',
+        },
+        { status: 409 }
+      );
+    }
+    if (err instanceof Error && err.message === 'invalid_scale') {
+      return NextResponse.json({ error: 'invalid_scale' }, { status: 400 });
+    }
     if (err instanceof Error && err.message === 'invalid_items') {
       return NextResponse.json(
         {

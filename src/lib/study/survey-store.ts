@@ -14,16 +14,28 @@ import { db } from '@/db/db';
 import { studySurveyAnswers, studySurveyConfig } from '@/db/schema';
 import {
   DEFAULT_SURVEY_ITEMS,
+  DEFAULT_SURVEY_SCALE_MAX,
+  SURVEY_SCALE_CHOICES,
   isValidSurveyItems,
   type SurveyItem,
 } from './survey-items';
 import { ensureStudyTables } from './store';
 
-export async function getSurveyItems(): Promise<SurveyItem[]> {
+export interface SurveyConfig {
+  items: SurveyItem[];
+  scaleMax: number;
+}
+
+export async function getSurveyConfig(): Promise<SurveyConfig> {
   await ensureStudyTables();
   const [row] = await db.select().from(studySurveyConfig).where(eq(studySurveyConfig.id, 1));
-  if (!row || !isValidSurveyItems(row.items)) return DEFAULT_SURVEY_ITEMS;
-  return row.items;
+  const items = row && isValidSurveyItems(row.items) ? row.items : DEFAULT_SURVEY_ITEMS;
+  const scaleMax = row?.scaleMax ?? DEFAULT_SURVEY_SCALE_MAX;
+  return { items, scaleMax };
+}
+
+export async function getSurveyItems(): Promise<SurveyItem[]> {
+  return (await getSurveyConfig()).items;
 }
 
 /** Item keys that already have answers recorded against them. */
@@ -37,6 +49,7 @@ export async function answeredItemKeys(): Promise<string[]> {
 
 export interface SurveySaveResult {
   items: SurveyItem[];
+  scaleMax: number;
   /** Keys that had answers and are no longer in the instrument. */
   orphanedKeys: string[];
 }
@@ -48,28 +61,41 @@ export interface SurveySaveResult {
  */
 export async function saveSurveyItems(
   items: unknown,
-  updatedBy: string
+  updatedBy: string,
+  scaleMax?: number
 ): Promise<SurveySaveResult> {
   await ensureStudyTables();
   if (!isValidSurveyItems(items)) throw new Error('invalid_items');
+
+  const current = await getSurveyConfig();
+  let nextScale = current.scaleMax;
+  if (typeof scaleMax === 'number' && scaleMax !== current.scaleMax) {
+    if (!(SURVEY_SCALE_CHOICES as readonly number[]).includes(scaleMax)) {
+      throw new Error('invalid_scale');
+    }
+    // A 5 on a 7-point scale is not a 5 on a 5-point one. Once anyone has
+    // answered, changing the scale would leave two incomparable instruments in
+    // one dataset — refuse rather than silently mix them.
+    if ((await surveyRespondentCount()) > 0) throw new Error('scale_locked');
+    nextScale = scaleMax;
+  }
 
   const answered = new Set(await answeredItemKeys());
   const keptKeys = new Set(items.map((i) => i.key));
   const orphanedKeys = [...answered].filter((k) => !keptKeys.has(k));
 
-  const values = { items, updatedAt: new Date(), updatedBy };
+  const values = { items, scaleMax: nextScale, updatedAt: new Date(), updatedBy };
   await db
     .insert(studySurveyConfig)
     .values({ id: 1, ...values })
     .onConflictDoUpdate({ target: studySurveyConfig.id, set: values });
 
-  return { items, orphanedKeys };
+  return { items, scaleMax: nextScale, orphanedKeys };
 }
 
 /** Restore the shipped wording (the design's constructs and counts). */
-export async function resetSurveyItems(updatedBy: string): Promise<SurveyItem[]> {
-  const { items } = await saveSurveyItems(DEFAULT_SURVEY_ITEMS, updatedBy);
-  return items;
+export async function resetSurveyItems(updatedBy: string): Promise<SurveySaveResult> {
+  return saveSurveyItems(DEFAULT_SURVEY_ITEMS, updatedBy);
 }
 
 /** How many participants have answered anything — the "careful now" signal. */

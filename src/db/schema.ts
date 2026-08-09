@@ -732,6 +732,8 @@ export const studyGeneratedResponses = pgTable('study_generated_responses', {
 export const studySurveyConfig = pgTable('study_survey_config', {
   id: integer('id').primaryKey().default(1),
   items: jsonb('items').notNull(),
+  // Top of the response scale (the bottom is always 1). 5 or 7 in practice.
+  scaleMax: integer('scale_max').notNull().default(7),
   updatedAt: timestamp('updated_at').notNull(),
   updatedBy: text('updated_by'),
 });

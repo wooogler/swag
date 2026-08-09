@@ -184,10 +184,12 @@ export async function ensureStudyTables(): Promise<void> {
         CREATE TABLE IF NOT EXISTS "study_survey_config" (
           "id" integer PRIMARY KEY NOT NULL DEFAULT 1,
           "items" jsonb NOT NULL,
+          "scale_max" integer NOT NULL DEFAULT 7,
           "updated_at" timestamp NOT NULL,
           "updated_by" text,
           CONSTRAINT "study_survey_config_singleton" CHECK (id = 1)
         )`);
+      await db.execute(sql`ALTER TABLE "study_survey_config" ADD COLUMN IF NOT EXISTS "scale_max" integer NOT NULL DEFAULT 7`);
 
       // Which questions of a STUDY assignment are the curated review set. A
       // reduced master keeps whole threads so a question can be read in

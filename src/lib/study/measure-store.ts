@@ -116,6 +116,42 @@ export async function deployedConfigFor(clone: {
 }
 
 /**
+ * A per-participant presentation order.
+ *
+ * Every participant seeing the same order would put whatever the first item
+ * happens to ask under "fresh attention" and the last under fatigue, for
+ * everyone alike — an order effect that never averages out. Seeded rather than
+ * random so a reload or a mid-item refresh does not reshuffle the questions
+ * under someone.
+ *
+ * The bank's own `position` is NOT the presentation order; it is the canonical
+ * balanced-block order, which is what any decision to show fewer items has to
+ * cut from. Select first, then shuffle what is shown.
+ */
+function seededShuffle<T>(items: T[], seedKey: string): T[] {
+  let seed = 2166136261;
+  for (let i = 0; i < seedKey.length; i++) {
+    seed ^= seedKey.charCodeAt(i);
+    seed = Math.imul(seed, 16777619) >>> 0;
+  }
+  const next = () => {
+    // xorshift32 — plenty for shuffling a dozen items reproducibly.
+    seed ^= seed << 13;
+    seed >>>= 0;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    seed >>>= 0;
+    return seed / 0x100000000;
+  };
+  const out = items.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/**
  * The block-test items for one clone, with each item's answer state. A
  * response is attached only where a guess already exists — see the module
  * comment.
@@ -159,8 +195,12 @@ export async function getTestItems(
   const answerByItem = new Map(answers.map((a) => [a.bankItemId, a]));
   const responseByItem = new Map(responses.map((r) => [r.bankItemId, r.response]));
 
-  return bank
-    .sort((a, b) => a.position - b.position)
+  const ordered = seededShuffle(
+    bank.slice().sort((a, b) => a.position - b.position),
+    `test:${participant.id}:${clone.datasetKey}`
+  );
+
+  return ordered
     .map((item) => {
       const answer = answerByItem.get(item.id);
       const guessed = answer?.guess ?? null;
@@ -321,7 +361,11 @@ export async function getAbItems(participant: StudyParticipant): Promise<AbItem[
   const answerByItem = new Map(answers.map((a) => [a.bankItemId, a]));
 
   const items: AbItem[] = [];
-  for (const item of bank.sort((a, b) => a.position - b.position)) {
+  const orderedBank = seededShuffle(
+    bank.slice().sort((a, b) => a.position - b.position),
+    `ab:${participant.id}`
+  );
+  for (const item of orderedBank) {
     const first = responseByKey.get(`${block1.assignmentId}:${item.id}`);
     const second = responseByKey.get(`${block2.assignmentId}:${item.id}`);
     if (!first || !second) continue;

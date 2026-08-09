@@ -7,13 +7,13 @@ import { studySurveyAnswers } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { blockOf, isStudyPhase, phaseAccess } from '@/lib/study/phases';
 import { cloneForBlock } from '@/lib/study/measure-store';
-import { SURVEY_SCALE_MAX, SURVEY_SCALE_MIN } from '@/lib/study/survey-items';
-import { getSurveyItems } from '@/lib/study/survey-store';
+import { SURVEY_SCALE_MIN } from '@/lib/study/survey-items';
+import { getSurveyConfig } from '@/lib/study/survey-store';
 
 export const dynamic = 'force-dynamic';
 
 const bodySchema = z.object({
-  answers: z.record(z.string(), z.number().int().min(SURVEY_SCALE_MIN).max(SURVEY_SCALE_MAX)),
+  answers: z.record(z.string(), z.number().int().min(SURVEY_SCALE_MIN)),
 });
 
 export async function POST(req: Request) {
@@ -35,10 +35,14 @@ export async function POST(req: Request) {
   }
 
   const clone = await cloneForBlock(participant, block);
-  const validKeys = new Set((await getSurveyItems()).map((i) => i.key));
+  const config = await getSurveyConfig();
+  const validKeys = new Set(config.items.map((i) => i.key));
   const now = new Date();
   for (const [itemKey, value] of Object.entries(parsed.answers)) {
-    if (!validKeys.has(itemKey)) continue; // ignore anything not in the instrument
+    // Out-of-instrument keys and out-of-scale values are dropped, not stored:
+    // the scale is a setting, so the ceiling is read here rather than baked in.
+    if (!validKeys.has(itemKey)) continue;
+    if (value > config.scaleMax) continue;
     await db
       .insert(studySurveyAnswers)
       .values({

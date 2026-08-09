@@ -25,7 +25,7 @@ import AdminNav from '@/components/study/AdminNav';
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
 import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
 import {
-  SURVEY_SCALE_MAX,
+  SURVEY_SCALE_CHOICES,
   SURVEY_SCALE_MIN,
   type SurveyItem,
 } from '@/lib/study/survey-items';
@@ -1007,6 +1007,7 @@ function selectionLabel(selection: Selection, subtypes: Map<number, CurationSubt
  */
 function SurveyModal({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<SurveyItem[] | null>(null);
+  const [scaleMax, setScaleMax] = useState<number>(7);
   const [answeredKeys, setAnsweredKeys] = useState<string[]>([]);
   const [respondents, setRespondents] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -1020,6 +1021,7 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
       if (!res.ok || cancelled) return;
       const data = await res.json();
       setItems(data.items);
+      setScaleMax(data.scale?.max ?? 7);
       setAnsweredKeys(data.answeredKeys ?? []);
       setRespondents(data.respondents ?? 0);
     })();
@@ -1053,7 +1055,7 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
       const res = await fetch('/api/study/admin/curation/survey', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(reset ? { reset: true } : { items }),
+        body: JSON.stringify(reset ? { reset: true } : { items, scaleMax }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1061,6 +1063,7 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
         return;
       }
       setItems(data.items);
+      if (typeof data.scaleMax === 'number') setScaleMax(data.scaleMax);
       setAnsweredKeys((prev) => prev);
       if (data.orphanedKeys?.length) {
         setNote(
@@ -1086,8 +1089,8 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
         <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
           <h2 className="text-sm font-bold">Block questionnaire</h2>
           <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
-            Asked after each block, on a {SURVEY_SCALE_MIN}–{SURVEY_SCALE_MAX} scale. Rewording an
-            item keeps its answers; changing what it MEASURES deserves a new key.
+            Asked after each block. Rewording an item keeps its answers; changing what it
+            MEASURES deserves a new key.
             {respondents > 0 && (
               <span className="text-amber-700 font-semibold">
                 {' '}
@@ -1095,6 +1098,31 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
               </span>
             )}
           </p>
+        </div>
+
+        <div className="px-5 py-2.5 border-b border-[hsl(var(--border))] flex items-center gap-2">
+          <span className="text-[11px] font-semibold">Response scale</span>
+          <div className="flex border border-[hsl(var(--border))] rounded overflow-hidden text-[11px] font-semibold">
+            {SURVEY_SCALE_CHOICES.map((choice) => (
+              <button
+                key={choice}
+                disabled={respondents > 0}
+                onClick={() => setScaleMax(choice)}
+                className={`px-2.5 py-1 disabled:opacity-50 ${
+                  scaleMax === choice
+                    ? 'bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
+                    : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+                }`}
+              >
+                {SURVEY_SCALE_MIN}–{choice}
+              </button>
+            ))}
+          </div>
+          <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
+            {respondents > 0
+              ? 'Locked — answers exist on the current scale.'
+              : 'Applies to every item.'}
+          </span>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
@@ -1166,8 +1194,8 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
                     onChange={(e) => patch(index, { low: e.target.value })}
                     className="flex-1 border border-[hsl(var(--border))] rounded px-2 py-1 text-[11px] bg-[hsl(var(--card))]"
                   />
-                  <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
-                    {SURVEY_SCALE_MIN} … {SURVEY_SCALE_MAX}
+                  <span className="text-[10.5px] text-[hsl(var(--muted-foreground))] tabular-nums">
+                    {SURVEY_SCALE_MIN} … {scaleMax}
                   </span>
                   <input
                     value={item.high}
