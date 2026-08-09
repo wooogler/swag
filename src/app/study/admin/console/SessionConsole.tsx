@@ -11,6 +11,7 @@
 
 import { useCallback, useState } from 'react';
 import { Loader2, RefreshCw, ChevronRight, ChevronLeft, Trash2, RotateCcw } from 'lucide-react';
+import AdminNav from '@/components/study/AdminNav';
 import type { ParticipantStatus, CloneStatus } from '@/lib/study/console-store';
 import { PHASE_LABELS, type StudyPhase } from '@/lib/study/phases';
 
@@ -135,12 +136,7 @@ export default function SessionConsole({
       <header className="bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
         <div className="max-w-[1500px] mx-auto px-6 py-4 flex items-center gap-3">
           <h1 className="text-sm font-semibold">Session Console</h1>
-          <a
-            href="/study/admin/curation"
-            className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] underline"
-          >
-            Set curation →
-          </a>
+          <AdminNav current="console" />
           <div className="flex-1" />
           <button
             onClick={refresh}

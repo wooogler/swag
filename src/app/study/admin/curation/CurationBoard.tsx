@@ -21,6 +21,7 @@ import { ConversationThread } from '@/app/instructor/assignments/[id]/score/conv
 import { PaneSearch, QueryTextButton } from '@/app/instructor/assignments/[id]/score/workbench-shared';
 import { SortSelect, sortQueryRows, type QuerySortMode } from '@/app/instructor/assignments/[id]/score/query-list';
 import StudioShell from '@/app/instructor/assignments/[id]/score/StudioShell';
+import AdminNav from '@/components/study/AdminNav';
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
 import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
 import type {
@@ -346,6 +347,7 @@ export default function CurationBoard({
   const header = (
     <div className="flex items-center gap-3">
       <h1 className="text-sm font-semibold">Set Curation</h1>
+      <AdminNav current="curation" />
       <div className="flex-1" />
       <div className="flex border border-[hsl(var(--border))] rounded-lg overflow-hidden text-xs font-semibold">
         {datasets.map((d) => (
