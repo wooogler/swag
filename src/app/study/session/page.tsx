@@ -86,10 +86,15 @@ export default async function StudySessionPage() {
           ) : access.showSurvey ? (
             <>
               <h1 className="text-lg font-semibold mb-2">A few questions</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
-                Your facilitator will bring up a short questionnaire about the setup you
-                just did.
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                A short questionnaire about the setup you just did.
               </p>
+              <a
+                href="/study/session/survey"
+                className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+              >
+                Start
+              </a>
             </>
           ) : access.showAb ? (
             <>

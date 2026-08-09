@@ -43,10 +43,20 @@ const SCORE_TABLES_BY_ASSIGNMENT = [
   'study_events',
 ] as const;
 
+// Measurement tables that key the clone as `clone_assignment_id` rather than
+// `assignment_id`, so the loop above cannot reach them. Missing these would
+// strand a participant's frozen answers on an assignment that no longer exists.
+const STUDY_TABLES_BY_CLONE = ['study_generated_responses', 'study_test_answers'] as const;
+
 /** Delete one clone assignment and all of its sessions / messages / SCORE rows. */
 export async function deleteCloneAssignment(tx: Tx, assignmentId: string): Promise<void> {
   for (const table of SCORE_TABLES_BY_ASSIGNMENT) {
     await tx.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE assignment_id = ${assignmentId}`);
+  }
+  for (const table of STUDY_TABLES_BY_CLONE) {
+    await tx.execute(
+      sql`DELETE FROM ${sql.identifier(table)} WHERE clone_assignment_id = ${assignmentId}`
+    );
   }
   await tx.execute(sql`
     DELETE FROM chat_messages WHERE conversation_id IN (
@@ -88,6 +98,14 @@ export async function deleteParticipantClones(participant: StudyParticipant): Pr
   await db.transaction(async (tx) => {
     for (const c of clones) await deleteCloneAssignment(tx, c.assignmentId);
     await tx.delete(studyClones).where(eq(studyClones.participantId, participant.id));
+    // Participant-scoped measurements go with them: an A/B choice names the two
+    // clone assignments it compared, and a block survey is about the workspace
+    // just discarded. Keeping either would leave answers pointing at nothing.
+    for (const table of ['study_ab_answers', 'study_survey_answers'] as const) {
+      await tx.execute(
+        sql`DELETE FROM ${sql.identifier(table)} WHERE participant_id = ${participant.id}`
+      );
+    }
   });
   return clones.length;
 }

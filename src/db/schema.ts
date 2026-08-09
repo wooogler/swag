@@ -772,6 +772,26 @@ export const studyAbAnswers = pgTable('study_ab_answers', {
   uniq: uniqueIndex('study_ab_answers_unique').on(table.participantId, table.bankItemId),
 }));
 
+// Per-block questionnaire answers, one row per item. Item keys come from a
+// config rather than the schema, so rewording a scale after the pilot is a
+// content change; `block` (not the clone) is the unit, because the questions
+// are about the experience of that block.
+export const studySurveyAnswers = pgTable('study_survey_answers', {
+  id: serial('id').primaryKey(),
+  participantId: text('participant_id').notNull(),
+  block: integer('block').notNull(),
+  cloneAssignmentId: text('clone_assignment_id'), // which workspace it was about
+  itemKey: text('item_key').notNull(),
+  value: integer('value').notNull(),
+  answeredAt: timestamp('answered_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('study_survey_answers_unique').on(
+    table.participantId,
+    table.block,
+    table.itemKey
+  ),
+}));
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;

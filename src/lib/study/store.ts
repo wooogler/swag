@@ -243,6 +243,21 @@ export async function ensureStudyTables(): Promise<void> {
         )`);
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_ab_answers_unique" ON "study_ab_answers" ("participant_id","bank_item_id")`);
 
+      // Per-block questionnaire. One row per answered item, so adding or
+      // rewording a scale between the pilot and the study changes the config
+      // rather than the schema.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_survey_answers" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "participant_id" text NOT NULL,
+          "block" integer NOT NULL,
+          "clone_assignment_id" text,
+          "item_key" text NOT NULL,
+          "value" integer NOT NULL,
+          "answered_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_survey_answers_unique" ON "study_survey_answers" ("participant_id","block","item_key")`);
+
       // FK-column indexes on core tables that Postgres does NOT auto-create.
       // Without them, deleting a clone's sessions/conversations/messages forces
       // a full seq-scan of the referencing table per row to validate the FK —
