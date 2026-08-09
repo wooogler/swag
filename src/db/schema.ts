@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, text, timestamp, boolean, serial, jsonb, index, uniqueIndex, integer, doublePrecision } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, serial, jsonb, index, uniqueIndex, integer, doublePrecision, smallint } from 'drizzle-orm/pg-core';
 import { DEFAULT_ASSIGNMENT_AI_GUIDANCE } from '../lib/assignment-ai';
 
 // Instructor table for Phase 2
@@ -726,6 +726,39 @@ export const studyGeneratedResponses = pgTable('study_generated_responses', {
   participantIdx: index('study_generated_responses_participant_idx').on(table.participantId),
 }));
 
+// Block test: the participant predicts whether their configuration will answer
+// as they intend, THEN sees the frozen answer, THEN rates the fit. The
+// prediction is stored before the answer is released, so guessed_at < rated_at
+// is also the evidence that the prediction was made blind.
+export const studyTestAnswers = pgTable('study_test_answers', {
+  id: serial('id').primaryKey(),
+  participantId: text('participant_id').notNull(),
+  cloneAssignmentId: text('clone_assignment_id').notNull(),
+  bankItemId: integer('bank_item_id').notNull(),
+  guess: boolean('guess'),
+  rating: smallint('rating'), // 1-5 fit with the instructor's intent
+  guessedAt: timestamp('guessed_at'),
+  ratedAt: timestamp('rated_at'),
+}, (table) => ({
+  uniq: uniqueIndex('study_test_answers_unique').on(table.cloneAssignmentId, table.bankItemId),
+  participantIdx: index('study_test_answers_participant_idx').on(table.participantId),
+}));
+
+// Blind A/B: the two configurations answer the same question side by side.
+// Which one sat on which side is recorded WITH the choice — a bare
+// left/right/both/neither cannot be attributed afterwards.
+export const studyAbAnswers = pgTable('study_ab_answers', {
+  id: serial('id').primaryKey(),
+  participantId: text('participant_id').notNull(),
+  bankItemId: integer('bank_item_id').notNull(),
+  leftCloneAssignmentId: text('left_clone_assignment_id').notNull(),
+  rightCloneAssignmentId: text('right_clone_assignment_id').notNull(),
+  choice: text('choice').notNull(), // 'left' | 'right' | 'both' | 'neither'
+  answeredAt: timestamp('answered_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('study_ab_answers_unique').on(table.participantId, table.bankItemId),
+}));
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;
@@ -806,3 +839,5 @@ export type StudySetMember = typeof studySetMembers.$inferSelect;
 export type StudyCurationMeta = typeof studyCurationMeta.$inferSelect;
 export type StudyQuestionBankItem = typeof studyQuestionBank.$inferSelect;
 export type StudyGeneratedResponse = typeof studyGeneratedResponses.$inferSelect;
+export type StudyTestAnswer = typeof studyTestAnswers.$inferSelect;
+export type StudyAbAnswer = typeof studyAbAnswers.$inferSelect;

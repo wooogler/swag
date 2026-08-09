@@ -72,10 +72,16 @@ export default async function StudySessionPage() {
           ) : access.testBlock ? (
             <>
               <h1 className="text-lg font-semibold mb-2">Check your chatbot</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
-                Next you will see a few new student questions and check how the chatbot you
-                just set up answers them. Your facilitator will start this with you.
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                A few new student questions. For each one you will say whether you expect
+                your chatbot to answer the way you intend, then see what it actually says.
               </p>
+              <a
+                href="/study/session/test"
+                className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+              >
+                Start
+              </a>
             </>
           ) : access.showSurvey ? (
             <>
@@ -88,10 +94,16 @@ export default async function StudySessionPage() {
           ) : access.showAb ? (
             <>
               <h1 className="text-lg font-semibold mb-2">Comparing the two chatbots</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
                 Last step: the two chatbots you built today answer the same questions side
                 by side, and you pick the answer you would want.
               </p>
+              <a
+                href="/study/session/ab"
+                className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+              >
+                Start
+              </a>
             </>
           ) : access.isBreak ? (
             <>

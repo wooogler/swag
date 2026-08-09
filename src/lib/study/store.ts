@@ -199,6 +199,37 @@ export async function ensureStudyTables(): Promise<void> {
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_generated_responses_unique" ON "study_generated_responses" ("clone_assignment_id","bank_item_id")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_generated_responses_participant_idx" ON "study_generated_responses" ("participant_id")`);
 
+      // Block test: the yes/no prediction is written BEFORE the response is
+      // released, so the two timestamps are also the evidence that the guess
+      // was not made with the answer in view.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_test_answers" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "participant_id" text NOT NULL,
+          "clone_assignment_id" text NOT NULL,
+          "bank_item_id" integer NOT NULL,
+          "guess" boolean,
+          "rating" smallint,
+          "guessed_at" timestamp,
+          "rated_at" timestamp
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_test_answers_unique" ON "study_test_answers" ("clone_assignment_id","bank_item_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_test_answers_participant_idx" ON "study_test_answers" ("participant_id")`);
+
+      // Blind A/B: which configuration was shown on which side is recorded with
+      // the choice — without it a left/right answer cannot be attributed.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_ab_answers" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "participant_id" text NOT NULL,
+          "bank_item_id" integer NOT NULL,
+          "left_clone_assignment_id" text NOT NULL,
+          "right_clone_assignment_id" text NOT NULL,
+          "choice" text NOT NULL,
+          "answered_at" timestamp NOT NULL
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_ab_answers_unique" ON "study_ab_answers" ("participant_id","bank_item_id")`);
+
       // FK-column indexes on core tables that Postgres does NOT auto-create.
       // Without them, deleting a clone's sessions/conversations/messages forces
       // a full seq-scan of the referencing table per row to validate the FK —
