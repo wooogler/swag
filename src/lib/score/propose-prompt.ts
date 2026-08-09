@@ -63,11 +63,46 @@ export const PROPOSAL_SCHEMA = {
   },
 };
 
-export function buildProposeSystemPrompt(): string {
+/**
+ * WHICH rule is being revised. It decides what the agent is told the prompt
+ * covers — and the three answers are genuinely different instructions, not
+ * wording:
+ *
+ *   'intent'     one set's rule; it may speak directly to that kind of request
+ *   'type-root'  a query type's last resort — everything of that type that no
+ *                set claimed, so it must not assume a single kind of request
+ *   'prompt'     the BASELINE condition's single system prompt: it answers
+ *                EVERY student question. There are no categories and no other
+ *                rules, so scoping language ("for this kind of request…") is
+ *                actively wrong here.
+ *
+ * This used to be inferred from an empty definition, which lumped the last two
+ * together and told the baseline's agent its prompt was one type's fallback —
+ * both mis-scoping the revision and leaking the treatment's mechanism into the
+ * control arm's AI.
+ */
+export type ProposeScope = 'intent' | 'type-root' | 'prompt';
+
+export function buildProposeSystemPrompt(scope: ProposeScope = 'intent'): string {
+  const framing =
+    scope === 'prompt'
+      ? [
+          'The chatbot has ONE system prompt for the whole assignment, and the instructor is revising it. It answers every student request — there are no categories, and no other prompt runs underneath or alongside it.',
+          "You will get: the current prompt, the anchor exchange (the student message the instructor is working from, with its prior turn when it has one), and the instructor's input.",
+        ]
+      : scope === 'type-root'
+        ? [
+            'An instructor groups student requests into "intents". Each intent owns a COMPLETE system prompt (its "rule"): whenever a student request matches that intent, the chatbot answers with that prompt and nothing else stacked underneath.',
+            'The prompt you are revising is a query TYPE\'s last resort: it answers every request of that type that none of the instructor\'s intents claimed. So it covers a RANGE of leftover requests, not one kind — do not write it as if it had a single trigger.',
+            "You will get: what the type covers, the current prompt, the anchor exchange (the student message the instructor is working from, with its prior turn when it has one), and the instructor's input.",
+          ]
+        : [
+            'An instructor groups student requests into "intents". Each intent owns a COMPLETE system prompt (its "rule"): whenever a student request matches that intent, the chatbot answers with that prompt and nothing else stacked underneath.',
+            "You will get: the intent definition, the intent's current prompt, the anchor exchange (the student message the instructor is working from, with its prior turn when it has one), and the instructor's input.",
+          ];
   return [
     'You revise the SYSTEM PROMPT of a writing-support chatbot that students use for school assignments.',
-    'An instructor groups student requests into "intents". Each intent owns a COMPLETE system prompt (its "rule"): whenever a student request matches that intent, the chatbot answers with that prompt and nothing else stacked underneath.',
-    "You will get: the intent definition, the intent's current prompt, the anchor exchange (the student message the instructor is working from, with its prior turn when it has one), and the instructor's input.",
+    ...framing,
     "HOW THE PROMPT IS USED — this decides what a good one looks like. The chatbot answers real student messages with only this prompt as guidance, and the model's default instinct is to be maximally helpful — for a \"change the style\" request that means writing the improved text itself. A bare prohibition is not enough to override that instinct.",
     'Therefore, in EVERY variant:',
     '- Whenever the input forbids something, also state POSITIVELY what a reply gives instead, with one concrete hard cap in countable units (e.g. "never more than one complete sentence of finished prose").',
@@ -82,12 +117,18 @@ export function buildProposeSystemPrompt(): string {
     'When the CURRENT prompt is EMPTY there is nothing to preserve or rework and the ladder above collapses into three rewordings. In that case the strengths differ in SCOPE instead, and the rules should get visibly longer down the ladder:',
     '- "minimal": the narrowest rule that implements the input — trigger only on the exact kind of request the input names; say nothing about anything else.',
     '- "moderate": also cover the closely related requests the input plainly implies, so the behavior survives a rephrase.',
-    '- "aggressive": a complete prompt for this intent with the input as its centerpiece — the stance the chatbot takes, when the new behavior applies, and the edge cases around it.',
+    scope === 'prompt'
+      ? '- "aggressive": a complete prompt for the whole assignment with the input as its centerpiece — the stance the chatbot takes, when the new behavior applies, and the edge cases around it.'
+      : '- "aggressive": a complete prompt for this intent with the input as its centerpiece — the stance the chatbot takes, when the new behavior applies, and the edge cases around it.',
     'The three must genuinely differ in scope, not be three rewordings of one edit.',
     'Mode notes:',
     '- FEEDBACK mode: the input is a complaint about the response — fold it into the prompt as a durable instruction to the chatbot.',
     '- REWRITE mode: the input is the response rewritten the way the instructor wants it — infer the GENERALIZABLE change in behavior (tone, structure, what to withhold or ask), never the anchor-specific content.',
-    "- The prompt only ever runs on requests matching this intent's definition, so it may speak directly to that kind of request.",
+    scope === 'prompt'
+      ? '- This prompt runs on EVERY student request, so it must not be written as if it applied to one kind of request; keep it general enough to answer anything the assignment produces.'
+      : scope === 'type-root'
+        ? '- The prompt runs on every request of its type that no intent claimed — a range of leftovers, so keep it general enough to cover them rather than aimed at the anchor alone.'
+        : "- The prompt only ever runs on requests matching this intent's definition, so it may speak directly to that kind of request.",
     '- Also give a short TITLE naming this revision: at most 5 words, git-commit-subject style, no trailing period (e.g. "Scaffold, don\'t write").',
     '- The note is one sentence for the instructor: what you changed and why.',
     'Answer in the required JSON shape.',
@@ -101,7 +142,12 @@ export interface ProposeAnchor {
 }
 
 export interface ProposeContext {
-  /** Empty for a type root — the placeholder explains its else-rule role. */
+  /** Which rule is being revised — see `ProposeScope`. Decides how an empty
+   * `definition` is explained, which is the opposite thing for a type root and
+   * for the baseline's single prompt. */
+  scope?: ProposeScope;
+  /** Empty for a type root AND for the baseline's prompt-holder — `scope` says
+   * which, so the two are never described the same way. */
   definition: string;
   /** The rule under revision — EXACTLY what the runtime injects. Null/empty =
    * the chatbot answers these questions with no system prompt at all (v7
@@ -145,12 +191,15 @@ function anchorBlock(anchor: ProposeAnchor): string {
 /** The user message of the propose call — one builder for the route AND the
  * eval harness, so what is tested is what ships. */
 export function buildProposeUserContent(ctx: ProposeContext): string {
+  const scope = ctx.scope ?? 'intent';
   const parts = [
-    `INTENT DEFINITION (when a student…): ${
-      ctx.definition.trim() ||
-      "(none — this is a type's fallback rule: it answers every question of its type that no intent claims)"
-    }`,
-    `CURRENT PROMPT FOR THIS INTENT:\n${
+    scope === 'prompt'
+      ? 'WHAT THIS PROMPT COVERS: every student request in the assignment — it is the chatbot\'s only system prompt.'
+      : `INTENT DEFINITION (when a student…): ${
+          ctx.definition.trim() ||
+          "(none — this is a type's fallback rule: it answers every question of its type that no intent claims)"
+        }`,
+    `${scope === 'prompt' ? 'CURRENT PROMPT' : 'CURRENT PROMPT FOR THIS INTENT'}:\n${
       ctx.currentRule?.trim() ||
       '(empty — the chatbot currently answers these requests with no system prompt at all)'
     }`,

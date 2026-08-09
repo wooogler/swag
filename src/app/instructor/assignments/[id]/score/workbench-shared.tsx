@@ -8,7 +8,7 @@
  */
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { MaterialSegments, QuerySnippet, snippetOverflows, type Dissection } from './materials';
 import { useHeaderSlot } from './StudioShell';
 
@@ -96,6 +96,32 @@ export function DefinitionEditor({
         className="mt-1 w-full text-sm border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
       />
     </label>
+  );
+}
+
+/** A result pane's search box — filters the pane's rows by query text.
+ * Extracted verbatim from IntentWorkbench so the baseline FilterWorkbench's
+ * pane is the same control, not a look-alike. */
+export function PaneSearch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="relative">
+      <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search query text…"
+        className="w-full pl-7 pr-7 py-1 text-sm border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+      />
+      {value && (
+        <button
+          onClick={() => onChange('')}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+          aria-label="Clear search"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
   );
 }
 

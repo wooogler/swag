@@ -41,6 +41,7 @@ import {
   type DissectionResult,
   type MaterialKind,
   type MaterialSpan,
+  type PromptDissection,
 } from '@/lib/score/intents';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
@@ -431,7 +432,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // implicit intent. The split just computed above (`dissections`) is authoritative
   // for the messages it covers; for the rest (dissection already fresh) load the
   // stored rows. Missing → null → the reworded no-request rule still applies.
-  const dissectionByMsg = new Map<number, DissectionResult>();
+  const dissectionByMsg = new Map<number, PromptDissection>();
   // Type calls need the split just as much as rating calls do — more, even: a
   // type verdict is cached for the message's lifetime, so classifying it without
   // the steer bakes in the exact error (pasted material read as a request) the

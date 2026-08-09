@@ -19,7 +19,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { assignments, editorEvents, studentSessions } from '@/db/schema';
 import { instructionToPlainText } from '@/lib/instruction-content';
-import type { DissectionResult, MaterialKind, MaterialSpan } from './intents';
+import type { MaterialKind, MaterialSpan, PromptDissection } from './intents';
 import { getQueryRecords, type QueryRecord } from './queries';
 
 const MIN_MATERIAL = 12; // ignore matches shorter than this (noise)
@@ -232,7 +232,7 @@ export function dissectMessage(
   text: string,
   windowPastes: { content: string | null; sourceArea: string | null }[],
   sources: DissectSource[]
-): DissectionResult {
+): PromptDissection {
   const { norm: nText, map } = normWithMap(text);
   const spans: Span[] = [];
   const normSources = sources
@@ -357,7 +357,7 @@ export async function hasEditorEventLog(assignmentId: string): Promise<boolean> 
 export async function computeDissections(
   assignmentId: string,
   targetIds: Set<number>
-): Promise<Map<number, DissectionResult>> {
+): Promise<Map<number, PromptDissection>> {
   if (targetIds.size === 0) return new Map();
   const records = await getQueryRecords(assignmentId);
   const targets = records.filter((r) => targetIds.has(r.messageId));
@@ -472,7 +472,7 @@ export async function computeDissections(
     return text;
   };
 
-  const out = new Map<number, DissectionResult>();
+  const out = new Map<number, PromptDissection>();
   for (const r of targets) {
     const start = prevTs.get(r.messageId) ?? new Date(0);
     const windowPastes = (pastesBySession.get(r.sessionId) ?? []).filter(

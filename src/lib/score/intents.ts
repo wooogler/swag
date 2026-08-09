@@ -161,6 +161,17 @@ export interface DissectionResult {
   materials?: MaterialSpan[];
 }
 
+/**
+ * A dissection as the RATING prompt needs it: `materials` is REQUIRED.
+ *
+ * It is optional on DissectionResult because the LLM dissection path produces
+ * none. The rating prompt is now exactly the reader that needs the per-run
+ * kinds, so requiring it here is what makes a caller that forgets to SELECT the
+ * column fail to COMPILE rather than silently ship a different prompt — which
+ * is how the two study arms would drift apart.
+ */
+export type PromptDissection = DissectionResult & { materials: MaterialSpan[] };
+
 /* ------------------------------------------------------------------ */
 /* Versions & prompt-cache invalidation                                */
 /* ------------------------------------------------------------------ */
@@ -179,8 +190,34 @@ export interface DissectionResult {
  * v4: instructor examples left the prompt entirely. A label is now a transient
  *     CORRECTION folded into the definition text and then consumed, so the
  *     definition is the whole of what the judge reads — and the hash is the
- *     definition alone. Every rating carrying a pin-derived hash is stale. */
-export const INTENT_RATING_VERSION = 4;
+ *     definition alone. Every rating carrying a pin-derived hash is stale.
+ * v5: pasted MATERIAL is no longer sent verbatim to the rating judge. Each run
+ *     is replaced, in position, by the marker the instructor sees on screen
+ *     ("[OWN DRAFT · 390 words · 100%]") followed by an abridged excerpt of the
+ *     run. ASSIGNMENT PROMPT runs carry NO excerpt — the same text for every
+ *     student, and the source of the "pasted question read as the student's own
+ *     question" error. Rating only; the TYPE prompt is byte-identical. */
+export type MaterialPromptMode = 'verbatim' | 'abridged';
+
+/**
+ * How the rating prompt renders pasted material.
+ *
+ * A SOURCE constant on purpose. An env var or a per-assignment column would put
+ * two prompt regimes under one intentDefHash, which is unrecoverable — and
+ * probe.ts copies template ratings ignoring def_hash, so one arm would import
+ * the other regime's verdicts. Flipping this is a cohort-boundary commit.
+ *
+ * Flipping this one word is the whole change; it moves intentDefHash for every
+ * intent in the same commit, so the prompt cannot go live against cached
+ * verdicts produced under the other regime.
+ */
+export const MATERIAL_PROMPT_MODE: MaterialPromptMode = 'abridged';
+
+/** Derived from the mode — a table rather than a comparison, because TS narrows
+ * a const to its initializer's literal type and would call the comparison dead.
+ * The point is that the prompt cannot change without the hash moving with it. */
+const RATING_VERSION_BY_MODE: Record<MaterialPromptMode, number> = { verbatim: 4, abridged: 5 };
+export const INTENT_RATING_VERSION = RATING_VERSION_BY_MODE[MATERIAL_PROMPT_MODE];
 
 /** Version of the dissection method/output. Rows below this are stale and
  * re-dissected on the next rate batch.

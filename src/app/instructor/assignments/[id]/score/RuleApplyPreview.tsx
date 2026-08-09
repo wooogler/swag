@@ -7,9 +7,9 @@
  * see a bad response FIRST, then bring its question in to revise against,
  * instead of picking blind from a list.
  *
- *   LEFT   the questions in scope with generation status — SCORE: the intent's
- *          questions (each checkable as an example); baseline (promptMode): the
- *          WHOLE log, 10 at a time, review-only
+ *   LEFT   the questions in scope with generation status, each checkable as an
+ *          example — an intent's questions, a type root's unclaimed residue, or
+ *          (baseline) the WHOLE log, 10 at a time and review-only
  *   MIDDLE the CURRENT rule pinned on top · the selected question · original response
  *   RIGHT  the NEW rule pinned on top · the regenerated response under it
  *
@@ -19,8 +19,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, Loader2, Plus, Sparkles, X } from 'lucide-react';
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
+import type { RuleTarget } from './RuleWorkbench';
 import { MaterialSegments, QuerySnippet } from './materials';
-import { WorkbenchTopBar } from './workbench-shared';
+import { PaneSearch, WorkbenchTopBar } from './workbench-shared';
 import { ResponseBody } from './conversation';
 import { sortQueryRows, type QuerySortMode } from './query-list';
 import { getJSON } from './http';
@@ -30,9 +31,10 @@ const BATCH = 6;
 /** Questions revealed / generated per "Load more" page. */
 const PAGE = 10;
 
-// Same sort set the old Add-example picker had (QueryPicker): the shared
-// dashboard modes plus the anchor-distance "Most different" — it moved here
-// with the picker's job when Add example merged into this preview.
+// Same sort set the old Add-example picker had: the shared dashboard modes
+// plus the anchor-distance "Most different". Both moved here — along with the
+// picker's text search — when Add example merged into this preview, in both
+// conditions; the picker itself is gone.
 type PreviewSort = QuerySortMode | 'different';
 
 const SORT_CLASS =
@@ -41,11 +43,17 @@ const SORT_CLASS =
 interface RuleApplyPreviewProps {
   assignmentId: string;
   intent: IntentSummary;
-  /** Baseline: `intent` is the hidden prompt-holder; scope is the whole log and
-   * the intent-only WHEN header is dropped. */
-  promptMode?: boolean;
+  /** Which rule is being previewed — the same three-way split RuleWorkbench
+   * makes. It decides what this screen CALLS the set it is showing: an intent's
+   * questions, a type's unclaimed residue, or the whole log. Inferring it from
+   * a single promptMode flag used to tell a type root it was previewing "all
+   * questions" while showing it a narrowed set — the exact misreading the type
+   * root's read-only WHEN exists to prevent. */
+  variant?: RuleTarget;
+  /** The type's display name, for the 'type-root' variant. */
+  scopeLabel?: string | null;
   rows: ScoreQueryRow[];
-  /** The questions in scope, anchor first (SCORE: the intent's; baseline: all). */
+  /** The questions in scope, anchor first. */
   queryIds: number[];
   anchorId: number;
   /** The rule students currently get (last saved major; null = base fallback). */
@@ -58,9 +66,9 @@ interface RuleApplyPreviewProps {
   /** Already-generated responses under `afterRule` (anchor simulation etc.). */
   seed: Map<number, string | null>;
   onClose: () => void;
-  /** SCORE: bring checked questions into the workbench as example tabs,
-   * carrying the responses generated here so the tabs open instantly. Absent
-   * (baseline) → review-only, no checkboxes. */
+  /** Bring checked questions into the workbench as example tabs, carrying the
+   * responses generated here so the tabs open instantly. Absent (baseline) →
+   * review-only, no checkboxes. */
   onAddExamples?: (ids: number[], responses: Map<number, string | null>) => void;
   /** Questions already open as tabs — not offered again. */
   existingIds?: Set<number>;
@@ -69,7 +77,8 @@ interface RuleApplyPreviewProps {
 export default function RuleApplyPreview({
   assignmentId,
   intent,
-  promptMode = false,
+  variant = 'intent',
+  scopeLabel = null,
   rows,
   queryIds,
   anchorId,
@@ -83,6 +92,16 @@ export default function RuleApplyPreview({
   onAddExamples,
   existingIds,
 }: RuleApplyPreviewProps) {
+  /** The baseline's rules DOCUMENT — the only target with no bounded set, and
+   * the only one whose copy is plural. */
+  const monolith = variant === 'prompt';
+  /** What this screen is showing, named. */
+  const scopeTitle =
+    variant === 'intent'
+      ? `Preview across intent — ${intent.title}`
+      : variant === 'type-root'
+        ? `Preview across ${scopeLabel ?? 'this type'} — questions no set claims`
+        : 'Preview across the log';
   const base = `/api/instructor/assignments/${assignmentId}/score`;
   const [selectedId, setSelectedId] = useState(anchorId);
   const [visible, setVisible] = useState(Math.min(PAGE, queryIds.length));
@@ -124,11 +143,22 @@ export default function RuleApplyPreview({
     };
   }, [base, intent.id, anchorId]);
 
+  /** Text search over the questions in scope. This screen is now the ONE door
+   * to a rule's other questions in both conditions, and the baseline's scope is
+   * the whole log — without a way to jump to a remembered question, "find the
+   * one about thesis statements" meant paging through 50 screens. Came over
+   * from the picker along with the sort. */
+  const [search, setSearch] = useState('');
+
   const sortedIds = useMemo(() => {
+    const q = search.trim().toLowerCase();
     const rest = queryIds.filter((id) => id !== anchorId);
     const restRows = rest
       .map((id) => rowById.get(id))
-      .filter((r): r is ScoreQueryRow => r !== undefined);
+      .filter((r): r is ScoreQueryRow => r !== undefined)
+      // The anchor is exempt: it is the question under revision and stays
+      // pinned first whatever is typed.
+      .filter((r) => !q || r.queryText.toLowerCase().includes(q));
     let ordered: number[];
     if (sortMode === 'different') {
       if (!distances) {
@@ -144,14 +174,16 @@ export default function RuleApplyPreview({
       ordered = sortQueryRows(restRows, sortMode).map((r) => r.messageId);
     }
     return [anchorId, ...ordered];
-  }, [queryIds, anchorId, rowById, sortMode, distances]);
+  }, [queryIds, anchorId, rowById, sortMode, distances, search]);
 
   const visibleIds = useMemo(() => sortedIds.slice(0, visible), [sortedIds, visible]);
 
   const doneCount = visibleIds.filter((id) => gen.has(id)).length;
   const failedCount = visibleIds.filter((id) => gen.has(id) && gen.get(id) === null).length;
   const allVisibleDone = doneCount >= visibleIds.length;
-  const moreToLoad = visible < queryIds.length;
+  // Against the SEARCHED list, not the raw scope — otherwise a search that
+  // narrows to 3 questions still offers "Load more".
+  const moreToLoad = visible < sortedIds.length;
 
   // Generate the missing responses for the VISIBLE page, batch by batch.
   // Re-runs when the page grows (Load more) or the sort reorders which ids are
@@ -229,7 +261,7 @@ export default function RuleApplyPreview({
       }`}
     >
       <p className={`text-[10px] font-semibold uppercase tracking-wide ${accent ? 'text-emerald-700' : 'text-[hsl(var(--muted-foreground))]'}`}>
-        {accent ? (promptMode ? 'New rules' : 'New rule') : promptMode ? 'Deployed rules' : 'Deployed rule'}{' '}
+        {accent ? (monolith ? 'New rules' : 'New rule') : monolith ? 'Deployed rules' : 'Deployed rule'}{' '}
         <span className="font-normal normal-case">· {label}</span>
       </p>
       <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
@@ -243,7 +275,7 @@ export default function RuleApplyPreview({
       {/* TOP BAR — back, title, progress (review-only). Takes the page header
           over from the workbench underneath for as long as it is open. */}
       <WorkbenchTopBar
-        title={promptMode ? 'Preview across the log' : `Preview across intent — ${intent.title}`}
+        title={scopeTitle}
         onBack={onClose}
         backLabel="Back"
         backTitle="Back to revising"
@@ -253,7 +285,7 @@ export default function RuleApplyPreview({
               {!allVisibleDone && <Loader2 className="w-3 h-3 animate-spin" />}
               <span className="tabular-nums">
                 {doneCount}/{visibleIds.length} shown
-                {moreToLoad ? ` · ${queryIds.length} total` : ''}
+                {moreToLoad ? ` · ${sortedIds.length} total` : ''}
                 {failedCount > 0 ? ` · ${failedCount} failed` : ''}
               </span>
             </span>
@@ -269,14 +301,7 @@ export default function RuleApplyPreview({
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,320px)_minmax(0,1fr)_minmax(0,1fr)] gap-4 flex-1 min-h-0">
         {/* LEFT — scope + questions with generation status. */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
-          {promptMode ? (
-            <div className="shrink-0 flex items-center justify-between gap-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                All questions · {queryIds.length}
-              </span>
-              {sortControl}
-            </div>
-          ) : (
+          {variant === 'intent' ? (
             <>
               <div className="shrink-0 border-b border-[hsl(var(--border))] bg-[hsl(var(--card))]/95 px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
@@ -299,7 +324,26 @@ export default function RuleApplyPreview({
                 {sortControl}
               </div>
             </>
+          ) : (
+            /* A type root's set is neither an intent's nor "everything": it is
+               exactly what its chain left over, and saying so here is the point
+               — this screen is the type root's only cross-query view, so a
+               header reading "All questions" would state the opposite of what
+               its rule does. */
+            <div className="shrink-0 flex items-center justify-between gap-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                {variant === 'type-root'
+                  ? `${scopeLabel ?? 'Type'} · no set claims · ${queryIds.length}`
+                  : `All questions · ${queryIds.length}`}
+              </span>
+              {sortControl}
+            </div>
           )}
+          {/* Search sits under whichever header rendered, so the count above
+              always names the SCOPE and this narrows what is listed. */}
+          <div className="shrink-0 px-3 py-1.5 border-b border-[hsl(var(--border))]">
+            <PaneSearch value={search} onChange={setSearch} />
+          </div>
           <ul className="flex-1 min-h-0 overflow-y-auto divide-y divide-[hsl(var(--border))]/60">
             {visibleIds.map((id) => {
               const r = rowById.get(id);
@@ -361,10 +405,10 @@ export default function RuleApplyPreview({
             {moreToLoad && (
               <li className="p-2">
                 <button
-                  onClick={() => setVisible((v) => Math.min(v + PAGE, queryIds.length))}
+                  onClick={() => setVisible((v) => Math.min(v + PAGE, sortedIds.length))}
                   className="w-full inline-flex items-center justify-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-1.5 text-[11px] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
                 >
-                  <Plus className="w-3 h-3" /> Load {Math.min(PAGE, queryIds.length - visible)} more
+                  <Plus className="w-3 h-3" /> Load {Math.min(PAGE, sortedIds.length - visible)} more
                 </button>
               </li>
             )}
@@ -403,7 +447,7 @@ export default function RuleApplyPreview({
                   Student question
                 </p>
                 <p className="text-xs whitespace-pre-wrap rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-2 leading-relaxed">
-                  <MaterialSegments key={selectedRow.messageId} text={selectedRow.queryText} dissection={selectedRow.dissection} />
+                  <MaterialSegments key={selectedRow.messageId} text={selectedRow.queryText} dissection={selectedRow.dissection} toggleAll />
                 </p>
               </div>
               <div>

@@ -24,6 +24,7 @@ import { getDefaultScoreModel } from '@/lib/score/models';
 import {
   buildProposeSystemPrompt,
   buildProposeUserContent,
+  type ProposeScope,
   PROPOSAL_SCHEMA,
   PROPOSAL_STRENGTHS,
   type ProposalStrength,
@@ -128,7 +129,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // runtime injects the rule verbatim (buildInjectedSystemPrompt), so telling
   // the agent to preserve a default prompt the runtime never sends was a bug.
   const baseRule = body.draftRule !== undefined ? body.draftRule || null : intent.rule;
+  // WHICH rule this is decides what the agent is told it covers — and what
+  // condition the revision is logged under. The row already knows: 'intent' |
+  // 'type_root' | 'prompt_holder' (the baseline's monolithic container).
+  const scope: ProposeScope =
+    intent.kind === 'prompt_holder' ? 'prompt' : intent.kind === 'type_root' ? 'type-root' : 'intent';
   const user = buildProposeUserContent({
+    scope,
     definition: intent.definition,
     currentRule: baseRule,
     anchor: {
@@ -146,7 +153,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   try {
     const raw = await callModel(
-      buildProposeSystemPrompt(),
+      buildProposeSystemPrompt(scope),
       user,
       getDefaultScoreModel(),
       'medium', // revision authoring warrants more deliberation than batch rating
@@ -176,7 +183,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       (v): v is NonNullable<typeof v> => v !== undefined
     );
     if (variants.length === 0) throw new Error('proposal produced no usable variant');
-    await logStudyEvent(id, 'revise_submit', { condition: 'score', mode: body.mode, intentId, anchorMessageId: body.messageId });
+    // The condition is derived, not assumed: this route serves BOTH arms now
+    // (the baseline's dedicated revise endpoint has no caller left), so
+    // hardcoding 'score' filed every baseline revision under the treatment.
+    await logStudyEvent(id, 'revise_submit', {
+      condition: scope === 'prompt' ? 'baseline' : 'score',
+      scope,
+      mode: body.mode,
+      intentId,
+      anchorMessageId: body.messageId,
+    });
     return NextResponse.json({ variants, mode: body.mode, raw });
   } catch (error) {
     console.error(`SCORE rule proposal failed for intent ${intentId}:`, error);

@@ -32,7 +32,6 @@ import {
   Maximize2,
   Minimize2,
   Pencil,
-  Plus,
   Quote,
   RotateCcw,
   Save as SaveIcon,
@@ -47,7 +46,6 @@ import { WorkbenchTopBar } from './workbench-shared';
 import ChatMessages from '@/components/chat/ChatMessages';
 import { seedRuleVersionName } from '@/lib/score/intents';
 import RuleApplyPreview from './RuleApplyPreview';
-import QueryPicker from './QueryPicker';
 import ProposalPreviewModal, { type ProposalVariant } from './ProposalPreviewModal';
 import { RuleDiff } from './rule-diff';
 
@@ -340,6 +338,9 @@ function ChatRuleBlock({
 /** Batch cap of the preview/apply endpoints (MAX_PREVIEW_MESSAGES mirror). */
 const APPLY_BATCH = 6;
 
+/** The three rules this one workbench edits — see the `variant` prop. */
+export type RuleTarget = 'intent' | 'type-root' | 'prompt';
+
 interface RuleWorkbenchProps {
   assignmentId: string;
   /** Every question row — conversation threads and the intent's question list. */
@@ -364,19 +365,36 @@ interface RuleWorkbenchProps {
   /** Set when the viewer had a rule VERSION selected — open checked out on it. */
   viewVersion?: { versionNo: number; name: string | null; rule: string | null; response: string | null } | null;
   onClose: (changed: boolean) => void;
-  /** BASELINE (ablation): `intent` is the hidden prompt-holder and its rule IS
-   * the whole monolithic system prompt. Hides the intent-only affordances (WHEN,
-   * apply-to-intent, edge-case sweep, "doesn't fit → new intent") and swaps them
-   * for a manual "Add example" set. Everything else — the rich rule-version
-   * history (v1 seed, minors, checkout, revert) + the feedback agent — is reused
-   * verbatim. Default false → the SCORE rule workbench is unchanged. */
-  promptMode?: boolean;
-  /** promptMode variants that DO have a scope: a v7 type root's rule answers
-   * whatever its type leaves unclaimed, so its examples and cross-query preview
-   * must come from those questions, not from the whole log. Omitted (baseline)
-   * → the whole log, unchanged. */
+  /**
+   * WHICH of the three rules this workbench is editing. This used to be one
+   * `promptMode` boolean, which collapsed the last two together — and since the
+   * baseline half of that pair carries the ABLATION's affordances, a SCORE type
+   * root was silently getting the control condition's interaction model (a blind
+   * picker instead of the cross-query preview, review-only instead of
+   * pull-a-question-in, plus the header door SCORE deliberately dropped).
+   *
+   *  'intent'    SCORE — an intent's rule. Authored WHEN, edge-case sweep.
+   *  'type-root' SCORE — a v7 type root's rule: the type's last resort, answering
+   *              whatever its chain leaves unclaimed. No authored WHEN (see
+   *              `fixedWhen`) but a real, bounded question set (`scopeMessageIds`),
+   *              so it takes the SCORE flow everywhere the question set is what
+   *              matters.
+   *  'prompt'    BASELINE — `intent` is the hidden prompt-holder and its rule IS
+   *              the whole monolithic rules document. No WHEN and no question set:
+   *              it answers everything, so its review set is built by hand from a
+   *              blind picker. That is the ablation, not an oversight.
+   *
+   * Read the derived `authoredWhen` / `scoped` / `monolith` below rather than
+   * testing this directly — they name WHY each branch differs.
+   */
+  variant?: RuleTarget;
+  /** The questions this rule actually ANSWERS under v7 first-match routing —
+   * computed by the board, which owns the resolver. Both SCORE variants pass it
+   * ('intent': the questions resolved to this intent, not merely matching it;
+   * 'type-root': the type's unclaimed residue). Null for the baseline: its one
+   * prompt answers the whole log. */
   scopeMessageIds?: number[] | null;
-  /** Header/copy name for a scoped promptMode rule (e.g. "Planning"). */
+  /** Header/copy name for a scoped rule (e.g. "Planning"). */
   scopeLabel?: string | null;
   /** A WHEN nobody authored, shown READ-ONLY. A type root's rule fires on
    * whatever its type leaves unclaimed: half of that condition is the type
@@ -397,11 +415,20 @@ export default function RuleWorkbench({
   deployedRule = null,
   viewVersion = null,
   onClose,
-  promptMode = false,
+  variant = 'intent',
   scopeMessageIds = null,
   scopeLabel = null,
   fixedWhen = null,
 }: RuleWorkbenchProps) {
+  // The three axes the variants actually differ on. Every branch below asks one
+  // of these rather than naming a variant, so what a branch is FOR stays legible
+  // (and so a new caller cannot land on the wrong side of one by accident).
+  /** There is an instructor-written WHEN — only an intent has one. */
+  const authoredWhen = variant === 'intent';
+  /** The baseline's single rules DOCUMENT: plural copy, no WHEN, and the one
+   * target whose question set is the whole log rather than a bounded slice
+   * (see `scopeRows`). */
+  const monolith = variant === 'prompt';
   const base = `/api/instructor/assignments/${assignmentId}/score`;
   // Full conversation — replaces the MIDDLE column in place (shared thread view).
   const [convoOpen, setConvoOpen] = useState(false);
@@ -417,8 +444,6 @@ export default function RuleWorkbench({
   // TABS — the anchor plus any opened intent questions (edge cases / apply-all).
   const [caseIds, setCaseIds] = useState<number[] | null>(null);
   const [activeId, setActiveId] = useState(row.messageId);
-  // promptMode: the manual "Add example" picker (no intent question list to sweep).
-  const [pickerOpen, setPickerOpen] = useState(false);
   // Lazily generated previews under the VIEWED rule for tabs the viewed
   // version's own stored response doesn't cover. Cleared on version switch.
   const [updated, setUpdated] = useState<Record<number, { text: string | null; loading: boolean }>>({});
@@ -501,9 +526,12 @@ export default function RuleWorkbench({
         setChat(entries.map((e) => ({ ...e, id: ++chatIdRef.current })));
       }
     })();
-    // SCORE: seed the tab strip with the intent's top edge cases by default
-    // (baseline starts at the anchor and adds examples by hand).
-    if (!promptMode) void checkEdgeCases();
+    // Seed the tab strip with the intent's top edge cases. Only an intent has
+    // them: the sweep asks which questions the CHAIN resolves to this intent,
+    // and a type root is not a chain member (it is what the chain falls through
+    // to), so the call would come back empty. The type root's other questions
+    // are reached through the cross-query preview instead.
+    if (authoredWhen) void checkEdgeCases();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -598,7 +626,10 @@ export default function RuleWorkbench({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rule: intent.rule,
-          ...(untouched ? { name: seedRuleVersionName(intent.rule, { plural: promptMode }) } : {}),
+          // Plural only for the baseline's rules DOCUMENT. A type root owns one
+          // rule like any set, and this name is persisted — a wrong plural
+          // outlives the copy fix.
+          ...(untouched ? { name: seedRuleVersionName(intent.rule, { plural: monolith }) } : {}),
           source: 'seed',
           updatedResponse: untouched ? row.responseText?.trim() || null : null,
           anchorMessageId: row.messageId,
@@ -623,20 +654,19 @@ export default function RuleWorkbench({
     [rows, activeRow.conversationId]
   );
 
-  // "Add example" candidate scope: baseline draws from the WHOLE log (the prompt
-  // applies to everything); SCORE limits it to THIS intent's questions (its
-  // clearly-in members, pins overriding) — examples belong to the intent.
-  const pickerLog = useMemo(
-    () =>
-      promptMode
-        ? scopeMessageIds
-          ? rows.filter((r) => scopeMessageIds.includes(r.messageId))
-          : rows
-        : rows.filter((r) => {
-            const pin = r.pinnedIntents[intent.id];
-            return pin ? pin === 'in' : r.intentRatings[intent.id]?.rating === 'clearly_in';
-          }),
-    [promptMode, scopeMessageIds, rows, intent.id]
+  /** The questions this rule can be tried against: the ones it ANSWERS, which
+   * the board resolves with the real chain compiler and hands over as
+   * `scopeMessageIds`. Only the baseline falls back to the whole log — its one
+   * prompt genuinely answers everything.
+   *
+   * It used to read membership here itself (clearly_in + pins). Under v7 that
+   * is the wrong set: first-match means an intent can MATCH a question that an
+   * earlier sibling or one of its own subsets answers instead, and tuning a
+   * rule against a response no student receives is exactly the confusion the
+   * shadowing diagnostic exists to name. */
+  const scopeRows = useMemo(
+    () => (scopeMessageIds ? rows.filter((r) => scopeMessageIds.includes(r.messageId)) : rows),
+    [scopeMessageIds, rows]
   );
 
   // The response the pane shows for the active tab under the VIEWED version:
@@ -1080,7 +1110,7 @@ export default function RuleWorkbench({
     const label = versionLabel(viewed);
     if (
       !window.confirm(
-        `Revert to ${label}?\n\nThis makes ${label} the live rule and permanently deletes the ${laterCount} later step(s) — including any Save among them. This cannot be undone.`
+        `Revert to ${label}?\n\nThis makes ${label} the live rule and permanently deletes the ${laterCount} later step(s) — including any Apply among them. This cannot be undone.`
       )
     ) {
       return;
@@ -1132,21 +1162,10 @@ export default function RuleWorkbench({
     }
   }
 
-  /** promptMode: append manually-picked questions as tabs (the ablation's
-   * hand-built review set), generating each one's response under the viewed rule. */
-  async function addExamples(ids: number[]) {
-    const existing = caseIds ?? [row.messageId];
-    const fresh = ids.filter((id) => id !== row.messageId && !existing.includes(id));
-    if (!fresh.length) return;
-    setCaseIds([...existing, ...fresh]);
-    const gen = genRef.current;
-    const need = viewed?.source === 'seed' ? [] : fresh.filter((id) => updated[id] === undefined);
-    await generateUpdated(need, ruleParamFor(viewed), gen);
-  }
-
-  /** SCORE: from the cross-query preview — open checked questions as example
-   * tabs, seeding the responses generated THERE so the tabs open instantly
-   * (the preview runs under the same working rule, viewingLatest-gated). */
+  /** From the cross-query preview (every condition's one way to add) — open
+   * checked questions as example tabs, seeding the responses generated THERE so
+   * the tabs open instantly (the preview runs under the same working rule,
+   * viewingLatest-gated). */
   function addExamplesFromPreview(ids: number[], responses: Map<number, string | null>) {
     setPreviewOpen(false);
     if (ids.length === 0) return;
@@ -1186,18 +1205,10 @@ export default function RuleWorkbench({
     };
   };
 
-  // CROSS-QUERY PREVIEW — replaces the workbench while reviewing the saved rule's
-  // response across questions. SCORE: the intent's questions; baseline: the whole
-  // log (RuleApplyPreview paginates 10 at a time). Review-only — Back to return.
+  // CROSS-QUERY PREVIEW — replaces the workbench while reviewing the rule's
+  // response across every question it answers (paginated 10 at a time).
   if (previewOpen) {
-    const inScope = promptMode
-      ? (scopeMessageIds ?? rows.map((r) => r.messageId))
-      : rows
-          .filter((r) => {
-            const pin = r.pinnedIntents[intent.id];
-            return pin ? pin === 'in' : r.intentRatings[intent.id]?.rating === 'clearly_in';
-          })
-          .map((r) => r.messageId);
+    const inScope = scopeRows.map((r) => r.messageId);
     const previewIds = [row.messageId, ...inScope.filter((id) => id !== row.messageId)];
     const seed = new Map<number, string | null>();
     for (const [idStr, entry] of Object.entries(updated)) {
@@ -1208,7 +1219,8 @@ export default function RuleWorkbench({
       <RuleApplyPreview
         assignmentId={assignmentId}
         intent={intent}
-        promptMode={promptMode}
+        variant={variant}
+        scopeLabel={scopeLabel}
         rows={rows}
         queryIds={previewIds}
         anchorId={row.messageId}
@@ -1221,10 +1233,11 @@ export default function RuleWorkbench({
         isNirvana={isNirvana}
         seed={seed}
         onClose={() => setPreviewOpen(false)}
-        // SCORE: the preview doubles as the example picker — a bad response
-        // here is one checkbox away from being a tab to fix. Baseline stays
-        // review-only (its review set is built by hand, part of the ablation).
-        onAddExamples={promptMode ? undefined : addExamplesFromPreview}
+        // The preview doubles as the example picker in every condition — a bad
+        // response here is one checkbox away from being a tab to fix. The only
+        // review-set difference the ablation calls for is the AUTO-SEED
+        // (checkEdgeCases), which the baseline still does not get.
+        onAddExamples={addExamplesFromPreview}
         existingIds={new Set(caseIds ?? [row.messageId])}
       />
     );
@@ -1235,34 +1248,17 @@ export default function RuleWorkbench({
       {/* TOP BAR — rendered into the page header (see StudioShell). */}
       <WorkbenchTopBar
         title={
-          promptMode
-            ? scopeLabel
-              ? `Revise rule — ${scopeLabel}`
-              : 'Revise the system prompt'
-            : `Revise rule — ${intent.title}`
+          monolith
+            ? 'Revise the rules'
+            : `Revise rule — ${scopeLabel ?? intent.title}`
         }
         onBack={() => (leaveLoss() ? setLeavePrompt(true) : onClose(savedAnyRef.current))}
-        actions={
-          /* BASELINE ONLY. In SCORE the same surface is reached from "Other
-             questions" in the tab strip, where it belongs — it is about the
-             questions, and a second door in the header only asked which one to
-             use. The baseline's picker is a different action (a blind list), so
-             it keeps this review-only preview as its own entry. */
-          promptMode ? (
-            <button
-              onClick={() => setPreviewOpen(true)}
-              disabled={boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-              title={
-                boxEdited
-                  ? 'Try your edit first, then Preview'
-                  : 'Preview these rules across the log (10 questions at a time)'
-              }
-            >
-              <Eye className="w-3.5 h-3.5" /> Preview
-            </button>
-          ) : undefined
-        }
+        /* No header Preview door in ANY condition: the cross-query surface is
+           reached from "Other questions" in the tab strip, where it belongs —
+           it is about the questions, and a second door only asked which one to
+           use. The baseline used to keep this one because its own entry was a
+           blind picker; now it opens the same merged preview, so the second
+           door has nothing left to be. */
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)_minmax(300px,380px)] gap-4 flex-1 min-h-0">
@@ -1271,10 +1267,10 @@ export default function RuleWorkbench({
           <div className="p-4 space-y-3">
             {/* WHEN — an intent's authored definition. Read-only here: this
                 screen is for the Then; the When is edited in the intent
-                workbench. The baseline's rule has no trigger condition at all,
-                so promptMode falls through to `fixedWhen` (a type root) or to
-                nothing (the monolithic prompt). */}
-            {!promptMode ? (
+                workbench. A type root's condition is nobody's sentence, so it
+                falls through to `fixedWhen`; the baseline's rules document has
+                no trigger at all and gets nothing. */}
+            {authoredWhen ? (
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   When a student…
@@ -1317,9 +1313,9 @@ export default function RuleWorkbench({
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   {/* A When above it makes this half of a pair — label it as one.
-                      Only the baseline's monolithic prompt (no When) keeps the
+                      Only the baseline's rules document (no When) keeps the
                       bare "Rules". */}
-                  {promptMode && !fixedWhen
+                  {monolith
                     ? `Rules${viewed ? ` · ${versionLabel(viewed)}` : ''}`
                     : `Then… (rule${viewed ? ` · ${versionLabel(viewed)}` : ''})`}
                 </p>
@@ -1364,9 +1360,9 @@ export default function RuleWorkbench({
                 onChange={(e) => !readOnly && setRuleText(e.target.value)}
                 readOnly={readOnly}
                 placeholder={
-                  fixedWhen
+                  variant === 'type-root'
                     ? 'Empty — the questions above get no system prompt at all.'
-                    : promptMode
+                    : monolith
                       ? 'Empty — the chatbot answers with no rules at all.'
                       : 'Empty — this intent has no rule of its own yet.'
                 }
@@ -1424,12 +1420,19 @@ export default function RuleWorkbench({
                       : !viewingLatest
                         ? 'Viewing an old step — Revert to make it live instead'
                         : dirty
-                          ? "Make this the intent's live rule — the board shows it as soon as you go back"
+                          ? // Says what goes live, in the words of whatever is
+                            // being edited — the label below has three audiences
+                            // and this tooltip used to name only the intent.
+                            monolith
+                            ? 'Make these the live rules — the board shows them as soon as you go back'
+                            : variant === 'type-root'
+                              ? `Make this the live ${scopeLabel ?? 'type'} rule — the board shows it as soon as you go back`
+                              : "Make this the intent's live rule — the board shows it as soon as you go back"
                           : 'Nothing to apply — try a change first'
                   }
                 >
                   {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
-                  {promptMode && !fixedWhen ? 'Apply rules' : 'Apply rule'}
+                  {monolith ? 'Apply rules' : 'Apply rule'}
                 </button>
               </div>
             </div>
@@ -1464,38 +1467,35 @@ export default function RuleWorkbench({
                 );
               })}
             <button
-              // SCORE's main affordance here: the rule is doing something to
-              // every OTHER question in the intent, and this is the door to
-              // that. Named for what you go there to do (look at the others)
-              // rather than the mechanism (adding a tab), and styled to be
-              // seen — in the study nobody found the quiet "Add example".
-              // Baseline keeps the blind picker (its hand-built review set is
-              // part of the ablation).
-              onClick={() => (promptMode ? setPickerOpen(true) : setPreviewOpen(true))}
+              // The main affordance here, in EVERY condition: the rule is doing
+              // something to every OTHER question it answers, and this is the
+              // door to that. Named for what you go there to do (look at the
+              // others) rather than the mechanism (adding a tab), and styled to
+              // be seen — in the study nobody found the quiet "Add example".
+              //
+              // The baseline used to get a blind picker instead, on the theory
+              // that hand-building the review set was part of the ablation. It
+              // is not: spec §4.1/4.2 put exactly ONE difference in this flow —
+              // SCORE auto-seeds the tabs on open (checkEdgeCases) and the
+              // baseline starts at the anchor. Every MANUAL path is shared, so
+              // choosing from responses you can see is a preview capability
+              // (§0 principle 1 lists previews as parity), not a structuring
+              // one. Withholding it just made the control's loop worse, which
+              // is the strawman §0 principle 3 forbids.
+              onClick={() => setPreviewOpen(true)}
               disabled={
-                !promptMode &&
-                (boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving)
+                boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving
               }
-              className={`shrink-0 ml-auto inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs disabled:opacity-50 ${
-                promptMode
-                  ? 'border border-[hsl(var(--border))] font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]'
-                  : 'border border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 font-semibold text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20'
-              }`}
+              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs disabled:opacity-50 border border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 font-semibold text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20"
               title={
-                promptMode
-                  ? 'Pull in more logged questions to try the rule against'
-                  : "See what this rule does to the intent's other questions — and pull any in to fix"
+                monolith
+                  ? 'See what these rules do to the other logged questions — and pull any in to fix'
+                  : variant === 'type-root'
+                    ? `See what this rule does to the other ${scopeLabel ?? 'type'} questions no set claims — and pull any in to fix`
+                    : "See what this rule does to the intent's other questions — and pull any in to fix"
               }
             >
-              {promptMode ? (
-                <>
-                  <Plus className="w-3 h-3" /> Add example
-                </>
-              ) : (
-                <>
-                  <Eye className="w-3.5 h-3.5" /> Other questions
-                </>
-              )}
+              <Eye className="w-3.5 h-3.5" /> Other questions
             </button>
           </div>
 
@@ -1602,9 +1602,14 @@ export default function RuleWorkbench({
                         m.id === activeRow.messageId &&
                         activeRow.dissection &&
                         activeRow.dissection.materialKinds.length > 0 ? (
+                          // Tags stay collapsed here: revising a rule is about
+                          // the SHAPE of the question, and a pasted draft is
+                          // exactly the part the rule shouldn't be written
+                          // against. The bubble's control reveals it on demand.
                           <MaterialSegments
                             text={activeRow.queryText}
                             dissection={activeRow.dissection}
+                            toggleAll
                           />
                         ) : null
                       }
@@ -1730,8 +1735,13 @@ export default function RuleWorkbench({
                                       ) : (
                                         <Wand2 className="w-3 h-3" />
                                       )}
+                                      {/* "intent" here meant "what you meant by
+                                          the edit" — an unrelated sense of the
+                                          word, which reads as the object noun
+                                          in SCORE and is treatment vocabulary
+                                          in the baseline. Say the plain thing. */}
                                       {chosen.length > 0
-                                        ? `Propose with ${chosen.length} intent${chosen.length === 1 ? '' : 's'}`
+                                        ? `Propose with ${chosen.length} change${chosen.length === 1 ? '' : 's'}`
                                         : 'Propose anyway'}
                                     </button>
                                   );
@@ -1983,22 +1993,6 @@ export default function RuleWorkbench({
       {/* "Make this a new intent" — three editable candidates seeded from the
           ACTIVE question; picking one opens the New Intent workbench. */}
 
-      {/* promptMode: pull logged questions in as example tabs (manual review set).
-          Distance is measured from the active tab, so the picker leads with the
-          questions most different from what you're currently viewing. */}
-      {pickerOpen && (
-        <QueryPicker
-          log={pickerLog}
-          excludeIds={new Set(caseIds ?? [row.messageId])}
-          anchorId={activeId}
-          assignmentId={assignmentId}
-          intentId={intent.id}
-          isNirvana={isNirvana}
-          onAdd={(ids) => void addExamples(ids)}
-          onClose={() => setPickerOpen(false)}
-        />
-      )}
-
       {/* LEAVE GUARD — the demo confusion this prevents: Apply/feedback only
           SIMULATE; walking out after them leaves the board on the old rule.
           Mirrors the intent workbench's leave prompt, plus a save-and-leave
@@ -2021,9 +2015,14 @@ export default function RuleWorkbench({
                   {loss === 'edit' ? 'Untried edit' : 'Not applied yet'}
                 </h3>
                 <p className="mt-1.5 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+                  {/* Condition-neutral on purpose: this modal fires for all
+                      three targets, and "the intent" is the treatment's object
+                      noun — a control participant must never read it. */}
                   {loss === 'edit'
                     ? 'The rule text you edited hasn’t been tried yet — leaving discards it.'
-                    : 'Your latest steps are simulations — the intent still runs its old rule. Apply to make this the live rule; if you leave, the steps stay here as drafts you can apply later.'}
+                    : `Your latest steps are simulations — students still get the old ${
+                        monolith ? 'rules' : 'rule'
+                      }. Apply to make ${monolith ? 'these the live rules' : 'this the live rule'}; if you leave, the steps stay here as drafts you can apply later.`}
                 </p>
                 <div className="mt-3 flex items-center justify-end gap-2">
                   <button

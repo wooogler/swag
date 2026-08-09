@@ -3,83 +3,44 @@
 /**
  * SCORE v7 — the New Intent chooser. EVERY intent is created through here.
  *
- * A blank create form does not tell an instructor what a good intent looks
- * like, so creation always opens on a chooser instead: candidates drafted from
- * the question in view, the taxonomy's starter sets for this query type, and —
- * still one click away — a blank one. Picking is only a seed; the workbench
- * that follows is where the intent is actually built.
- *
- * Two things the layout is answering:
- *
- *  - WHERE it lands. In the left column the "+ New intent" button says that by
- *    its indentation; once a modal covers the tree that is gone, so the scope
- *    line at the top is the first thing in the dialog and is present in every
- *    entry path (the anchor question is not — it may be absent).
- *
- *  - HOW LONG it takes. A starter set whose definition still matches a prepared
- *    template clones with its ratings copied server-side: zero LLM calls, so
- *    its questions are there the moment the workbench opens. That is a property
- *    of the DEFINITION TEXT, not of the row it came from — edit the wording and
- *    the match is gone — so it is computed off the live draft and shown next to
- *    Create, which is where the wait would otherwise happen.
+ * The chooser itself is shared with the baseline condition's New Search dialog
+ * (candidate-chooser.tsx) — same proposals, same starter sets, same editor, so
+ * the conditions differ in what the created object DOES, not in what its author
+ * knew when they wrote it. This file is the SCORE half: the scope header, and
+ * the intent vocabulary.
  */
-import { useEffect, useMemo, useState } from 'react';
-import {
-  AlertTriangle,
-  ArrowRight,
-  ChevronRight,
-  Loader2,
-  Plus,
-  RefreshCw,
-  Sparkles,
-  X,
-  Zap,
-} from 'lucide-react';
+import { ChevronRight, Plus } from 'lucide-react';
 import type { ScoreQueryType } from '@/lib/score/intents';
-import {
-  LEGACY_TYPE_TO_QUERY_TYPE,
-  jelsonToIntent,
-  suggestJelson,
-  type JelsonSuggestion,
-} from '@/lib/score/jelson-suggest';
+import type { JelsonSuggestion } from '@/lib/score/jelson-suggest';
 import type { ScoreQueryRow } from './IntentBoard';
-import { MaterialSegments } from './materials';
+import CandidateChooser, { type CandidateSeed, type ChooserCopy } from './candidate-chooser';
 
-/** How many starter sets ride above the fold. The rest are one click away — a
- * query type has 4–8 subtypes, so "show all" is never a long list. */
-const STARTER_SHORTLIST = 3;
-
-const ALTITUDE_LABELS = ['Specific', 'Broader category', 'Reframed'];
-
-/** One thing the instructor can start from. `seed` is the starting text; what
- * they create is whatever they edit it into. */
-interface Option {
-  key: string;
-  group: 'ai' | 'starter' | 'scratch';
-  /** Small tag under the row — the altitude, the taxonomy code, or nothing. */
-  tag: string | null;
-  label: string;
-  seed: { title: string; definition: string };
-  /** Its definition is already a live intent. Nothing on the row says so — a
-   * struck-out list reads as broken. It only keeps the option from being where
-   * the pane OPENS; clicking it explains, in the pane, why Create is off. */
-  taken?: boolean;
-}
+const COPY: ChooserCopy = {
+  starterGroup: 'Starter intents',
+  titleLabel: 'Title',
+  titlePlaceholder: 'Auto-named on save if empty',
+  definitionLabel: 'When a question…',
+  definitionPlaceholder:
+    'e.g. asks the chatbot to write a thesis statement or conclusion for them',
+  duplicate:
+    'An intent with this exact definition already exists. Edit it into a different one to create it.',
+  instant: 'questions appear immediately',
+  instantTitle:
+    'This definition is already rated across the log — the clone copies those ratings, so no rating pass is needed.',
+  create: 'Create intent',
+  createTitle: 'Open the workbench seeded with this candidate',
+};
 
 interface NewIntentModalProps {
   assignmentId: string;
   /** Where the new set lands. Known in every entry path — this is what the
    * modal shows in place of the create button's position in the tree. */
   scope: { type: ScoreQueryType; parentIntentId: number | null };
-  /** The question in view when they asked, if any. Anchors the AI proposals
-   * and ranks the starter sets. */
   anchorRow: ScoreQueryRow | null;
   /** The set the new one is carved out of — `scope.parentIntentId` resolved.
    * Null when the type's own rule is what answers the scope today. */
   currentIntent: { id: number; title: string } | null;
-  /** The taxonomy, built once by the page. */
   jelsonSuggestions: JelsonSuggestion[];
-  /** Prepared starter templates: a definition match clones with zero LLM calls. */
   templates: { id: number; title: string; definition: string }[];
   /** Definitions already live in this assignment (trimmed) — those starters are
    * still listed and still readable, just not creatable a second time. */
@@ -91,7 +52,7 @@ interface NewIntentModalProps {
    * board's module graph. */
   typeDot: string;
   onCancel: () => void;
-  onPick: (seed: { title: string; definition: string; fromTemplateId?: number }) => void;
+  onPick: (seed: CandidateSeed) => void;
 }
 
 export default function NewIntentModal({
@@ -108,467 +69,67 @@ export default function NewIntentModal({
   onCancel,
   onPick,
 }: NewIntentModalProps) {
-  // --- Starter sets: instant, no round-trip --------------------------------
-  // Ranked against the question in view when there is one; taxonomy order
-  // otherwise. Ranking can return fewer than the shortlist (suggestJelson has a
-  // relevance floor and returns [] for an unmatched query), so the remainder
-  // pads from the top of the type — this group must never be empty, or the
-  // chooser has nothing to show while the LLM proposals are still in flight.
-  const starters = useMemo(() => {
-    const scoped = jelsonSuggestions.filter(
-      (j) => LEGACY_TYPE_TO_QUERY_TYPE[j.typeKey] === scope.type
-    );
-    const ranked = anchorRow
-      ? suggestJelson(anchorRow.queryText, scoped, STARTER_SHORTLIST).map((m) => m.suggestion)
-      : [];
-    const seen = new Set(ranked.map((s) => s.code));
-    // Padding never uses something already live — recommending a set that
-    // exists is just a duplicate. A RANKED one is different: the question in
-    // view matched it, so "that set already exists" is the most useful thing
-    // the shortlist can say, and it stays (struck out, not creatable).
-    const fresh = scoped.filter(
-      (s) => !seen.has(s.code) && !liveDefinitions.has(jelsonToIntent(s).definition.trim())
-    );
-    const shortlist = [...ranked, ...fresh].slice(0, STARTER_SHORTLIST);
-    const shortlisted = new Set(shortlist.map((s) => s.code));
-    return { shortlist, overflow: scoped.filter((s) => !shortlisted.has(s.code)) };
-  }, [jelsonSuggestions, scope.type, anchorRow, liveDefinitions]);
+  /* WHERE IT LANDS — the promise the tree's indentation used to make, now said
+     in words. Drawn as the same path the left column shows (type dot → section
+     → set) and ending in the same dashed chip that was clicked, so the dialog
+     is recognisably standing in that spot. The line under it states the
+     CONSEQUENCE of landing there, which is the part that surprises people: a
+     subset can only ever take what its parent already took.
 
-  const [showAllStarters, setShowAllStarters] = useState(false);
-
-  // --- AI proposals: one LLM call, only with a question to anchor them ------
-  const [suggestions, setSuggestions] = useState<{ title: string; definition: string }[] | null>(
-    null
-  );
-  const [suggestError, setSuggestError] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0); // bump to re-propose
-  const wantsAi = !!anchorRow && openaiConfigured;
-
-  useEffect(() => {
-    if (!wantsAi || !anchorRow) return;
-    const controller = new AbortController();
-    setSuggestions(null);
-    setSuggestError(null);
-    // Proposal keys are positional, so a re-proposal puts DIFFERENT candidates
-    // behind them — anything typed into the old ones has to go with them.
-    setEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith('ai-'))));
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/instructor/assignments/${assignmentId}/score/intent-suggestions`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              messageId: anchorRow.messageId,
-              ...(currentIntent ? { currentIntentId: currentIntent.id } : {}),
-              scopeType: scope.type,
-            }),
-            signal: controller.signal,
-          }
-        );
-        const d = await res.json().catch(() => ({}));
-        if (controller.signal.aborted) return;
-        if (!res.ok) {
-          throw new Error(typeof d?.message === 'string' ? d.message : 'Failed to propose intents.');
-        }
-        // The route promises 1–3 candidates, not exactly 3.
-        setSuggestions((d.suggestions as { title: string; definition: string }[]).slice(0, 3));
-      } catch (e) {
-        if ((e as Error)?.name !== 'AbortError' && !controller.signal.aborted) {
-          setSuggestError((e as Error).message);
-        }
-      }
-    })();
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nonce, wantsAi]);
-
-  // --- The one list --------------------------------------------------------
-  const [pickedKey, setPickedKey] = useState<string | null>(null);
-
-  const options = useMemo((): Option[] => {
-    const list: Option[] = [];
-    (suggestions ?? []).forEach((s, i) => {
-      list.push({
-        key: `ai-${i}`,
-        group: 'ai',
-        tag: ALTITUDE_LABELS[i] ?? `Option ${i + 1}`,
-        label: s.title || 'Untitled proposal',
-        seed: { title: s.title, definition: s.definition },
-      });
-    });
-    const asOption = (s: JelsonSuggestion): Option => {
-      const seed = jelsonToIntent(s);
-      return {
-        key: `starter-${s.code}`,
-        group: 'starter',
-        tag: s.code,
-        label: s.label,
-        seed,
-        taken: liveDefinitions.has(seed.definition.trim()),
-      };
-    };
-    starters.shortlist.forEach((s) => list.push(asOption(s)));
-    // Collapsing hides the rest of the type — but never the one being worked
-    // on, or the selection (and the edits under it) would fall off the list.
-    starters.overflow
-      .filter((s) => showAllStarters || `starter-${s.code}` === pickedKey)
-      .forEach((s) => list.push(asOption(s)));
-    list.push({
-      key: 'scratch',
-      group: 'scratch',
-      tag: null,
-      label: 'Start from scratch',
-      seed: { title: '', definition: '' },
-    });
-    return list;
-  }, [suggestions, starters, showAllStarters, liveDefinitions, pickedKey]);
-
-  // The opening selection is DERIVED, so the right pane is never briefly
-  // empty — and then pinned, so it cannot move again. Starter sets render
-  // instantly while the proposals take seconds: without the pin, the pane
-  // would swap out from under whoever is already reading or editing it the
-  // moment the proposals land at the head of the list.
-  const selected = useMemo(() => {
-    const picked = pickedKey ? options.find((o) => o.key === pickedKey) : null;
-    // Blank is the last resort, not a default — it is only where the pane opens
-    // when every set on offer already exists.
-    return (
-      picked ??
-      options.find((o) => !o.taken && o.group !== 'scratch') ??
-      options.find((o) => o.group === 'scratch') ??
-      null
-    );
-  }, [pickedKey, options]);
-  const selectedKey = selected?.key ?? null;
-  useEffect(() => {
-    // Pinning a real candidate; NOT the blank fallback, which should still give
-    // way to the proposals when they arrive (typing into it pins it instead).
-    if (!pickedKey && selected && selected.group !== 'scratch') setPickedKey(selected.key);
-  }, [pickedKey, selected]);
-
-  // Edits are kept per candidate, so switching between two to compare them does
-  // not throw away what was typed into either.
-  const [edits, setEdits] = useState<Record<string, { title: string; definition: string }>>({});
-  const draft = selected ? edits[selected.key] ?? selected.seed : null;
-  const editDraft = (patch: Partial<{ title: string; definition: string }>) => {
-    if (!selected) return;
-    setPickedKey(selected.key); // typing claims the selection, whatever arrives later
-    setEdits((prev) => ({
-      ...prev,
-      [selected.key]: { ...(prev[selected.key] ?? selected.seed), ...patch },
-    }));
-  };
-
-  // Prepared-ness follows the TEXT: type a definition by hand that matches a
-  // template and the clone is just as free; change a starter's wording by one
-  // character and it is not.
-  const matchedTemplate = useMemo(() => {
-    const def = draft?.definition.trim();
-    if (!def) return null;
-    return templates.find((t) => t.definition.trim() === def) ?? null;
-  }, [draft?.definition, templates]);
-
-  // What blocks Create is the TEXT being one that already exists — not which
-  // row it came from. So an existing starter can be opened and read, and
-  // editing it into something different unblocks Create; and a definition
-  // typed by hand that happens to duplicate a live intent is caught too.
-  const duplicates = !!draft && liveDefinitions.has(draft.definition.trim());
-  const creatable = !!draft && draft.definition.trim().length > 0 && !duplicates;
-
-  function pick(o: Option) {
-    setPickedKey(o.key);
-  }
-
-  const groupOf = (group: Option['group']) => options.filter((o) => o.group === group);
-  const starterRows = groupOf('starter');
-
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-      onClick={onCancel}
-    >
-      <div
-        className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* WHERE IT LANDS — the promise the tree's indentation used to make,
-            now said in words. Drawn as the same path the left column shows
-            (type dot → section → set) and ending in the same dashed chip that
-            was clicked, so the dialog is recognisably standing in that spot.
-            The line under it states the CONSEQUENCE of landing there, which is
-            the part that surprises people: a subset can only ever take what
-            its parent already took. */}
-        <div className="shrink-0 px-4 py-3 border-b border-[hsl(var(--border))] flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-              New intent
-            </p>
-            <p className="mt-1 flex items-center gap-1.5 min-w-0">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${typeDot}`} />
-              <span className="shrink-0 text-xs font-semibold uppercase tracking-wide">
-                {typeLabel}
-              </span>
-              {currentIntent && (
-                <>
-                  <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
-                  <span className="truncate text-sm font-semibold">{currentIntent.title}</span>
-                </>
-              )}
-              <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
-              <span className="shrink-0 inline-flex items-center gap-1 rounded border border-dashed border-[hsl(var(--primary))]/60 px-1.5 py-0.5 text-[11px] font-medium text-[hsl(var(--primary))]">
-                <Plus className="w-3 h-3" /> new intent
-              </span>
-            </p>
-            <p className="mt-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
-              {currentIntent ? (
-                <>
-                  Only questions{' '}
-                  <span className="font-medium text-[hsl(var(--foreground))]">
-                    “{currentIntent.title}”
-                  </span>{' '}
-                  already answers can land here.
-                </>
-              ) : (
-                <>Answers {typeLabel} questions no existing intent claims first.</>
-              )}
-            </p>
-          </div>
-          <button
-            onClick={onCancel}
-            className="p-1 shrink-0 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-            aria-label="Close"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* The question stays in view for the whole dialog. It is what the
-            candidates are drafted from and what the definition is being
-            written against, so hiding it behind a disclosure just means
-            opening it again on every edit. Long ones scroll in place rather
-            than pushing the panes down. */}
-        {anchorRow && (
-          <div className="shrink-0 px-4 py-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-              The question
-            </p>
-            <p className="mt-0.5 text-xs whitespace-pre-wrap leading-relaxed max-h-24 overflow-y-auto">
-              <MaterialSegments text={anchorRow.queryText} dissection={anchorRow.dissection} />
-            </p>
-          </div>
-        )}
-
-        <div className="flex-1 min-h-0 flex">
-          {/* LEFT — every way to start, in one scannable list. */}
-          <div className="w-60 shrink-0 overflow-y-auto border-r border-[hsl(var(--border))] py-2">
-            {wantsAi && (
-              <Group label="From this question">
-                {suggestError ? (
-                  <div className="px-3 py-2 space-y-1.5">
-                    <p className="flex items-start gap-1.5 text-[11px] text-red-600">
-                      <AlertTriangle className="w-3 h-3 mt-px shrink-0" /> {suggestError}
-                    </p>
-                    <button
-                      onClick={() => setNonce((n) => n + 1)}
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[hsl(var(--border))] text-[11px] font-medium hover:bg-[hsl(var(--muted))]"
-                    >
-                      <RefreshCw className="w-3 h-3" /> Retry
-                    </button>
-                  </div>
-                ) : suggestions === null ? (
-                  // The starter sets below are already usable — this group
-                  // filling in must never be something to wait for.
-                  <div className="px-3 py-1.5 space-y-2">
-                    {[0, 1, 2].map((i) => (
-                      <div
-                        key={i}
-                        className="h-3 rounded bg-[hsl(var(--muted))] animate-pulse"
-                        style={{ width: `${80 - i * 12}%` }}
-                      />
-                    ))}
-                    <p className="flex items-center gap-1.5 pt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">
-                      <Loader2 className="w-3 h-3 animate-spin" /> Drafting candidates…
-                    </p>
-                  </div>
-                ) : (
-                  groupOf('ai').map((o) => (
-                    <OptionRow
-                      key={o.key}
-                      option={o}
-                      active={o.key === selectedKey}
-                      edited={!!edits[o.key]}
-                      onClick={() => pick(o)}
-                    />
-                  ))
-                )}
-              </Group>
-            )}
-
-            <Group label={`Starter intents · ${typeLabel}`}>
-              {starterRows.map((o) => (
-                <OptionRow
-                  key={o.key}
-                  option={o}
-                  active={o.key === selectedKey}
-                  edited={!!edits[o.key]}
-                  onClick={() => pick(o)}
-                />
-              ))}
-              {starters.overflow.length > 0 && (
-                <button
-                  onClick={() => setShowAllStarters((v) => !v)}
-                  className="w-full text-left px-3 py-1 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                >
-                  {showAllStarters
-                    ? 'Show fewer'
-                    : `Show all ${starters.shortlist.length + starters.overflow.length}`}
-                </button>
-              )}
-            </Group>
-
-            <div className="mt-1 pt-1 border-t border-[hsl(var(--border))]">
-              {groupOf('scratch').map((o) => (
-                <OptionRow
-                  key={o.key}
-                  option={o}
-                  active={o.key === selectedKey}
-                  edited={!!edits[o.key]}
-                  onClick={() => pick(o)}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* RIGHT — the candidate itself, editable whichever list it came from. */}
-          <div className="flex-1 min-w-0 overflow-y-auto px-4 py-3 space-y-3">
-            {!draft ? (
-              <p className="py-8 text-center text-xs text-[hsl(var(--muted-foreground))]">
-                Pick something to start from.
-              </p>
-            ) : (
-              <>
-                <label className="block space-y-1 cursor-text">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                    Title
-                  </span>
-                  <input
-                    value={draft.title}
-                    onChange={(e) => editDraft({ title: e.target.value })}
-                    placeholder="Auto-named on save if empty"
-                    className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
-                  />
-                </label>
-                <label className="block space-y-1 cursor-text">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                    When a question…
-                  </span>
-                  <textarea
-                    value={draft.definition}
-                    onChange={(e) => editDraft({ definition: e.target.value })}
-                    rows={8}
-                    placeholder="e.g. asks the chatbot to write a thesis statement or conclusion for them"
-                    className="w-full resize-y rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
-                  />
-                </label>
-                {duplicates && (
-                  <p className="flex items-start gap-1.5 text-[11px] text-amber-700">
-                    <AlertTriangle className="w-3 h-3 mt-px shrink-0" /> An intent with this exact
-                    definition already exists. Edit it into a different one to create it.
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="shrink-0 border-t border-[hsl(var(--border))]">
-          <div className="px-4 py-3 flex items-center gap-3">
-            <span className="flex-1" />
-            {matchedTemplate && creatable && (
-              <span
-                className="shrink-0 inline-flex items-center gap-1 text-[11px] text-emerald-700"
-                title="This definition is already rated across the log — the clone copies those ratings, so no rating pass is needed."
-              >
-                <Zap className="w-3 h-3" /> questions appear immediately
-              </span>
-            )}
-            <button
-              onClick={onCancel}
-              className="shrink-0 px-3 py-1.5 rounded border border-[hsl(var(--border))] text-xs font-medium hover:bg-[hsl(var(--muted))]"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() =>
-                draft &&
-                onPick({
-                  title: draft.title.trim(),
-                  definition: draft.definition.trim(),
-                  ...(matchedTemplate ? { fromTemplateId: matchedTemplate.id } : {}),
-                })
-              }
-              disabled={!creatable}
-              title="Open the workbench seeded with this candidate"
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-xs font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-            >
-              Create intent <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Group({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-1">
-      <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-        {label}
+     This block is the ONE thing the baseline's dialog does not get. Ownership,
+     the first-match chain, and what a scope forecloses ARE the treatment — a
+     control condition that reads them here would have been taught the mental
+     model the study is trying to measure. */
+  const header = (
+    <>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+        New intent
       </p>
-      {children}
-    </div>
-  );
-}
-
-function OptionRow({
-  option,
-  active,
-  edited,
-  onClick,
-}: {
-  option: Option;
-  active: boolean;
-  edited: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      title={option.seed.definition}
-      className={`w-full text-left px-3 py-1.5 flex items-start gap-1.5 ${
-        active
-          ? 'bg-[hsl(var(--primary))]/10 border-l-2 border-[hsl(var(--primary))] pl-[10px]'
-          : 'hover:bg-[hsl(var(--muted))]/50'
-      }`}
-    >
-      {option.group === 'ai' && (
-        <Sparkles className="w-3 h-3 mt-0.5 shrink-0 text-violet-500" aria-hidden />
-      )}
-      {option.group === 'scratch' && <Plus className="w-3 h-3 mt-0.5 shrink-0" aria-hidden />}
-      <span className="min-w-0 flex-1">
-        <span className={`block text-xs truncate ${active ? 'font-medium' : ''}`}>
-          {option.label}
-        </span>
-        {option.tag && (
-          <span className="block text-[10px] text-[hsl(var(--muted-foreground))]">
-            {option.tag}
-            {edited && ' · edited'}
-          </span>
+      <p className="mt-1 flex items-center gap-1.5 min-w-0">
+        <span className={`w-2 h-2 rounded-full shrink-0 ${typeDot}`} />
+        <span className="shrink-0 text-xs font-semibold uppercase tracking-wide">{typeLabel}</span>
+        {currentIntent && (
+          <>
+            <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
+            <span className="truncate text-sm font-semibold">{currentIntent.title}</span>
+          </>
         )}
-      </span>
-    </button>
+        <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
+        <span className="shrink-0 inline-flex items-center gap-1 rounded border border-dashed border-[hsl(var(--primary))]/60 px-1.5 py-0.5 text-[11px] font-medium text-[hsl(var(--primary))]">
+          <Plus className="w-3 h-3" /> new intent
+        </span>
+      </p>
+      <p className="mt-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+        {currentIntent ? (
+          <>
+            Only questions{' '}
+            <span className="font-medium text-[hsl(var(--foreground))]">
+              “{currentIntent.title}”
+            </span>{' '}
+            already answers can land here.
+          </>
+        ) : (
+          <>Answers {typeLabel} questions no existing intent claims first.</>
+        )}
+      </p>
+    </>
+  );
+
+  return (
+    <CandidateChooser
+      assignmentId={assignmentId}
+      scopeType={scope.type}
+      parentIntentId={scope.parentIntentId}
+      anchorRow={anchorRow}
+      jelsonSuggestions={jelsonSuggestions}
+      templates={templates}
+      existingDefinitions={liveDefinitions}
+      openaiConfigured={openaiConfigured}
+      typeLabel={typeLabel}
+      copy={COPY}
+      header={header}
+      onCancel={onCancel}
+      onPick={onPick}
+    />
   );
 }

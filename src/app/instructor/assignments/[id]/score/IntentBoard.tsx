@@ -41,15 +41,16 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { jelsonToIntent, jelsonTypeToIntent, type JelsonSuggestion } from '@/lib/score/jelson-suggest';
+import type { JelsonSuggestion } from '@/lib/score/jelson-suggest';
 import { MaterialSegments, QuerySnippet, StudentMessage, type Dissection } from './materials';
 import { ConversationThread, ResponseBody } from './conversation';
 import ChatMessages from '@/components/chat/ChatMessages';
 import IntentWorkbench, { type WorkbenchMode } from './IntentWorkbench';
 import RuleWorkbench from './RuleWorkbench';
 import NewIntentModal from './NewIntentModal';
-import SearchWorkbench, { type SearchMode } from './SearchWorkbench';
-import { getJSON, postJSON } from './http';
+import NewFilterModal from './NewFilterModal';
+import FilterWorkbench, { type FilterMode } from './FilterWorkbench';
+import { getJSON } from './http';
 import { SortSelect, sortQueryRows, type QuerySortMode } from './query-list';
 
 /** One student message, with its per-intent ratings/pins and dissection. Built
@@ -120,9 +121,6 @@ export interface IntentSummary {
   /** The instructor's boundary labels, split — shown in the When/Then hover. */
   includedCount: number;
   excludedCount: number;
-  /** Latest saved RULE version (score_rule_versions) — the intents panel shows
-   * "Then vN name" with the full rule on hover. */
-  latestRuleVersion?: { versionNo: number; name: string | null } | null;
   /** This intent's own definition-version count (config versions touching it) —
    * the intents panel shows "When vN title" with the definition on hover. */
   intentVersionNo?: number;
@@ -143,7 +141,6 @@ export interface TypeRootSummary {
   type: ScoreQueryType;
   title: string;
   rule: string | null;
-  latestRuleVersion?: { versionNo: number; name: string | null } | null;
 }
 
 /** One indent level of the tree. Each item inside draws its OWN segment of the
@@ -214,14 +211,6 @@ const TYPE_SECTION_DOT: Record<ScoreQueryType, string> = {
   drafting: 'bg-violet-500',
 };
 
-/** Type dot colors for the pre-built starter-set library. */
-const TYPE_DOT: Record<string, string> = {
-  Planning: 'bg-blue-500',
-  Translating: 'bg-emerald-500',
-  Reviewing: 'bg-amber-500',
-  All: 'bg-violet-500',
-};
-
 interface IntentBoardProps {
   assignmentId: string;
   rows: ScoreQueryRow[];
@@ -273,13 +262,10 @@ type IntentSelection =
   // as that scope's "Uncategorized" leaf.
   | { kind: 'residue'; scopeId: number }
   | { kind: 'pending' }
-  // Starter-set browse: questions rated clearly-in for one prepared template
-  // (`set:CODE`) or for every prepared template of a Type (`type:KEY`).
-  // ids = template intent ids; label = display name for the middle header.
-  | { kind: 'starter'; key: string; ids: number[]; label: string }
-  // Baseline saved-search browse: the search's clearly-in questions by messageId
-  // (from its cached probe). Clicking a saved Search filters the list here — the
-  // baseline analogue of clicking a starter set; only +New opens the workbench.
+  // BASELINE — a saved filter: its clearly-in questions by messageId (from the
+  // probe cache, intersected with the filter's own type). Clicking a filter
+  // only FILTERS the question list; the workbench is reached by creating or by
+  // Edit Filter.
   | { kind: 'search'; key: string; ids: number[]; label: string };
 
 function Badge({ n }: { n: number }) {
@@ -291,249 +277,181 @@ function Badge({ n }: { n: number }) {
 }
 
 /**
- * One segment of the left column's whole-log filter (All / Uncategorized).
- *
- * Deliberately a real segmented control on a filled track: "All" used to be an
- * inline `All · 507` chip in the INTENTS header and read as a count, not a
- * button, and the uncategorized list sat at the far bottom of the column between
- * Archived and Starter sets — so the two never looked like one either/or
- * choice. The raised active pill is the whole point; don't flatten it back into
- * text buttons.
+ * The contents of one branch — the rows nested one level in, ending with the
+ * create button when this is the selected scope. Rendering them through here
+ * is what lets the LAST item end the vertical rule instead of the rule running
+ * past into empty space. Shared by SCORE's intent tree and the baseline's
+ * filter tree, so the two columns' nesting is drawn by the same code.
  */
-function FilterSegment({
-  label,
-  count,
-  active,
-  onClick,
-  title,
-}: {
-  label: string;
-  count: number;
-  active: boolean;
-  onClick: () => void;
-  title: string;
-}) {
+function renderBranch(parts: { key: string; node: React.ReactNode }[]): React.ReactNode {
+  if (parts.length === 0) return null;
   return (
-    <button
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 rounded px-2 py-1 text-xs transition-colors ${
-        active
-          ? 'bg-[hsl(var(--card))] shadow-sm font-medium text-[hsl(var(--foreground))]'
-          : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
-      }`}
-    >
-      <span className="truncate">{label}</span>
-      <span className="tabular-nums text-[hsl(var(--muted-foreground))]">{count}</span>
-    </button>
+    <TreeBranch>
+      {parts.map((part, i) => (
+        <TreeItem key={part.key} last={i === parts.length - 1}>
+          {part.node}
+        </TreeItem>
+      ))}
+    </TreeBranch>
   );
 }
 
-/** One Type in the pre-built starter-set library (a Jelson taxonomy type + its
- * sub-type sets), as built by the `starterGroups` memo. */
-type StarterGroup = {
-  typeKey: string;
-  typeLabel: string;
-  typeDescription: string;
-  typeSeed: { title: string; definition: string };
-  typeTemplateId: number | null;
-  typeActive: boolean;
-  sets: {
-    code: string;
-    title: string;
-    definition: string;
-    desc: string;
-    templateId: number | null;
-    active: boolean;
-  }[];
+/** One saved baseline filter, as the searches GET returns it. `clearlyInIds`
+ * is the probe cache under its defHash (whole log — the tree intersects with
+ * the filter's own type before counting or selecting). */
+type SavedFilter = {
+  id: string;
+  name: string | null;
+  type: ScoreQueryType | null;
+  description: string;
+  clearlyInIds: number[];
 };
-type StarterCounts = { perSet: Map<number, number>; perType: Map<string, number> };
 
-/** A starter-tree row label. The row stays a single tight line; its description
- * (Type or Sub type) is hidden and surfaces as a right-hand tooltip on hover, so
- * the tree reads as structure rather than a wall of text. */
 /**
- * A starter-tree row that reveals its description on hover.
+ * BASELINE — the left column's filter tree: the four query types as sections,
+ * each with its saved filters hanging off it, ending (when the type is the
+ * scope being looked at) in the same dashed create row SCORE's sections end in.
  *
- * The WHOLE ROW is the hover target — including the Add Intent button — so the
- * description stays up while the pointer travels to it. And it drops BELOW the
- * row rather than to the right, where it used to sit on top of that very
- * button.
+ * This list used to be the whole taxonomy: four Types opening onto 31 prepared
+ * sub-type searches, every one already run across the log. That was fair while
+ * SCORE handed out the same 31 as starter intents, but v7 demoted them there
+ * to SUGGESTIONS offered at creation — so keeping them here would have given
+ * the control condition a finished sub-type map of the corpus for free, which
+ * is a product of the structuring work the study measures, not a capability
+ * either condition starts with. Now the free tier is the four types on both
+ * sides — membership by the SAME copied type classification, so the counts
+ * match SCORE's sections — and everything below a type is something this
+ * participant made.
+ *
+ * What the mirror deliberately lacks (the ablation): a filter claims nothing —
+ * two filters can collect the same question, so there is no order to the rows,
+ * no ↑↓, no nesting, no per-scope Uncategorized residue, and no rule anywhere.
+ * See docs/STUDY_BASELINE_SPEC.md §S-6c.
  */
-function RowHover({
-  description,
-  className,
-  children,
-}: {
-  description?: string;
-  className: string;
-  children: React.ReactNode;
-}) {
-  const desc = description?.trim();
-  if (!desc) return <div className={className}>{children}</div>;
-  return (
-    <HoverReveal
-      placement="bottom"
-      className={className}
-      content={<p className="text-sm leading-relaxed text-[hsl(var(--foreground))]">{desc}</p>}
-    >
-      {children}
-    </HoverReveal>
-  );
-}
-
-/**
- * The pre-built starter-set browse tree: Type headers, each an accordion over
- * its sub-type sets (a chevron collapses the children; the sub-types sit under a
- * guide line so the Type→Sub type dependency is visible). Clicking a Type or set
- * filters the question list to its clearly-in count (setSelection → kind:'starter').
- * SCORE also renders the activation affordances (Add a set/Type as a live intent,
- * Added/Adding chips). The BASELINE reuses the SAME tree with `showActivation={false}`,
- * so a "Search" (starter set) just shows its matching questions — Type + Sub type
- * + count, no workbench. Single source of truth for both conditions.
- */
-function StarterSetTree({
-  groups,
-  counts,
+function BaselineFilterTree({
+  rows,
+  filters,
+  untypedCount,
   selection,
   setSelection,
+  onNewFilter,
 }: {
-  groups: StarterGroup[];
-  counts: StarterCounts;
+  rows: ScoreQueryRow[];
+  filters: SavedFilter[];
+  untypedCount: number;
   selection: IntentSelection;
   setSelection: (s: IntentSelection) => void;
+  onNewFilter: (type: ScoreQueryType) => void;
 }) {
-  // Accordion: every Type starts COLLAPSED so the library opens as four
-  // headings to unpack one at a time, not 26 sets at once. Tracked as the
-  // EXPANDED set (empty = all closed) rather than a collapsed set seeded from
-  // `groups` — the initializer runs once, so a seeded set would leave any Type
-  // that arrives later (or after a refresh) hanging open.
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const toggle = (key: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  const typeCounts = useMemo(() => {
+    const m = new Map<ScoreQueryType, number>();
+    for (const r of rows) if (r.queryType) m.set(r.queryType, (m.get(r.queryType) ?? 0) + 1);
+    return m;
+  }, [rows]);
+  // A filter's list membership: its cached clearly-in ∩ its own type.
+  const filterIds = (f: SavedFilter): number[] => {
+    const inSet = new Set(f.clearlyInIds);
+    return rows
+      .filter((r) => inSet.has(r.messageId) && (f.type === null || r.queryType === f.type))
+      .map((r) => r.messageId);
+  };
+  const filterRow = (f: SavedFilter) => {
+    const key = `search:${f.id}`;
+    const active = selection.kind === 'search' && selection.key === key;
+    const label = f.name?.trim() || f.description;
+    const ids = filterIds(f);
+    return (
+      <button
+        onClick={() => setSelection({ kind: 'search', key, ids, label })}
+        title={f.description}
+        className={`w-full text-left pl-3 pr-3 py-1 min-h-[28px] text-sm flex items-center justify-between gap-2 ${
+          active ? 'bg-[hsl(var(--muted))] font-medium' : 'hover:bg-[hsl(var(--muted))]/40'
+        }`}
+      >
+        <span className="truncate">{label}</span>
+        <Badge n={ids.length} />
+      </button>
+    );
+  };
+  // Untyped rows predate per-type filters; shown at the bottom so they stay
+  // reachable, but nothing new ever lands there.
+  const untyped = filters.filter((f) => f.type === null);
   return (
     <div className="pb-1">
-      {groups.map((g) => {
-        // SCORE: a set that is already a live intent LEAVES the library. Keeping
-        // the row invited a second Add (its button came back the moment the POST
-        // resolved, before the refresh landed), and two intents with the same
-        // definition overlap on every question — the resolver then assigns
-        // neither, so both read 0. The baseline keeps the full tree: there the
-        // sets are searches, not intents, and nothing is ever "added".
-        const sets = g.sets;
-        // Browse the TYPE template's own questions when prepared (what Add would
-        // capture); fall back to the union of its prepared sets. Matches the
-        // badge (counts.perType) — so it spans ALL sets, added ones included.
-        const preparedSetIds = g.sets.map((s) => s.templateId).filter((id): id is number => id !== null);
-        const groupIds = g.typeTemplateId !== null ? [g.typeTemplateId] : preparedSetIds;
-        const groupKey = `type:${g.typeKey}`;
-        const groupActive = selection.kind === 'starter' && selection.key === groupKey;
-        const open = expanded.has(g.typeKey);
+      {SCORE_QUERY_TYPES.map((t) => {
+        const typeActive = selection.kind === 'type' && selection.typeKey === t;
+        const mine = filters.filter((f) => f.type === t);
+        // The create row belongs to the scope being looked at — this type, or
+        // one of its own filters (a filter has no inside, so creation from it
+        // still lands beside it).
+        const scopeHere =
+          typeActive ||
+          (selection.kind === 'search' && mine.some((f) => `search:${f.id}` === selection.key));
         return (
-          <div key={g.typeKey}>
-            {/* Type header — the chevron expands/collapses its sub-types; the
-                label browses (SCORE hover Add turns the whole Type into ONE
-                intent). The Type description shows as a right-hand tooltip. */}
-            <RowHover
-              description={g.typeDescription}
-              className={`group flex items-center gap-1 pr-3 ${
-                groupActive ? 'bg-[hsl(var(--muted))]' : 'bg-[hsl(var(--muted))]/30 hover:bg-[hsl(var(--muted))]/60'
+          <div key={t} className="border-b border-[hsl(var(--border))]">
+            <div
+              className={`group flex items-center gap-1.5 px-3 py-1.5 cursor-pointer ${
+                typeActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
               }`}
+              onClick={() => setSelection({ kind: 'type', typeKey: t })}
             >
-              <button
-                onClick={() => toggle(g.typeKey)}
-                className="shrink-0 self-stretch pl-2 pr-0.5 flex items-center text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                title={open ? 'Collapse' : 'Expand'}
-                aria-expanded={open}
-                aria-label={open ? `Collapse ${g.typeLabel}` : `Expand ${g.typeLabel}`}
-              >
-                <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
-              </button>
-              <div className="min-w-0 flex-1">
-                <button
-                  onClick={() =>
-                    groupIds.length > 0 &&
-                    setSelection(
-                      groupActive ? { kind: 'all' } : { kind: 'starter', key: groupKey, ids: groupIds, label: g.typeLabel }
-                    )
-                  }
-                  disabled={groupIds.length === 0}
-                  className={`w-full min-w-0 text-left py-1 pr-1 flex items-center gap-2 ${
-                    groupIds.length === 0 ? 'cursor-default' : ''
-                  }`}
-                >
-                  <span className={`w-2 h-2 shrink-0 rounded-full ${TYPE_DOT[g.typeKey] ?? 'bg-gray-400'}`} />
-                  <span className={`min-w-0 truncate text-xs uppercase tracking-wide ${groupActive ? 'font-semibold text-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))]'}`}>
-                    {g.typeLabel} ({sets.length})
-                  </span>
-                </button>
-              </div>
-              {groupIds.length > 0 && (
-                <span className="shrink-0">
-                  <Badge n={counts.perType.get(g.typeKey) ?? 0} />
-                </span>
-              )}
-            </RowHover>
-            {/* Sub-types — the Type's children, indented under a vertical guide
-                line with a per-row connector so the dependency reads at a glance.
-                Collapsed away by the chevron above. */}
-            {open && (
-              <div className="ml-4 border-l border-[hsl(var(--border))]">
-                {sets.map((s) => {
-                  const setKey = `set:${s.code}`;
-                  const setActive = selection.kind === 'starter' && selection.key === setKey;
-                  const browsable = s.templateId !== null;
-                  return (
-                    <RowHover
-                      key={s.code}
-                      description={s.desc}
-                      className={`group relative flex items-center gap-2 pl-4 pr-3 py-1.5 border-b border-[hsl(var(--border))]/40 before:content-[''] before:absolute before:left-0 before:top-1/2 before:h-px before:w-2.5 before:bg-[hsl(var(--border))] ${
-                        setActive ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
-                      }`}
-                    >
-                      {/* Click the set → browse its clearly-in questions (prepared
-                          sets only — unprepared have no ratings). The Sub type
-                          description shows as a right-hand tooltip. */}
-                      <div className="min-w-0 flex-1">
-                        <button
-                          onClick={() =>
-                            browsable &&
-                            setSelection(
-                              setActive
-                                ? { kind: 'all' }
-                                : { kind: 'starter', key: setKey, ids: [s.templateId as number], label: s.title }
-                            )
-                          }
-                          disabled={!browsable}
-                          className={`w-full min-w-0 text-left ${browsable ? '' : 'cursor-default'}`}
-                        >
-                          <span className={`block text-sm truncate ${setActive ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
-                            {s.title}
-                          </span>
-                        </button>
-                      </div>
-                      {/* No "Added" chip here: an added set is filtered out of
-                          the tree above, so this row only ever renders for sets
-                          that can still be added. */}
-                      {browsable && (
-                        <span className="shrink-0">
-                          <Badge n={counts.perSet.get(s.templateId as number) ?? 0} />
-                        </span>
-                      )}
-                    </RowHover>
-                  );
-                })}
-              </div>
-            )}
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TYPE_SECTION_DOT[t]}`} />
+              <span className="text-xs font-semibold uppercase tracking-wide truncate flex-1">
+                {QUERY_TYPE_LABELS[t]}
+              </span>
+              <Badge n={typeCounts.get(t) ?? 0} />
+            </div>
+            <div className="pb-1">
+              {renderBranch([
+                ...mine.map((f) => ({ key: f.id, node: filterRow(f) })),
+                ...(scopeHere
+                  ? [
+                      {
+                        key: 'new',
+                        node: (
+                          <NewIntentRow
+                            scope={{
+                              label: `Create a filter in ${QUERY_TYPE_LABELS[t]}`,
+                              buttonLabel: `New filter in ${QUERY_TYPE_LABELS[t]}`,
+                            }}
+                            onClick={() => onNewFilter(t)}
+                          />
+                        ),
+                      },
+                    ]
+                  : []),
+              ])}
+            </div>
           </div>
         );
       })}
+      {untyped.length > 0 && (
+        <div className="border-b border-[hsl(var(--border))]">
+          <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            Ungrouped
+          </p>
+          <div className="pb-1">{renderBranch(untyped.map((f) => ({ key: f.id, node: filterRow(f) })))}</div>
+        </div>
+      )}
+      {/* A question with no query type belongs to no section, so without this
+          it would be reachable from nowhere in this column — the four sections
+          are the whole column now that the global "All" is gone. Provisioning
+          copies a fully classified log, so this should never render; it is here
+          so that "some questions are invisible" can never be the silent
+          failure. SCORE's counterpart is its amber Not-yet-categorized row
+          (which also offers Run — baseline has no run controls, by design). */}
+      {untypedCount > 0 && (
+        <button
+          onClick={() => setSelection({ kind: 'pending' })}
+          className={`w-full text-left px-3 py-1.5 flex items-center justify-between gap-2 border-b border-[hsl(var(--border))] text-xs ${
+            selection.kind === 'pending' ? 'bg-amber-100 text-amber-900' : 'bg-amber-50/70 text-amber-800 hover:text-amber-900'
+          }`}
+          title="These questions have not been classified into a query type."
+        >
+          <span className="truncate">Not yet categorized</span>
+          <Badge n={untypedCount} />
+        </button>
+      )}
     </div>
   );
 }
@@ -566,6 +484,48 @@ function ClampedText({ text, muted = false }: { text: string; muted?: boolean })
         </button>
       )}
     </span>
+  );
+}
+
+/** What the outermost scope is called when nothing above a rule has one. */
+const DEFAULT_PROMPT_SCOPE = 'the default prompt';
+
+/**
+ * Whether a rule says anything its enclosing scope did not.
+ *
+ * Rules are seeded copy-on-create and inheritance is NOT live (§3.5), so a set
+ * whose rule still matches the scope around it routes questions without
+ * changing a word of the answer — it exists, but it does nothing yet. THAT is
+ * what a glance at the board should settle. The rule's version number cannot:
+ * v3 says a rule was edited three times, not whether those edits moved it away
+ * from the rule it started as, and the history the number indexes lives in the
+ * workbench anyway.
+ */
+function RuleOrigin({
+  rule,
+  enclosing,
+}: {
+  rule: string | null | undefined;
+  enclosing: { rule: string; scope: string };
+}) {
+  // No rule at all — the "No rule yet" copy beside this already says so.
+  if (!rule?.trim()) return null;
+  const own = rule.trim() !== enclosing.rule.trim();
+  return (
+    <SmallChip
+      className={
+        own
+          ? 'shrink-0 self-start border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))]'
+          : 'shrink-0 self-start border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
+      }
+      title={
+        own
+          ? `This rule differs from ${enclosing.scope} — the difference is what it adds.`
+          : `Still word-for-word ${enclosing.scope}. These questions get the same answer they would without this rule.`
+      }
+    >
+      {own ? 'own rule' : `same as ${enclosing.scope}`}
+    </SmallChip>
   );
 }
 
@@ -942,6 +902,7 @@ function DeployVersionBoard({
                   key={selectedRow.messageId}
                   text={selectedRow.queryText}
                   dissection={selectedRow.dissection}
+                  defaultOpen
                 />
               </section>
               <section>
@@ -1014,12 +975,14 @@ export default function IntentBoard({
     return () => clearTimeout(t);
   }, [flagIntent, boardRefreshing]);
 
-  // SCORE opens on the first type section — there is no global "All" any more,
-  // and a fixed starting point gives every study participant the same first
-  // screen. The baseline keeps All (its left column is searches, not types).
-  const [selection, setSelection] = useState<IntentSelection>(
-    condition === 'baseline' ? { kind: 'all' } : { kind: 'type', typeKey: SCORE_QUERY_TYPES[0] }
-  );
+  // Both conditions open on the first type section — there is no global "All"
+  // in either left column, and a fixed starting point gives every study
+  // participant the same first screen. (Opening on a type also means the
+  // dashed create row is visible from the first render, both sides.)
+  const [selection, setSelection] = useState<IntentSelection>({
+    kind: 'type',
+    typeKey: SCORE_QUERY_TYPES[0],
+  });
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   // PID ascending by default: the log is a finished class's archive, so
@@ -1082,20 +1045,27 @@ export default function IntentBoard({
    * carve it into/out of another set. Both are pure routing changes — position
    * and parent are outside intentDefHash, so nothing is re-rated (§3.4).
    */
-  /** The rule a set was seeded from: the nearest enclosing scope that has one,
-   * ultimately its type root. Mirrors the copy-on-create the API does, so the
-   * workbench can tell an untouched copy from an edited rule (§3.5). */
-  function seedRuleFor(intent: IntentSummary): string {
+  /** The rule a set was seeded from — the nearest enclosing scope that has one,
+   * ultimately its type root — and whose scope that was. Mirrors the
+   * copy-on-create the API does, so the workbench can tell an untouched copy
+   * from an edited rule (§3.5) and the board can name what a set is still
+   * following. */
+  function enclosingRule(intent: IntentSummary): { rule: string; scope: string } {
     const byId = intentById;
     let cursor = intent.parentIntentId;
     for (let guard = 0; cursor !== null && guard < 100; guard++) {
       const node = byId.get(cursor);
       if (!node) break;
-      if (node.rule?.trim()) return node.rule;
+      if (node.rule?.trim()) return { rule: node.rule, scope: node.title };
       cursor = node.parentIntentId;
     }
     const root = intent.type ? typeRoots.find((t) => t.type === intent.type) : undefined;
-    return root?.rule ?? basePrompt;
+    return root?.rule != null
+      ? { rule: root.rule, scope: QUERY_TYPE_LABELS[root.type] }
+      : { rule: basePrompt, scope: DEFAULT_PROMPT_SCOPE };
+  }
+  function seedRuleFor(intent: IntentSummary): string {
+    return enclosingRule(intent).rule;
   }
 
   /** Revising a TYPE ROOT's rule — the rule that answers whatever its type
@@ -1159,43 +1129,46 @@ export default function IntentBoard({
     parentIntentId?: number | null;
   } | null>(null);
 
-  // BASELINE: the Intents list is replaced by Searches — the pre-built starter
-  // sets (reusing the SCORE StarterSetTree over `starterGroups`) plus the user's
-  // saved custom searches. searchMode holds the open Search workbench (+New).
-  const [searchMode, setSearchMode] = useState<SearchMode | null>(null);
-  const [savedSearches, setSavedSearches] = useState<{ id: string; description: string }[]>([]);
+  // BASELINE: the Intents list is replaced by Filters — the four query types
+  // as sections with this participant's saved filters nested under them
+  // (BaselineFilterTree). searchMode holds the open Filter workbench. Clicking
+  // a filter only FILTERS the question list (its cached clearly-in ids arrive
+  // with the GET, so the click is instant and calls nothing); the workbench is
+  // reached by creating or by Edit Filter.
+  const [searchMode, setSearchMode] = useState<FilterMode | null>(null);
+  const [savedSearches, setSavedSearches] = useState<SavedFilter[]>([]);
   async function reloadSearches() {
     if (!isBaseline) return;
     const b = `/api/instructor/assignments/${assignmentId}/score/baseline`;
-    const s = await getJSON<{ searches?: { id: string; description: string }[] }>(`${b}/searches`).catch(() => ({
+    const s = await getJSON<{ searches?: SavedFilter[] }>(`${b}/searches`).catch(() => ({
       searches: [],
     }));
-    setSavedSearches(s.searches ?? []);
+    const fresh = s.searches ?? [];
+    setSavedSearches(fresh);
+    // A 'search' selection SNAPSHOTS its member ids — refresh the snapshot,
+    // or coming back from Edit Filter would keep showing the pre-edit members
+    // (and the pre-rename label) until the row was clicked again.
+    setSelection((prev) => {
+      if (prev.kind !== 'search') return prev;
+      const f = fresh.find((x) => `search:${x.id}` === prev.key);
+      if (!f) return { kind: 'type', typeKey: SCORE_QUERY_TYPES[0] };
+      const inSet = new Set(f.clearlyInIds);
+      const ids = rows
+        .filter((r) => inSet.has(r.messageId) && (f.type === null || r.queryType === f.type))
+        .map((r) => r.messageId);
+      return { kind: 'search', key: prev.key, ids, label: f.name?.trim() || f.description };
+    });
   }
-  // Clicking a saved Search filters the list to its matches (like clicking a
-  // starter set) rather than opening the workbench — only +New does that. The
-  // probe is cached from when the search was run, so this is normally instant.
-  const [openingSearchId, setOpeningSearchId] = useState<string | null>(null);
-  async function openSavedSearch(s: { id: string; description: string }) {
-    setOpeningSearchId(s.id);
-    const probeUrl = `/api/instructor/assignments/${assignmentId}/score/probe`;
-    try {
-      let ids: number[] = [];
-      for (let guard = 0; guard < 100; guard++) {
-        const data = await postJSON<{ clearlyIn?: { messageId: number }[]; remaining: number; ratedThisBatch: number }>(
-          probeUrl,
-          { description: s.description }
-        );
-        ids = (data.clearlyIn ?? []).map((x) => x.messageId);
-        if (data.remaining === 0 || data.ratedThisBatch === 0) break;
-      }
-      setSelection({ kind: 'search', key: `search:${s.id}`, ids, label: s.description });
-    } catch {
-      /* ignore — leave the current selection in place */
-    } finally {
-      setOpeningSearchId(null);
-    }
-  }
+  /** The create chooser will not offer a starter whose description is already
+   * saved — the baseline's counterpart of SCORE's `liveDefinitions`. */
+  const savedDescriptions = useMemo(
+    () => new Set(savedSearches.map((s) => s.description.trim())),
+    [savedSearches]
+  );
+  /** The open New Filter chooser: the query type the new filter will live
+   * under, which is also whose suggestions it offers. Baseline's counterpart
+   * of `newIntentRequest` — a placement in the LIST, never a claim. */
+  const [newFilterRequest, setNewFilterRequest] = useState<ScoreQueryType | null>(null);
   useEffect(() => {
     void reloadSearches();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1208,7 +1181,7 @@ export default function IntentBoard({
     viewVersion: ViewerRuleVersion | null;
   } | null>(null);
   // BASELINE: Revise targets the whole monolithic prompt (no owning intent) —
-  // opens RuleWorkbench (promptMode) on the prompt-holder from the anchor question.
+  // opens RuleWorkbench (variant='prompt') on the prompt-holder from the anchor question.
   const [promptReviseTarget, setPromptReviseTarget] = useState<ScoreQueryRow | null>(null);
 
   // Full conversation is a per-question opt-in expansion of the viewer; the
@@ -1248,114 +1221,10 @@ export default function IntentBoard({
     }
   }
 
-  // ---- Starter sets: the Jelson taxonomy as a PERMANENT library of pre-built
-  // intents. The library is a catalog — activating a set CLONES its template
-  // into a live intent (ratings copied, so it's instant); the TEMPLATE row in
-  // the database stays put — the prepared library is never consumed — but the
-  // set disappears from this tree, so the same starter cannot be added twice.
-  // Open by default: the section costs four Type headings, and seeing that a
-  // prepared library exists is the point. The TYPES stay collapsed, so it is
-  // still unpacked one at a time (StarterSetTree's `expanded`).
-  /** Definitions added since the last server render — see starterGroups. */
-  const [justAddedDefs, setJustAddedDefs] = useState<Set<string>>(() => new Set());
-  // A fresh server render supersedes the optimistic overlay: whatever it says
-  // about live intents is now the truth (added, or archived again since).
-  useEffect(() => {
-    setJustAddedDefs((prev) => (prev.size === 0 ? prev : new Set()));
-  }, [intents]);
-  const starterGroups = useMemo(() => {
-    // A live (unarchived, non-template) intent with this definition exists.
-    const activeDefs = new Set(
-      intents.filter((i) => !i.archived && !i.isTemplate).map((i) => i.definition.trim())
-    );
-    // …plus what was added THIS render cycle. router.refresh() is fire-and-
-    // forget, so between the POST resolving and the server render landing the
-    // starter row (and its Add button) would otherwise come back and take a
-    // second click. justAddedDefs is cleared as soon as any fresh server render
-    // arrives, so an intent archived right after adding puts its set back.
-    for (const d of justAddedDefs) activeDefs.add(d);
-    // Prepared templates (rated in advance) by definition → id for instant activate.
-    const templateByDef = new Map(
-      intents.filter((i) => i.isTemplate).map((i) => [i.definition.trim(), i.id])
-    );
-    const groups: {
-      typeKey: string;
-      typeLabel: string;
-      typeDescription: string;
-      /** ONE-intent seed for the whole Type (dedicated definition). */
-      typeSeed: { title: string; definition: string };
-      /** Prepared type-level template (from "Run all") → instant activation. */
-      typeTemplateId: number | null;
-      /** The Type intent is already live — show Added instead of Add. */
-      typeActive: boolean;
-      sets: {
-        code: string;
-        title: string;
-        definition: string;
-        desc: string;
-        templateId: number | null;
-        /** A live intent with this definition exists — show Added, block re-Add. */
-        active: boolean;
-      }[];
-    }[] = [];
-    for (const s of jelsonSuggestions) {
-      const { title, definition } = jelsonToIntent(s);
-      const key = definition.trim();
-      let g = groups[groups.length - 1];
-      if (!g || g.typeKey !== s.typeKey) {
-        const typeSeed = jelsonTypeToIntent(s.typeKey, s.typeLabel, s.typeDescription);
-        const typeDefKey = typeSeed.definition.trim();
-        g = {
-          typeKey: s.typeKey,
-          typeLabel: s.typeLabel,
-          typeDescription: s.typeDescription,
-          typeSeed,
-          typeTemplateId: templateByDef.get(typeDefKey) ?? null,
-          typeActive: activeDefs.has(typeDefKey),
-          sets: [],
-        };
-        groups.push(g);
-      }
-      // desc = full description (examples folded in), shown truncated.
-      g.sets.push({
-        code: s.code,
-        title,
-        definition,
-        desc: s.description,
-        templateId: templateByDef.get(key) ?? null,
-        active: activeDefs.has(key),
-      });
-    }
-    return groups;
-  }, [jelsonSuggestions, intents, justAddedDefs]);
-  // Only what is still addable — the header count must match the rows inside.
-  /** Per-set / per-type clearly-in counts for the starter library. SCORE no
-   * longer activates starter sets (v7 creates from the type sections instead),
-   * but the BASELINE condition still browses them as its saved-search presets,
-   * so the counts stay. */
-  const starterCounts = useMemo(() => {
-    const perSet = new Map<number, number>();
-    const perType = new Map<string, number>();
-    const isIn = (r: ScoreQueryRow, tid: number) => {
-      const pin = r.pinnedIntents[tid];
-      return pin ? pin === 'in' : r.intentRatings[tid]?.rating === 'clearly_in';
-    };
-    for (const r of rows) {
-      for (const g of starterGroups) {
-        let anyIn = false;
-        for (const s of g.sets) {
-          if (s.templateId === null) continue;
-          if (isIn(r, s.templateId)) {
-            perSet.set(s.templateId, (perSet.get(s.templateId) ?? 0) + 1);
-            anyIn = true;
-          }
-        }
-        const typeIn = g.typeTemplateId !== null ? isIn(r, g.typeTemplateId) : anyIn;
-        if (typeIn) perType.set(g.typeKey, (perType.get(g.typeKey) ?? 0) + 1);
-      }
-    }
-    return { perSet, perType };
-  }, [rows, starterGroups]);
+  // The starter TEMPLATE rows stay in the database even though neither
+  // condition browses them any more (they are chooser seeds now): they carry a
+  // full rating pass over the log, so anything whose text still matches one
+  // skips the wait — SCORE by cloning, baseline through the probe cache.
 
   /**
    * Categorize (and rate) whatever is still pending across the whole log. This
@@ -1597,16 +1466,11 @@ export default function IntentBoard({
       (selection.kind === 'residue' &&
         !typeRoots.some((t) => t.id === selection.scopeId) &&
         !activeIntents.some((i) => i.id === selection.scopeId)) ||
-      (selection.kind === 'pending' && untypedCount === 0) ||
-      // A browsed template can leave the library (activated → live intent).
-      (selection.kind === 'starter' &&
-        !selection.ids.some((tid) => intentById.get(tid)?.isTemplate));
+      (selection.kind === 'pending' && untypedCount === 0);
     if (gone) {
-      setSelection(
-        isBaseline ? { kind: 'all' } : { kind: 'type', typeKey: SCORE_QUERY_TYPES[0] }
-      );
+      setSelection({ kind: 'type', typeKey: SCORE_QUERY_TYPES[0] });
     }
-  }, [selection, activeIntents, untypedCount, intentById, typeRoots, isBaseline]);
+  }, [selection, activeIntents, untypedCount, typeRoots]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
@@ -1632,15 +1496,9 @@ export default function IntentBoard({
         }
         case 'pending':
           return res.kind === 'pending';
-        case 'starter':
-          // Rated clearly-in for ANY of the browsed templates (pins override).
-          return selection.ids.some((tid) => {
-            const pin = r.pinnedIntents[tid];
-            if (pin) return pin === 'in';
-            return r.intentRatings[tid]?.rating === 'clearly_in';
-          });
         case 'search':
-          // A baseline saved search: its cached clearly-in messageIds.
+          // A baseline saved filter: its cached clearly-in messageIds,
+          // already intersected with the filter's type by the tree.
           return selection.ids.includes(r.messageId);
       }
     });
@@ -1747,11 +1605,18 @@ export default function IntentBoard({
   const selectedOwner = selectedOwnerId !== null ? intentById.get(selectedOwnerId) ?? null : null;
   const responseResolved =
     selectedOwnerId === null || !selectedOwner?.rule || viewerVersions !== null;
-  // The selected question's user bubble keeps its Material tags (same as the
-  // question lists) — passed to ChatMessages' renderUserContent override.
+  // The selected question's user bubble shows pasted Material as its verbatim
+  // text (highlighted per kind) rather than the list's collapsed tags — this
+  // pane is where the instructor READS the message. One control in the bubble
+  // collapses them back. Passed to ChatMessages' renderUserContent override.
   const renderSelectedUser = () =>
     selectedRow?.dissection && selectedRow.dissection.materialKinds.length > 0 ? (
-      <MaterialSegments text={selectedRow.queryText} dissection={selectedRow.dissection} />
+      <MaterialSegments
+        text={selectedRow.queryText}
+        dissection={selectedRow.dissection}
+        defaultOpen
+        toggleAll
+      />
     ) : null;
 
   // ---- Rate runner (same client-driven batch loop as classification) ------
@@ -1784,10 +1649,8 @@ export default function IntentBoard({
       }
       case 'pending':
         return 'Not yet categorized';
-      case 'starter':
-        return `Starter intent · ${selection.label}`;
       case 'search':
-        return `Search · ${selection.label}`;
+        return `Filter · ${selection.label}`;
     }
   })();
 
@@ -1831,25 +1694,6 @@ export default function IntentBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, chains]);
   const shadowedBy = treeDiagnostics.shadowed;
-
-  /**
-   * The contents of one branch — subsets, the bucket for what they leave
-   * behind, and (when this is the selected scope) the create button. Rendering
-   * them through here is what lets the LAST item end the vertical rule instead
-   * of the rule running past into empty space.
-   */
-  function renderBranch(parts: { key: string; node: React.ReactNode }[]): React.ReactNode {
-    if (parts.length === 0) return null;
-    return (
-      <TreeBranch>
-        {parts.map((part, i) => (
-          <TreeItem key={part.key} last={i === parts.length - 1}>
-            {part.node}
-          </TreeItem>
-        ))}
-      </TreeBranch>
-    );
-  }
 
   /** One set in the left column's tree, then its subsets under it. */
   function renderTreeNode(
@@ -2195,6 +2039,17 @@ export default function IntentBoard({
           isNirvana={isNirvana}
           deployedRule={deployedRuleByIntent.get(reviseTarget.intent.id) ?? null}
           viewVersion={reviseTarget.viewVersion}
+          // The questions this rule ANSWERS, resolved with the real chain — not
+          // the ones it merely matches. Under first-match an intent can match a
+          // question an earlier sibling or one of its own subsets takes first,
+          // and tuning a rule against a response no student receives is exactly
+          // the confusion shadowing exists to name.
+          scopeMessageIds={rows
+            .filter((r) => {
+              const res = resolutions.get(r.messageId);
+              return res?.kind === 'matched' && res.intentId === reviseTarget.intent.id;
+            })
+            .map((r) => r.messageId)}
           onClose={(changed) => {
             const savedIntentId = reviseTarget.intent.id;
             setReviseTarget(null);
@@ -2209,12 +2064,14 @@ export default function IntentBoard({
           }}
         />
       ) : isBaseline && searchMode ? (
-        <SearchWorkbench
-          key={searchMode.kind === 'preset' ? `preset-${searchMode.intentId}` : searchMode.kind === 'saved' ? `saved-${searchMode.searchId}` : 'new-search'}
+        <FilterWorkbench
+          key={searchMode.kind === 'saved' ? `saved-${searchMode.searchId}` : `new-${searchMode.definition}`}
           assignmentId={assignmentId}
           rows={rows}
           isNirvana={isNirvana}
           mode={searchMode}
+          typeLabel={searchMode.type ? QUERY_TYPE_LABELS[searchMode.type] : null}
+          typeDot={searchMode.type ? TYPE_SECTION_DOT[searchMode.type] : null}
           onExit={() => {
             setSearchMode(null);
             void reloadSearches();
@@ -2222,8 +2079,9 @@ export default function IntentBoard({
         />
       ) : isBaseline && promptReviseTarget && promptHolder ? (
         // Baseline Revise = the SCORE RuleWorkbench mounted on the hidden
-        // prompt-holder intent (promptMode hides the intent-only affordances),
-        // so version history (v1 seed, minors, checkout, revert) is reused verbatim.
+        // prompt-holder intent (variant='prompt' hides the intent-only
+        // affordances and keeps the hand-built review set), so version history
+        // (v1 seed, minors, checkout, revert) is reused verbatim.
         <RuleWorkbench
           key={`prompt-revise-${promptReviseTarget.messageId}`}
           assignmentId={assignmentId}
@@ -2233,7 +2091,7 @@ export default function IntentBoard({
           seedRule={basePrompt}
           isNirvana={isNirvana}
           deployedRule={baseline?.deployedPrompt ?? null}
-          promptMode
+          variant="prompt"
           onClose={(changed) => {
             setPromptReviseTarget(null);
             if (changed) {
@@ -2242,11 +2100,13 @@ export default function IntentBoard({
             }
           }}
         />
-      ) : rootReviseTarget ? (
-        /* TYPE ROOT rule — no AUTHORED When (it is the type's final else), so it
-           reuses the promptMode workbench, scoped to the questions the type
-           actually leaves unclaimed. The condition still exists and is still
-           narrow, so it is shown read-only via `fixedWhen`. */
+      ) : !isBaseline && rootReviseTarget ? (
+        /* TYPE ROOT rule — no AUTHORED When (it is the type's final else), so
+           the condition is shown read-only via `fixedWhen`. It is still a SCORE
+           surface with a real question set (what the chain leaves unclaimed),
+           so it takes the SCORE interaction model: "Other questions" over that
+           set, with pull-in. SCORE-only by an explicit gate — see the matching
+           note on the type detail header. */
         <RuleWorkbench
           key={`root-${rootReviseTarget.root.id}-${rootReviseTarget.row.messageId}`}
           assignmentId={assignmentId}
@@ -2271,7 +2131,7 @@ export default function IntentBoard({
           deployedRule={
             deployedRules?.find((d) => d.id === rootReviseTarget.root.id)?.rule ?? null
           }
-          promptMode
+          variant="type-root"
           scopeMessageIds={rows
             .filter(
               (r) =>
@@ -2328,7 +2188,7 @@ export default function IntentBoard({
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 flex-1 min-h-0">
         {/* LEFT — Intents · Needs decision · Unassigned. In the baseline the
-            Rules panel is pinned at the top and only the Searches list below
+            Rules panel is pinned at the top and only the Filters tree below
             it scrolls (flex column); SCORE scrolls as one panel. */}
         <div
           className={`rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] ${
@@ -2362,82 +2222,34 @@ export default function IntentBoard({
             </div>
           ) : null}
 
-          {/* SEARCHES (baseline only) + its whole-log filter. SCORE's left
-              column is the type sections below: there is no global "All" and no
-              global Uncategorized any more — every query belongs to exactly one
-              type, and each type owns its own unclaimed bucket. */}
+          {/* FILTERS (baseline only). The same four type sections SCORE's left
+              column opens with — same classifier, same counts — with this
+              participant's saved filters nested under them. No global "All"
+              (SCORE has none either) and no global "+ New": creating is
+              invoked from a type, the same way SCORE's "+ New intent" is, so
+              both conditions reach the chooser through a scope. */}
           {isBaseline && (
             <div className="shrink-0 sticky top-0 z-10 bg-[hsl(var(--card))]">
-              <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2">
+              <div className="px-3 pt-2 pb-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  Searches
+                  Filters
                 </span>
-                <button
-                  onClick={() => setSearchMode({ kind: 'new' })}
-                  className="inline-flex items-center gap-1 shrink-0 text-xs px-1.5 py-0.5 rounded border border-[hsl(var(--primary))] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
-                  title="Create a new search"
-                >
-                  <Plus className="w-3 h-3" /> New
-                </button>
-              </div>
-              <div className="mx-3 mb-2 flex items-stretch gap-1 rounded-md bg-[hsl(var(--muted))] p-0.5">
-                <FilterSegment
-                  label="All"
-                  count={rows.length}
-                  active={selection.kind === 'all'}
-                  onClick={() => setSelection({ kind: 'all' })}
-                  title="Every logged question"
-                />
               </div>
             </div>
           )}
-
           {isBaseline && (
-            /* SEARCHES: the user's saved custom searches, then the pre-built
-               starter-set library (reusing the SCORE StarterSetTree). Clicking
-               either filters the question list to its matches — Type + Sub type
-               + count — WITHOUT opening the workbench; only +New does that. This
-               list is the ONLY scrolling region of the baseline left column. */
+            /* Clicking a type or a filter only FILTERS the question list; the
+               workbench is reached by creating or by Edit Filter. This list is
+               the ONLY scrolling region of the baseline left column. */
             <div className="flex-1 min-h-0 overflow-y-auto pb-1">
-              {savedSearches.length > 0 && (
-                <>
-                  <div className="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                    Saved
-                  </div>
-                  <ul>
-                    {savedSearches.map((s) => {
-                      const active = selection.kind === 'search' && selection.key === `search:${s.id}`;
-                      return (
-                        <li key={s.id}>
-                          <button
-                            onClick={() => openSavedSearch(s)}
-                            disabled={openingSearchId !== null}
-                            className={`group w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left border-b border-[hsl(var(--border))]/40 ${
-                              active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
-                            }`}
-                            title={s.description}
-                          >
-                            <span className={`min-w-0 truncate text-sm ${active ? 'font-medium' : 'text-[hsl(var(--foreground))]/90'}`}>
-                              {s.description}
-                            </span>
-                            {openingSearchId === s.id && (
-                              <RefreshCw className="w-3 h-3 shrink-0 animate-spin text-[hsl(var(--muted-foreground))]" />
-                            )}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </>
-              )}
-              {starterGroups.length > 0 && (
-                <StarterSetTree
-                  groups={starterGroups}
-                  counts={starterCounts}
-                  selection={selection}
-                  setSelection={setSelection}
-                />
-              )}
+              <BaselineFilterTree
+                rows={rows}
+                filters={savedSearches}
+                untypedCount={untypedCount}
+                selection={selection}
+                setSelection={setSelection}
+                onNewFilter={setNewFilterRequest}
+              />
             </div>
           )}
           {/* TYPE SECTIONS (score) — the four fixed query types, each a set
@@ -2625,12 +2437,15 @@ export default function IntentBoard({
             if (selection.kind === 'intent') {
               const intent = intentById.get(selection.id);
               if (!intent) return null;
-              // Rule editing opens on an anchor question — the intent's most
-              // recent capture (pins override the classifier).
+              // Rule editing opens on a question this rule actually ANSWERS —
+              // resolved by the chain, the same way the type root's anchor is
+              // picked below. Reading raw membership here (clearly_in + pins)
+              // could anchor the whole session on a question an earlier sibling
+              // or one of this intent's own subsets takes first, i.e. on a
+              // response no student ever receives.
               const anchor = rows.find((r) => {
-                const pin = r.pinnedIntents[intent.id];
-                if (pin) return pin === 'in';
-                return r.intentRatings[intent.id]?.rating === 'clearly_in';
+                const res = resolutions.get(r.messageId);
+                return res?.kind === 'matched' && res.intentId === intent.id;
               });
               return (
                 <div className="px-3 py-2 space-y-1.5 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
@@ -2654,23 +2469,17 @@ export default function IntentBoard({
                         No rule yet
                       </span>
                     )}
-                    {/* Proof a Save landed: the latest saved rule version. */}
-                    {intent.latestRuleVersion && (
-                      <SmallChip
-                        className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200"
-                        title={`Latest saved rule version${intent.latestRuleVersion.name ? ` — ${intent.latestRuleVersion.name}` : ''}`}
-                      >
-                        v{intent.latestRuleVersion.versionNo}
-                        {intent.latestRuleVersion.name ? ` · ${intent.latestRuleVersion.name}` : ''}
-                      </SmallChip>
-                    )}
+                    <RuleOrigin rule={intent.rule} enclosing={enclosingRule(intent)} />
                     <HeaderAction
                       onClick={() => anchor && setReviseTarget({ row: anchor, intent, viewVersion: null })}
                       disabled={!anchor}
                       title={
                         anchor
                           ? 'Edit rule — how the chatbot responds to these questions'
-                          : 'Edit rule — this intent has to capture at least one question first'
+                          : // Matching is not enough: a set whose matches are
+                            // all taken by earlier sets or by its own subsets
+                            // answers nothing, and there is no response to tune.
+                            'Edit rule — this intent has to answer at least one question first'
                       }
                       icon={<Pencil className="w-3 h-3" />}
                     >
@@ -2680,10 +2489,14 @@ export default function IntentBoard({
                 </div>
               );
             }
-            if (selection.kind === 'type' || selection.kind === 'residue') {
+            if (!isBaseline && (selection.kind === 'type' || selection.kind === 'residue')) {
               // The TYPE ROOT's rule — what answers every question here that no
               // set claims. Shown like an intent's Then row so a saved root
               // rule is visible on the board at all (it used to be nowhere).
+              // The !isBaseline gate is explicit rather than relying on the
+              // baseline having no type roots: the baseline now rests on a
+              // kind:'type' selection by default, and "a rule attached to a
+              // type, editable" is exactly the mechanism the ablation removes.
               const root =
                 selection.kind === 'type'
                   ? typeRoots.find((t) => t.type === selection.typeKey)
@@ -2716,15 +2529,12 @@ export default function IntentBoard({
                         No rule yet — these questions get no system prompt
                       </span>
                     )}
-                    {root.latestRuleVersion && (
-                      <SmallChip
-                        className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200"
-                        title={`Latest saved rule version${root.latestRuleVersion.name ? ` — ${root.latestRuleVersion.name}` : ''}`}
-                      >
-                        v{root.latestRuleVersion.versionNo}
-                        {root.latestRuleVersion.name ? ` · ${root.latestRuleVersion.name}` : ''}
-                      </SmallChip>
-                    )}
+                    {/* A type root's scope is the assignment default — nothing
+                        encloses it but that. */}
+                    <RuleOrigin
+                      rule={root.rule}
+                      enclosing={{ rule: basePrompt, scope: DEFAULT_PROMPT_SCOPE }}
+                    />
                     <HeaderAction
                       onClick={() => anchor && setRootReviseTarget({ row: anchor, root })}
                       disabled={!anchor}
@@ -2749,11 +2559,19 @@ export default function IntentBoard({
                   <DetailLabel>Finds</DetailLabel>
                   <ClampedText text={saved.description} muted />
                   <HeaderAction
-                    onClick={() => setSearchMode({ kind: 'saved', searchId: saved.id, definition: saved.description })}
-                    title="Edit this search — change what it looks for"
+                    onClick={() =>
+                      setSearchMode({
+                        kind: 'saved',
+                        searchId: saved.id,
+                        name: saved.name,
+                        definition: saved.description,
+                        type: saved.type,
+                      })
+                    }
+                    title="Edit this filter — change what it collects"
                     icon={<Pencil className="w-3 h-3" />}
                   >
-                    Edit Search
+                    Edit Filter
                   </HeaderAction>
                 </div>
               );
@@ -2763,9 +2581,13 @@ export default function IntentBoard({
           </div>
           {sortedRows.length === 0 ? (
             <p className="p-6 text-sm text-[hsl(var(--muted-foreground))]">
+              {/* The prompt to go make something is SCORE's only: in baseline
+                  an empty result is an empty result, and telling a participant
+                  to "create an intent" would hand them the other condition's
+                  vocabulary. */}
               {selection.kind === 'pending' || rows.length === 0
                 ? 'No questions here.'
-                : activeIntents.length === 0
+                : !isBaseline && activeIntents.length === 0
                   ? 'Create an intent to start organizing the log.'
                   : 'No questions for this selection.'}
             </p>
@@ -2989,6 +2811,7 @@ export default function IntentBoard({
                   rows={rows}
                   current={selectedRow}
                   isNirvana={isNirvana}
+                  expandMaterials
                   overrideResponse={
                     viewedVersion?.response
                       ? { messageId: selectedRow.messageId, text: viewedVersion.response, raw: false }
@@ -3083,6 +2906,37 @@ export default function IntentBoard({
           />
         );
       })()}
+
+      {/* THE NEW FILTER CHOOSER (baseline) — the same dialog, minus the part
+          about claiming. The type it was opened from is where the filter will
+          LIVE (list placement + which questions it shows), never what it owns. */}
+      {newFilterRequest && (
+        <NewFilterModal
+          assignmentId={assignmentId}
+          scopeType={newFilterRequest}
+          anchorRow={anchorRow}
+          jelsonSuggestions={jelsonSuggestions}
+          templates={templateOptions}
+          savedDescriptions={savedDescriptions}
+          openaiConfigured={openaiConfigured}
+          typeLabel={QUERY_TYPE_LABELS[newFilterRequest]}
+          typeDot={TYPE_SECTION_DOT[newFilterRequest]}
+          onCancel={() => setNewFilterRequest(null)}
+          onPick={(seed) => {
+            setNewFilterRequest(null);
+            // fromTemplateId is deliberately dropped: SCORE clones the
+            // template's ratings into a new intent, while a filter has nothing
+            // to clone into — the probe finds the same rows already cached
+            // under this description's hash.
+            setSearchMode({
+              kind: 'new',
+              name: seed.title,
+              definition: seed.definition,
+              type: newFilterRequest,
+            });
+          }}
+        />
+      )}
 
       {/* DELETE CONFIRM — direct, irreversible; the modal's job is to show
           where this set's questions FALL once its rule stops answering them

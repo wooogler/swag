@@ -40,7 +40,7 @@ import {
   X,
 } from 'lucide-react';
 import { runShardedRate } from './rate-runner';
-import { DefinitionEditor, QueryTextButton, WorkbenchTopBar } from './workbench-shared';
+import { DefinitionEditor, PaneSearch, QueryTextButton, WorkbenchTopBar } from './workbench-shared';
 import type { Dissection } from './materials';
 import FoldReviewModal, { type FoldProposalView } from './FoldReviewModal';
 import { ConversationThread } from './conversation';
@@ -114,7 +114,7 @@ interface IntentVersion {
 /** Instructor-facing labels for the version-history actions (majors). */
 const ACTION_LABELS: Record<string, string> = {
   create_intent: 'created',
-  update_intent: 'saved', // majors read 'saved'; spec-persisting minors read 'tried' below
+  update_intent: 'applied', // the live-making step — one verb across both benches
   archive_intent: 'archived',
   restore_intent: 'restored',
   add_pin: 'labeled',
@@ -991,7 +991,7 @@ export default function IntentWorkbench({
     const label = target ? versionLabel(target) : `v${checkout}`;
     if (
       !window.confirm(
-        `Revert to ${label}?\n\nThis makes ${label} the live version and permanently deletes the ${laterCount} later step(s) — including any Save among them. This cannot be undone.`
+        `Revert to ${label}?\n\nThis makes ${label} the live version and permanently deletes the ${laterCount} later step(s) — including any Apply among them. This cannot be undone.`
       )
     ) {
       return;
@@ -1835,7 +1835,7 @@ export default function IntentWorkbench({
         {boardRow ? (
           // ChatMessages owns the scroll (flex-1 overflow-y-auto), so the
           // thread scrolls inside the pane under the sticky Exit header.
-          <ConversationThread rows={rows} current={boardRow} isNirvana={isNirvana} />
+          <ConversationThread rows={rows} current={boardRow} isNirvana={isNirvana} expandMaterials />
         ) : (
           <p className="p-4 text-sm text-[hsl(var(--muted-foreground))]">
             The conversation for this question is not available.
@@ -2574,25 +2574,3 @@ export default function IntentWorkbench({
 }
 
 /** The per-pane query search box. */
-function PaneSearch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="relative">
-      <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="Search query text…"
-        className="w-full pl-7 pr-7 py-1 text-sm border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-      />
-      {value && (
-        <button
-          onClick={() => onChange('')}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-          aria-label="Clear search"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
-      )}
-    </div>
-  );
-}

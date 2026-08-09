@@ -40,10 +40,16 @@ export function ConversationThread({
   isNirvana,
   overrideResponse = null,
   singleTurn = false,
+  expandMaterials = false,
 }: {
   rows: ScoreQueryRow[];
   current: ScoreQueryRow;
   isNirvana: boolean;
+  /** Show pasted Material as its verbatim text instead of a collapsed tag.
+   * Reading views want this — the tags earn their density in the question
+   * lists, but in a thread you are here to read what the student wrote. Every
+   * bubble keeps a show/hide-all control either way. */
+  expandMaterials?: boolean;
   /** Replace ONE turn's reply with a regenerated response (rule workbench:
    * "this step's response, in the context of the prior conversation"). `raw`
    * overrides the thread-wide NIRVANA raw rendering for just that message. */
@@ -89,12 +95,20 @@ export function ConversationThread({
   );
   const rowById = useMemo(() => new Map(thread.map((r) => [r.messageId as string | number, r])), [thread]);
 
-  // Pasted Material collapses into the same clickable per-kind tags as the
-  // question lists (click to reveal verbatim, click again to collapse).
+  // Pasted Material keeps the same clickable per-kind tags/highlights as the
+  // question lists (click to reveal verbatim, click again to collapse); which
+  // way it starts is the caller's call.
   const renderUserContent = (m: Message) => {
     const row = rowById.get(m.id);
     if (!row?.dissection || row.dissection.materialKinds.length === 0) return null;
-    return <MaterialSegments text={row.queryText} dissection={row.dissection} />;
+    return (
+      <MaterialSegments
+        text={row.queryText}
+        dissection={row.dissection}
+        defaultOpen={expandMaterials}
+        toggleAll
+      />
+    );
   };
 
   return (

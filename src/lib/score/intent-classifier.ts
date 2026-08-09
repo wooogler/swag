@@ -12,7 +12,7 @@
  * (prior-context v2 strategy — the following bot reply is never sent).
  */
 import { callModel, extractJsonObject, type CallOptions, type ReasoningEffort } from './classifier';
-import { buildQueryContent } from './prompts';
+import { buildRatingQueryContent } from './prompts';
 import {
   buildIntentSchema,
   buildIntentSystemPrompt,
@@ -25,6 +25,7 @@ import {
   MATERIAL_KINDS,
   type DissectionResult,
   type MaterialKind,
+  type PromptDissection,
   type RatingLevel,
 } from './intents';
 
@@ -64,8 +65,11 @@ export async function rateMessageIntents(args: {
    * rendered into the prompt so the judge rates only the typed request and never
    * treats pasted material (esp. the assignment prompt) as an implicit request.
    * Optional: the live chat runtime may not have it and passes null — the
-   * reworded no-request rule in the system prompt still applies either way. */
-  dissection?: DissectionResult | null;
+   * reworded no-request rule in the system prompt still applies either way.
+   * `materials` is REQUIRED (PromptDissection): the marker carries per-run
+   * kinds, so a caller that forgets to load them must fail to compile rather
+   * than quietly send the other study arm a different prompt. */
+  dissection?: PromptDissection | null;
   model: string;
   /** Override the default timeout/retry budget — the LIVE chat runtime passes
    * a much tighter one (a student is waiting; it fails open to base). */
@@ -80,7 +84,7 @@ export async function rateMessageIntents(args: {
   const intentIds = intents.map((i) => i.id);
   const raw = await callModel(
     buildIntentSystemPrompt(intents, includeDissection),
-    buildQueryContent(queryText, prevQueryText, prevResponseText, args.dissection),
+    buildRatingQueryContent(queryText, prevQueryText, prevResponseText, args.dissection),
     model,
     // Boundary judgments against instructor-authored definitions benefit from
     // a little deliberation ('low'). SCORE_RATING_EFFORT=none trades some of

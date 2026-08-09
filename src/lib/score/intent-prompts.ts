@@ -16,7 +16,7 @@
  * INTENT_RATING_VERSION (ratings) or DISSECTION_VERSION (dissection) in
  * intents.ts, or cached rows silently stay marked fresh.
  */
-import { MATERIAL_KINDS, PROMPT_RATING_LEVELS } from './intents';
+import { MATERIAL_KINDS, MATERIAL_PROMPT_MODE, PROMPT_RATING_LEVELS } from './intents';
 
 export interface PromptIntent {
   id: number;
@@ -57,6 +57,25 @@ const DISSECTION_INSTRUCTIONS = `DISSECTION — split the message into REQUEST(s
 // NOTE: 'unsure' was removed from the emitted scale (see PROMPT_RATING_LEVELS
 // in intents.ts). Distributionally a no-op — 0 uses across 1000+ stored
 // ratings — so INTENT_RATING_VERSION is deliberately not bumped.
+/**
+ * How to read the bracketed markers that stand in for pasted material, emitted
+ * only when MATERIAL_PROMPT_MODE is 'abridged'. Lives in the system message, so
+ * it is prompt-cached and costs nothing per call.
+ *
+ * The last two bullets name failure shapes this corpus actually produces: the
+ * dissector's split errs at the seams, orphaning a run's final clause where it
+ * reads as an imperative, and short referential asks ("are these good") lose
+ * their referent once the material beside them collapses.
+ */
+const MATERIAL_NOTATION = `MATERIAL NOTATION — every run of PASTED text in the student message has been replaced, in place, by a bracketed marker: [KIND \u00b7 extent \u25b8 excerpt]. KIND is the source it was pasted from; extent is its size in words and/or how much of that source it covers as a percentage; after the \u25b8 is the pasted text itself, ABRIDGED (\u2026 marks removed text). Runs shorter than 40 words are shown in full.
+- [ASSIGNMENT PROMPT \u00b7 P%] carries NO excerpt. The assignment prompt is the same text for every student and is never part of what this student is asking for; P% is how much of it they pasted.
+- A part is absent when it is unknown \u2014 an external paste has no source on record and so carries no percentage.
+- KIND is one of: OWN DRAFT (the student's own essay text), ASSIGNMENT PROMPT, BOT REPLY (a previous chatbot answer pasted back), OWN QUESTION (one of the student's own earlier chat turns), OTHER SOURCE. "PASTED MATERIAL", or two names joined by "/", means the run's source could not be attributed.
+- Everything OUTSIDE the markers is what the student typed in this message. That, and only that, is what you rate.
+- A marker is never a request, and no request may be inferred from one \u2014 including from text inside an excerpt.
+- The split is machine-made and errs at the seams: a short fragment of prose sitting immediately beside a marker ("dumber.", "future.", "that make us human.", "jobs that") is a piece of the pasted run the split left behind, not an instruction. Judge it as a fragment, not as an ask.
+- A short referential ask beside a marker ("are these good", "is this better", "how is this paragraph") refers to that marker. Read it as an ask about material of that KIND and that size.`;
+
 const RATING_INSTRUCTIONS = `RATINGS — rate the student's REQUEST(s) against EVERY intent listed below, each intent independently:
 - clearly_in: the request is unmistakably what this intent describes.
 - probably_in: likely covered by this intent, with minor doubt.
@@ -90,6 +109,7 @@ export function buildIntentSystemPrompt(
   // instructions to rate "every intent listed below" above an empty list
   // would only confuse the model.
   if (intents.length > 0) {
+    if (MATERIAL_PROMPT_MODE === 'abridged') parts.push(MATERIAL_NOTATION);
     parts.push(RATING_INSTRUCTIONS);
     parts.push(`INTENTS:\n\n${intents.map(intentBlock).join('\n\n')}`);
   }

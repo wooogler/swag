@@ -3,7 +3,6 @@ import {
   assignments,
   scoreConfigVersions,
   scoreQueryTypes,
-  scoreRuleVersions,
   studentSessions,
 } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -110,7 +109,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     intentState,
     intentRatingRows,
     dissectionRows,
-    ruleVersionRows,
     configVersionRows,
     queryTypeRows,
   ] = await Promise.all([
@@ -123,16 +121,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       loadIntentState(id),
       listIntentRatings(id),
       listDissections(id),
-      db
-        .select({
-          intentId: scoreRuleVersions.intentId,
-          versionNo: scoreRuleVersions.versionNo,
-          name: scoreRuleVersions.name,
-          minor: scoreRuleVersions.minor,
-          source: scoreRuleVersions.source,
-        })
-        .from(scoreRuleVersions)
-        .where(eq(scoreRuleVersions.assignmentId, id)),
       db
         .select({ summary: scoreConfigVersions.summary })
         .from(scoreConfigVersions)
@@ -259,33 +247,12 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   }
 
   // Latest saved RULE version per intent (the intents panel's "Then vN name").
-  // The board must show the DISPLAY major number (v1, v2, …), NOT the raw
-  // per-intent versionNo — the simulated minors also occupy the sequence, so
-  // raw versionNo runs ahead (e.g. seed=1, minor=2, applied=3 must read as
-  // "v2"). Walk each intent's versions ascending, count majors (minor=false,
-  // mirroring the rule-versions route), and keep the latest major with its
-  // ordinal. The v1 seed COUNTS: it is the rule the intent starts from, so a
-  // never-revised intent reads "Then v1 Starting rule" rather than dumping the
-  // raw text.
-  const rulesByIntent = new Map<number, typeof ruleVersionRows>();
-  for (const v of ruleVersionRows) {
-    const list = rulesByIntent.get(v.intentId) ?? [];
-    list.push(v);
-    rulesByIntent.set(v.intentId, list);
-  }
-  const latestRuleByIntent = new Map<number, { versionNo: number; name: string | null }>();
-  for (const [intentId, list] of rulesByIntent) {
-    const asc = [...list].sort((a, b) => a.versionNo - b.versionNo);
-    let majorNo = 0;
-    let latest: { versionNo: number; name: string | null } | null = null;
-    for (const v of asc) {
-      if (!v.minor) {
-        majorNo += 1;
-        latest = { versionNo: majorNo, name: v.name };
-      }
-    }
-    if (latest) latestRuleByIntent.set(intentId, latest);
-  }
+  // NOTE: the board deliberately does NOT carry a rule-version number. It used
+  // to load every score_rule_versions row here just to render a "v2 · name"
+  // chip; a version ordinal says how many times a rule was saved, which is not
+  // the question the board answers, and the history it indexes is one click
+  // away in the workbench. The board shows whether a rule has diverged from the
+  // scope it was copied from (RuleOrigin) instead — the whole query is gone.
   // MAJOR versions only — minors (applies, pin labels) fold into the workbench
   // accordion and must not advance the board's "When vN"; isMinorVersion keeps
   // this count and the workbench numbering in lockstep.
@@ -367,7 +334,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       pinCount: pins.length,
       includedCount: pins.filter((p) => p.verdict === 'in').length,
       excludedCount: pins.filter((p) => p.verdict === 'out').length,
-      latestRuleVersion: latestRuleByIntent.get(i.id) ?? null,
       intentVersionNo: intentVersionCount.get(i.id) ?? 0,
       type: isScoreQueryType(i.type) ? i.type : null,
       parentIntentId: i.parentIntentId,
@@ -386,7 +352,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       type: i.type as ScoreQueryType,
       title: i.title,
       rule: i.rule,
-      latestRuleVersion: latestRuleByIntent.get(i.id) ?? null,
     }))
     .sort((a, b) => SCORE_QUERY_TYPES.indexOf(a.type) - SCORE_QUERY_TYPES.indexOf(b.type));
 

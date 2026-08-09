@@ -20,7 +20,8 @@ import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
 import { ensureIntentTables } from '@/lib/score/intent-store';
 import { getDefaultScoreModel } from '@/lib/score/models';
-import { buildQueryContent } from '@/lib/score/prompts';
+import { buildRatingQueryContent } from '@/lib/score/prompts';
+import { computeDissections } from '@/lib/score/dissect';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
 
 export const dynamic = 'force-dynamic';
@@ -121,13 +122,18 @@ export async function POST(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'message_not_found' }, { status: 404 });
   }
 
+  // The dissection too, not just the text: this block claims to be what the
+  // classifier rated, and under the abridged material mode a prompt built
+  // without it would quote an essay the judge never saw — then hand that
+  // reasoning to the instructor as the verdict's rationale.
+  const dissection = (await computeDissections(id, new Set([body.messageId]))).get(body.messageId) ?? null;
   const parts = [
     `INTENT DEFINITION (a student's request is "in" when it…): ${intent.definition}`,
     // SAME prior-context + query block the classifier rated with (previous
     // student message + the chatbot reply it was responding to, capped
     // identically), so turn-dependent requests ("make it longer", "redo in 3
     // sentences") get reasons grounded in what the request actually refers to.
-    buildQueryContent(anchor.queryText, anchor.prevQueryText, anchor.prevResponseText),
+    buildRatingQueryContent(anchor.queryText, anchor.prevQueryText, anchor.prevResponseText, dissection),
   ];
   if (body.rationale) {
     parts.push(`CLASSIFIER RATIONALE FOR THIS MESSAGE (context): ${body.rationale}`);

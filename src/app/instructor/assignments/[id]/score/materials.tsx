@@ -8,7 +8,19 @@
  * (IntentBoard) and the Intent modal's expand view.
  */
 import { useMemo, useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { MATERIAL_LABELS, type MaterialKind, type MaterialSpan } from '@/lib/score/intents';
+// The tag renderer lives in lib so the intent-rating prompt emits the SAME
+// string the instructor reads. `tagText` is the local alias for the bracketed
+// form, so the JSX below is unchanged from when it was defined here.
+import {
+  coveragePct,
+  materialTag as tagText,
+  segmentForMaterials,
+  tagTitle,
+} from '@/lib/score/material-render';
+
+export { coveragePct, segmentForMaterials };
 
 export interface Dissection {
   /** Message-wide set of kinds. Kept for filters and for rows dissected before
@@ -37,136 +49,8 @@ const MATERIAL_STYLE: Record<MaterialKind, { tag: string; hl: string }> = {
  * colors (orange collided with own-draft amber). */
 const MATERIAL_MIXED = { tag: 'bg-pink-50 text-pink-700', hl: 'bg-pink-100 text-pink-900' };
 
-/** How much of the source this run covers, as a whole percent — the answer to
- * "did they paste the whole assignment prompt or one line of it". Null when the
- * source size is unknown (an external paste has no source on record), and the
- * tag then carries no extent rather than a made-up one. */
-export function coveragePct(span: MaterialSpan | null | undefined): number | null {
-  if (!span?.sourceChars || !span.chars) return null;
-  const pct = (span.chars / span.sourceChars) * 100;
-  if (!Number.isFinite(pct)) return null;
-  return Math.min(100, Math.max(1, Math.round(pct)));
-}
-
-/** The collapsed placeholder text: reads like redacted-source markers rather
- * than UI chips — "[OWN DRAFT · 40%]", "[BOT REPLY]". The percentage is how
- * much of that source the run covers. On pre-v4 rows the kind of an individual
- * run is unknown, so the tag lists the message's candidates instead:
- * "[OWN DRAFT / ASSIGNMENT PROMPT]" = this block is one of these. */
-function tagText(
-  mk: MaterialKind | null,
-  kinds: MaterialKind[],
-  span?: MaterialSpan | null
-): string {
-  const pct = coveragePct(span);
-  const extent = pct === null ? '' : ` · ${pct}%`;
-  if (mk) return `[${MATERIAL_LABELS[mk].toUpperCase()}${extent}]`;
-  const names = kinds.map((k) => MATERIAL_LABELS[k].toUpperCase());
-  return `[${names.length > 1 ? names.join(' / ') : 'PASTED MATERIAL'}${extent}]`;
-}
-
-/** Hover text: the extent in plain numbers, since the tag only has room for a
- * percentage. */
-function tagTitle(label: string, span: MaterialSpan | null | undefined, open: boolean): string {
-  const action = open ? 'click to collapse' : 'click to reveal';
-  const pct = coveragePct(span);
-  if (pct === null || !span) return `${open ? 'Pasted material' : label} — ${action}`;
-  return `${label} — ${span.chars} of ${span.sourceChars} characters (${pct}%) — ${action}`;
-}
-
 export function materialStyle(mk: MaterialKind | null) {
   return mk ? MATERIAL_STYLE[mk] : MATERIAL_MIXED;
-}
-
-type MsgSeg =
-  | { kind: 'text'; text: string }
-  | { kind: 'material'; text: string; mk: MaterialKind | null; span?: MaterialSpan | null };
-
-/** Locate each stored Material run in the message and split around it, so every
- * run carries its OWN kind and extent. Runs are verbatim substrings in document
- * order, found by a forward-scanning indexOf (same technique as requests below)
- * — no stored offsets to drift. Returns null when the dissection has no runs
- * (pre-v4 row) or none of them can be located, so the caller falls back. */
-function segmentFromMaterials(text: string, materials: MaterialSpan[]): MsgSeg[] | null {
-  const segs: MsgSeg[] = [];
-  const lower = text.toLowerCase();
-  let cursor = 0;
-  for (const m of materials) {
-    const t = m.text.trim();
-    if (!t) continue;
-    let idx = text.indexOf(t, cursor);
-    if (idx === -1) idx = lower.indexOf(t.toLowerCase(), cursor);
-    if (idx === -1) continue;
-    if (idx > cursor) segs.push({ kind: 'text', text: text.slice(cursor, idx) });
-    segs.push({ kind: 'material', text: text.slice(idx, idx + t.length), mk: m.kind, span: m });
-    cursor = idx + t.length;
-  }
-  if (!segs.some((s) => s.kind === 'material')) return null;
-  if (cursor < text.length) segs.push({ kind: 'text', text: text.slice(cursor) });
-  return segs;
-}
-
-/** Split the message into plain-text runs (the dissected Requests) and Material
- * runs (the gaps between them), so the viewer can replace pasted Material with a
- * collapsible tag. Prefers the stored per-run kinds; on rows written before
- * those existed it falls back to the message-wide set, where the kind is known
- * only when the message has a SINGLE one (multi-kind → null → neutral tag). */
-export function segmentForMaterials(
-  text: string,
-  requests: string[],
-  kinds: MaterialKind[],
-  materials?: MaterialSpan[]
-): MsgSeg[] {
-  if (materials?.length) {
-    const byRun = segmentFromMaterials(text, materials);
-    if (byRun) return byRun;
-  }
-  const mk = kinds.length === 1 ? kinds[0] : null;
-  const segs: MsgSeg[] = [];
-  // Push a Material run, but keep its leading/trailing whitespace as plain text
-  // so the tag/highlight hugs only real content — otherwise an expanded run that
-  // starts with blank lines renders as a big empty highlighted box.
-  const pushGap = (a: number, b: number) => {
-    if (b <= a) return;
-    const g = text.slice(a, b);
-    if (!g.trim()) {
-      // Whitespace-only gap stays plain — a bare tag here reads as noise.
-      segs.push({ kind: 'text', text: g });
-      return;
-    }
-    const lead = g.length - g.trimStart().length;
-    const trail = g.length - g.trimEnd().length;
-    if (lead) segs.push({ kind: 'text', text: g.slice(0, lead) });
-    segs.push({ kind: 'material', text: g.slice(lead, g.length - trail), mk });
-    if (trail) segs.push({ kind: 'text', text: g.slice(g.length - trail) });
-  };
-  if (requests.length === 0) {
-    // No requests located → the whole message is Material (when any was detected).
-    if (!kinds.length) return [{ kind: 'text', text }];
-    pushGap(0, text.length);
-    return segs;
-  }
-  const spans: [number, number][] = [];
-  const lower = text.toLowerCase();
-  let from = 0;
-  for (const req of requests) {
-    const r = req.trim();
-    if (!r) continue;
-    let idx = text.indexOf(r, from);
-    if (idx === -1) idx = lower.indexOf(r.toLowerCase(), from);
-    if (idx === -1) continue;
-    spans.push([idx, idx + r.length]);
-    from = idx + r.length;
-  }
-  if (spans.length === 0) return [{ kind: 'text', text }];
-  let cursor = 0;
-  for (const [s, e] of spans) {
-    pushGap(cursor, s);
-    segs.push({ kind: 'text', text: text.slice(s, e) });
-    cursor = e;
-  }
-  pushGap(cursor, text.length);
-  return segs;
 }
 
 /** Message body with Material collapsed into clickable per-kind tags; click to
@@ -178,11 +62,21 @@ export function segmentForMaterials(
 export function MaterialSegments({
   text,
   dissection,
+  defaultOpen = false,
+  toggleAll = false,
 }: {
   text: string;
   dissection: Dissection | null;
+  /** Start with every run revealed. Reading views (the conversation panes) want
+   * the message as the student actually wrote it — a wall of [TAG]s is only
+   * worth its density in the question LISTS, where the alternative is a preview
+   * drowned in someone's pasted draft. */
+  defaultOpen?: boolean;
+  /** Append a small show/hide-all control, so a view that collapses by default
+   * (the rule workbench, which reads tags as the thing the rule sees) is still
+   * one click from the verbatim text. */
+  toggleAll?: boolean;
 }) {
-  const [open, setOpen] = useState<Set<number>>(() => new Set());
   const segs = useMemo(
     () =>
       segmentForMaterials(
@@ -193,6 +87,14 @@ export function MaterialSegments({
       ),
     [text, dissection]
   );
+  const materialIdx = useMemo(
+    () => segs.flatMap((s, i) => (s.kind === 'material' ? [i] : [])),
+    [segs]
+  );
+  const [open, setOpen] = useState<Set<number>>(() =>
+    defaultOpen ? new Set(materialIdx) : new Set()
+  );
+  const allOpen = materialIdx.length > 0 && materialIdx.every((i) => open.has(i));
   const toggle = (i: number) =>
     setOpen((prev) => {
       const n = new Set(prev);
@@ -220,7 +122,7 @@ export function MaterialSegments({
             role="button"
             tabIndex={0}
             onClick={onClick}
-            title={tagTitle(label, s.span, true)}
+            title={tagTitle(label, s.text, s.span, 'open')}
             className={`cursor-pointer rounded-[2px] box-decoration-clone ${style.hl}`}
           >
             {s.text}
@@ -231,23 +133,65 @@ export function MaterialSegments({
             role="button"
             tabIndex={0}
             onClick={onClick}
-            title={tagTitle(label, s.span, false)}
+            title={tagTitle(label, s.text, s.span, 'closed')}
             className={`mx-0.5 cursor-pointer whitespace-nowrap rounded-[2px] px-0.5 font-medium hover:underline ${style.tag}`}
           >
-            {tagText(s.mk, dissection?.materialKinds ?? [], s.span)}
+            {tagText(s.mk, dissection?.materialKinds ?? [], s.text, s.span)}
           </span>
         );
       })}
+      {toggleAll && materialIdx.length > 0 && (
+        // Its own line, not trailing the prose: inline, it read as part of the
+        // sentence the student wrote. `flex` makes this <span> a block-level box
+        // (so it breaks the line) while staying phrasing content — the parents
+        // here are <p>, and a <div> would be invalid inside one. `w-fit` keeps
+        // the hit target on the control instead of the whole width.
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(allOpen ? new Set() : new Set(materialIdx));
+          }}
+          title={
+            allOpen
+              ? 'Collapse every pasted block back to its tag'
+              : 'Show the verbatim text behind every tag'
+          }
+          // select-none keeps the label out of a drag-selection: the rule
+          // workbench turns a selection inside the bubble into quoted feedback,
+          // and a drag to the end of the message now lands on this line.
+          className="mt-1.5 flex w-fit cursor-pointer select-none items-center gap-0.5 whitespace-nowrap rounded border border-[hsl(var(--border))] px-1 py-px text-[10px] font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+        >
+          {allOpen ? (
+            <>
+              <EyeOff className="h-2.5 w-2.5" /> hide pasted text
+            </>
+          ) : (
+            <>
+              <Eye className="h-2.5 w-2.5" /> show pasted text
+            </>
+          )}
+        </span>
+      )}
     </>
   );
 }
 
 /** Student message box for the conversation viewer. Expansion state resets per
  * message via a `key` on the message id at the call site. */
-export function StudentMessage({ text, dissection }: { text: string; dissection: Dissection | null }) {
+export function StudentMessage({
+  text,
+  dissection,
+  defaultOpen = false,
+}: {
+  text: string;
+  dissection: Dissection | null;
+  defaultOpen?: boolean;
+}) {
   return (
     <p className="text-sm whitespace-pre-wrap rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-3 leading-relaxed">
-      <MaterialSegments text={text} dissection={dissection} />
+      <MaterialSegments text={text} dissection={dissection} defaultOpen={defaultOpen} toggleAll />
     </p>
   );
 }
@@ -309,9 +253,15 @@ export function QuerySnippet({
         out.push(
           <span
             key={key++}
+            title={tagTitle(
+              s.mk ? MATERIAL_LABELS[s.mk] : 'Pasted material',
+              s.text,
+              s.span,
+              'static'
+            )}
             className={`mx-0.5 whitespace-nowrap rounded-[2px] px-0.5 font-medium ${style.tag}`}
           >
-            {tagText(s.mk, dissection?.materialKinds ?? [], s.span)}
+            {tagText(s.mk, dissection?.materialKinds ?? [], s.text, s.span)}
           </span>
         );
         continue;

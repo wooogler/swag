@@ -169,7 +169,9 @@ export async function POST(req: Request, { params }: RouteParams) {
   } catch (error) {
     console.error(`SCORE intent suggestions failed for message ${body.messageId}:`, error);
     return NextResponse.json(
-      { error: 'suggest_failed', message: 'Failed to propose intents — try again.' },
+      // Condition-neutral wording: BOTH create choosers surface `message`
+      // verbatim, and the baseline one must not print the word "intents".
+      { error: 'suggest_failed', message: 'Failed to draft candidates — try again.' },
       { status: 500 }
     );
   }
