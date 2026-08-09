@@ -44,12 +44,25 @@ export type CloneCounts = Record<string, number>;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/** Keep only these conversations, and within each only turns up to and
+ * including `maxSequence`. Used to build the reduced STUDY masters, which hold
+ * just the curated review set with each thread cut at its last curated turn. */
+export interface CloneRestriction {
+  conversationId: string;
+  maxSequence: number;
+}
+
 /**
  * Deep-clone the source assignment's message log + SCORE starter set into a new
  * assignment owned by `newInstructorId`. Runs entirely inside `tx`; temp maps
  * are ON COMMIT DROP. Returns per-table copied row counts.
+ *
+ * With `restrictTo`, the copy is a SUBSET. Every per-message cache below joins
+ * through _msg_map, so restricting the three id maps filters all of them at
+ * once — but the restriction has to be applied to BOTH sides of the 1:1 remap
+ * assertion in step 6, or a legitimate subset copy trips it.
  */
-async function cloneStarterSet(
+export async function cloneStarterSet(
   tx: Tx,
   opts: {
     sourceAssignmentId: string;
@@ -58,10 +71,33 @@ async function cloneStarterSet(
     shareToken: string;
     newTitle: string;
     includeEditorEvents: boolean;
+    restrictTo?: CloneRestriction[];
   }
 ): Promise<CloneCounts> {
-  const { sourceAssignmentId, newAssignmentId, newInstructorId, shareToken, newTitle, includeEditorEvents } = opts;
+  const { sourceAssignmentId, newAssignmentId, newInstructorId, shareToken, newTitle, includeEditorEvents, restrictTo } = opts;
   const counts: CloneCounts = {};
+  const restricted = Array.isArray(restrictTo);
+
+  // The cut list, as a table so every step below can join the SAME predicate.
+  // Unrestricted clones get one row per conversation with an open-ended cutoff,
+  // which makes the joins a no-op and keeps a single code path.
+  await tx.execute(sql`CREATE TEMP TABLE _keep (conv_id text PRIMARY KEY, max_seq integer NOT NULL) ON COMMIT DROP`);
+  if (restricted) {
+    if (restrictTo!.length === 0) throw new Error('restrictTo is empty — refusing to build an empty clone');
+    const values = sql.join(
+      restrictTo!.map((r) => sql`(${r.conversationId}, ${r.maxSequence})`),
+      sql`, `
+    );
+    await tx.execute(sql`INSERT INTO _keep (conv_id, max_seq) VALUES ${values} ON CONFLICT (conv_id) DO UPDATE SET max_seq = GREATEST(_keep.max_seq, EXCLUDED.max_seq)`);
+  } else {
+    await tx.execute(sql`
+      INSERT INTO _keep (conv_id, max_seq)
+      SELECT c.id, 2147483647
+      FROM chat_conversations c
+      JOIN student_sessions s ON s.id = c.session_id
+      WHERE s.assignment_id = ${sourceAssignmentId}
+    `);
+  }
 
   // 1) New assignment row — copy every field except id/title/token/owner/created.
   await tx.execute(sql`
@@ -75,11 +111,19 @@ async function cloneStarterSet(
     FROM assignments WHERE id = ${sourceAssignmentId}
   `);
 
-  // 2) Session map + copy.
+  // 2) Session map + copy. A restricted clone keeps only the students whose
+  //    threads survive the cut — an empty session would otherwise show up in
+  //    the reduced master as a student who asked nothing.
   await tx.execute(sql`
     CREATE TEMP TABLE _sess_map ON COMMIT DROP AS
     SELECT id AS old_id, gen_random_uuid()::text AS new_id
-    FROM student_sessions WHERE assignment_id = ${sourceAssignmentId}
+    FROM student_sessions s
+    WHERE s.assignment_id = ${sourceAssignmentId}
+      AND (${!restricted} OR EXISTS (
+        SELECT 1 FROM chat_conversations c
+        JOIN _keep k ON k.conv_id = c.id
+        WHERE c.session_id = s.id
+      ))
   `);
   await tx.execute(sql`
     INSERT INTO student_sessions
@@ -106,7 +150,9 @@ async function cloneStarterSet(
   await tx.execute(sql`
     CREATE TEMP TABLE _conv_map ON COMMIT DROP AS
     SELECT c.id AS old_id, gen_random_uuid()::text AS new_id, m.new_id AS new_session_id
-    FROM chat_conversations c JOIN _sess_map m ON m.old_id = c.session_id
+    FROM chat_conversations c
+    JOIN _sess_map m ON m.old_id = c.session_id
+    JOIN _keep k ON k.conv_id = c.id
   `);
   await tx.execute(sql`
     INSERT INTO chat_conversations (id, session_id, title, created_at)
@@ -115,28 +161,37 @@ async function cloneStarterSet(
   `);
   counts.chat_conversations = await tempCount(tx, '_conv_map');
 
-  // 5) Messages (serial id → omit; remap conversation).
+  // 5) Messages (serial id → omit; remap conversation). The cutoff truncates
+  //    each thread at its last curated turn, so a participant reads exactly the
+  //    context the chatbot had — and never a turn that comes after it.
   await tx.execute(sql`
     INSERT INTO chat_messages (conversation_id, role, content, metadata, timestamp, sequence_number)
     SELECT cm.new_id, msg.role, msg.content, msg.metadata, msg.timestamp, msg.sequence_number
-    FROM chat_messages msg JOIN _conv_map cm ON cm.old_id = msg.conversation_id
+    FROM chat_messages msg
+    JOIN _conv_map cm ON cm.old_id = msg.conversation_id
+    JOIN _keep k ON k.conv_id = msg.conversation_id AND msg.sequence_number <= k.max_seq
   `);
 
   // 6) Message map via natural key (new conversation, sequence_number). Assert
   //    it is 1:1 with the source messages — a collision would silently drop
-  //    score rows, so fail the whole clone instead.
+  //    score rows, so fail the whole clone instead. BOTH sides of the comparison
+  //    carry the cutoff: counting the untruncated source here would make every
+  //    legitimate subset copy look like a collision.
   await tx.execute(sql`
     CREATE TEMP TABLE _msg_map ON COMMIT DROP AS
     SELECT o.id AS old_id, n.id AS new_id
     FROM _conv_map cm
-    JOIN chat_messages o ON o.conversation_id = cm.old_id
+    JOIN _keep k ON k.conv_id = cm.old_id
+    JOIN chat_messages o ON o.conversation_id = cm.old_id AND o.sequence_number <= k.max_seq
     JOIN chat_messages n ON n.conversation_id = cm.new_id AND n.sequence_number = o.sequence_number
   `);
   const mappedMsgs = await tempCount(tx, '_msg_map');
   const srcMsgs = await countExpr(
     tx,
     sql`SELECT count(*)::int AS n
-        FROM chat_messages msg JOIN _conv_map cm ON cm.old_id = msg.conversation_id`
+        FROM chat_messages msg
+        JOIN _conv_map cm ON cm.old_id = msg.conversation_id
+        JOIN _keep k ON k.conv_id = msg.conversation_id AND msg.sequence_number <= k.max_seq`
   );
   if (mappedMsgs !== srcMsgs) {
     throw new Error(
@@ -315,7 +370,7 @@ async function cloneStarterSet(
   `);
   counts.score_rule_previews = await assignmentCount(tx, 'score_rule_previews', newAssignmentId);
 
-  await tx.execute(sql`DROP TABLE IF EXISTS _sess_map, _conv_map, _msg_map, _intent_map`);
+  await tx.execute(sql`DROP TABLE IF EXISTS _sess_map, _conv_map, _msg_map, _intent_map, _keep`);
   return counts;
 }
 
