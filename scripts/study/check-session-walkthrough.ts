@@ -45,7 +45,8 @@ async function main() {
   const { deployBaselineVersion } = await import('../../src/lib/study/baseline-store');
   const { STUDY_DATASETS } = await import('../../src/lib/study/config');
   const { blockPlan, nextPhase } = await import('../../src/lib/study/phases');
-  const { SURVEY_ITEMS } = await import('../../src/lib/study/survey-items');
+  const { getSurveyItems } = await import('../../src/lib/study/survey-store');
+  const SURVEY_ITEMS = await getSurveyItems();
   const { studySurveyAnswers } = await import('../../src/db/schema');
 
   const { participant } = await ensureParticipantSetup(number);

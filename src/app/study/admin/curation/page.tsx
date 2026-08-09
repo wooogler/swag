@@ -13,7 +13,7 @@ import CurationBoard from './CurationBoard';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata = { title: 'Set Curation' };
+export const metadata = { title: 'Study Settings' };
 
 /**
  * Set curation — one screen over a MASTER log.

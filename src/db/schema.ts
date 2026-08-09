@@ -726,6 +726,16 @@ export const studyGeneratedResponses = pgTable('study_generated_responses', {
   participantIdx: index('study_generated_responses_participant_idx').on(table.participantId),
 }));
 
+// The questionnaire as currently worded. One row (id = 1) holding the whole
+// instrument: the design leaves the exact wording (and whether load is TLX or
+// UBS) to the advisor meeting, so it has to be editable without a deploy.
+export const studySurveyConfig = pgTable('study_survey_config', {
+  id: integer('id').primaryKey().default(1),
+  items: jsonb('items').notNull(),
+  updatedAt: timestamp('updated_at').notNull(),
+  updatedBy: text('updated_by'),
+});
+
 // Per-type size of each curated set, as a researcher currently has it. One row
 // (id = 1): the design requires both datasets to carry matching set sizes, so
 // a per-dataset figure would be a way to break that by accident.

@@ -177,6 +177,18 @@ export async function ensureStudyTables(): Promise<void> {
           CONSTRAINT "study_set_targets_singleton" CHECK (id = 1)
         )`);
 
+      // The questionnaire, as a researcher currently has it worded. Singleton
+      // JSON rather than a row per item: the whole instrument is edited and
+      // saved as one thing, and item identity lives in the key inside it.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_survey_config" (
+          "id" integer PRIMARY KEY NOT NULL DEFAULT 1,
+          "items" jsonb NOT NULL,
+          "updated_at" timestamp NOT NULL,
+          "updated_by" text,
+          CONSTRAINT "study_survey_config_singleton" CHECK (id = 1)
+        )`);
+
       // Which questions of a STUDY assignment are the curated review set. A
       // reduced master keeps whole threads so a question can be read in
       // context, and those earlier turns are questions too — this is what

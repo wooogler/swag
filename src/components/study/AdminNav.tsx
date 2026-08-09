@@ -8,7 +8,7 @@ import Link from 'next/link';
  * other. Shipping a screen with no way in is the same as not shipping it.
  */
 const TABS = [
-  { href: '/study/admin/curation', label: 'Set curation' },
+  { href: '/study/admin/curation', label: 'Study settings' },
   { href: '/study/admin/console', label: 'Session console' },
 ] as const;
 

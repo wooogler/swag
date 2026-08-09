@@ -13,9 +13,9 @@
  * knows the board can already read this screen.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, Lock, Unlock, RefreshCw, Settings } from 'lucide-react';
+import { Loader2, Lock, Unlock, RefreshCw, Settings, ClipboardList, Plus, X } from 'lucide-react';
 import type { ScoreQueryRow } from '@/app/instructor/assignments/[id]/score/IntentBoard';
 import { ConversationThread } from '@/app/instructor/assignments/[id]/score/conversation';
 import { PaneSearch, QueryTextButton } from '@/app/instructor/assignments/[id]/score/workbench-shared';
@@ -24,6 +24,11 @@ import StudioShell from '@/app/instructor/assignments/[id]/score/StudioShell';
 import AdminNav from '@/components/study/AdminNav';
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
 import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
+import {
+  SURVEY_SCALE_MAX,
+  SURVEY_SCALE_MIN,
+  type SurveyItem,
+} from '@/lib/study/survey-items';
 import type {
   CurationState,
   CurationSubtype,
@@ -111,6 +116,7 @@ export default function CurationBoard({
   const [violations, setViolations] = useState(initialViolations);
   const [targets, setTargets] = useState<SetTargets>(initialTargets);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [surveyOpen, setSurveyOpen] = useState(false);
   const [selection, setSelection] = useState<Selection>({ kind: 'type', type: 'planning' });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
@@ -328,8 +334,6 @@ export default function CurationBoard({
   }, [selection, state.members, state.questions, memberByMessage, rowById, gradeFilter, search, sort, questionById]);
 
   const selectedRow = selectedId !== null ? rowById.get(selectedId) ?? null : null;
-  const selectedQuestion = selectedId !== null ? questionById.get(selectedId) ?? null : null;
-  const selectedMember = selectedId !== null ? memberByMessage.get(selectedId) ?? null : null;
 
   const subtypesByType = useMemo(() => {
     const map = new Map<ScoreQueryType, CurationSubtype[]>();
@@ -352,7 +356,7 @@ export default function CurationBoard({
 
   const header = (
     <div className="flex items-center gap-3">
-      <h1 className="text-sm font-semibold">Set Curation</h1>
+      <h1 className="text-sm font-semibold">Study Settings</h1>
       <AdminNav current="curation" />
       <div className="flex-1" />
       <div className="flex border border-[hsl(var(--border))] rounded-lg overflow-hidden text-xs font-semibold">
@@ -408,6 +412,15 @@ export default function CurationBoard({
           {busy === 'classify' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Refresh classification
           <Badge tone={state.missingTypeCount > 0 ? 'warn' : 'plain'}>{state.missingTypeCount} missing</Badge>
+        </button>
+        <button
+          onClick={() => setSurveyOpen(true)}
+          disabled={busy !== null}
+          title="Edit the per-block questionnaire"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+        >
+          <ClipboardList className="w-3 h-3" />
+          Survey
         </button>
         <button
           onClick={() => setSettingsOpen(true)}
@@ -715,15 +728,29 @@ export default function CurationBoard({
                     onToggleExpand={() => setExpanded(expanded === row.messageId ? null : row.messageId)}
                     onOpen={() => setSelectedId(row.messageId)}
                   />
-                  <div className="mt-1 flex flex-wrap gap-1 items-center">
+                  {/* The classification lives with the question, where it is
+                      read while scanning — not in the viewer, which is for
+                      reading the conversation. Type is already on the meta
+                      line above, so only the subtypes repeat here. */}
+                  <div className="mt-1 flex flex-wrap gap-1 items-center pr-2">
                     {q?.grade === 'certain' && <Chip tone="ok">● certain</Chip>}
                     {q?.grade === 'boundary' && <Chip tone="warn">◐ boundary</Chip>}
                     {q?.grade === 'unmatched' && <Chip>unmatched</Chip>}
+                    {Object.entries(q?.matches ?? {}).map(([intentId, grade]) => {
+                      const st = subtypeById.get(Number(intentId));
+                      if (!st) return null;
+                      return (
+                        <Chip key={intentId} tone={grade === 'clearly_in' ? 'ok' : 'warn'}>
+                          <span className="max-w-[10rem] truncate">{st.title}</span>
+                          {grade === 'clearly_in' ? '●' : '◐'}
+                        </Chip>
+                      );
+                    })}
                     {member && <Chip tone="violet">{SET_LABELS[member.setKind]}</Chip>}
                     {isExcluded && <Chip tone="violet">Demo-isolated</Chip>}
                   </div>
                   {!locked && !isExcluded && (
-                    <div className="absolute right-2 top-1.5 z-10 flex items-center gap-0.5 rounded-md bg-[hsl(var(--card))] px-1 py-0.5 shadow-sm ring-1 ring-[hsl(var(--border))] opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                    <div className="absolute right-2 bottom-1.5 z-10 flex items-center gap-0.5 rounded-md bg-[hsl(var(--card))] px-1 py-0.5 shadow-sm ring-1 ring-[hsl(var(--border))] opacity-0 group-hover:opacity-100 focus-within:opacity-100">
                       {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => (
                         <button
                           key={kind}
@@ -753,7 +780,10 @@ export default function CurationBoard({
           </ul>
         </div>
 
-        {/* RIGHT: conversation + classification + assign */}
+        {/* RIGHT: the conversation, and nothing else. Classification and the
+            assign controls belong to the question row, where the scanning
+            happens; a viewer that also carries controls makes reading a thread
+            feel like operating a form. */}
         <div className="border border-[hsl(var(--border))] rounded-lg bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px]">
           {selectedRow ? (
             <>
@@ -766,80 +796,16 @@ export default function CurationBoard({
               <div className="flex-1 overflow-y-auto">
                 <ConversationThread rows={rows} current={selectedRow} isNirvana={isNirvana} expandMaterials />
               </div>
-
-              <div className="border-t border-[hsl(var(--border))] px-3 py-2">
-                <div className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
-                  Classification
-                </div>
-                <div className="flex flex-wrap gap-1.5 items-center">
-                  {selectedQuestion?.queryType ? (
-                    <Chip>
-                      <span className={`w-1.5 h-1.5 rounded-full ${TYPE_DOT[selectedQuestion.queryType]}`} />
-                      {QUERY_TYPE_LABELS[selectedQuestion.queryType]}
-                    </Chip>
-                  ) : (
-                    <Chip tone="bad">Not classified</Chip>
-                  )}
-                  {Object.entries(selectedQuestion?.matches ?? {}).map(([intentId, grade]) => {
-                    const s = subtypeById.get(Number(intentId));
-                    if (!s) return null;
-                    return (
-                      <Chip key={intentId} tone={grade === 'clearly_in' ? 'ok' : 'warn'}>
-                        {s.title} · {grade === 'clearly_in' ? '●' : '◐'}
-                      </Chip>
-                    );
-                  })}
-                  {Object.keys(selectedQuestion?.matches ?? {}).length === 0 && (
-                    <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
-                      No starter subtype claims this
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="border-t border-[hsl(var(--border))] px-3 py-2.5">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                    Assign
-                  </span>
-                  {excluded.has(selectedRow.messageId) && (
-                    <Chip tone="violet">Demo-isolated — cannot assign</Chip>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => (
-                    <button
-                      key={kind}
-                      disabled={locked || excluded.has(selectedRow.messageId)}
-                      onClick={() =>
-                        assign(selectedRow.messageId, selectedMember?.setKind === kind ? null : kind)
-                      }
-                      className={`flex-1 text-xs font-semibold py-2 rounded-lg border disabled:opacity-40 ${
-                        selectedMember?.setKind === kind
-                          ? 'bg-[hsl(var(--primary))] border-[hsl(var(--primary))] text-white'
-                          : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]'
-                      }`}
-                    >
-                      {SET_LABELS[kind]}
-                    </button>
-                  ))}
-                  <button
-                    disabled={locked || !selectedMember}
-                    onClick={() => assign(selectedRow.messageId, null)}
-                    className="px-3 text-xs font-semibold py-2 rounded-lg border border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-[hsl(var(--muted-foreground))] px-6 text-center">
-              Pick a question to see its conversation and classification, and to assign it.
+              Pick a question to read its conversation.
             </div>
           )}
         </div>
       </div>
+
+      {surveyOpen && <SurveyModal onClose={() => setSurveyOpen(false)} />}
 
       {settingsOpen && (
         <SetTargetsModal
@@ -1029,4 +995,237 @@ function selectionLabel(selection: Selection, subtypes: Map<number, CurationSubt
     case 'subtype':
       return subtypes.get(selection.intentId)?.title ?? 'Subtype';
   }
+}
+
+/**
+ * The questionnaire editor.
+ *
+ * `key` is the column the answers are stored under, so it is editable only
+ * while an item is new — renaming one after a session would orphan what a
+ * participant already said. The dialog shows which keys have answers and
+ * refuses to pretend a removal is free.
+ */
+function SurveyModal({ onClose }: { onClose: () => void }) {
+  const [items, setItems] = useState<SurveyItem[] | null>(null);
+  const [answeredKeys, setAnsweredKeys] = useState<string[]>([]);
+  const [respondents, setRespondents] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch('/api/study/admin/curation/survey');
+      if (!res.ok || cancelled) return;
+      const data = await res.json();
+      setItems(data.items);
+      setAnsweredKeys(data.answeredKeys ?? []);
+      setRespondents(data.respondents ?? 0);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const patch = (index: number, change: Partial<SurveyItem>) =>
+    setItems((prev) =>
+      prev ? prev.map((item, i) => (i === index ? { ...item, ...change } : item)) : prev
+    );
+
+  const addItem = () =>
+    setItems((prev) => [
+      ...(prev ?? []),
+      {
+        key: `item_${(prev?.length ?? 0) + 1}`,
+        construct: 'control',
+        text: '',
+        low: 'Strongly disagree',
+        high: 'Strongly agree',
+      },
+    ]);
+
+  const save = async (reset = false) => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await fetch('/api/study/admin/curation/survey', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reset ? { reset: true } : { items }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.message ?? 'Could not save.');
+        return;
+      }
+      setItems(data.items);
+      setAnsweredKeys((prev) => prev);
+      if (data.orphanedKeys?.length) {
+        setNote(
+          `Saved. ${data.orphanedKeys.length} removed item(s) still have answers on record: ${data.orphanedKeys.join(', ')} — they are kept, not deleted.`
+        );
+      } else {
+        setNote('Saved.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
+          <h2 className="text-sm font-bold">Block questionnaire</h2>
+          <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
+            Asked after each block, on a {SURVEY_SCALE_MIN}–{SURVEY_SCALE_MAX} scale. Rewording an
+            item keeps its answers; changing what it MEASURES deserves a new key.
+            {respondents > 0 && (
+              <span className="text-amber-700 font-semibold">
+                {' '}
+                {respondents} participant(s) have already answered — edit with care.
+              </span>
+            )}
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+          {items === null && (
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">Loading…</p>
+          )}
+          {items?.map((item, index) => {
+            const hasAnswers = answeredKeys.includes(item.key);
+            return (
+              <div
+                key={index}
+                className="rounded-lg border border-[hsl(var(--border))] px-3 py-2.5 space-y-2"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[10.5px] text-[hsl(var(--muted-foreground))] w-4 tabular-nums">
+                    {index + 1}
+                  </span>
+                  <input
+                    value={item.key}
+                    disabled={hasAnswers}
+                    onChange={(e) => patch(index, { key: e.target.value })}
+                    title={
+                      hasAnswers
+                        ? 'Answers exist under this key — renaming would orphan them.'
+                        : 'lower_snake_case identifier'
+                    }
+                    className="w-40 border border-[hsl(var(--border))] rounded px-2 py-1 text-[11px] font-mono bg-[hsl(var(--card))] disabled:opacity-60"
+                  />
+                  <select
+                    value={item.construct}
+                    onChange={(e) =>
+                      patch(index, { construct: e.target.value as SurveyItem['construct'] })
+                    }
+                    className="text-[11px] border border-[hsl(var(--border))] rounded px-1.5 py-1 bg-[hsl(var(--card))]"
+                  >
+                    <option value="control">control</option>
+                    <option value="trust">trust</option>
+                    <option value="load">load</option>
+                  </select>
+                  <label className="flex items-center gap-1 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+                    <input
+                      type="checkbox"
+                      checked={!!item.reverse}
+                      onChange={(e) => patch(index, { reverse: e.target.checked })}
+                      className="accent-[hsl(var(--primary))]"
+                    />
+                    high = more burden
+                  </label>
+                  {hasAnswers && <Chip tone="warn">has answers</Chip>}
+                  <button
+                    onClick={() => setItems((prev) => prev?.filter((_, i) => i !== index) ?? prev)}
+                    className="ml-auto text-[hsl(var(--muted-foreground))] hover:text-rose-700"
+                    title="Remove item"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <textarea
+                  value={item.text}
+                  rows={2}
+                  placeholder="Question as the participant reads it"
+                  onChange={(e) => patch(index, { text: e.target.value })}
+                  className="w-full border border-[hsl(var(--border))] rounded px-2 py-1.5 text-xs bg-[hsl(var(--card))]"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    value={item.low}
+                    placeholder="low anchor"
+                    onChange={(e) => patch(index, { low: e.target.value })}
+                    className="flex-1 border border-[hsl(var(--border))] rounded px-2 py-1 text-[11px] bg-[hsl(var(--card))]"
+                  />
+                  <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
+                    {SURVEY_SCALE_MIN} … {SURVEY_SCALE_MAX}
+                  </span>
+                  <input
+                    value={item.high}
+                    placeholder="high anchor"
+                    onChange={(e) => patch(index, { high: e.target.value })}
+                    className="flex-1 border border-[hsl(var(--border))] rounded px-2 py-1 text-[11px] bg-[hsl(var(--card))]"
+                  />
+                </div>
+              </div>
+            );
+          })}
+
+          <button
+            onClick={addItem}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded border border-dashed border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+          >
+            <Plus className="w-3 h-3" /> Add item
+          </button>
+
+          {note && (
+            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-semibold text-emerald-700">
+              {note}
+            </p>
+          )}
+          {error && (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex items-center gap-2">
+          <button
+            onClick={() => save(true)}
+            disabled={busy}
+            className="text-[11px] font-semibold px-2.5 py-1.5 rounded border border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] disabled:opacity-40"
+          >
+            Restore defaults
+          </button>
+          <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
+            {items?.length ?? 0} item(s)
+          </span>
+          <div className="flex-1" />
+          <button
+            onClick={onClose}
+            className="text-xs font-semibold px-3 py-1.5 rounded border border-[hsl(var(--border))]"
+          >
+            Close
+          </button>
+          <button
+            onClick={() => save(false)}
+            disabled={busy || !items}
+            className="text-xs font-semibold px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-white disabled:opacity-40"
+          >
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

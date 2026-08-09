@@ -5,7 +5,8 @@ import { studySurveyAnswers } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
 import { blockOf, isStudyPhase, phaseAccess } from '@/lib/study/phases';
-import { SURVEY_ITEMS, SURVEY_SCALE_MAX, SURVEY_SCALE_MIN } from '@/lib/study/survey-items';
+import { SURVEY_SCALE_MAX, SURVEY_SCALE_MIN } from '@/lib/study/survey-items';
+import { getSurveyItems } from '@/lib/study/survey-store';
 import BlockSurvey from './BlockSurvey';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,7 @@ export default async function SurveyPage() {
   const block = blockOf(phase);
   if (!block) redirect('/study/session');
 
+  const items = await getSurveyItems();
   const prior = await db
     .select({ itemKey: studySurveyAnswers.itemKey, value: studySurveyAnswers.value })
     .from(studySurveyAnswers)
@@ -31,7 +33,7 @@ export default async function SurveyPage() {
 
   return (
     <BlockSurvey
-      items={SURVEY_ITEMS}
+      items={items}
       min={SURVEY_SCALE_MIN}
       max={SURVEY_SCALE_MAX}
       initial={Object.fromEntries(prior.map((p) => [p.itemKey, p.value]))}

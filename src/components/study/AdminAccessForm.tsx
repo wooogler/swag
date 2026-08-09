@@ -45,7 +45,7 @@ export default function AdminAccessForm() {
     <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--background))] py-12 px-4 sm:px-6 lg:px-8">
       <Card className="w-full max-w-md border-0 sm:border shadow-none sm:shadow-sm">
         <CardHeader className="space-y-1 text-center">
-          <CardTitle className="text-3xl font-bold tracking-tight">Set Curation</CardTitle>
+          <CardTitle className="text-3xl font-bold tracking-tight">Study Settings</CardTitle>
           <CardDescription>
             Enter your researcher code and the curation passcode.
           </CardDescription>

@@ -6,7 +6,7 @@ import AdminAccessForm from '@/components/study/AdminAccessForm';
 export const dynamic = 'force-dynamic';
 
 export const metadata = {
-  title: 'Set Curation Access',
+  title: 'Study Settings Access',
 };
 
 /**

@@ -7,7 +7,8 @@ import { studySurveyAnswers } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { blockOf, isStudyPhase, phaseAccess } from '@/lib/study/phases';
 import { cloneForBlock } from '@/lib/study/measure-store';
-import { SURVEY_SCALE_MAX, SURVEY_SCALE_MIN, isSurveyItemKey } from '@/lib/study/survey-items';
+import { SURVEY_SCALE_MAX, SURVEY_SCALE_MIN } from '@/lib/study/survey-items';
+import { getSurveyItems } from '@/lib/study/survey-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,9 +35,10 @@ export async function POST(req: Request) {
   }
 
   const clone = await cloneForBlock(participant, block);
+  const validKeys = new Set((await getSurveyItems()).map((i) => i.key));
   const now = new Date();
   for (const [itemKey, value] of Object.entries(parsed.answers)) {
-    if (!isSurveyItemKey(itemKey)) continue; // ignore anything not in the config
+    if (!validKeys.has(itemKey)) continue; // ignore anything not in the instrument
     await db
       .insert(studySurveyAnswers)
       .values({

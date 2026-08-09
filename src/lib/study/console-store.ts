@@ -31,7 +31,7 @@ import {
   type StudyPhase,
 } from './phases';
 import { logParticipantEvent } from './events';
-import { SURVEY_ITEMS } from './survey-items';
+import { getSurveyItems } from './survey-store';
 
 /**
  * What a participant has actually BUILT in one workspace, read out of the
@@ -288,6 +288,7 @@ export async function getParticipantStatus(
     .where(eq(studyClones.participantId, participant.id));
   const plan = blockPlan(participant.participantNumber);
   const phase: StudyPhase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
+  const surveyItemCount = (await getSurveyItems()).length;
 
   const cloneStatuses: CloneStatus[] = await Promise.all(
     clones.map(async (clone) => {
@@ -341,7 +342,7 @@ export async function getParticipantStatus(
         testAnswered: testProgress.answered,
         testTotal: testProgress.total,
         surveyAnswered: surveyCount[0]?.n ?? 0,
-        surveyTotal: SURVEY_ITEMS.length,
+        surveyTotal: surveyItemCount,
       };
     })
   );

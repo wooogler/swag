@@ -25,7 +25,7 @@ export interface SurveyItem {
 export const SURVEY_SCALE_MIN = 1;
 export const SURVEY_SCALE_MAX = 7;
 
-export const SURVEY_ITEMS: SurveyItem[] = [
+export const DEFAULT_SURVEY_ITEMS: SurveyItem[] = [
   // Sense of control (design: 3-4 items)
   {
     key: 'control_predict',
@@ -99,6 +99,23 @@ export const SURVEY_ITEMS: SurveyItem[] = [
   },
 ];
 
-export function isSurveyItemKey(key: string): boolean {
-  return SURVEY_ITEMS.some((i) => i.key === key);
+/** Item keys are the data's identity: reword freely, but a changed CONSTRUCT
+ * deserves a new key rather than a redefinition of an old one. */
+export const SURVEY_ITEM_KEY_RE = /^[a-z][a-z0-9_]{1,39}$/;
+
+export function isValidSurveyItems(value: unknown): value is SurveyItem[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const keys = new Set<string>();
+  for (const raw of value) {
+    const item = raw as Partial<SurveyItem>;
+    if (typeof item?.key !== 'string' || !SURVEY_ITEM_KEY_RE.test(item.key)) return false;
+    if (keys.has(item.key)) return false;
+    keys.add(item.key);
+    if (item.construct !== 'control' && item.construct !== 'trust' && item.construct !== 'load') {
+      return false;
+    }
+    if (typeof item.text !== 'string' || item.text.trim() === '') return false;
+    if (typeof item.low !== 'string' || typeof item.high !== 'string') return false;
+  }
+  return true;
 }

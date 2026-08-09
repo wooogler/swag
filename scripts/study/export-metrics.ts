@@ -60,7 +60,8 @@ function write(name: string, rows: Record<string, unknown>[]) {
 
 async function main() {
   const { blockPlan } = await import('../../src/lib/study/phases');
-  const { SURVEY_ITEMS } = await import('../../src/lib/study/survey-items');
+  const { getSurveyItems } = await import('../../src/lib/study/survey-store');
+  const SURVEY_ITEMS = await getSurveyItems();
   mkdirSync(OUT, { recursive: true });
 
   const participants = await db.select().from(studyParticipants);
