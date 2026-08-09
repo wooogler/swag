@@ -1,6 +1,8 @@
 # SCORE v7 설계 — Intent Tree (중첩 집합 + first-match 체인)
 
-작성: 2026-08-01 · 상태: **설계 초안 (구현 전)** · v6의 분류/배정 층(§classification, resolveAssignment, exception links, boundary)을 대체함. Rule/버전/배포 메커니즘은 유지하되 형태 변경.
+> **구현 완료 + 일부 개정 (2026-08-05).** 현행 as-built 기준은 **`docs/SCORE_BASELINE_DESIGN.md`**. 이 문서는 v7 결정의 근거 사료로 유효하되, §3.6(핀)은 개정됐다 — pin은 판정 오버라이드가 아니라 pending→fold→consumed 교정이며 라우팅에 직접 영향을 주지 않는다.
+
+작성: 2026-08-01 · 상태: ~~설계 초안 (구현 전)~~ **구현됨** (`SCORE_v7_implementation_plan.md` 참조) · v6의 분류/배정 층(§classification, resolveAssignment, exception links, boundary)을 대체함. Rule/버전/배포 메커니즘은 유지하되 형태 변경.
 
 ## 0. 한 줄 요약
 
