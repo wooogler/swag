@@ -154,6 +154,30 @@ export default function CurationBoard({
     return counts;
   }, [state.members, questionById]);
 
+  /**
+   * The subtype mix already sitting in one (set, type) slot — what a hover
+   * answers. Read live from the judge's verdicts rather than the snapshot on
+   * the member row, so it reflects every subtype a question matches, not just
+   * the one frozen as its label.
+   */
+  const subtypeMixFor = useCallback(
+    (kind: CurationSetKind, type: ScoreQueryType): [string, number][] => {
+      const tally = new Map<string, number>();
+      for (const m of state.members) {
+        if (m.setKind !== kind) continue;
+        const q = questionById.get(m.messageId);
+        if ((q?.queryType ?? m.queryType) !== type) continue;
+        const titles = Object.entries(q?.matches ?? {})
+          .filter(([id, grade]) => grade === 'clearly_in' && subtypeById.get(Number(id))?.isSubtype)
+          .map(([id]) => subtypeById.get(Number(id))!.title);
+        if (titles.length === 0) titles.push('(어느 subtype에도 안 걸림)');
+        for (const t of titles) tally.set(t, (tally.get(t) ?? 0) + 1);
+      }
+      return [...tally].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    },
+    [state.members, questionById, subtypeById]
+  );
+
   /** How many of a set's questions SHOULD be boundary, at the natural ratio. */
   const boundaryTargetFor = useCallback(
     (kind: CurationSetKind) =>
@@ -310,8 +334,11 @@ export default function CurationBoard({
     return { map, ungrouped };
   }, [state.subtypes]);
 
-  const errors = violations.filter((v) => v.severity === 'error');
-  const warnings = violations.filter((v) => v.severity === 'warning');
+  // Counts and the per-set notes live in the cards; anything else (demo
+  // isolation, unclassified questions) still needs saying out loud.
+  const otherViolations = violations.filter(
+    (v) => v.code !== 'count' && v.code !== 'ab_balance' && v.code !== 'boundary_ratio'
+  );
 
   const header = (
     <div className="flex items-center gap-3">
@@ -342,24 +369,6 @@ export default function CurationBoard({
     <StudioShell header={header}>
       {/* ── strip: set totals, demo isolation, classification, lock ── */}
       <div className="flex items-center gap-2 flex-wrap px-1 pb-2 border-b border-[hsl(var(--border))] mb-3">
-        {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
-          const have = setCounts.get(kind) ?? 0;
-          const want = targets[kind] * SCORE_QUERY_TYPES.length;
-          const boundaryHave = setCounts.get(`${kind}:boundary`) ?? 0;
-          const boundaryWant = boundaryTargetFor(kind);
-          return (
-            <Chip key={kind} tone={have === want ? 'ok' : 'warn'}>
-              {SET_LABELS[kind]} {have}/{want}
-              <span
-                className="opacity-70 font-normal"
-                title={`경계 질문 ${boundaryHave}개 (자연 비율대로면 ${boundaryWant}개)`}
-              >
-                ◐{boundaryHave}/{boundaryWant}
-              </span>
-            </Chip>
-          );
-        })}
-        <span className="w-px h-4 bg-[hsl(var(--border))]" />
         <span className="text-[11px] text-[hsl(var(--muted-foreground))]">Demo subtype</span>
         <select
           value={state.meta.demoSubtype ?? ''}
@@ -409,7 +418,97 @@ export default function CurationBoard({
         </button>
       </div>
 
-      {(error || errors.length > 0 || warnings.length > 0 || locked) && (
+      {/* Progress, one card per set. The per-type counts ARE the blocking
+          checks, so they are shown as the work rather than as a list of
+          errors — a count list of twelve had to be truncated, which hid the
+          one violation that was not a count. */}
+      <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+        {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
+          const have = setCounts.get(kind) ?? 0;
+          const want = targets[kind] * SCORE_QUERY_TYPES.length;
+          const boundaryHave = setCounts.get(`${kind}:boundary`) ?? 0;
+          const boundaryWant = boundaryTargetFor(kind);
+          const complete = have === want;
+          // Violations that belong to this set rather than to a type count.
+          const setNotes = violations.filter(
+            (v) =>
+              (v.code === 'ab_balance' && kind === 'ab') ||
+              (v.code === 'boundary_ratio' && v.message.startsWith(kind))
+          );
+          return (
+            <div
+              key={kind}
+              className={`rounded-lg border px-3 py-2 ${
+                complete
+                  ? 'border-emerald-200 bg-emerald-50/40'
+                  : 'border-[hsl(var(--border))] bg-[hsl(var(--card))]'
+              }`}
+            >
+              <div className="flex items-baseline gap-2 mb-1.5">
+                <span className="text-[11px] font-bold uppercase tracking-wide">
+                  {SET_LABELS[kind]}
+                </span>
+                <span
+                  className={`text-[11px] font-semibold tabular-nums ${
+                    complete ? 'text-emerald-700' : 'text-amber-700'
+                  }`}
+                >
+                  {have}/{want}
+                </span>
+                <span
+                  className="ml-auto text-[10.5px] tabular-nums text-[hsl(var(--muted-foreground))]"
+                  title={`경계 질문 ${boundaryHave}개 — 로그의 자연 비율(${(state.naturalBoundaryRatio * 100).toFixed(0)}%)대로면 ${boundaryWant}개`}
+                >
+                  ◐ {boundaryHave}/{boundaryWant}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                {SCORE_QUERY_TYPES.map((type) => {
+                  const n = setCounts.get(`${kind}:${type}`) ?? 0;
+                  const target = targets[kind];
+                  const mix = subtypeMixFor(kind, type);
+                  return (
+                    <div
+                      key={type}
+                      className="flex items-center gap-1.5 text-[10.5px]"
+                      title={
+                        mix.length > 0
+                          ? `${QUERY_TYPE_LABELS[type]} — 담긴 subtype\n` +
+                            mix.map(([t, c]) => `  ${t} ${c}`).join('\n')
+                          : `${QUERY_TYPE_LABELS[type]} — 아직 없음`
+                      }
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TYPE_DOT[type]}`} />
+                      <span className="truncate text-[hsl(var(--muted-foreground))]">
+                        {QUERY_TYPE_LABELS[type]}
+                      </span>
+                      <span
+                        className={`ml-auto tabular-nums font-semibold ${
+                          n === target ? 'text-emerald-700' : 'text-[hsl(var(--muted-foreground))]'
+                        }`}
+                      >
+                        {n}/{target}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {setNotes.map((v, i) => (
+                <p
+                  key={i}
+                  className={`mt-1.5 text-[10px] font-semibold ${
+                    v.severity === 'error' ? 'text-rose-700' : 'text-amber-700'
+                  }`}
+                >
+                  {v.severity === 'error' ? '✗' : '⚠'} {v.message}
+                </p>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+
+      {(error || locked || otherViolations.length > 0) && (
         <div className="mb-3 space-y-1.5">
           {locked && (
             <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-4 py-2 text-xs font-semibold text-violet-800">
@@ -421,27 +520,18 @@ export default function CurationBoard({
               {error}
             </div>
           )}
-          {errors.length > 0 && (
-            <div className="rounded-lg border border-[hsl(var(--border))] px-4 py-2 text-[11px] flex flex-wrap gap-1.5 items-center">
-              <span className="font-semibold text-[hsl(var(--muted-foreground))]">확정 차단</span>
-              {errors.slice(0, 12).map((v, i) => (
-                <Chip key={i} tone="bad">
-                  {v.message}
-                </Chip>
-              ))}
-              {errors.length > 12 && <span className="text-[hsl(var(--muted-foreground))]">+{errors.length - 12}</span>}
+          {otherViolations.map((v, i) => (
+            <div
+              key={i}
+              className={`rounded-lg border px-4 py-2 text-[11px] font-semibold ${
+                v.severity === 'error'
+                  ? 'border-rose-200 bg-rose-50 text-rose-700'
+                  : 'border-amber-200 bg-amber-50 text-amber-700'
+              }`}
+            >
+              {v.message}
             </div>
-          )}
-          {warnings.length > 0 && (
-            <div className="rounded-lg border border-[hsl(var(--border))] px-4 py-2 text-[11px] flex flex-wrap gap-1.5 items-center">
-              <span className="font-semibold text-[hsl(var(--muted-foreground))]">경고</span>
-              {warnings.map((v, i) => (
-                <Chip key={i} tone="warn">
-                  {v.message}
-                </Chip>
-              ))}
-            </div>
-          )}
+          ))}
         </div>
       )}
 
