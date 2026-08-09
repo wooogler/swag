@@ -112,7 +112,14 @@ export default async function CurationPage({
 
   return (
     <div className="h-screen flex flex-col">
+      {/* Keyed by dataset: switching datasets is a client navigation, and
+          without this React reuses the mounted board — its state was SEEDED
+          from the old dataset and useState ignores the new initial value, so
+          the tree keeps the old counts while the rows underneath are the new
+          dataset's, and every list comes out empty. A different dataset is a
+          different board. */}
       <CurationBoard
+        key={dataset.key}
         rows={rows}
         initialState={state}
         initialViolations={validateCuration(state)}
