@@ -716,8 +716,27 @@ export default function CurationBoard({
                   onClick={() => setSelectedId(row.messageId)}
                 >
                   <div className="flex items-center justify-between text-[11px] font-mono text-[hsl(var(--muted-foreground))] tabular-nums mb-1">
-                    <span>
+                    <span className="flex items-center gap-1.5">
                       {row.participantToken} · Turn {row.turnNumber}
+                      {/* Certainty as a glyph next to the turn: it is one of
+                          three states, read at a glance down the column, and a
+                          worded chip on every row crowded out the subtypes,
+                          which are what a curator is actually comparing. */}
+                      {q?.grade === 'certain' && (
+                        <span className="text-emerald-600" title="certain — one subtype claims it">
+                          ●
+                        </span>
+                      )}
+                      {q?.grade === 'boundary' && (
+                        <span className="text-amber-600" title="boundary — competing or weak claims">
+                          ◐
+                        </span>
+                      )}
+                      {q?.grade === 'unmatched' && (
+                        <span className="opacity-50" title="unmatched — no subtype claims it">
+                          ○
+                        </span>
+                      )}
                     </span>
                     <span>{q?.queryType ? QUERY_TYPE_LABELS[q.queryType] : '—'}</span>
                   </div>
@@ -732,10 +751,7 @@ export default function CurationBoard({
                       read while scanning — not in the viewer, which is for
                       reading the conversation. Type is already on the meta
                       line above, so only the subtypes repeat here. */}
-                  <div className="mt-1 flex flex-wrap gap-1 items-center pr-2">
-                    {q?.grade === 'certain' && <Chip tone="ok">● certain</Chip>}
-                    {q?.grade === 'boundary' && <Chip tone="warn">◐ boundary</Chip>}
-                    {q?.grade === 'unmatched' && <Chip>unmatched</Chip>}
+                  <div className="mt-1 flex flex-wrap gap-1 items-center">
                     {Object.entries(q?.matches ?? {}).map(([intentId, grade]) => {
                       const st = subtypeById.get(Number(intentId));
                       if (!st) return null;
@@ -748,27 +764,30 @@ export default function CurationBoard({
                     })}
                     {member && <Chip tone="violet">{SET_LABELS[member.setKind]}</Chip>}
                     {isExcluded && <Chip tone="violet">Demo-isolated</Chip>}
+                    {/* In the row's own flow, right-aligned: floating it made
+                        the panel sit on the seam between two rows, belonging to
+                        neither. Space is reserved so hovering does not reflow. */}
+                    {!locked && !isExcluded && (
+                      <span className="ml-auto flex items-center gap-0.5 rounded-md ring-1 ring-[hsl(var(--border))] bg-[hsl(var(--card))] px-1 py-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                        {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => (
+                          <button
+                            key={kind}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              assign(row.messageId, member?.setKind === kind ? null : kind);
+                            }}
+                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                              member?.setKind === kind
+                                ? 'bg-[hsl(var(--primary))] text-white'
+                                : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+                            }`}
+                          >
+                            {kind === 'review' ? 'Review' : kind === 'test' ? 'Test' : 'A/B'}
+                          </button>
+                        ))}
+                      </span>
+                    )}
                   </div>
-                  {!locked && !isExcluded && (
-                    <div className="absolute right-2 bottom-1.5 z-10 flex items-center gap-0.5 rounded-md bg-[hsl(var(--card))] px-1 py-0.5 shadow-sm ring-1 ring-[hsl(var(--border))] opacity-0 group-hover:opacity-100 focus-within:opacity-100">
-                      {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => (
-                        <button
-                          key={kind}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            assign(row.messageId, member?.setKind === kind ? null : kind);
-                          }}
-                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                            member?.setKind === kind
-                              ? 'bg-[hsl(var(--primary))] text-white'
-                              : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
-                          }`}
-                        >
-                          {kind === 'review' ? 'Review' : kind === 'test' ? 'Test' : 'A/B'}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </li>
               );
             })}
