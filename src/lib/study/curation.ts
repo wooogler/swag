@@ -91,7 +91,9 @@ export interface CurationQuestion {
   turnIndex: number;
   queryText: string;
   queryType: ScoreQueryType | null;
-  /** subtype intentId → grade, only for the two grades curation shows. */
+  /** subtype intentId → grade, only for the two grades curation shows, and only
+   * for subtypes under THIS question's own type — the ones the deployed chain
+   * could actually route it to. See gradeOf. */
   matches: Record<number, CurationGrade>;
   grade: QuestionGrade;
 }
@@ -232,6 +234,11 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
     if (!isGrade(raw.rating)) continue;
     const subtype = subtypeById.get(raw.intentId);
     if (!subtype) continue;
+    // Same type scoping as gradeOf, and for the same reason: a subtype's count
+    // is a promise about what it can claim, and it cannot claim a question the
+    // chain will never route to it. Counting cross-type matches here while the
+    // grade ignores them would put a question under a subtype badged unmatched.
+    if (typeByMessage.get(raw.messageId) !== subtype.type) continue;
     if (raw.rating === 'clearly_in') subtype.clearlyIn += 1;
     else subtype.probablyIn += 1;
     const bag = matchesByMessage.get(raw.messageId) ?? {};
@@ -239,16 +246,18 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
     matchesByMessage.set(raw.messageId, bag);
   }
 
+  const typeOfSubtype = (intentId: number) => subtypeById.get(intentId)?.type ?? null;
   const questions: CurationQuestion[] = records.map((r) => {
     const matches = matchesByMessage.get(r.messageId) ?? {};
+    const queryType = typeByMessage.get(r.messageId) ?? null;
     return {
       messageId: r.messageId,
       participantToken: tokenBySession.get(r.sessionId) ?? '',
       turnIndex: r.turnIndex,
       queryText: r.queryText,
-      queryType: typeByMessage.get(r.messageId) ?? null,
+      queryType,
       matches,
-      grade: gradeOf(matches),
+      grade: gradeOf(matches, queryType, typeOfSubtype),
     };
   });
 
@@ -296,13 +305,39 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
   };
 }
 
-/** See QuestionGrade. `matches` only ever holds real subtypes (see above). */
-function gradeOf(matches: Record<number, CurationGrade>): QuestionGrade {
+/**
+ * See QuestionGrade. `matches` only ever holds real subtypes (see above).
+ *
+ * Counted WITHIN THE QUESTION'S OWN TYPE. A template is type-less, so it is
+ * rated against every question in the log — but the deployed chain is not: a
+ * typed intent only ever sees its own type's queries (rate/route.ts isNeeded).
+ * So a planning question that reads clearly_in for a reviewing subtype carries
+ * a match the runtime can never act on, and counting it would grade the
+ * question by ambiguity that does not exist where it matters.
+ *
+ * It is also what makes the grade usable. Under solo rating a question matches
+ * ~4 subtypes across the taxonomy, so "exactly one clearly_in" over all 26 is
+ * nearly unreachable — 86-88% of both masters graded boundary, and translating
+ * was down to 3 certain questions. Scoped to the type: 77-78% boundary, and
+ * translating recovers to 25 (SWAG) and 12 (NIRVANA).
+ *
+ * An UNTYPED question grades unmatched: nothing can claim it until it has a
+ * type, and the board surfaces that separately as missingTypeCount rather than
+ * letting it hide inside a grade.
+ */
+function gradeOf(
+  matches: Record<number, CurationGrade>,
+  queryType: string | null,
+  typeOfSubtype: (intentId: number) => ScoreQueryType | null
+): QuestionGrade {
   let clearly = 0;
   let probably = 0;
-  for (const grade of Object.values(matches)) {
-    if (grade === 'clearly_in') clearly += 1;
-    else probably += 1;
+  if (queryType) {
+    for (const [id, grade] of Object.entries(matches)) {
+      if (typeOfSubtype(Number(id)) !== queryType) continue;
+      if (grade === 'clearly_in') clearly += 1;
+      else probably += 1;
+    }
   }
   if (clearly === 1) return 'certain';
   if (clearly > 1 || probably > 0) return 'boundary';
@@ -386,24 +421,26 @@ async function classifyOne(
     if (!prev || r.ratedAt > prev.ratedAt) newest.set(r.intentId, r);
   }
 
-  let clearly = 0;
-  let probably = 0;
+  // Rebuilt into gradeOf's shape rather than counted inline: the board and the
+  // stored snapshot MUST grade identically, and two copies of the rule is
+  // exactly how they stop doing that.
+  const queryType = typeRow?.type ?? null;
+  const matches: Record<number, CurationGrade> = {};
+  const typeById = new Map<number, ScoreQueryType | null>();
   let best: string | null = null;
   for (const r of newest.values()) {
     if (!isGrade(r.rating)) continue;
-    if (!labelToType.has(r.title.trim().toLowerCase())) continue; // real subtypes only
-    if (r.rating === 'clearly_in') {
-      clearly += 1;
-      if (!best) best = r.title;
-    } else {
-      probably += 1;
-      if (!best) best = r.title;
-    }
+    const type = labelToType.get(r.title.trim().toLowerCase());
+    if (!type) continue; // real subtypes only
+    matches[r.intentId] = r.rating;
+    typeById.set(r.intentId, type);
+    // The label stored beside the member is the subtype the chain could
+    // actually route it to, so it follows the same type scoping.
+    if (!best && type === queryType) best = r.title;
   }
-  const grade: QuestionGrade =
-    clearly === 1 ? 'certain' : clearly > 1 || probably > 0 ? 'boundary' : 'unmatched';
+  const grade = gradeOf(matches, queryType, (id) => typeById.get(id) ?? null);
 
-  return { queryType: typeRow?.type ?? null, subtype: best, grade };
+  return { queryType, subtype: best, grade };
 }
 
 /**
