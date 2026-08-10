@@ -106,13 +106,17 @@ function Chip({
  * button and names the count, and the second does it. Hidden entirely at zero
  * (nothing to empty) and while locked (nothing may change).
  *
- * `reveal` is the parent's named group-hover class, so an icon appears on the
- * thing it acts on rather than on every row of the card at once.
+ * Visibility is driven by state, not group-hover. The first version passed the
+ * variant in as a prop (`reveal="group-hover/card:opacity-100"`) and Tailwind's
+ * scanner never saw the candidate there, so the rule was never generated and
+ * the icon could not appear at all — a class name only exists if it is written
+ * somewhere the scanner reads. Tracking hover here also keeps the card's icon
+ * and a row's icon independent, which nested unnamed groups cannot do.
  */
 function ClearButton({
   n,
   armed,
-  reveal,
+  visible,
   onArm,
   onConfirm,
   disabled,
@@ -120,7 +124,7 @@ function ClearButton({
 }: {
   n: number;
   armed: boolean;
-  reveal: string;
+  visible: boolean;
   onArm: () => void;
   onConfirm: () => void;
   disabled: boolean;
@@ -150,7 +154,9 @@ function ClearButton({
       }}
       disabled={disabled}
       title={`Empty ${what} (${n})`}
-      className={`w-4 shrink-0 flex items-center justify-center opacity-0 ${reveal} transition-opacity text-[hsl(var(--muted-foreground))] hover:text-rose-600 disabled:opacity-0`}
+      className={`w-4 shrink-0 flex items-center justify-center transition-opacity text-[hsl(var(--muted-foreground))] hover:text-rose-600 ${
+        visible ? 'opacity-100' : 'opacity-0'
+      }`}
     >
       <Trash2 className="w-3 h-3" />
     </button>
@@ -201,6 +207,11 @@ export default function CurationBoard({
    * slot throws away hand-assigned reading — the one thing here that cannot be
    * recomputed — so the first click only arms, and the second is the act. */
   const [armedClear, setArmedClear] = useState<string | null>(null);
+  /** Which clear icon is revealed. Two independent keys rather than one, so a
+   * row's icon and its card's icon do not fight over the same slot when the
+   * pointer is inside both. */
+  const [hoverCard, setHoverCard] = useState<CurationSetKind | null>(null);
+  const [hoverRow, setHoverRow] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -570,8 +581,12 @@ export default function CurationBoard({
           return (
             <div
               key={kind}
-              onMouseLeave={() => setArmedClear((a) => (a?.startsWith(`${kind}:`) ? null : a))}
-              className={`group/card rounded-lg border px-3 py-2 ${
+              onMouseEnter={() => setHoverCard(kind)}
+              onMouseLeave={() => {
+                setHoverCard((c) => (c === kind ? null : c));
+                setArmedClear((a) => (a?.startsWith(`${kind}:`) ? null : a));
+              }}
+              className={`rounded-lg border px-3 py-2 ${
                 complete
                   ? 'border-emerald-200 bg-emerald-50/40'
                   : 'border-[hsl(var(--border))] bg-[hsl(var(--card))]'
@@ -612,7 +627,7 @@ export default function CurationBoard({
                     <ClearButton
                       n={have}
                       armed={armedClear === `${kind}:all`}
-                      reveal="group-hover/card:opacity-100"
+                      visible={hoverCard === kind}
                       onArm={() => setArmedClear(`${kind}:all`)}
                       onConfirm={() => runClear(kind, null)}
                       disabled={busy !== null}
@@ -630,7 +645,9 @@ export default function CurationBoard({
                   return (
                     <div
                       key={type}
-                      className="group/row flex items-center gap-1.5 text-[10.5px] leading-5"
+                      onMouseEnter={() => setHoverRow(`${kind}:${type}`)}
+                      onMouseLeave={() => setHoverRow((r) => (r === `${kind}:${type}` ? null : r))}
+                      className="flex items-center gap-1.5 text-[10.5px] leading-5"
                       title={
                         mix.length > 0
                           ? `${QUERY_TYPE_LABELS[type]} — subtypes in this slot\n` +
@@ -656,7 +673,7 @@ export default function CurationBoard({
                         <ClearButton
                           n={n}
                           armed={armedClear === `${kind}:${type}`}
-                          reveal="group-hover/row:opacity-100"
+                          visible={hoverRow === `${kind}:${type}`}
                           onArm={() => setArmedClear(`${kind}:${type}`)}
                           onConfirm={() => runClear(kind, type)}
                           disabled={busy !== null}
