@@ -17,7 +17,7 @@ async function show(key: string, label: string) {
   console.log(`harness        ${s.mode} · r${s.ratingVersion} · ${s.model}`);
   console.log(`reachable      ${s.reachable.length} subtypes × ${s.questions} questions = ${s.pairs} pairs`);
   console.log(`skipped        ${s.unreachable.length}${s.unreachable.length ? ` — ${s.unreachable.join(', ')}` : ''}`);
-  console.log(`out of date    ${s.stalePairs} verdicts · ${s.pendingMessages} calls`);
+  console.log(`out of date    ${s.stalePairs} verdicts = ${s.stalePairs} calls (one definition per call)`);
   return s;
 }
 
@@ -45,11 +45,9 @@ async function main() {
   console.log(JSON.stringify(second, null, 2));
   const final = await show(key, `${label} after pass 2`);
 
-  const droppedFirst = first.ratedPairs;
-  const droppedSecond = before - final.stalePairs;
   console.log(
-    `\nidempotent? pass 1 wrote ${droppedFirst} pairs; pass 2 moved a further ${droppedSecond}` +
-      ` — pass 2 rated NEW questions (${second.ratedMessages}), never the same ones twice.`
+    `\nidempotent? pass 1 wrote ${first.ratedPairs} pairs; pass 2 moved a further ` +
+      `${before - final.stalePairs} — pass 2 rated NEW pairs (${second.ratedPairs}), never the same ones twice.`
   );
   process.exit(0);
 }

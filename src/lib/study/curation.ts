@@ -40,7 +40,6 @@ import {
 } from '@/lib/score/intents';
 import { classifyMessageType } from '@/lib/score/type-classifier';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
-import { MAX_INTENTS_PER_CALL } from '@/lib/score/intent-prompts';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
@@ -828,12 +827,11 @@ export interface ReRateStatus {
   /** Templates no chooser option can seed — skipped, listed so it is visible. */
   unreachable: string[];
   questions: number;
-  /** reachable × questions — the verdicts the prepared set is made of. */
+  /** reachable × questions — the verdicts the prepared set is made of, and,
+   * one definition per call, the number of calls a full pass costs. */
   pairs: number;
-  /** Pairs with no row at the current defHash. */
+  /** Pairs with no row at the current defHash — the calls left to make. */
   stalePairs: number;
-  /** Messages carrying at least one stale pair, i.e. the calls left to make. */
-  pendingMessages: number;
   mode: string;
   ratingVersion: number;
   model: string;
@@ -862,17 +860,14 @@ export async function getReRateStatus(datasetKey: string): Promise<ReRateStatus>
     else unreachable.push(t.title);
   }
 
-  const stale = await stalePairsByMessage(assignmentId, records, reachable);
-  let stalePairs = 0;
-  for (const ids of stale.values()) stalePairs += ids.length;
+  const stale = await stalePairs(assignmentId, records, reachable);
 
   return {
     reachable: reachable.map((r) => ({ intentId: r.intentId, title: r.title })),
     unreachable,
     questions: records.length,
     pairs: reachable.length * records.length,
-    stalePairs,
-    pendingMessages: stale.size,
+    stalePairs: stale.length,
     mode: MATERIAL_PROMPT_MODE,
     ratingVersion: INTENT_RATING_VERSION,
     model: getDefaultScoreModel(),
@@ -880,18 +875,18 @@ export async function getReRateStatus(datasetKey: string): Promise<ReRateStatus>
 }
 
 /**
- * Per message, which reachable templates have no verdict at their CURRENT
- * defHash. Unlike probe.ts — which deliberately accepts an older generation so
- * a seeded filter opens instantly — this is the strict test: a row from the
- * previous harness is a verdict the current system would not necessarily
- * produce, and topping those up is the whole point of the button.
+ * Which (question, subtype) pairs have no verdict at their CURRENT defHash.
+ * Unlike probe.ts — which deliberately accepts an older generation so a seeded
+ * filter opens instantly — this is the strict test: a row from the previous
+ * harness is a verdict the current system would not necessarily produce, and
+ * topping those up is the whole point of the button.
  */
-async function stalePairsByMessage(
+async function stalePairs(
   assignmentId: string,
   records: { messageId: number }[],
   templates: { intentId: number; defHash: string }[]
-): Promise<Map<number, number[]>> {
-  const out = new Map<number, number[]>();
+): Promise<{ messageId: number; intentId: number; defHash: string }[]> {
+  const out: { messageId: number; intentId: number; defHash: string }[] = [];
   if (templates.length === 0 || records.length === 0) return out;
 
   const rows = await db
@@ -908,22 +903,40 @@ async function stalePairsByMessage(
     );
   const have = new Set(rows.map((r) => `${r.messageId}:${r.intentId}:${r.defHash}`));
 
+  // Question-major, so a partial run leaves whole questions finished rather
+  // than every question half-judged — the board reads a mix of generations
+  // until a pass completes, and this keeps that mix legible.
   for (const rec of records) {
-    const missing = templates
-      .filter((t) => !have.has(`${rec.messageId}:${t.intentId}:${t.defHash}`))
-      .map((t) => t.intentId);
-    if (missing.length > 0) out.set(rec.messageId, missing);
+    for (const t of templates) {
+      if (!have.has(`${rec.messageId}:${t.intentId}:${t.defHash}`)) {
+        out.push({ messageId: rec.messageId, intentId: t.intentId, defHash: t.defHash });
+      }
+    }
   }
   return out;
 }
 
 /**
  * Re-rate the prepared subtype set against the master log under the CURRENT
- * rating harness — same model, same mode, same prompt builder the workbench
- * uses. One call carries up to MAX_INTENTS_PER_CALL templates, so a master is
- * ~one call per question, not one per pair.
+ * rating harness — same model, same mode, same prompt builder, and ONE
+ * DEFINITION PER CALL.
  *
- * Idempotent by defHash: a template already rated at its current hash costs
+ * That last part is the expensive part and the whole point. A definition judged
+ * beside its 25 siblings is not judged the same way as one judged alone: a
+ * sibling with a narrower definition takes the question, so a broad set keeps
+ * only what nothing else claims better. Measured on this master (see
+ * scripts/study/check-neighbor-effect.ts), a broad subtype flipped membership on
+ * 6 of 30 questions between the two, every flip in the same direction.
+ *
+ * The path a participant takes is solo: the chooser's probe rates one
+ * definition (probe.ts), and creating the intent rates it alone too — the New
+ * Intent modal scopes the run with `intentIds: [id]`. The prepared sets were
+ * only ever batched because they were filled by an UNSCOPED sweep, which pools
+ * every stale intent on a message into one call. So this matches the sets to
+ * the path, at 26× the calls, rather than leaving a starter and a hand-typed
+ * intent with the same text disagreeing about which questions they cover.
+ *
+ * Idempotent by defHash: a pair already rated at its current hash costs
  * nothing, which is what makes the button safe to press repeatedly and what
  * lets the UI drive it as a loop. Rows from older generations are left alone —
  * they are hash-keyed history, and probe.ts still falls back to them.
@@ -935,13 +948,13 @@ async function stalePairsByMessage(
  */
 export async function reRateSubtypes(
   datasetKey: string,
-  limit = 40
+  /** Pairs — and so calls — per invocation. */
+  limit = 500
 ): Promise<{
-  pendingMessages: number;
-  ratedMessages: number;
+  pendingPairs: number;
   ratedPairs: number;
   failed: number;
-  remainingMessages: number;
+  remainingPairs: number;
 }> {
   const dataset = curationDataset(datasetKey);
   if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
@@ -959,21 +972,21 @@ export async function reRateSubtypes(
   const templates = templateRows
     .map((t) => ({ intentId: t.id, definition: t.definition, defHash: intentDefHash(t.definition) }))
     .filter((t) => chooser.has(t.defHash));
-  if (templates.length === 0) return { pendingMessages: 0, ratedMessages: 0, ratedPairs: 0, failed: 0, remainingMessages: 0 };
+  const nothing = { pendingPairs: 0, ratedPairs: 0, failed: 0, remainingPairs: 0 };
+  if (templates.length === 0) return nothing;
 
-  const stale = await stalePairsByMessage(assignmentId, records, templates);
-  if (stale.size === 0) {
-    return { pendingMessages: 0, ratedMessages: 0, ratedPairs: 0, failed: 0, remainingMessages: 0 };
-  }
+  const pending = await stalePairs(assignmentId, records, templates);
+  if (pending.length === 0) return nothing;
   if (!isOpenAIConfigured()) throw new Error('openai_not_configured');
 
-  const byId = new Map(templates.map((t) => [t.intentId, t]));
-  const batch = records.filter((r) => stale.has(r.messageId)).slice(0, limit);
-  const ids = batch.map((b) => b.messageId);
+  const definitionById = new Map(templates.map((t) => [t.intentId, t.definition]));
+  const recordById = new Map(records.map((r) => [r.messageId, r]));
+  const batch = pending.slice(0, limit);
 
   // `materials` is required by the rating prompt in abridged mode — without the
   // spans the judge would silently read the pasted material verbatim and rate a
-  // different prompt than the workbench does.
+  // different prompt than the workbench does. Loaded per distinct message, not
+  // per pair: 26 pairs share one question's dissection.
   const stored = await db
     .select({
       messageId: scoreDissections.messageId,
@@ -983,7 +996,10 @@ export async function reRateSubtypes(
     })
     .from(scoreDissections)
     .where(
-      and(eq(scoreDissections.assignmentId, assignmentId), inArray(scoreDissections.messageId, ids))
+      and(
+        eq(scoreDissections.assignmentId, assignmentId),
+        inArray(scoreDissections.messageId, [...new Set(batch.map((p) => p.messageId))])
+      )
     );
   const dissectionByMsg = new Map(
     stored.map((s) => [
@@ -1000,71 +1016,61 @@ export async function reRateSubtypes(
   const run = createLimiter(SCORE_CONCURRENCY);
   const now = new Date();
   let ratedPairs = 0;
-  let ratedMessages = 0;
   let failed = 0;
 
   await Promise.all(
-    batch.map((rec) =>
+    batch.map((pair) =>
       run(async () => {
-        const wanted = (stale.get(rec.messageId) ?? [])
-          .map((id) => byId.get(id))
-          .filter((t): t is (typeof templates)[number] => Boolean(t));
-        let wroteHere = 0;
-        // Chunked HERE rather than left to rateMessageIntents, which silently
-        // slices to MAX_INTENTS_PER_CALL — a set that outgrew one call would
-        // otherwise leave the tail permanently stale and the loop never ending.
-        for (let i = 0; i < wanted.length; i += MAX_INTENTS_PER_CALL) {
-          const chunk = wanted.slice(i, i + MAX_INTENTS_PER_CALL);
-          try {
-            const result = await rateMessageIntents({
-              queryText: rec.queryText,
-              prevQueryText: rec.prevQueryText,
-              prevResponseText: rec.prevResponseText,
-              intents: chunk.map((t) => ({ id: t.intentId, definition: t.definition })),
-              includeDissection: false,
-              dissection: dissectionByMsg.get(rec.messageId) ?? null,
-              model,
-            });
-            for (const t of chunk) {
-              const rating = result.ratings.get(t.intentId);
-              if (!rating) continue; // no usable verdict → stays stale, retried
-              const values = {
-                rating: rating.rating,
-                rationale: rating.rationale || null,
-                defHash: t.defHash,
-                rawResponse: result.raw,
-                model,
-                ratedAt: now,
-              };
-              await db
-                .insert(scoreIntentRatings)
-                .values({ assignmentId, messageId: rec.messageId, intentId: t.intentId, ...values })
-                .onConflictDoUpdate({
-                  target: [
-                    scoreIntentRatings.messageId,
-                    scoreIntentRatings.intentId,
-                    scoreIntentRatings.defHash,
-                  ],
-                  set: values,
-                });
-              wroteHere += 1;
-            }
-          } catch {
-            failed += 1;
+        const rec = recordById.get(pair.messageId);
+        const definition = definitionById.get(pair.intentId);
+        if (!rec || !definition) return;
+        try {
+          const result = await rateMessageIntents({
+            queryText: rec.queryText,
+            prevQueryText: rec.prevQueryText,
+            prevResponseText: rec.prevResponseText,
+            intents: [{ id: pair.intentId, definition }],
+            includeDissection: false,
+            dissection: dissectionByMsg.get(pair.messageId) ?? null,
+            model,
+          });
+          const rating = result.ratings.get(pair.intentId);
+          if (!rating) {
+            failed += 1; // no usable verdict → stays stale, retried next batch
+            return;
           }
+          const values = {
+            rating: rating.rating,
+            rationale: rating.rationale || null,
+            defHash: pair.defHash,
+            rawResponse: result.raw,
+            model,
+            ratedAt: now,
+          };
+          await db
+            .insert(scoreIntentRatings)
+            .values({ assignmentId, messageId: pair.messageId, intentId: pair.intentId, ...values })
+            .onConflictDoUpdate({
+              target: [
+                scoreIntentRatings.messageId,
+                scoreIntentRatings.intentId,
+                scoreIntentRatings.defHash,
+              ],
+              set: values,
+            });
+          ratedPairs += 1;
+        } catch {
+          failed += 1;
         }
-        ratedPairs += wroteHere;
-        if (wroteHere > 0) ratedMessages += 1;
       })
     )
   );
 
   return {
-    pendingMessages: stale.size,
-    ratedMessages,
+    pendingPairs: pending.length,
     ratedPairs,
     failed,
-    remainingMessages: Math.max(0, stale.size - ratedMessages),
+    remainingPairs: Math.max(0, pending.length - ratedPairs),
   };
 }
 

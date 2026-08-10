@@ -2,10 +2,11 @@
  * Re-rate the prepared subtype set against a master, under the current harness.
  *
  * GET  — what it would cost, spending nothing.
- * POST — one batch of messages; the caller loops until `remainingMessages` is 0.
- *        Batched rather than one long request because a master is ~500 calls,
- *        far past any single request budget, and because a loop that reports
- *        after every batch is the only honest progress bar.
+ * POST — one batch of pairs; the caller loops until `pendingPairs` is 0.
+ *        Batched rather than one long request because a master is ~13,000 calls
+ *        (one definition per call — see reRateSubtypes), far past any single
+ *        request budget, and because a loop that reports after every batch is
+ *        the only honest progress bar.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -17,7 +18,9 @@ export const maxDuration = 300;
 
 const bodySchema = z.object({
   datasetKey: z.string().min(1),
-  limit: z.number().int().positive().max(200).optional(),
+  // A pair is a call, and SCORE_CONCURRENCY runs 64 at a time — 500 lands in
+  // well under the route budget while still reporting progress often enough.
+  limit: z.number().int().positive().max(2000).optional(),
 });
 
 export async function GET(req: Request) {

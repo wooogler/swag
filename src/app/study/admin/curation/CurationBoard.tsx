@@ -976,7 +976,6 @@ interface ReRateStatus {
   questions: number;
   pairs: number;
   stalePairs: number;
-  pendingMessages: number;
   mode: string;
   ratingVersion: number;
   model: string;
@@ -1035,7 +1034,7 @@ function ReRateModal({
     setError(null);
     setDone(0);
     setFailed(0);
-    setTotal(status.pendingMessages);
+    setTotal(status.stalePairs);
     let completed = 0;
     try {
       // Loops on the server's own remaining count, not a local estimate: a
@@ -1046,7 +1045,7 @@ function ReRateModal({
         const res = await fetch('/api/study/admin/curation/rerate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ datasetKey, limit: 25 }),
+          body: JSON.stringify({ datasetKey, limit: 500 }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -1057,13 +1056,13 @@ function ReRateModal({
           );
           break;
         }
-        completed += data.ratedMessages ?? 0;
+        completed += data.ratedPairs ?? 0;
         setDone(completed);
         setFailed((f) => f + (data.failed ?? 0));
-        if (!data.pendingMessages) break;
+        if (!data.pendingPairs) break;
         // No progress and nothing pending left to try means the remainder is
         // stuck on unusable model output — stop rather than spin on it.
-        if (!data.ratedMessages) {
+        if (!data.ratedPairs) {
           setError('Some questions produced no usable verdict. Try again later.');
           break;
         }
@@ -1094,9 +1093,11 @@ function ReRateModal({
           <h2 className="text-sm font-bold">Re-rate subtypes — {datasetLabel}</h2>
           <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
             Judges every starter subtype against every question again, under the harness
-            the study will actually run. A subtype is only re-rated while its definition
-            is still the exact text the intent chooser seeds — that identity is what makes
-            a prepared set and a hand-made intent agree.
+            the study will actually run — <strong>one definition per call</strong>, the way
+            the New Intent modal rates an intent someone wrote themselves. A subtype is
+            only re-rated while its definition is still the exact text the chooser seeds;
+            that, and judging it alone, is what makes a prepared set and a hand-made
+            intent agree.
           </p>
         </div>
 
@@ -1120,7 +1121,7 @@ function ReRateModal({
                 </dd>
                 <dt className="text-[hsl(var(--muted-foreground))]">Out of date</dt>
                 <dd className="font-semibold tabular-nums">
-                  {status.stalePairs} verdicts · {status.pendingMessages} calls
+                  {status.stalePairs} verdicts = {status.stalePairs} calls
                 </dd>
               </dl>
 
@@ -1154,7 +1155,7 @@ function ReRateModal({
                     />
                   </div>
                   <p className="text-[10.5px] text-[hsl(var(--muted-foreground))] tabular-nums">
-                    {done} / {total} questions
+                    {done} / {total} verdicts
                     {failed > 0 && ` · ${failed} calls failed`}
                     {running && ' · running'}
                   </p>
@@ -1190,7 +1191,7 @@ function ReRateModal({
               {running
                 ? 'Re-rating…'
                 : status
-                  ? `Re-rate ${status.pendingMessages} questions`
+                  ? `Re-rate ${status.stalePairs} verdicts`
                   : 'Re-rate'}
             </button>
           </div>
