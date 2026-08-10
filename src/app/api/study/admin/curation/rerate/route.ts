@@ -1,0 +1,70 @@
+/**
+ * Re-rate the prepared subtype set against a master, under the current harness.
+ *
+ * GET  — what it would cost, spending nothing.
+ * POST — one batch of messages; the caller loops until `remainingMessages` is 0.
+ *        Batched rather than one long request because a master is ~500 calls,
+ *        far past any single request budget, and because a loop that reports
+ *        after every batch is the only honest progress bar.
+ */
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { getReRateStatus, isLocked, reRateSubtypes } from '@/lib/study/curation';
+import { requireAdmin } from '@/lib/study/admin-guard';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
+
+const bodySchema = z.object({
+  datasetKey: z.string().min(1),
+  limit: z.number().int().positive().max(200).optional(),
+});
+
+export async function GET(req: Request) {
+  const gate = await requireAdmin();
+  if (gate.response) return gate.response;
+  const datasetKey = new URL(req.url).searchParams.get('datasetKey');
+  if (!datasetKey) return NextResponse.json({ error: 'invalid_body' }, { status: 400 });
+  try {
+    return NextResponse.json({ success: true, ...(await getReRateStatus(datasetKey)) });
+  } catch (err) {
+    console.error('curation rerate status error:', err);
+    return NextResponse.json({ error: 'status_failed' }, { status: 500 });
+  }
+}
+
+export async function POST(req: Request) {
+  const gate = await requireAdmin();
+  if (gate.response) return gate.response;
+
+  let parsed: z.infer<typeof bodySchema>;
+  try {
+    parsed = bodySchema.parse(await req.json());
+  } catch {
+    return NextResponse.json({ error: 'invalid_body' }, { status: 400 });
+  }
+
+  // A locked dataset is one whose sets have been signed off and may already
+  // have been built into the reduced masters. Re-rating under it would move the
+  // certain/boundary split beneath a set that was curated on the old one.
+  if (await isLocked(parsed.datasetKey)) {
+    return NextResponse.json(
+      {
+        error: 'curation_locked',
+        message: 'Unlock this dataset first — re-rating moves the grades the confirmed sets were picked on.',
+      },
+      { status: 409 }
+    );
+  }
+
+  try {
+    const result = await reRateSubtypes(parsed.datasetKey, parsed.limit);
+    return NextResponse.json({ success: true, ...result });
+  } catch (err) {
+    if (err instanceof Error && err.message === 'openai_not_configured') {
+      return NextResponse.json({ error: 'openai_not_configured' }, { status: 503 });
+    }
+    console.error('curation rerate error:', err);
+    return NextResponse.json({ error: 'rerate_failed' }, { status: 500 });
+  }
+}

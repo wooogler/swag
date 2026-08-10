@@ -13,9 +13,19 @@
  * knows the board can already read this screen.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, Lock, Unlock, RefreshCw, Settings, ClipboardList, Plus, X } from 'lucide-react';
+import {
+  Loader2,
+  Lock,
+  Unlock,
+  RefreshCw,
+  Settings,
+  ClipboardList,
+  Plus,
+  Scale,
+  X,
+} from 'lucide-react';
 import type { ScoreQueryRow } from '@/app/instructor/assignments/[id]/score/IntentBoard';
 import { ConversationThread } from '@/app/instructor/assignments/[id]/score/conversation';
 import { PaneSearch, QueryTextButton } from '@/app/instructor/assignments/[id]/score/workbench-shared';
@@ -117,6 +127,7 @@ export default function CurationBoard({
   const [targets, setTargets] = useState<SetTargets>(initialTargets);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [surveyOpen, setSurveyOpen] = useState(false);
+  const [reRateOpen, setReRateOpen] = useState(false);
   const [selection, setSelection] = useState<Selection>({ kind: 'type', type: 'planning' });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
@@ -406,6 +417,15 @@ export default function CurationBoard({
           {busy === 'classify' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Refresh classification
           <Badge tone={state.missingTypeCount > 0 ? 'warn' : 'plain'}>{state.missingTypeCount} missing</Badge>
+        </button>
+        <button
+          onClick={() => setReRateOpen(true)}
+          disabled={busy !== null}
+          title="Re-judge the starter subtypes under the current harness"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+        >
+          <Scale className="w-3 h-3" />
+          Re-rate subtypes
         </button>
         <button
           onClick={() => setSurveyOpen(true)}
@@ -800,6 +820,16 @@ export default function CurationBoard({
 
       {surveyOpen && <SurveyModal onClose={() => setSurveyOpen(false)} />}
 
+      {reRateOpen && (
+        <ReRateModal
+          datasetKey={state.dataset.key}
+          datasetLabel={state.dataset.label}
+          locked={locked}
+          onClose={() => setReRateOpen(false)}
+          onDone={refresh}
+        />
+      )}
+
       {settingsOpen && (
         <SetTargetsModal
           targets={targets}
@@ -932,6 +962,236 @@ function SetTargetsModal({
               className="text-xs font-semibold px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-white disabled:opacity-40"
             >
               {busy ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface ReRateStatus {
+  reachable: { intentId: number; title: string }[];
+  unreachable: string[];
+  questions: number;
+  pairs: number;
+  stalePairs: number;
+  pendingMessages: number;
+  mode: string;
+  ratingVersion: number;
+  model: string;
+}
+
+/**
+ * Re-rate the prepared subtype set under the current harness.
+ *
+ * Driven as a loop from here rather than as one long request: a master is
+ * ~one call per question, which is minutes of work, and a batch that reports
+ * back after each round is the only way to show real progress — and the only
+ * way to stop halfway without losing what was already rated (every batch is
+ * committed, and the job is idempotent by definition hash).
+ */
+function ReRateModal({
+  datasetKey,
+  datasetLabel,
+  locked,
+  onClose,
+  onDone,
+}: {
+  datasetKey: string;
+  datasetLabel: string;
+  locked: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [status, setStatus] = useState<ReRateStatus | null>(null);
+  const [running, setRunning] = useState(false);
+  const [done, setDone] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [failed, setFailed] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const stopRef = useRef(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const res = await fetch(
+        `/api/study/admin/curation/rerate?datasetKey=${encodeURIComponent(datasetKey)}`
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!alive) return;
+      if (!res.ok) setError('Could not read the re-rate status.');
+      else setStatus(data as ReRateStatus);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [datasetKey]);
+
+  const run = async () => {
+    if (!status) return;
+    stopRef.current = false;
+    setRunning(true);
+    setError(null);
+    setDone(0);
+    setFailed(0);
+    setTotal(status.pendingMessages);
+    let completed = 0;
+    try {
+      // Loops on the server's own remaining count, not a local estimate: a
+      // message whose call produced no usable verdict stays pending, so a
+      // client-side countdown would report finished while work remained.
+      for (;;) {
+        if (stopRef.current) break;
+        const res = await fetch('/api/study/admin/curation/rerate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ datasetKey, limit: 25 }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(
+            data.error === 'openai_not_configured'
+              ? 'OPENAI_API_KEY is not configured.'
+              : (data.message ?? 'Re-rating failed.')
+          );
+          break;
+        }
+        completed += data.ratedMessages ?? 0;
+        setDone(completed);
+        setFailed((f) => f + (data.failed ?? 0));
+        if (!data.pendingMessages) break;
+        // No progress and nothing pending left to try means the remainder is
+        // stuck on unusable model output — stop rather than spin on it.
+        if (!data.ratedMessages) {
+          setError('Some questions produced no usable verdict. Try again later.');
+          break;
+        }
+      }
+    } finally {
+      setRunning(false);
+      const res = await fetch(
+        `/api/study/admin/curation/rerate?datasetKey=${encodeURIComponent(datasetKey)}`
+      );
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setStatus(data as ReRateStatus);
+      onDone();
+    }
+  };
+
+  const upToDate = status !== null && status.stalePairs === 0;
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+      onClick={running ? undefined : onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
+          <h2 className="text-sm font-bold">Re-rate subtypes — {datasetLabel}</h2>
+          <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
+            Judges every starter subtype against every question again, under the harness
+            the study will actually run. A subtype is only re-rated while its definition
+            is still the exact text the intent chooser seeds — that identity is what makes
+            a prepared set and a hand-made intent agree.
+          </p>
+        </div>
+
+        <div className="px-5 py-4 space-y-3 text-xs">
+          {!status && !error && (
+            <p className="text-[hsl(var(--muted-foreground))]">Reading…</p>
+          )}
+
+          {status && (
+            <>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                <dt className="text-[hsl(var(--muted-foreground))]">Harness</dt>
+                <dd className="font-semibold tabular-nums">
+                  {status.mode} · r{status.ratingVersion}
+                </dd>
+                <dt className="text-[hsl(var(--muted-foreground))]">Model</dt>
+                <dd className="font-semibold">{status.model}</dd>
+                <dt className="text-[hsl(var(--muted-foreground))]">Subtypes × questions</dt>
+                <dd className="font-semibold tabular-nums">
+                  {status.reachable.length} × {status.questions} = {status.pairs}
+                </dd>
+                <dt className="text-[hsl(var(--muted-foreground))]">Out of date</dt>
+                <dd className="font-semibold tabular-nums">
+                  {status.stalePairs} verdicts · {status.pendingMessages} calls
+                </dd>
+              </dl>
+
+              {status.unreachable.length > 0 && (
+                <p className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-3 py-2 text-[10.5px] leading-relaxed">
+                  <strong>Skipped ({status.unreachable.length}):</strong>{' '}
+                  {status.unreachable.join(', ')} — no chooser option seeds these
+                  definitions, so nothing reads their verdicts.
+                </p>
+              )}
+
+              {locked && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
+                  This dataset is confirmed. Re-rating would move the grades its sets were
+                  picked on — unlock it first.
+                </p>
+              )}
+
+              {upToDate && !running && (
+                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-semibold text-emerald-700">
+                  Every subtype is current. Nothing to do.
+                </p>
+              )}
+
+              {(running || done > 0) && (
+                <div className="space-y-1.5">
+                  <div className="h-1.5 rounded-full bg-[hsl(var(--muted))] overflow-hidden">
+                    <div
+                      className="h-full bg-[hsl(var(--primary))] transition-all"
+                      style={{ width: `${total ? Math.min(100, (done / total) * 100) : 0}%` }}
+                    />
+                  </div>
+                  <p className="text-[10.5px] text-[hsl(var(--muted-foreground))] tabular-nums">
+                    {done} / {total} questions
+                    {failed > 0 && ` · ${failed} calls failed`}
+                    {running && ' · running'}
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+
+          {error && (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex items-center justify-between gap-2">
+          <span className="text-[10.5px] text-[hsl(var(--muted-foreground))] max-w-[22rem] leading-snug">
+            Safe to stop and resume — finished questions are kept. Curate after it
+            finishes, though: a half-done run reads half old grades.
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={running ? () => (stopRef.current = true) : onClose}
+              className="text-xs font-semibold px-3 py-1.5 rounded border border-[hsl(var(--border))]"
+            >
+              {running ? 'Stop' : 'Close'}
+            </button>
+            <button
+              onClick={run}
+              disabled={!status || running || locked || upToDate}
+              className="text-xs font-semibold px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-white disabled:opacity-40"
+            >
+              {running
+                ? 'Re-rating…'
+                : status
+                  ? `Re-rate ${status.pendingMessages} questions`
+                  : 'Re-rate'}
             </button>
           </div>
         </div>

@@ -28,19 +28,30 @@ import {
 } from '@/db/schema';
 import { getQueryRecords } from '@/lib/score/queries';
 import {
+  INTENT_RATING_VERSION,
+  MATERIAL_PROMPT_MODE,
   SCORE_QUERY_TYPES,
   TYPE_CLASSIFIER_VERSION,
+  intentDefHash,
   type DissectionResult,
   type MaterialKind,
+  type MaterialSpan,
   type ScoreQueryType,
 } from '@/lib/score/intents';
 import { classifyMessageType } from '@/lib/score/type-classifier';
+import { rateMessageIntents } from '@/lib/score/intent-classifier';
+import { MAX_INTENTS_PER_CALL } from '@/lib/score/intent-prompts';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import { DEFAULT_SCORE_CONFIG } from '@/lib/score/default-config';
+import { getScoreConfig } from '@/lib/score/config-store';
 import { flattenSubtypes } from '@/lib/score/config';
-import { LEGACY_TYPE_TO_QUERY_TYPE } from '@/lib/score/jelson-suggest';
+import {
+  LEGACY_TYPE_TO_QUERY_TYPE,
+  buildJelsonSuggestions,
+  jelsonToIntent,
+} from '@/lib/score/jelson-suggest';
 import {
   CURATION_DATASETS,
   CURATION_SET_KINDS,
@@ -691,9 +702,8 @@ function questionType(state: CurationState, messageId: number): ScoreQueryType |
  * TYPE_CLASSIFIER_VERSION, upsert on message_id). Idempotent — a fully typed
  * master costs zero calls, which is why the button is safe to press twice.
  *
- * Subtype verdicts are deliberately NOT topped up here: they belong to the
- * prepared starter set, and re-rating 31 templates × the whole log is a batch
- * job, not a click (scripts/score/… own that).
+ * Subtype verdicts are topped up separately, by reRateSubtypes below — same
+ * shape, different unit of work.
  */
 export async function classifyMissingTypes(
   datasetKey: string,
@@ -781,6 +791,281 @@ export async function classifyMissingTypes(
   );
 
   return { pending: pending.length, classified, failed };
+}
+
+/* ------------------------------------------------------------------ */
+/* Subtype re-rating                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The definitions the CHOOSER seeds, keyed by hash.
+ *
+ * This is the parity contract, and it runs one way: a prepared subtype set is
+ * only meaningful because its definition is the exact text a participant would
+ * get by picking that suggestion and creating the intent by hand. Same text →
+ * same intentDefHash → same verdicts, whichever route produced them. So the
+ * chooser's text is the authority here, and a template is worth re-rating
+ * precisely when it still matches one.
+ *
+ * Type-level starters are not in this map: jelsonTypeToIntent has no caller in
+ * the app, so no chooser option can seed one. The 4 type templates left on the
+ * masters by an older seeding pass are unreachable text — re-rating them would
+ * buy verdicts nothing reads.
+ */
+async function chooserDefinitions(): Promise<Map<string, string>> {
+  const config = await getScoreConfig();
+  const byHash = new Map<string, string>();
+  for (const s of buildJelsonSuggestions(config)) {
+    const { definition } = jelsonToIntent(s);
+    byHash.set(intentDefHash(definition), s.label);
+  }
+  return byHash;
+}
+
+export interface ReRateStatus {
+  /** Templates on the master whose definition is still a live chooser option. */
+  reachable: { intentId: number; title: string }[];
+  /** Templates no chooser option can seed — skipped, listed so it is visible. */
+  unreachable: string[];
+  questions: number;
+  /** reachable × questions — the verdicts the prepared set is made of. */
+  pairs: number;
+  /** Pairs with no row at the current defHash. */
+  stalePairs: number;
+  /** Messages carrying at least one stale pair, i.e. the calls left to make. */
+  pendingMessages: number;
+  mode: string;
+  ratingVersion: number;
+  model: string;
+}
+
+/** What a re-rate would cost right now, without spending anything. */
+export async function getReRateStatus(datasetKey: string): Promise<ReRateStatus> {
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  const assignmentId = dataset.masterAssignmentId;
+
+  const [records, templates, chooser] = await Promise.all([
+    getQueryRecords(assignmentId),
+    db
+      .select({ id: scoreIntents.id, title: scoreIntents.title, definition: scoreIntents.definition })
+      .from(scoreIntents)
+      .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true))),
+    chooserDefinitions(),
+  ]);
+
+  const reachable: { intentId: number; title: string; defHash: string }[] = [];
+  const unreachable: string[] = [];
+  for (const t of templates) {
+    const hash = intentDefHash(t.definition);
+    if (chooser.has(hash)) reachable.push({ intentId: t.id, title: t.title, defHash: hash });
+    else unreachable.push(t.title);
+  }
+
+  const stale = await stalePairsByMessage(assignmentId, records, reachable);
+  let stalePairs = 0;
+  for (const ids of stale.values()) stalePairs += ids.length;
+
+  return {
+    reachable: reachable.map((r) => ({ intentId: r.intentId, title: r.title })),
+    unreachable,
+    questions: records.length,
+    pairs: reachable.length * records.length,
+    stalePairs,
+    pendingMessages: stale.size,
+    mode: MATERIAL_PROMPT_MODE,
+    ratingVersion: INTENT_RATING_VERSION,
+    model: getDefaultScoreModel(),
+  };
+}
+
+/**
+ * Per message, which reachable templates have no verdict at their CURRENT
+ * defHash. Unlike probe.ts — which deliberately accepts an older generation so
+ * a seeded filter opens instantly — this is the strict test: a row from the
+ * previous harness is a verdict the current system would not necessarily
+ * produce, and topping those up is the whole point of the button.
+ */
+async function stalePairsByMessage(
+  assignmentId: string,
+  records: { messageId: number }[],
+  templates: { intentId: number; defHash: string }[]
+): Promise<Map<number, number[]>> {
+  const out = new Map<number, number[]>();
+  if (templates.length === 0 || records.length === 0) return out;
+
+  const rows = await db
+    .select({ messageId: scoreIntentRatings.messageId, intentId: scoreIntentRatings.intentId, defHash: scoreIntentRatings.defHash })
+    .from(scoreIntentRatings)
+    .where(
+      and(
+        eq(scoreIntentRatings.assignmentId, assignmentId),
+        inArray(
+          scoreIntentRatings.intentId,
+          templates.map((t) => t.intentId)
+        )
+      )
+    );
+  const have = new Set(rows.map((r) => `${r.messageId}:${r.intentId}:${r.defHash}`));
+
+  for (const rec of records) {
+    const missing = templates
+      .filter((t) => !have.has(`${rec.messageId}:${t.intentId}:${t.defHash}`))
+      .map((t) => t.intentId);
+    if (missing.length > 0) out.set(rec.messageId, missing);
+  }
+  return out;
+}
+
+/**
+ * Re-rate the prepared subtype set against the master log under the CURRENT
+ * rating harness — same model, same mode, same prompt builder the workbench
+ * uses. One call carries up to MAX_INTENTS_PER_CALL templates, so a master is
+ * ~one call per question, not one per pair.
+ *
+ * Idempotent by defHash: a template already rated at its current hash costs
+ * nothing, which is what makes the button safe to press repeatedly and what
+ * lets the UI drive it as a loop. Rows from older generations are left alone —
+ * they are hash-keyed history, and probe.ts still falls back to them.
+ *
+ * Dissections are read, never written. The masters were dissected from an
+ * event log this function has no business re-deriving (scripts/score/redissect
+ * owns that), and in `abridged` mode the stored material spans are what the
+ * judge actually sees.
+ */
+export async function reRateSubtypes(
+  datasetKey: string,
+  limit = 40
+): Promise<{
+  pendingMessages: number;
+  ratedMessages: number;
+  ratedPairs: number;
+  failed: number;
+  remainingMessages: number;
+}> {
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  const assignmentId = dataset.masterAssignmentId;
+
+  const [records, templateRows, chooser] = await Promise.all([
+    getQueryRecords(assignmentId),
+    db
+      .select({ id: scoreIntents.id, title: scoreIntents.title, definition: scoreIntents.definition })
+      .from(scoreIntents)
+      .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true))),
+    chooserDefinitions(),
+  ]);
+
+  const templates = templateRows
+    .map((t) => ({ intentId: t.id, definition: t.definition, defHash: intentDefHash(t.definition) }))
+    .filter((t) => chooser.has(t.defHash));
+  if (templates.length === 0) return { pendingMessages: 0, ratedMessages: 0, ratedPairs: 0, failed: 0, remainingMessages: 0 };
+
+  const stale = await stalePairsByMessage(assignmentId, records, templates);
+  if (stale.size === 0) {
+    return { pendingMessages: 0, ratedMessages: 0, ratedPairs: 0, failed: 0, remainingMessages: 0 };
+  }
+  if (!isOpenAIConfigured()) throw new Error('openai_not_configured');
+
+  const byId = new Map(templates.map((t) => [t.intentId, t]));
+  const batch = records.filter((r) => stale.has(r.messageId)).slice(0, limit);
+  const ids = batch.map((b) => b.messageId);
+
+  // `materials` is required by the rating prompt in abridged mode — without the
+  // spans the judge would silently read the pasted material verbatim and rate a
+  // different prompt than the workbench does.
+  const stored = await db
+    .select({
+      messageId: scoreDissections.messageId,
+      materialKinds: scoreDissections.materialKinds,
+      requests: scoreDissections.requests,
+      materials: scoreDissections.materials,
+    })
+    .from(scoreDissections)
+    .where(
+      and(eq(scoreDissections.assignmentId, assignmentId), inArray(scoreDissections.messageId, ids))
+    );
+  const dissectionByMsg = new Map(
+    stored.map((s) => [
+      s.messageId,
+      {
+        materialKinds: (s.materialKinds ?? []) as MaterialKind[],
+        requests: (s.requests ?? []) as string[],
+        materials: (Array.isArray(s.materials) ? s.materials : []) as MaterialSpan[],
+      },
+    ])
+  );
+
+  const model = getDefaultScoreModel();
+  const run = createLimiter(SCORE_CONCURRENCY);
+  const now = new Date();
+  let ratedPairs = 0;
+  let ratedMessages = 0;
+  let failed = 0;
+
+  await Promise.all(
+    batch.map((rec) =>
+      run(async () => {
+        const wanted = (stale.get(rec.messageId) ?? [])
+          .map((id) => byId.get(id))
+          .filter((t): t is (typeof templates)[number] => Boolean(t));
+        let wroteHere = 0;
+        // Chunked HERE rather than left to rateMessageIntents, which silently
+        // slices to MAX_INTENTS_PER_CALL — a set that outgrew one call would
+        // otherwise leave the tail permanently stale and the loop never ending.
+        for (let i = 0; i < wanted.length; i += MAX_INTENTS_PER_CALL) {
+          const chunk = wanted.slice(i, i + MAX_INTENTS_PER_CALL);
+          try {
+            const result = await rateMessageIntents({
+              queryText: rec.queryText,
+              prevQueryText: rec.prevQueryText,
+              prevResponseText: rec.prevResponseText,
+              intents: chunk.map((t) => ({ id: t.intentId, definition: t.definition })),
+              includeDissection: false,
+              dissection: dissectionByMsg.get(rec.messageId) ?? null,
+              model,
+            });
+            for (const t of chunk) {
+              const rating = result.ratings.get(t.intentId);
+              if (!rating) continue; // no usable verdict → stays stale, retried
+              const values = {
+                rating: rating.rating,
+                rationale: rating.rationale || null,
+                defHash: t.defHash,
+                rawResponse: result.raw,
+                model,
+                ratedAt: now,
+              };
+              await db
+                .insert(scoreIntentRatings)
+                .values({ assignmentId, messageId: rec.messageId, intentId: t.intentId, ...values })
+                .onConflictDoUpdate({
+                  target: [
+                    scoreIntentRatings.messageId,
+                    scoreIntentRatings.intentId,
+                    scoreIntentRatings.defHash,
+                  ],
+                  set: values,
+                });
+              wroteHere += 1;
+            }
+          } catch {
+            failed += 1;
+          }
+        }
+        ratedPairs += wroteHere;
+        if (wroteHere > 0) ratedMessages += 1;
+      })
+    )
+  );
+
+  return {
+    pendingMessages: stale.size,
+    ratedMessages,
+    ratedPairs,
+    failed,
+    remainingMessages: Math.max(0, stale.size - ratedMessages),
+  };
 }
 
 /* ------------------------------------------------------------------ */
