@@ -110,6 +110,10 @@ interface PerModel {
 
 async function main() {
   const dry = process.argv.includes('--dry');
+  // --types-only: skip the 26-per-query subtype fan-out. The type gate is the
+  // cheap layer (1 call per query), so a prompt iteration on it should not
+  // cost 8,600 subtype calls per arm to measure.
+  const typesOnly = process.argv.includes('--types-only');
   const nArg = process.argv.slice(2).find((a) => /^\d+$/.test(a));
   const N = nArg ? Number(nArg) : Infinity;
   const out = process.argv.slice(2).find((a) => a.endsWith('.json'));
@@ -190,7 +194,7 @@ async function main() {
   if (noTemplate.length) console.log(`  NO TEMPLATE for: ${noTemplate.join(', ')}`);
   console.log(`gold rows    ${gold.length}  (unmatched ${unmatched}, uncoded/blank ${uncoded})`);
   console.log(`evaluating   ${sample.length} human-coded queries × ${templates.length} subtypes × ${MODELS.length} models`);
-  console.log(`calls        ${sample.length * MODELS.length} type + ${sample.length * templates.length * MODELS.length} subtype\n`);
+  console.log(`calls        ${sample.length * MODELS.length} type + ${typesOnly ? 0 : sample.length * templates.length * MODELS.length} subtype\n`);
   if (dry) { process.exit(0); }
 
   /* ── dissections (production steer) ── */
@@ -239,7 +243,7 @@ async function main() {
           } catch { per.typePred.set(rec.messageId, null); }
           per.typeMs.push(Date.now() - s);
         });
-        const subJobs = templates.map((t) =>
+        const subJobs = (typesOnly ? [] : templates).map((t) =>
           run(async () => {
             const s = Date.now();
             try {
@@ -321,11 +325,15 @@ async function main() {
       meanIn: inSum / scored,
     };
   });
-  line('SUB   gold rated clearly_in', subStats.map((s) => `${(s.hitClearly * 100).toFixed(1)}%`));
+  if (!typesOnly) line('SUB   gold rated clearly_in', subStats.map((s) => `${(s.hitClearly * 100).toFixed(1)}%`));
+  if (typesOnly) {
+    // per-type table + latency still print below; the subtype block is skipped.
+  } else {
   line('SUB   gold rated in-ish', subStats.map((s) => `${(s.hitIn * 100).toFixed(1)}%`));
   line('SUB   gold is the ONLY clearly_in', subStats.map((s) => `${(s.exact1 * 100).toFixed(1)}%`));
   line('SUB   mean |clearly_in| per query', subStats.map((s) => s.meanClearly.toFixed(2)));
   line('SUB   mean |in-ish| per query', subStats.map((s) => s.meanIn.toFixed(2)));
+  }
 
   const med = (xs: number[]) => { const a = [...xs].sort((x, y) => x - y); return a[Math.floor(a.length / 2)] ?? 0; };
   line('median latency  type call', results.map((r) => `${med(r.typeMs)} ms`));
@@ -334,6 +342,7 @@ async function main() {
   // How the four levels are actually spent. probably_in is not decoration: it
   // is curation's "boundary" grade, so a model that rarely reaches for it moves
   // the certain/boundary split the sets are assembled against.
+  if (!typesOnly) {
   console.log('\n──── rating levels emitted ────');
   const LEVELS = ['clearly_in', 'probably_in', 'probably_out', 'clearly_out'];
   const levelStats = results.map((r) => {
@@ -367,6 +376,9 @@ async function main() {
   for (const k of ['certain', 'boundary', 'unmatched'] as const) {
     line(`  ${k}`, gradeStats.map((s) => `${((s[k] / s.n) * 100).toFixed(1)}%  (${s[k]})`));
   }
+  report.levels = Object.fromEntries(results.map((r, i) => [r.model, Object.fromEntries(levelStats[i].c)]));
+  report.grades = Object.fromEntries(results.map((r, i) => [r.model, gradeStats[i]]));
+  }
 
   // Per-type accuracy — a 4-way average can hide one type collapsing.
   console.log('\n──── type accuracy by gold type ────');
@@ -382,8 +394,6 @@ async function main() {
   report.models = Object.fromEntries(
     results.map((r, i) => [r.model, { type: typeStats[i], subtype: subStats[i] }])
   );
-  report.levels = Object.fromEntries(results.map((r, i) => [r.model, Object.fromEntries(levelStats[i].c)]));
-  report.grades = Object.fromEntries(results.map((r, i) => [r.model, gradeStats[i]]));
   report.raw = {
     subtypeTitles: Object.fromEntries(templates.map((t) => [t.id, t.title])),
     queries: sample.map((s) => ({

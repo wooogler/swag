@@ -18,11 +18,16 @@
  * the argmax then lands on a partial match. The forced choice is what makes the
  * model commit to the dominant reading. Do not retry without new evidence.
  *
- * The type definitions descend from the hand-written whole-Type definitions in
- * jelson-suggest.ts (TYPE_INTENT_DEFINITIONS), reworded here for the forced
- * 4-way choice: the legacy 'All' is this scheme's 'drafting', and the
- * multi-activity tie-break that used to be implicit in 'All' is now an explicit
- * rule.
+ * The type definitions are drawn from the Jelson paper's coding scheme
+ * (docs/2026_StudentsUseChatGPTEssays_Jelson.en.md §3.4, §4.1), reworded for
+ * the forced 4-way choice: the legacy 'All' is this scheme's 'drafting', and
+ * the multi-activity tie-break that used to be implicit in 'All' is now an
+ * explicit rule. The paper's translating criterion is a TWO-gate test — the
+ * student supplied the substance AND the ask is a paragraph or less (§3.4.2
+ * "both a request to generate text and sufficient context about the desired
+ * content") — and its All examples are section requests carrying NO student
+ * content ("Write the third body paragraph"). Substance first, scale as the
+ * cap; v2 of this prompt had scale first, and translating recall was 42%.
  */
 import { SCORE_QUERY_TYPES, type ScoreQueryType } from './intents';
 
@@ -36,11 +41,11 @@ export const TYPE_DEFINITIONS: Record<ScoreQueryType, string> = {
   planning:
     'The student is deciding WHAT to write, and asks for no essay text in return — a question about the topic, examples or factual information, a suggested structure or list of topics, expanding or comparing ideas, or interpreting the assignment prompt.',
   translating:
-    "The student already has the idea and asks the chatbot to turn it into usable text at PARAGRAPH SCALE OR SMALLER — writing a sentence or paragraph from a given idea, completing an unfinished sentence or paragraph, or suggesting wording and word choice.",
+    "The student SUPPLIES THE SUBSTANCE — an idea, a stance, an outline, or their own unfinished text — and asks the chatbot to turn it into usable text at paragraph scale or smaller: writing a sentence or paragraph that says what the student specified, completing the student's unfinished sentence or paragraph, or suggesting wording and word choice.",
   reviewing:
     "The student asks the chatbot to evaluate or revise THE STUDENT'S OWN WRITING — text they wrote themselves — without changing its overall theme or viewpoint: proofreading, a spelling or grammar question, feedback or a grade, shortening, rewriting to a specification, general improvement, or checking it against the assignment prompt.",
   drafting:
-    'The student asks the chatbot to PRODUCE ESSAY PROSE — writing the whole essay or a complete section of it (introduction, body paragraph, conclusion) from a prompt or an idea, or producing another version of prose THE CHATBOT ITSELF wrote earlier (rewriting, regenerating, restyling or resizing it).',
+    'The student asks the chatbot to PRODUCE ESSAY PROSE the student did not supply the substance for — writing the whole essay from the assignment prompt or a high-level idea, writing a section (introduction, body paragraph, conclusion) requested with at most its name or a topic, or producing another version of prose THE CHATBOT ITSELF wrote earlier (rewriting, regenerating, restyling or resizing it).',
 };
 
 const INSTRUCTIONS = `Classify the STUDENT QUERY into exactly one of four types describing what the student is asking the chatbot to do.
@@ -52,8 +57,9 @@ ${SCORE_QUERY_TYPES.map((t) => `- ${t}: ${TYPE_DEFINITIONS[t]}`).join('\n')}
 RULES:
 - Judge only what the student is ASKING FOR in this message. Pasted material — the student's own draft, the assignment prompt, a previous chatbot reply — is context, never a request in itself.
 - Prior context is shown for reference only. Classify the STUDENT QUERY.
-- Scale separates translating from drafting: a sentence or a paragraph built from the student's own idea is translating; a whole essay or a complete section produced by the chatbot is drafting.
-- WHOSE TEXT separates reviewing from drafting — not whether text exists. Acting on writing the STUDENT produced is reviewing. Acting on prose THE CHATBOT produced earlier in the conversation is drafting: asking for it again in another shape ("rewrite it adding the dystopian view", "make it sound like a 10th grader", "make it longer") is asking the chatbot to write it again, not to review the student's work.
+- WHO DECIDES THE CONTENT separates translating from drafting at paragraph scale. Translating means the student has already decided what the text should say — a stated idea or stance ("write an intro sentence that says this paper claims X"), or their own unfinished sentence to finish — and the chatbot's job is only the wording. When the chatbot must decide the content itself, it is drafting: a section requested by name or topic alone ("write the third body paragraph"), or a paragraph the chatbot must think out ("analyze my paragraph against the utilitarian view") — supplying material to think ABOUT is not deciding what the text will say. SCALE then caps translating: anything larger than a paragraph is drafting even when the idea is the student's.
+- WHOSE TEXT separates reviewing from drafting — not whether text exists. Acting on writing the STUDENT produced is reviewing. Acting on prose THE CHATBOT produced earlier in the conversation is drafting: asking for it again in another shape ("rewrite it adding the dystopian view", "make it sound like a 10th grader", "make it longer") is asking the chatbot to write it again — even when the student contributes a new idea for it to include. Completing the STUDENT'S OWN unfinished sentence is translating, not reviewing: reviewing evaluates or revises text that is already written; completion produces the text that is missing.
+- A message that is nothing but the student's own draft prose stopping mid-sentence, with no instruction, is an implicit ask to complete it: translating. Only the student's own mid-sentence draft counts — a pasted assignment prompt or other material with no instruction is not an implicit completion ask.
 - WHAT THE ANSWER WOULD BE separates planning from drafting. Planning answers are ABOUT the writing — topics, facts, structure, comparisons. Drafting answers ARE the writing. A request phrased as a question still counts as drafting when the only way to answer it is to produce essay prose (e.g. "how would I defend the utilitarian view?", "state your perspective and analyse it against the others").
 - MULTIPLE ACTIVITIES: when one message asks for two or more different activities (for example "translate this and also fix the grammar"), answer drafting. Instructors handle these by carving out a narrower category inside drafting.
 - There is no "other" type. Off-topic messages, chit-chat, and meta questions about the chatbot still take the closest of the four.

@@ -60,7 +60,7 @@ export const DEFAULT_SCORE_CONFIG: ScoreConfig = {
           code: 'PL05',
           label: 'Expand an Idea',
           description:
-            'Expand on an existing idea — for example, "How can I further develop this idea: automation frees us from tedious tasks so we can focus on complex work?", "Expand on this point and connect it to human history.", or "Build on my argument that machines test what humans are really capable of."',
+            'Expand on an existing idea — for example, "How can I further develop this idea: automation frees us from tedious tasks so we can focus on complex work?", "Expand on this point and connect it to human history: this is just another step in human evolution.", or "Build on my argument that machines test what humans are really capable of."',
         },
         {
           code: 'PL06',
@@ -93,7 +93,7 @@ export const DEFAULT_SCORE_CONFIG: ScoreConfig = {
           code: 'TR01',
           label: 'Paragraph from Idea',
           description:
-            'Write a paragraph given an idea — for example, "Turn this idea into a paragraph: machines test what humans are truly capable of.", "Write a short intro paragraph that says this paper claims AI is good because it exposes our inefficiencies.", or "Here\'s my point — write a paragraph on it."',
+            'Write a paragraph given an idea — for example, "Turn this idea into a paragraph: machines test what humans are truly capable of.", "Write a short intro paragraph that says this paper claims AI is good because it exposes our inefficiencies.", or "Here\'s my point — write a paragraph on it: automation reflects our values about who does technical work."',
         },
         {
           code: 'TR02',

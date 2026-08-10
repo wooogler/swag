@@ -271,13 +271,22 @@ export const QUERY_TYPE_LABELS: Record<ScoreQueryType, string> = {
  *     reviewing. Measured cost: drafting recall 49% (docs/SCORE_v7_type_eval.md).
  *     The boundary is now WHOSE text, and a planning/drafting rule was added for
  *     essay requests phrased as questions.
+ * v3: the translating/drafting boundary was scale-first while the Jelson paper's
+ *     is substance-first (§3.4.2: a query is translating when the student
+ *     supplied the content AND the ask is ≤ a paragraph; its All examples are
+ *     section requests carrying no student content). Scale-first let drafting's
+ *     section enumeration swallow paper-canonical translating asks — "write an
+ *     intro sentence that says X" judged drafting on the section word alone.
+ *     Measured cost: translating recall 42% vs human coding, 13/31 stably wrong
+ *     (scripts/study/diagnose-translating.ts). Substance now leads, scale caps,
+ *     completion of the student's own fragment is translating by rule.
  * A message's type is judged ONCE PER MESSAGE EVER — content is immutable, so
  * unlike intent ratings there is no definition to invalidate against. Bumping
  * this constant is therefore the ONLY way a stored judgment is recomputed:
  * change any wording in type-prompts.ts and you MUST bump it here, or every
  * cached row stays "fresh" against a prompt it never saw.
  */
-export const TYPE_CLASSIFIER_VERSION = 2;
+export const TYPE_CLASSIFIER_VERSION = 3;
 
 /**
  * What a score_intents row IS. Replaces the PROMPT_HOLDER_TITLE string
