@@ -257,6 +257,33 @@ export default function CurationBoard({
   }, [state.members, questionById]);
 
   /**
+   * Per subtype, how many of its questions are already in each set —
+   * [review, block test, A/B].
+   *
+   * Counted over every subtype a question matches, not the single label frozen
+   * on the member row: a question that two subtypes claim is spoken for on both
+   * of their rows, which is what the tree is being read to decide. So these
+   * columns sum to more than the sets contain, on purpose.
+   */
+  const assignedBySubtype = useMemo(() => {
+    const slot: Record<CurationSetKind, 0 | 1 | 2> = { review: 0, test: 1, ab: 2 };
+    const tally = new Map<number, [number, number, number]>();
+    for (const m of state.members) {
+      const q = questionById.get(m.messageId);
+      if (!q) continue;
+      const i = slot[m.setKind];
+      if (i === undefined) continue;
+      for (const intentId of Object.keys(q.matches)) {
+        const id = Number(intentId);
+        const cur = tally.get(id) ?? ([0, 0, 0] as [number, number, number]);
+        cur[i] += 1;
+        tally.set(id, cur);
+      }
+    }
+    return tally;
+  }, [state.members, questionById]);
+
+  /**
    * The subtype mix already sitting in one (set, type) slot — what a hover
    * answers. Read live from the judge's verdicts rather than the snapshot on
    * the member row, so it reflects every subtype a question matches, not just
@@ -784,6 +811,7 @@ export default function CurationBoard({
                       last={i === list.length - 1}
                       active={selection.kind === 'subtype' && selection.intentId === s.intentId}
                       isDemo={state.meta.demoSubtype === s.title}
+                      assigned={assignedBySubtype.get(s.intentId) ?? [0, 0, 0]}
                       onClick={() => setSelection({ kind: 'subtype', intentId: s.intentId })}
                     />
                   ))}
@@ -1363,14 +1391,18 @@ function SubtypeRow({
   last,
   active,
   isDemo,
+  assigned,
   onClick,
 }: {
   subtype: CurationSubtype;
   last: boolean;
   active: boolean;
   isDemo: boolean;
+  /** [review, block test, A/B] already assigned from this subtype. */
+  assigned: [number, number, number];
   onClick: () => void;
 }) {
+  const anyAssigned = assigned[0] + assigned[1] + assigned[2] > 0;
   return (
     <button
       onClick={onClick}
@@ -1390,6 +1422,20 @@ function SubtypeRow({
         <span className="text-emerald-600">●{subtype.clearlyIn}</span>{' '}
         <span className="text-amber-600">◐{subtype.probablyIn}</span>
       </span>
+      {/* What this subtype has already contributed, review/block/AB. Shown only
+          once something has — a 0/0/0 on all 26 rows would bury the ● ◐ the
+          tree is actually browsed by. A question matching two subtypes counts
+          on both rows: the number answers "how much of this subtype is spoken
+          for", which is per subtype, so the column deliberately sums to more
+          than the set's size. */}
+      {anyAssigned && (
+        <span
+          className="text-[10px] font-bold tabular-nums whitespace-nowrap text-violet-600"
+          title={`assigned from this subtype — review ${assigned[0]} · block test ${assigned[1]} · A/B ${assigned[2]}`}
+        >
+          {assigned[0]}/{assigned[1]}/{assigned[2]}
+        </span>
+      )}
     </button>
   );
 }
