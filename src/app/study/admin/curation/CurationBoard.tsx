@@ -33,6 +33,7 @@ import { SortSelect, sortQueryRows, type QuerySortMode } from '@/app/instructor/
 import StudioShell from '@/app/instructor/assignments/[id]/score/StudioShell';
 import AdminNav from '@/components/study/AdminNav';
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
+import { TYPE_DEFINITIONS } from '@/lib/score/type-prompts';
 import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
 import {
   SURVEY_SCALE_CHOICES,
@@ -693,6 +694,16 @@ export default function CurationBoard({
               <SortSelect value={sort} onChange={setSort} />
             </div>
           </div>
+          {classifierText(selection, subtypeById) && (
+            <div className="px-3 py-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/25">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-0.5">
+                {selection.kind === 'type' ? 'Type definition · given to the 4-way classifier' : 'Subtype definition · given to the judge'}
+              </p>
+              <p className="text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
+                {classifierText(selection, subtypeById)}
+              </p>
+            </div>
+          )}
           <div className="px-3 py-2 border-b border-[hsl(var(--border))]">
             <PaneSearch value={search} onChange={setSearch} />
           </div>
@@ -1236,6 +1247,28 @@ function SubtypeRow({
       </span>
     </button>
   );
+}
+
+/**
+ * The wording the classifier was actually given for the current selection —
+ * TYPE_DEFINITIONS for a type, the template's own definition for a subtype.
+ *
+ * Both are the shipped strings, not a description of them. Curation is reading
+ * counts produced by these sentences, and the only way to judge whether a
+ * subtype is claiming the right questions is to see the claim it was asked to
+ * make. (type-prompts.ts is client-safe precisely so a viewer can reconstruct
+ * the prompt; the same guarantee is what lets this render it.)
+ *
+ * Sets and Unassigned have no definition behind them — the block is omitted
+ * rather than filled with a stand-in.
+ */
+function classifierText(
+  selection: Selection,
+  subtypes: Map<number, CurationSubtype>
+): string | null {
+  if (selection.kind === 'type') return TYPE_DEFINITIONS[selection.type];
+  if (selection.kind === 'subtype') return subtypes.get(selection.intentId)?.definition ?? null;
+  return null;
 }
 
 function selectionLabel(selection: Selection, subtypes: Map<number, CurationSubtype>): string {

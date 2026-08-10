@@ -69,6 +69,10 @@ export interface CurationSubtype {
   intentId: number;
   title: string;
   type: ScoreQueryType | null; // via the starter taxonomy, not the intent row
+  /** The template's own definition — the text the judge was given, verbatim,
+   * not a paraphrase of it. Shown while browsing so the counts on this row can
+   * be read against the wording that produced them. */
+  definition: string;
   clearlyIn: number;
   probablyIn: number;
 }
@@ -163,7 +167,7 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
         .from(studentSessions)
         .where(eq(studentSessions.assignmentId, assignmentId)),
       db
-        .select({ id: scoreIntents.id, title: scoreIntents.title })
+        .select({ id: scoreIntents.id, title: scoreIntents.title, definition: scoreIntents.definition })
         .from(scoreIntents)
         .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true))),
       db
@@ -215,6 +219,7 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
       intentId: t.id,
       title: t.title,
       type,
+      definition: t.definition,
       clearlyIn: 0,
       probablyIn: 0,
     });
