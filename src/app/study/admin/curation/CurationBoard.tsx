@@ -24,6 +24,7 @@ import {
   ClipboardList,
   Plus,
   Scale,
+  Trash2,
   X,
 } from 'lucide-react';
 import type { ScoreQueryRow } from '@/app/instructor/assignments/[id]/score/IntentBoard';
@@ -97,6 +98,65 @@ function Chip({
   );
 }
 
+/**
+ * Empty a set, or one type's slot in it. Two clicks, never one.
+ *
+ * What it discards is hand-assigned reading — the only thing on this screen
+ * that no amount of re-running gets back — so the first click just arms the
+ * button and names the count, and the second does it. Hidden entirely at zero
+ * (nothing to empty) and while locked (nothing may change).
+ *
+ * `reveal` is the parent's named group-hover class, so an icon appears on the
+ * thing it acts on rather than on every row of the card at once.
+ */
+function ClearButton({
+  n,
+  armed,
+  reveal,
+  onArm,
+  onConfirm,
+  disabled,
+  what,
+}: {
+  n: number;
+  armed: boolean;
+  reveal: string;
+  onArm: () => void;
+  onConfirm: () => void;
+  disabled: boolean;
+  what: string;
+}) {
+  if (n === 0) return <span className="w-4 shrink-0" aria-hidden />;
+  if (armed) {
+    return (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onConfirm();
+        }}
+        disabled={disabled}
+        title={`Remove all ${n} from ${what}`}
+        className="shrink-0 text-[10px] font-bold px-1 rounded bg-rose-600 text-white disabled:opacity-50"
+      >
+        {n}?
+      </button>
+    );
+  }
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onArm();
+      }}
+      disabled={disabled}
+      title={`Empty ${what} (${n})`}
+      className={`w-4 shrink-0 flex items-center justify-center opacity-0 ${reveal} transition-opacity text-[hsl(var(--muted-foreground))] hover:text-rose-600 disabled:opacity-0`}
+    >
+      <Trash2 className="w-3 h-3" />
+    </button>
+  );
+}
+
 /* ── selection model ── */
 
 type Selection =
@@ -137,6 +197,10 @@ export default function CurationBoard({
   // certain/boundary mix (design §4) means being able to go looking for each
   // kind, not just for the ambiguous ones.
   const [gradeFilter, setGradeFilter] = useState<'all' | QuestionGrade>('all');
+  /** Which clear button is armed, as `${setKind}:${type|'all'}`. Emptying a
+   * slot throws away hand-assigned reading — the one thing here that cannot be
+   * recomputed — so the first click only arms, and the second is the act. */
+  const [armedClear, setArmedClear] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -261,6 +325,26 @@ export default function CurationBoard({
       await refresh();
     },
     [locked, questionById, state.dataset.key, refresh]
+  );
+
+  const runClear = useCallback(
+    async (kind: CurationSetKind, type: ScoreQueryType | null) => {
+      setBusy('clear');
+      setError(null);
+      const res = await fetch('/api/study/admin/curation/clear', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ datasetKey: state.dataset.key, setKind: kind, queryType: type }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.message ?? 'Could not clear.');
+      }
+      setArmedClear(null);
+      await refresh();
+      setBusy(null);
+    },
+    [state.dataset.key, refresh]
   );
 
   const runClassify = useCallback(async () => {
@@ -486,7 +570,8 @@ export default function CurationBoard({
           return (
             <div
               key={kind}
-              className={`rounded-lg border px-3 py-2 ${
+              onMouseLeave={() => setArmedClear((a) => (a?.startsWith(`${kind}:`) ? null : a))}
+              className={`group/card rounded-lg border px-3 py-2 ${
                 complete
                   ? 'border-emerald-200 bg-emerald-50/40'
                   : 'border-[hsl(var(--border))] bg-[hsl(var(--card))]'
@@ -522,6 +607,19 @@ export default function CurationBoard({
                     {v.severity === 'error' ? '✗' : '⚠'} {v.message}
                   </span>
                 ))}
+                {!locked && (
+                  <span className={setNotes.length ? '' : 'ml-auto'}>
+                    <ClearButton
+                      n={have}
+                      armed={armedClear === `${kind}:all`}
+                      reveal="group-hover/card:opacity-100"
+                      onArm={() => setArmedClear(`${kind}:all`)}
+                      onConfirm={() => runClear(kind, null)}
+                      disabled={busy !== null}
+                      what={SET_LABELS[kind]}
+                    />
+                  </span>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-x-4">
                 {SCORE_QUERY_TYPES.map((type) => {
@@ -532,7 +630,7 @@ export default function CurationBoard({
                   return (
                     <div
                       key={type}
-                      className="flex items-center gap-1.5 text-[10.5px] leading-5"
+                      className="group/row flex items-center gap-1.5 text-[10.5px] leading-5"
                       title={
                         mix.length > 0
                           ? `${QUERY_TYPE_LABELS[type]} — subtypes in this slot\n` +
@@ -554,6 +652,17 @@ export default function CurationBoard({
                       <span className="tabular-nums text-amber-600 w-6 text-right">
                         ◐{nBoundary}
                       </span>
+                      {!locked && (
+                        <ClearButton
+                          n={n}
+                          armed={armedClear === `${kind}:${type}`}
+                          reveal="group-hover/row:opacity-100"
+                          onArm={() => setArmedClear(`${kind}:${type}`)}
+                          onConfirm={() => runClear(kind, type)}
+                          disabled={busy !== null}
+                          what={`${SET_LABELS[kind]} · ${QUERY_TYPE_LABELS[type]}`}
+                        />
+                      )}
                     </div>
                   );
                 })}

@@ -555,6 +555,69 @@ export async function setSetMember(input: AssignInput): Promise<void> {
     });
 }
 
+/**
+ * Empty one set, or one type's slot inside it.
+ *
+ * Hand-assigned members are the researcher's own reading of the log — the one
+ * thing on this screen that cannot be recomputed — so this returns what it
+ * removed rather than a bare count, and the caller shows it before asking a
+ * second time. The type filter reads the LIVE type (score_query_types), not the
+ * snapshot frozen on the member row: a re-classification can move a question
+ * between types after it was assigned, and clearing "Planning" should empty
+ * what the board currently shows under Planning.
+ */
+export async function clearSet(
+  datasetKey: string,
+  setKind: CurationSetKind,
+  queryType: ScoreQueryType | null
+): Promise<{ removed: { messageId: number; queryType: string | null; subtype: string | null }[] }> {
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  await ensureStudyTables();
+  if (await isLocked(datasetKey)) throw new Error('curation_locked');
+
+  const rows = await db
+    .select({
+      messageId: studySetMembers.sourceMessageId,
+      queryType: studySetMembers.queryType,
+      subtype: studySetMembers.subtype,
+    })
+    .from(studySetMembers)
+    .where(and(eq(studySetMembers.datasetKey, datasetKey), eq(studySetMembers.setKind, setKind)));
+  if (rows.length === 0) return { removed: [] };
+
+  let targets = rows;
+  if (queryType) {
+    const liveTypes = await db
+      .select({ messageId: scoreQueryTypes.messageId, type: scoreQueryTypes.type })
+      .from(scoreQueryTypes)
+      .where(
+        and(
+          eq(scoreQueryTypes.assignmentId, dataset.masterAssignmentId),
+          inArray(
+            scoreQueryTypes.messageId,
+            rows.map((r) => r.messageId)
+          )
+        )
+      );
+    const typeByMessage = new Map(liveTypes.map((t) => [t.messageId, t.type]));
+    targets = rows.filter((r) => (typeByMessage.get(r.messageId) ?? r.queryType) === queryType);
+  }
+  if (targets.length === 0) return { removed: [] };
+
+  await db.delete(studySetMembers).where(
+    and(
+      eq(studySetMembers.datasetKey, datasetKey),
+      eq(studySetMembers.setKind, setKind),
+      inArray(
+        studySetMembers.sourceMessageId,
+        targets.map((t) => t.messageId)
+      )
+    )
+  );
+  return { removed: targets };
+}
+
 export async function setDemoSubtype(datasetKey: string, demoSubtype: string | null): Promise<void> {
   await ensureStudyTables();
   if (await isLocked(datasetKey)) throw new Error('curation_locked');
