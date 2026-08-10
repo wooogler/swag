@@ -13,14 +13,14 @@ import { CURATION_DATASETS } from '../../src/lib/study/config';
 async function main() {
   for (const ds of CURATION_DATASETS) {
     const state = await getCurationState(ds.key);
-    const unmapped = state.subtypes.filter((s) => !s.type);
+    // Type-level starters are dropped when the state is read, so this counts
+    // only real subtypes — the ones curation browses by.
     const graded = state.subtypes.reduce((n, s) => n + s.clearlyIn + s.probablyIn, 0);
 
     console.log(`\n=== ${ds.label} (${ds.key}) ===`);
     console.log(`questions        ${state.questions.length}`);
     console.log(`type counts      ${JSON.stringify(state.typeCounts)}  missing=${state.missingTypeCount}`);
-    console.log(`subtypes         ${state.subtypes.length}  type-level/unmapped=${unmapped.length}`);
-    if (unmapped.length) console.log(`  NOT SUBTYPES: ${unmapped.map((s) => s.title).join(', ')}`);
+    console.log(`subtypes         ${state.subtypes.length} (type-level starters excluded)`);
     console.log(`subtype verdicts ${graded} (clearly+probably)`);
     console.log(`question grades  ${JSON.stringify(state.gradeCounts)}`);
     console.log(`natural boundary ${(state.naturalBoundaryRatio * 100).toFixed(1)}%`);

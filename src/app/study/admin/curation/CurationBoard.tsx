@@ -183,7 +183,7 @@ export default function CurationBoard({
         const q = questionById.get(m.messageId);
         if ((q?.queryType ?? m.queryType) !== type) continue;
         const titles = Object.entries(q?.matches ?? {})
-          .filter(([id, grade]) => grade === 'clearly_in' && subtypeById.get(Number(id))?.isSubtype)
+          .filter(([id, grade]) => grade === 'clearly_in' && subtypeById.has(Number(id)))
           .map(([id]) => subtypeById.get(Number(id))!.title);
         if (titles.length === 0) titles.push('(no subtype claims it)');
         for (const t of titles) tally.set(t, (tally.get(t) ?? 0) + 1);
@@ -338,14 +338,9 @@ export default function CurationBoard({
   const subtypesByType = useMemo(() => {
     const map = new Map<ScoreQueryType, CurationSubtype[]>();
     for (const t of SCORE_QUERY_TYPES) map.set(t, []);
-    const ungrouped: CurationSubtype[] = [];
-    for (const s of state.subtypes) {
-      if (s.type && s.isSubtype) map.get(s.type)!.push(s);
-      else ungrouped.push(s);
-    }
+    for (const s of state.subtypes) if (s.type) map.get(s.type)!.push(s);
     for (const list of map.values()) list.sort((a, b) => b.clearlyIn - a.clearlyIn);
-    ungrouped.sort((a, b) => b.clearlyIn - a.clearlyIn);
-    return { map, ungrouped };
+    return map;
   }, [state.subtypes]);
 
   // Counts and the per-set notes live in the cards; anything else (demo
@@ -393,7 +388,6 @@ export default function CurationBoard({
         >
           <option value="">— none —</option>
           {state.subtypes
-            .filter((s) => s.isSubtype)
             .map((s) => (
               <option key={s.intentId} value={s.title}>
                 {s.title}
@@ -621,7 +615,7 @@ export default function CurationBoard({
 
           <div className="flex-1 overflow-y-auto py-1">
             {SCORE_QUERY_TYPES.map((type) => {
-              const list = subtypesByType.map.get(type) ?? [];
+              const list = subtypesByType.get(type) ?? [];
               return (
                 <div key={type}>
                   <button
@@ -649,26 +643,6 @@ export default function CurationBoard({
                 </div>
               );
             })}
-            {subtypesByType.ungrouped.length > 0 && (
-              <div>
-                <div className="px-3 py-1.5 flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--muted-foreground))]" />
-                  <span className="text-[11px] font-bold uppercase tracking-wide flex-1 text-[hsl(var(--muted-foreground))]">
-                    Type-level starters
-                  </span>
-                </div>
-                {subtypesByType.ungrouped.map((s, i) => (
-                  <SubtypeRow
-                    key={s.intentId}
-                    subtype={s}
-                    last={i === subtypesByType.ungrouped.length - 1}
-                    active={selection.kind === 'subtype' && selection.intentId === s.intentId}
-                    isDemo={false}
-                    onClick={() => setSelection({ kind: 'subtype', intentId: s.intentId })}
-                  />
-                ))}
-              </div>
-            )}
           </div>
 
           <div className="px-3 py-2 border-t border-[hsl(var(--border))] text-[10.5px] text-[hsl(var(--muted-foreground))] tabular-nums">

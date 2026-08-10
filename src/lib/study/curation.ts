@@ -61,10 +61,6 @@ export interface CurationSubtype {
   type: ScoreQueryType | null; // via the starter taxonomy, not the intent row
   clearlyIn: number;
   probablyIn: number;
-  /** False for the master's four TYPE-LEVEL starter sets ("Planning", "All", …)
-   * and any renamed row: they claim questions across a whole type, so they
-   * browse fine but must not drive the certain/boundary arithmetic. */
-  isSubtype: boolean;
 }
 
 /**
@@ -74,8 +70,8 @@ export interface CurationSubtype {
  *   boundary  — nothing claims it clearly but something claims it probably,
  *               OR two+ subtypes claim it clearly (competing claims)
  *   unmatched — no subtype claims it at either grade
- * Computed over real subtypes only (isSubtype), so the type-level starters
- * cannot make every question look boundary.
+ * Computed over real subtypes only — the type-level starters are dropped when
+ * the state is read, so they cannot make every question look boundary.
  */
 export type QuestionGrade = 'certain' | 'boundary' | 'unmatched';
 
@@ -193,17 +189,22 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
     }
   }
 
+  // A master also carries TYPE-LEVEL starter sets ("Planning", "All", …) and
+  // the odd renamed row. They claim across a whole type, so they say nothing a
+  // question's own type does not already say — and shown beside a real subtype
+  // they read as a competing claim. Dropped here, once, rather than filtered at
+  // each place they would otherwise surface.
   const labelToType = subtypeTypeByLabel();
   const subtypeById = new Map<number, CurationSubtype>();
   for (const t of templates) {
     const type = labelToType.get(t.title.trim().toLowerCase()) ?? null;
+    if (!type) continue;
     subtypeById.set(t.id, {
       intentId: t.id,
       title: t.title,
       type,
       clearlyIn: 0,
       probablyIn: 0,
-      isSubtype: type !== null,
     });
   }
 
@@ -237,7 +238,7 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
       queryText: r.queryText,
       queryType: typeByMessage.get(r.messageId) ?? null,
       matches,
-      grade: gradeOf(matches, subtypeById),
+      grade: gradeOf(matches),
     };
   });
 
@@ -285,15 +286,11 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
   };
 }
 
-/** See QuestionGrade. Counts only real subtypes, never the type-level starters. */
-function gradeOf(
-  matches: Record<number, CurationGrade>,
-  subtypeById: Map<number, CurationSubtype>
-): QuestionGrade {
+/** See QuestionGrade. `matches` only ever holds real subtypes (see above). */
+function gradeOf(matches: Record<number, CurationGrade>): QuestionGrade {
   let clearly = 0;
   let probably = 0;
-  for (const [intentId, grade] of Object.entries(matches)) {
-    if (!subtypeById.get(Number(intentId))?.isSubtype) continue;
+  for (const grade of Object.values(matches)) {
     if (grade === 'clearly_in') clearly += 1;
     else probably += 1;
   }
