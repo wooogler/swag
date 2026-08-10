@@ -743,7 +743,24 @@ export default function CurationBoard({
                         </span>
                       )}
                     </span>
-                    <span>{q?.queryType ? QUERY_TYPE_LABELS[q.queryType] : '—'}</span>
+                    {/* Membership sits on the meta line, flush right: which set
+                        a question is already in is scanned DOWN the list, and
+                        down in the chip row it moved with however many subtypes
+                        the question matched. font-sans so a label does not read
+                        as part of the mono identity column. */}
+                    <span className="flex items-center gap-1.5">
+                      {q?.queryType ? QUERY_TYPE_LABELS[q.queryType] : '—'}
+                      {member && (
+                        <span className="font-sans">
+                          <Chip tone="violet">{SET_LABELS[member.setKind]}</Chip>
+                        </span>
+                      )}
+                      {isExcluded && (
+                        <span className="font-sans">
+                          <Chip tone="violet">Demo-isolated</Chip>
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <QueryTextButton
                     queryText={row.queryText}
@@ -754,9 +771,13 @@ export default function CurationBoard({
                   />
                   {/* The classification lives with the question, where it is
                       read while scanning — not in the viewer, which is for
-                      reading the conversation. Type is already on the meta
-                      line above, so only the subtypes repeat here. */}
-                  <div className="mt-1 flex flex-wrap gap-1 items-center">
+                      reading the conversation. Type and set membership are on
+                      the meta line above, so only the subtypes remain here —
+                      and this row now varies with the question alone, which is
+                      what keeps the hover panel's right edge steady.
+                      min-h holds the row's height for an unmatched question, so
+                      the list does not shift as the grade filter changes. */}
+                  <div className="mt-1 flex flex-wrap gap-1 items-center min-h-[1.25rem]">
                     {Object.entries(q?.matches ?? {}).map(([intentId, grade]) => {
                       const st = subtypeById.get(Number(intentId));
                       if (!st) return null;
@@ -767,8 +788,6 @@ export default function CurationBoard({
                         </Chip>
                       );
                     })}
-                    {member && <Chip tone="violet">{SET_LABELS[member.setKind]}</Chip>}
-                    {isExcluded && <Chip tone="violet">Demo-isolated</Chip>}
                     {/* In the row's own flow, right-aligned: floating it made
                         the panel sit on the seam between two rows, belonging to
                         neither. Space is reserved so hovering does not reflow. */}
