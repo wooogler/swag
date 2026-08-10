@@ -46,7 +46,12 @@ import {
 import { getScoreConfig } from '../../src/lib/score/config-store';
 import { buildJelsonSuggestions, jelsonToIntent } from '../../src/lib/score/jelson-suggest';
 
-const MODELS = ['gpt-5.4-mini', 'gpt-5.6-luna'];
+// Override with --models=a,b — passing the SAME id twice measures the judge's
+// own test-retest, which is the only honest yardstick for "is this gap big?".
+const MODELS = (process.argv.find((a) => a.startsWith('--models='))?.slice(9).split(',') ?? [
+  'gpt-5.4-mini',
+  'gpt-5.6-luna',
+]);
 
 /** Gold code prefix → v7 query type (the old "All" is v7 'drafting'). */
 const PREFIX_TO_TYPE: Record<string, ScoreQueryType> = {
@@ -326,9 +331,84 @@ async function main() {
   line('median latency  type call', results.map((r) => `${med(r.typeMs)} ms`));
   line('median latency  subtype call', results.map((r) => `${med(r.subMs)} ms`));
 
-  /* ── model vs model ── */
-  console.log('\n════ MODEL vs MODEL (does switching move the sets?) ════\n');
+  // How the four levels are actually spent. probably_in is not decoration: it
+  // is curation's "boundary" grade, so a model that rarely reaches for it moves
+  // the certain/boundary split the sets are assembled against.
+  console.log('\n──── rating levels emitted ────');
+  const LEVELS = ['clearly_in', 'probably_in', 'probably_out', 'clearly_out'];
+  const levelStats = results.map((r) => {
+    const c = new Map<string, number>();
+    let total = 0;
+    for (const m of r.subtype.values()) for (const v of m.values()) { c.set(v, (c.get(v) ?? 0) + 1); total++; }
+    return { c, total };
+  });
+  for (const lv of LEVELS) {
+    line(`  ${lv}`, levelStats.map((s) => `${(((s.c.get(lv) ?? 0) / s.total) * 100).toFixed(1)}%`));
+  }
+
+  // The curation grade each model would produce, by the board's own rule
+  // (curation.ts gradeOf): exactly one clearly_in is "certain"; more than one,
+  // or any probably_in, is "boundary"; nothing is "unmatched".
+  console.log('\n──── curation grade the board would show ────');
+  const gradeStats = results.map((r) => {
+    const g = { certain: 0, boundary: 0, unmatched: 0 };
+    for (const s of sample) {
+      const m = r.subtype.get(s.rec.messageId);
+      if (!m || m.size === 0) continue;
+      let clearly = 0, probably = 0;
+      for (const v of m.values()) { if (v === 'clearly_in') clearly++; else if (v === 'probably_in') probably++; }
+      if (clearly === 1) g.certain++;
+      else if (clearly > 1 || probably > 0) g.boundary++;
+      else g.unmatched++;
+    }
+    const n = g.certain + g.boundary + g.unmatched;
+    return { ...g, n };
+  });
+  for (const k of ['certain', 'boundary', 'unmatched'] as const) {
+    line(`  ${k}`, gradeStats.map((s) => `${((s[k] / s.n) * 100).toFixed(1)}%  (${s[k]})`));
+  }
+
+  // Per-type accuracy — a 4-way average can hide one type collapsing.
+  console.log('\n──── type accuracy by gold type ────');
+  for (const t of TYPES) {
+    const rows = sample.filter((s) => s.goldType === t);
+    line(`  ${t} (n=${rows.length})`, results.map((r) => {
+      const scored = rows.filter((s) => r.typePred.get(s.rec.messageId));
+      const hit = scored.filter((s) => r.typePred.get(s.rec.messageId) === t).length;
+      return scored.length ? `${((hit / scored.length) * 100).toFixed(1)}%` : '—';
+    }));
+  }
+
+  report.models = Object.fromEntries(
+    results.map((r, i) => [r.model, { type: typeStats[i], subtype: subStats[i] }])
+  );
+  report.levels = Object.fromEntries(results.map((r, i) => [r.model, Object.fromEntries(levelStats[i].c)]));
+  report.grades = Object.fromEntries(results.map((r, i) => [r.model, gradeStats[i]]));
+  report.raw = {
+    subtypeTitles: Object.fromEntries(templates.map((t) => [t.id, t.title])),
+    queries: sample.map((s) => ({
+      messageId: s.rec.messageId,
+      goldCode: s.code,
+      goldType: s.goldType,
+      goldIntentId: templateByCode.get(s.code)?.id ?? null,
+      byModel: Object.fromEntries(
+        results.map((r) => [
+          r.model,
+          {
+            type: r.typePred.get(s.rec.messageId) ?? null,
+            ratings: Object.fromEntries(r.subtype.get(s.rec.messageId) ?? []),
+          },
+        ])
+      ),
+    })),
+  };
   const [A, B] = results;
+  if (!B) {
+    // Single-arm run (a mode sweep, say) — the pairwise section needs two.
+    if (out) { writeFileSync(out, JSON.stringify(report, null, 2)); console.log(`\nwrote ${out}`); }
+    process.exit(0);
+  }
+  console.log('\n════ MODEL vs MODEL (does switching move the sets?) ════\n');
   let bothType = 0, sameType = 0;
   for (const s of sample) {
     const a = A.typePred.get(s.rec.messageId), b = B.typePred.get(s.rec.messageId);
@@ -360,10 +440,9 @@ async function main() {
     for (const [title, n] of worst) console.log(`  ${String(n).padStart(4)}  ${title}`);
   }
 
-  report.models = Object.fromEntries(
-    results.map((r, i) => [r.model, { type: typeStats[i], subtype: subStats[i] }])
-  );
   report.modelVsModel = { sameType, bothType, same4, sameSide, pairs };
+  // Raw predictions, so any metric thought of later is a re-read, not a re-run.
+
   if (out) { writeFileSync(out, JSON.stringify(report, null, 2)); console.log(`\nwrote ${out}`); }
   process.exit(0);
 }
