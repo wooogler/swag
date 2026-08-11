@@ -5,7 +5,7 @@ import { getGlobalValidator } from '@/lib/copy-validator';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
-import { ArrowDown, ArrowUp, Copy, Check, Globe, Loader2, Pencil } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Copy, Check, Globe, Loader2, Pencil } from 'lucide-react';
 import { renderHighlightedChildren, type ReplayPasteHighlight } from './replayPasteHighlight';
 
 export interface Message {
@@ -46,6 +46,10 @@ interface ChatMessagesProps {
   /** Replace the assistant Copy action with an Edit action (rule workbench:
    * editing the reply IS the rewrite affordance). */
   onEditAssistant?: (message: Message) => void;
+  /** Put prev/next controls on every question, so a reader can hop question to
+   * question without scrolling through the replies in between. For read-only
+   * thread views; a live chat has no earlier question worth jumping back to. */
+  showQueryNav?: boolean;
 }
 
 export default function ChatMessages({
@@ -62,6 +66,7 @@ export default function ChatMessages({
   autoScrollToHighlight = false,
   renderUserContent,
   onEditAssistant,
+  showQueryNav = false,
 }: ChatMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -84,6 +89,26 @@ export default function ChatMessages({
 
     return map;
   }, [replayPasteHighlights]);
+
+  // The questions, in thread order — the stops the prev/next controls move
+  // between. Replies are not stops: skipping past them is the whole point.
+  const queryOrder = useMemo(
+    () => messages.filter((m) => m.role === 'user').map((m) => m.id),
+    [messages]
+  );
+  const queryIndex = useMemo(
+    () => new Map(queryOrder.map((id, i) => [id, i])),
+    [queryOrder]
+  );
+
+  // scrollIntoView rather than scrolling this container, because in several
+  // mounts the real scroller is an ANCESTOR (see the highlight-visibility note
+  // below); the browser walks up and moves whichever one actually scrolls.
+  const scrollToMessage = (id: string | number) => {
+    scrollContainerRef.current
+      ?.querySelector(`[data-message-id="${id}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
 
   // Register all messages with validator (both user and assistant)
   useEffect(() => {
@@ -245,7 +270,7 @@ export default function ChatMessages({
           <div
             key={message.id}
             data-message-id={message.id}
-            className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+            className={`group/msg flex ${isUser ? 'justify-end' : 'justify-start'}`}
           >
             <div className={`${isUser ? 'max-w-[85%]' : 'w-full'} ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
               {showConversationBadge && message.conversationTitle && (
@@ -341,6 +366,49 @@ export default function ChatMessages({
               </div>
 
               <div className="flex items-center gap-3 mt-1 px-1">
+                {/* Question-to-question navigation, on the question itself.
+                    Questions sit right-aligned, so the controls go LEFT of the
+                    timestamp and stay out of the way until the pointer is on
+                    the message — except on the question under review, where
+                    they show unprompted so the affordance is findable without
+                    hunting. Named group written inline: an unnamed one would
+                    also fire from any ancestor that happens to be a `group`,
+                    and a class name passed in as a prop is never emitted. */}
+                {isUser && showQueryNav && queryOrder.length > 1 && (() => {
+                  const i = queryIndex.get(message.id) ?? -1;
+                  const prevId = i > 0 ? queryOrder[i - 1] : null;
+                  const nextId = i >= 0 && i < queryOrder.length - 1 ? queryOrder[i + 1] : null;
+                  return (
+                    <div
+                      className={`flex items-center gap-0.5 text-xs text-[hsl(var(--muted-foreground))] transition-opacity focus-within:opacity-100 ${
+                        isHighlighted ? 'opacity-100' : 'opacity-0 group-hover/msg:opacity-100'
+                      }`}
+                    >
+                      <button
+                        onClick={() => prevId != null && scrollToMessage(prevId)}
+                        disabled={prevId == null}
+                        title="Previous question"
+                        aria-label="Previous question"
+                        className="p-0.5 rounded hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-30 disabled:hover:bg-transparent"
+                      >
+                        <ChevronUp className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="tabular-nums" title={`Question ${i + 1} of ${queryOrder.length}`}>
+                        {i + 1}/{queryOrder.length}
+                      </span>
+                      <button
+                        onClick={() => nextId != null && scrollToMessage(nextId)}
+                        disabled={nextId == null}
+                        title="Next question"
+                        aria-label="Next question"
+                        className="p-0.5 rounded hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-30 disabled:hover:bg-transparent"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })()}
+
                 {(showTimestamp || (showWebSearchIndicator && message.metadata?.webSearchEnabled)) && (
                   <div className="flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
                     {showWebSearchIndicator && message.metadata?.webSearchEnabled && (
@@ -417,11 +485,7 @@ export default function ChatMessages({
           }`}
         >
           <button
-            onClick={() =>
-              scrollContainerRef.current
-                ?.querySelector(`[data-message-id="${highlightedMessageId}"]`)
-                ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-            }
+            onClick={() => highlightedMessageId != null && scrollToMessage(highlightedMessageId)}
             className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--foreground))] shadow-md hover:bg-[hsl(var(--muted))]"
             title="Scroll back to the question being reviewed"
           >

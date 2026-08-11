@@ -117,6 +117,10 @@ export function ConversationThread({
       showTimestamp
       highlightedMessageId={current.messageId}
       autoScrollToHighlight
+      // Threads here run long and the replies are the long part, so every
+      // question carries prev/next controls. Hidden when the thread is one
+      // turn (singleTurn, or a one-question conversation) — nowhere to go.
+      showQueryNav
       rawAssistantText={isNirvana}
       renderUserContent={renderUserContent}
     />
