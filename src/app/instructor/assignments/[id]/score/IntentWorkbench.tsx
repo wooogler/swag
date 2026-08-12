@@ -34,8 +34,6 @@ import {
 } from '@/lib/score/intents';
 import {
   AlertTriangle,
-  ChevronDown,
-  ChevronUp,
   GitCompareArrows,
   Loader2,
   Minimize2,
@@ -351,8 +349,9 @@ export default function IntentWorkbench({
      * (pinned out / clearly_out), or undecided ('nd' — also unrated). */
     buckets: Map<number, 'in' | 'nd' | 'out'>;
   } | null>(null);
-  const [newOpen, setNewOpen] = useState(true);
-  const [leftOpen, setLeftOpen] = useState(true);
+  // The two sides of the diff on their own, over the workbench. The list itself
+  // already carries the change in colour; this is for reading it as a change.
+  const [diffOpen, setDiffOpen] = useState(false);
   // Bumped when a rating pass finishes, to RE-READ the baseline snapshot. The
   // base is version-scoped but its ratings are hash-scoped: a base whose spec
   // still matches the live one (the just-created v1, before any edit) gains
@@ -1310,11 +1309,10 @@ export default function IntentWorkbench({
   ) => new Set(rowsIn.filter(isMember).map((r) => r.messageId));
   const effectiveInNow = useMemo(() => (data ? effectiveIn(data.rows) : new Set<number>()), [data]);
 
-  // The version the diff is anchored to: the latest SAVE (major) by default —
-  // an Apply records a minor entry, and diffing against the apply you just ran
-  // would always read empty — or the one picked via "diff" in History.
-  // Baseline membership loads from the same hash-keyed version store the
-  // checkout uses (instant, zero LLM).
+  // The version the diff is anchored to: the latest SAVE by default — so the
+  // panes always answer "what has changed since I last recorded this?" — or the
+  // one picked via "diff" in History. Baseline membership loads from the same
+  // hash-keyed version store the checkout uses (instant, zero LLM).
   const diffBaseNo =
     diffSel === 'latest' ? versions?.find((v) => !v.minor)?.versionNo ?? null : diffSel;
   useEffect(() => {
@@ -1356,9 +1354,8 @@ export default function IntentWorkbench({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diffBaseNo, intentId, assignmentId, baselineNonce]);
 
-  // Entered/left since the baseline. `newlyIn` marks rows in the current lists;
-  // `leftRows` no longer qualify for "In this intent", so they get their own
-  // strip (their CURRENT rating row still exists — relabel from there).
+  // Entered/left since the baseline. Both are rendered INTO the list rather
+  // than into strips above it — see `diffRows`.
   const newlyIn = useMemo(
     () =>
       baseline ? new Set([...effectiveInNow].filter((id) => !baseline.inSet.has(id))) : null,
@@ -1371,11 +1368,26 @@ export default function IntentWorkbench({
         : [],
     [baseline, data, effectiveInNow]
   );
-  // New arrivals grouped into their own strip at the top of "In this intent"
-  // (mirrors the Left strip); the main list below shows the rest.
-  const newInRows = useMemo(
-    () => (newlyIn ? inThisIntent.filter((r) => newlyIn.has(r.messageId)) : []),
-    [inThisIntent, newlyIn]
+  const leftSet = useMemo(() => new Set(leftRows.map((r) => r.messageId)), [leftRows]);
+  /** Which verdict a row can newly take: the pane's direction, except that a
+   * question which has LEFT the intent can only be pulled back in — it is
+   * already out, so an out button there would be a no-op, and this row is the
+   * only place it can be reached at all. */
+  const pinDirection = (r: RatingRow, pane: 'in' | 'nd'): 'in' | 'out' =>
+    pane === 'nd' || leftSet.has(r.messageId) ? 'in' : 'out';
+  /**
+   * "In this intent" as a DIFF: the members, plus the questions that left,
+   * sorted together by whatever order the pane is in.
+   *
+   * The two used to be collapsible strips pinned above the list, which put the
+   * changes where they could be read but not where they happened — a question
+   * that dropped out appeared at the top, far from the neighbours that explain
+   * why. Merging them and colouring in place is the git-diff reading: the list
+   * is the set, and the additions and removals sit in it.
+   */
+  const diffRows = useMemo(
+    () => (leftRows.length > 0 ? [...inThisIntent, ...leftRows] : inThisIntent),
+    [inThisIntent, leftRows]
   );
   const diffBaseLabel = useMemo(() => {
     if (!baseline) return null;
@@ -1528,10 +1540,10 @@ export default function IntentWorkbench({
   };
 
   // One question row — query text (click to open its full conversation in this
-  // pane) + the model's short rationale + its current prior-assignment status +
-  // in/out pins. Reused by both panes: "In this intent" rows get the buttons
-  // too (pin in = confirm as an example; pin out = overrule the model).
-  const renderRow = (r: RatingRow, pane: 'in' | 'nd') => {
+  // pane) + the model's short rationale + its pin button. `diff` colours the
+  // row against the base version: 'new' entered since it, 'left' is gone from
+  // the intent and rendered in place of where it used to sit.
+  const renderRow = (r: RatingRow, pane: 'in' | 'nd', diff?: 'new' | 'left') => {
     // Buttons stay visible on PINNED rows too (active state, click to undo) —
     // a label never strips a row of its controls, only membership moves it.
     const showButtons = checkout === null;
@@ -1558,16 +1570,29 @@ export default function IntentWorkbench({
     // The row whose conversation you last opened in THIS pane, marked so a
     // return from the thread lands somewhere recognizable.
     const marked = lastOpened[pane] === r.messageId;
+    // The marked row wins the border: it is where you are, and a diff colour
+    // that overrode it would lose the place you came back to.
+    const rail = marked
+      ? 'border-l-[hsl(var(--ring))] bg-[hsl(var(--muted))]/60'
+      : diff === 'new'
+        ? 'border-l-emerald-400 bg-emerald-50/50 hover:bg-emerald-50'
+        : diff === 'left'
+          ? 'border-l-rose-400 bg-rose-50/50 hover:bg-rose-50'
+          : 'border-l-transparent hover:bg-[hsl(var(--muted))]/40';
     return (
       <li
         key={r.messageId}
         ref={marked ? (el) => { markedRowRef.current[pane] = el; } : undefined}
-        title={marked ? 'The conversation you last opened' : undefined}
-        className={`group relative px-3 py-2 border-l-2 ${
+        title={
           marked
-            ? 'border-l-[hsl(var(--ring))] bg-[hsl(var(--muted))]/60'
-            : 'border-l-transparent hover:bg-[hsl(var(--muted))]/40'
-        }`}
+            ? 'The conversation you last opened'
+            : diff === 'new'
+              ? `Not in this intent at ${diffBaseLabel} — it has entered since`
+              : diff === 'left'
+                ? `In this intent at ${diffBaseLabel} — it has left since`
+                : undefined
+        }
+        className={`group relative px-3 py-2 border-l-2 ${rail}`}
       >
         <div className="flex items-start gap-2">
           <QueryTextButton
@@ -1652,7 +1677,7 @@ export default function IntentWorkbench({
               r.pinned || reasonPicker?.messageId === r.messageId ? 'opacity-100' : 'opacity-0'
             }`}
           >
-            {pinButtons(r, pane)}
+            {pinButtons(r, pinDirection(r, pane))}
           </span>
         )}
       </li>
@@ -1664,15 +1689,15 @@ export default function IntentWorkbench({
   // A render HELPER (not a nested component) so React doesn't see a fresh
   // component type each render and remount the buttons.
   //
-  // ONE verdict per pane, in the direction that pane exists to settle: "In this
-  // intent" is the list you carve members OUT of, "Needs decision" the list you
-  // pull members IN from. Offering both everywhere made every row a two-way
+  // ONE verdict per row, in the direction that settles the boundary there: "In
+  // this intent" is the list you carve members OUT of, "Needs decision" the one
+  // you pull members IN from. Offering both everywhere made every row a two-way
   // question when only one way moves the boundary. The opposite verdict still
   // renders when it is already pinned — that pill is the only way to withdraw
   // the label, and a label with no undo is a trap.
-  const pinButtons = (row: RatingRow, pane: 'in' | 'nd') => {
-    const showIn = pane === 'nd' || row.pinned === 'in';
-    const showOut = pane === 'in' || row.pinned === 'out';
+  const pinButtons = (row: RatingRow, dir: 'in' | 'out') => {
+    const showIn = dir === 'in' || row.pinned === 'in';
+    const showOut = dir === 'out' || row.pinned === 'out';
     return (
       <>
         {showIn && (
@@ -1751,7 +1776,7 @@ export default function IntentWorkbench({
               <span className="mr-1 text-xs text-[hsl(var(--muted-foreground))]">
                 label this question:
               </span>
-              {pinButtons(ratingRow, pane)}
+              {pinButtons(ratingRow, pinDirection(ratingRow, pane))}
             </span>
           )}
         </div>
@@ -2155,19 +2180,24 @@ export default function IntentWorkbench({
                         </span>
                       )}
                       {baseline && ((newlyIn?.size ?? 0) > 0 || leftRows.length > 0) && (
-                        <span
-                          className="font-normal normal-case text-[hsl(var(--muted-foreground))]"
-                          title={`Membership change compared to ${diffBaseLabel} (the diff base — pick another in History)`}
+                        // The counts are already readable in the list below (the
+                        // coloured rows); this opens the two sides on their own,
+                        // for when the question is "what changed" rather than
+                        // "what is in here".
+                        <button
+                          onClick={() => setDiffOpen(true)}
+                          className="inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-1 py-0.5 font-normal normal-case text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+                          title={`Show what entered and left since ${diffBaseLabel}, side by side (the diff base — pick another in History)`}
                         >
+                          <GitCompareArrows className="w-3 h-3" />
                           <span className={newlyIn && newlyIn.size > 0 ? 'text-emerald-700 font-medium' : ''}>
                             +{newlyIn?.size ?? 0}
                           </span>
-                          {' · '}
                           <span className={leftRows.length > 0 ? 'text-rose-700 font-medium' : ''}>
                             −{leftRows.length}
-                          </span>{' '}
-                          compared to {diffBaseLabel}
-                        </span>
+                          </span>
+                          <span>vs {diffBaseLabel}</span>
+                        </button>
                       )}
                     </span>
                     <span className="flex items-center gap-1 shrink-0">
@@ -2198,59 +2228,24 @@ export default function IntentWorkbench({
                   </div>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
-                  {/* NEW SINCE BASE — captures that entered since the diff base,
-                      grouped at the top (mirrors the Left strip below). */}
-                  {newInRows.length > 0 && (
-                    <div className="border-b border-emerald-200 bg-emerald-50/40">
-                      <button
-                        onClick={() => setNewOpen((v) => !v)}
-                        className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-semibold text-emerald-700"
-                        title={`Not in this intent at ${diffBaseLabel} — entered since; expand to review`}
-                      >
-                        <span>
-                          New in this intent · {newInRows.length}
-                          <span className="font-normal"> (compared to {diffBaseLabel})</span>
-                        </span>
-                        {newOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      </button>
-                      {newOpen && (
-                        <ul className="divide-y divide-emerald-200/60 border-t border-emerald-200/60">
-                          {newInRows.map((r) => renderRow(r, 'in'))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                  {/* LEFT SINCE BASE — questions that were in the intent at the
-                      diff base but no longer qualify. Their CURRENT rating row
-                      renders, so they can be pinned straight back in. */}
-                  {leftRows.length > 0 && (
-                    <div className="border-b border-rose-200 bg-rose-50/40">
-                      <button
-                        onClick={() => setLeftOpen((v) => !v)}
-                        className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-semibold text-rose-700"
-                        title={`In this intent at ${diffBaseLabel}, not anymore — expand to review`}
-                      >
-                        <span>
-                          Left this intent · {leftRows.length}
-                          <span className="font-normal"> (compared to {diffBaseLabel})</span>
-                        </span>
-                        {leftOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      </button>
-                      {leftOpen && (
-                        <ul className="divide-y divide-rose-200/60 border-t border-rose-200/60">
-                          {leftRows.map((r) => renderRow(r, 'in'))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
                   {(() => {
-                    // New arrivals live in their strip above — the main list
-                    // shows the rest of the captures.
-                    const rest = inThisIntent.filter((r) => !newlyIn?.has(r.messageId));
-                    const sorted = sortRows(rest, inSort, inSearch);
+                    // Members and departures in ONE sorted list, coloured in
+                    // place — the diff is read where the questions sit, not in
+                    // a strip above them.
+                    const sorted = sortRows(diffRows, inSort, inSearch);
                     return sorted.length > 0 ? (
                       <ul className="divide-y divide-[hsl(var(--border))]/60">
-                        {sorted.map((r) => renderRow(r, 'in'))}
+                        {sorted.map((r) =>
+                          renderRow(
+                            r,
+                            'in',
+                            leftSet.has(r.messageId)
+                              ? 'left'
+                              : newlyIn?.has(r.messageId)
+                                ? 'new'
+                                : undefined
+                          )
+                        )}
                       </ul>
                     ) : (
                       <p className="p-4 text-sm text-[hsl(var(--muted-foreground))]">
@@ -2258,9 +2253,7 @@ export default function IntentWorkbench({
                           ? 'No matching question.'
                           : busy
                             ? 'Rating the log — captured questions appear here as they land…'
-                            : newInRows.length > 0
-                              ? 'Every capture is new since the base — see the strip above.'
-                              : 'Nothing captured yet — decide the questions on the right.'}
+                            : 'Nothing captured yet — decide the questions on the right.'}
                       </p>
                     );
                   })()}
@@ -2457,6 +2450,85 @@ export default function IntentWorkbench({
             setFoldError(null);
           }}
         />
+      )}
+
+      {/* MEMBERSHIP DIFF — entered and left since the base version, each side
+          on its own. Read-only: the labelling happens in the list underneath,
+          where these same rows sit coloured. */}
+      {diffOpen && baseline && (
+        <div
+          className="fixed inset-0 z-[65] flex items-center justify-center bg-black/30 p-4"
+          onClick={() => setDiffOpen(false)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-4xl flex-col rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[hsl(var(--border))] px-4 py-2.5">
+              <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
+                What changed since {diffBaseLabel}
+                <span className="ml-2 font-normal text-xs text-[hsl(var(--muted-foreground))]">
+                  in “{title.trim() || 'this intent'}” · compare against another version from History
+                </span>
+              </h3>
+              <button
+                onClick={() => setDiffOpen(false)}
+                className="rounded p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-px overflow-hidden bg-[hsl(var(--border))] md:grid-cols-2">
+              {(
+                [
+                  {
+                    key: 'left' as const,
+                    rows: leftRows,
+                    head: `Left this intent · ${leftRows.length}`,
+                    tone: 'text-rose-700',
+                    note: `In this intent at ${diffBaseLabel}, not any more`,
+                  },
+                  {
+                    key: 'new' as const,
+                    rows: newlyIn ? inThisIntent.filter((r) => newlyIn.has(r.messageId)) : [],
+                    head: `New in this intent · ${newlyIn?.size ?? 0}`,
+                    tone: 'text-emerald-700',
+                    note: `Not in this intent at ${diffBaseLabel}; it has entered since`,
+                  },
+                ]
+              ).map((side) => (
+                <div key={side.key} className="flex min-h-0 flex-col bg-[hsl(var(--card))]">
+                  <div className="shrink-0 border-b border-[hsl(var(--border))] px-3 py-1.5">
+                    <p className={`text-xs font-semibold uppercase tracking-wide ${side.tone}`}>
+                      {side.head}
+                    </p>
+                    <p className="text-xs text-[hsl(var(--muted-foreground))]">{side.note}</p>
+                  </div>
+                  <ul className="min-h-0 flex-1 divide-y divide-[hsl(var(--border))]/60 overflow-y-auto">
+                    {side.rows.map((r) => (
+                      <li key={r.messageId} className="px-3 py-2">
+                        <p className="whitespace-pre-wrap break-words text-sm text-[hsl(var(--foreground))]">
+                          {r.queryText.replace(/\s+/g, ' ').trim()}
+                        </p>
+                        {r.rationale && (
+                          <p className="mt-1 text-xs italic text-[hsl(var(--muted-foreground))]">
+                            {r.rationale}
+                          </p>
+                        )}
+                      </li>
+                    ))}
+                    {side.rows.length === 0 && (
+                      <li className="px-3 py-4 text-sm text-[hsl(var(--muted-foreground))]">
+                        Nothing on this side.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* LEAVE GUARD — the only state leaving can destroy is text typed but
