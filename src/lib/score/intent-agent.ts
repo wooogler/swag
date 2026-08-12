@@ -13,6 +13,12 @@
  *    review modal shows that mapping, and a correction marked "not reflected"
  *    is an honest admission rather than a silent loss. Uses the stronger model
  *    with high reasoning effort.
+ *
+ *    That self-report is a claim, not a measurement: this model and the one
+ *    that actually judges are different models, so a span it believes carries a
+ *    correction can still be read the other way. The refine route therefore
+ *    MEASURES each candidate against the real classifier and hands the failures
+ *    back through `previousAttempt` — see its verification loop.
  */
 import { callModel, extractJsonObject } from './classifier';
 import { pinPromptText } from './intents';
@@ -86,7 +92,9 @@ Finally, report the OUTCOME of each correction by its id, honestly:
 - "already" if the current definition already handled it and needed no change.
 - "not_reflected" if you could not fold it in without breaking the definition — say why in note. Never claim a correction is reflected when it is not.
 
-Also return a short TITLE: an imperative noun phrase of at most 5 words, like a git commit subject.`;
+Also return a short TITLE: an imperative noun phrase of at most 5 words, like a git commit subject.
+
+A PREVIOUS ATTEMPT block, when present, is your own earlier rewrite MEASURED: the classifier read that text alone and still judged the listed questions the way the instructor says is wrong. It is evidence, not advice — the wording that failed is what has to change. Read each classifier reading, name what in the text let it reach that conclusion, and write a definition that closes it. Do not simply restate the same principle in new words, and do not fix the listed questions by abandoning corrections the previous attempt already carried.`;
 
 const REFINE_SCHEMA = {
   type: 'object',
@@ -160,9 +168,23 @@ export interface FoldCorrection {
   reason?: string | null;
 }
 
+/** One correction the previous candidate failed to teach, with the classifier's
+ * own reading of it — the evidence a retry works from. */
+export interface FoldFailure {
+  verdict: 'in' | 'out';
+  queryText: string;
+  reason?: string | null;
+  /** What the classifier answered, reading the candidate alone. */
+  judgeRating: string;
+  judgeRationale: string;
+}
+
 export async function foldCorrections(args: {
   definition: string;
   corrections: FoldCorrection[];
+  /** A candidate that was MEASURED and came back wrong (see the refine route's
+   * verification loop). Turns the retry from a reword into a repair. */
+  previousAttempt?: { definition: string; failures: FoldFailure[] };
 }): Promise<RefineResult> {
   const render = (verdict: 'in' | 'out') => {
     const rows = args.corrections.filter((c) => c.verdict === verdict);
@@ -174,10 +196,29 @@ export async function foldCorrections(args: {
       })
       .join('\n');
   };
+  const previous = args.previousAttempt;
   const user = [
     `CURRENT DEFINITION:\n${args.definition.trim()}`,
     `KEEP corrections (instructor says these DO belong):\n${render('in')}`,
     `DROP corrections (instructor says these do NOT belong):\n${render('out')}`,
+    ...(previous && previous.failures.length > 0
+      ? [
+          [
+            `PREVIOUS ATTEMPT (measured — the classifier read this text alone and got these wrong):`,
+            previous.definition.trim(),
+            '',
+            'It should have judged these the instructor\'s way, and did not:',
+            ...previous.failures.map(
+              (f) =>
+                `- "${pinPromptText(f.queryText)}"\n    instructor: ${
+                  f.verdict === 'in' ? 'belongs here' : 'does NOT belong here'
+                }${f.reason?.trim() ? ` (${f.reason.trim()})` : ''}\n    classifier said: ${
+                  f.judgeRating
+                }${f.judgeRationale ? ` — "${f.judgeRationale}"` : ''}`
+            ),
+          ].join('\n'),
+        ]
+      : []),
   ].join('\n\n');
 
   const raw = await callModel(
