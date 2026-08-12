@@ -54,6 +54,33 @@ function write(name: string, rows: Record<string, unknown>[]) {
   console.log(`  ${name.padEnd(28)} ${rows.length} row(s)`);
 }
 
+/**
+ * Did the pointing name what actually answered? SCORE only.
+ *
+ * Scorable because an intent has an id and the response carries the routing
+ * record. Two ways to be right: naming the intent that fired, or saying "none
+ * of them" when nothing of theirs did and the type default answered. "Not sure"
+ * is left blank rather than marked wrong — it is a real answer to a different
+ * question, and counting it as an error would punish the honesty the item asks
+ * for. Baseline is never scored: highlighting a stretch of a document that
+ * answers everything has no fact of the matter, so the analysis codes the
+ * pattern (v2 §6).
+ */
+function pointingCorrect(
+  condition: string | undefined,
+  answer: { pointedKind: string | null; pointedIntentId: number | null },
+  applied: { intentId?: number; outcome?: string } | null
+): number | '' {
+  if (condition !== 'score') return '';
+  if (answer.pointedKind === 'intent') {
+    return applied?.outcome === 'intent' && applied?.intentId === answer.pointedIntentId ? 1 : 0;
+  }
+  if (answer.pointedKind === 'none') {
+    return applied == null || applied.outcome === 'type_default' ? 1 : 0;
+  }
+  return '';
+}
+
 async function main() {
   const { blockPlan } = await import('../../src/lib/study/phases');
   const { getSurveyItems } = await import('../../src/lib/study/survey-store');
@@ -109,7 +136,12 @@ async function main() {
     const block = plan.find((x) => x.datasetKey === clone?.datasetKey)?.block ?? null;
     const item = bankById.get(a.bankItemId);
     const gen = generatedByKey.get(`${a.cloneAssignmentId}:${a.bankItemId}`);
-    const applied = gen?.applied as { intentId?: number; outcome?: string; type?: string } | null;
+    const applied = gen?.applied as {
+      intentId?: number;
+      intentTitle?: string;
+      outcome?: string;
+      type?: string;
+    } | null;
 
     // Fit ≤3 reads as "not what I intended" (design §6).
     const met = a.rating === null ? null : a.rating >= 4;
@@ -129,14 +161,86 @@ async function main() {
       // SCORE only: which of their own sets answered, or the type default.
       applied_outcome: applied?.outcome ?? '',
       applied_intent_id: applied?.intentId ?? '',
+      applied_intent_title: applied?.intentTitle ?? '',
       // Covered = one of the participant's own intents claimed it.
       covered: clone?.condition === 'score' ? (applied?.outcome === 'intent' ? 1 : 0) : '',
+      // Where they expected it to come from, before they saw it.
+      pointed_kind: a.pointedKind ?? '',
+      pointed_intent_id: a.pointedIntentId ?? '',
+      pointed_span_start: a.pointedSpanStart ?? '',
+      pointed_span_end: a.pointedSpanEnd ?? '',
+      pointed_text: a.pointedText ?? '',
+      pointing_correct: pointingCorrect(clone?.condition, a, applied),
       generation_outcome: gen?.outcome ?? '',
       guessed_at: a.guessedAt?.toISOString() ?? '',
+      pointed_at: a.pointedAt?.toISOString() ?? '',
       rated_at: a.ratedAt?.toISOString() ?? '',
     };
   });
   write('block_test.csv', testRows);
+
+  // ── misalignment coding sheet: only the items they said were off ────
+  // The design asks for a human pass over "what's off about it" (v2 §6), and
+  // that pass needs the item beside the prediction that missed it — not a
+  // filter someone has to rebuild in a spreadsheet.
+  const misalignedRows = testRows
+    .filter((r) => typeof r.rating === 'number' && r.rating <= 3)
+    .map((r) => ({
+      participant: r.participant,
+      block: r.block,
+      condition: r.condition,
+      dataset: r.dataset,
+      bank_item: r.bank_item,
+      query_type: r.query_type,
+      subtype: r.subtype,
+      question: bankById.get(r.bank_item)?.question ?? '',
+      response: generatedByKey.get(
+        `${testAnswers.find((a) => a.bankItemId === r.bank_item)?.cloneAssignmentId}:${r.bank_item}`
+      )?.response ?? '',
+      rating: r.rating,
+      guess: r.guess,
+      prediction_correct: r.prediction_correct,
+      pointed_kind: r.pointed_kind,
+      pointed_intent_id: r.pointed_intent_id,
+      pointed_text: r.pointed_text,
+      applied_outcome: r.applied_outcome,
+      applied_intent_title: r.applied_intent_title,
+      pointing_correct: r.pointing_correct,
+      misalignment_type: '', // filled by the coder
+      note: '',
+    }));
+  write('misalignment.csv', misalignedRows);
+
+  // ── per block: prediction accuracy and deployment confidence ────────
+  // Confidence calibration (v2 §6) is the pair, not either number: how many
+  // items they walked in expecting to be right, against how many turned out
+  // that way. A participant can be well calibrated and mostly wrong.
+  const byBlock = new Map<string, typeof testRows>();
+  for (const r of testRows) {
+    const key = `${r.participant}|${r.block}`;
+    byBlock.set(key, [...(byBlock.get(key) ?? []), r]);
+  }
+  const calibrationRows = [...byBlock.values()]
+    .filter((rows) => rows.length > 0)
+    .map((rows) => {
+      const scored = rows.filter((r) => r.prediction_correct !== '');
+      const pointed = rows.filter((r) => r.pointing_correct !== '');
+      return {
+        participant: rows[0].participant,
+        block: rows[0].block,
+        condition: rows[0].condition,
+        dataset: rows[0].dataset,
+        items: rows.length,
+        guessed_yes: rows.filter((r) => r.guess === 'yes').length,
+        met_intent: rows.filter((r) => r.met_intent === 'yes').length,
+        prediction_correct: scored.filter((r) => r.prediction_correct === 1).length,
+        prediction_scored: scored.length,
+        pointing_correct: pointed.filter((r) => r.pointing_correct === 1).length,
+        pointing_scored: pointed.length,
+        not_sure: rows.filter((r) => r.pointed_kind === 'not_sure').length,
+      };
+    });
+  write('block_summary.csv', calibrationRows);
 
   // ── survey ──────────────────────────────────────────────────────────
   const surveys = await db.select().from(studySurveyAnswers);

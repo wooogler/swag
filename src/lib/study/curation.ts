@@ -795,7 +795,7 @@ export async function saveSetTargets(
 /* ------------------------------------------------------------------ */
 
 export interface CurationViolation {
-  code: 'count' | 'isolation' | 'missing_type' | 'boundary_ratio';
+  code: 'count' | 'isolation' | 'missing_type' | 'boundary_ratio' | 'test_subtype_spread';
   severity: 'error' | 'warning';
   message: string;
   messageIds?: number[];
@@ -850,6 +850,42 @@ export function validateCuration(
       message: `${untyped.length} unclassified question(s) in a set — run Refresh classification`,
       messageIds: untyped,
     });
+  }
+
+  // Design v2 §4 wants the block test drawn from "the two most common subtypes"
+  // of each type — the point being that a test item should be a question the
+  // type actually sees a lot of, not a curiosity. A warning, not a block: a
+  // curator who takes a third subtype on purpose should not have to argue with
+  // the lock, and the two-most-common rule is guidance about typicality rather
+  // than a property of a valid set.
+  for (const type of SCORE_QUERY_TYPES) {
+    const top = state.subtypes
+      .filter((sub) => sub.type === type)
+      .sort((a, b) => b.clearlyIn - a.clearlyIn || a.title.localeCompare(b.title))
+      .slice(0, 2);
+    if (top.length === 0) continue;
+    // Judged on what the question MATCHES, not on the label frozen beside it.
+    // That label is whichever same-type subtype came first when the member was
+    // assigned; a question can match a commonest subtype and still be labelled
+    // with another, and flagging that would be flagging an ordering accident.
+    const allowed = new Set(top.map((sub) => sub.intentId));
+    const byMessage = new Map(state.questions.map((q) => [q.messageId, q]));
+    const strays = state.members.filter((m) => {
+      if (m.setKind !== 'test' || questionType(state, m.messageId) !== type) return false;
+      const matched = Object.keys(byMessage.get(m.messageId)?.matches ?? {});
+      if (matched.length === 0) return false; // unmatched is its own violation
+      return !matched.some((id) => allowed.has(Number(id)));
+    });
+    if (strays.length > 0) {
+      out.push({
+        code: 'test_subtype_spread',
+        severity: 'warning',
+        message: `test · ${type}: ${strays.length} item(s) outside the two commonest subtypes (${top
+          .map((sub) => sub.title)
+          .join(', ')})`,
+        messageIds: strays.map((m) => m.messageId),
+      });
+    }
   }
 
   for (const kind of CURATION_SET_KINDS) {
