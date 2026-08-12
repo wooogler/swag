@@ -751,7 +751,7 @@ export async function getSetTargets(): Promise<SetTargets> {
   await ensureStudyTables();
   const [row] = await db.select().from(studySetTargets).where(eq(studySetTargets.id, 1));
   if (!row) return { ...DEFAULT_SET_TARGETS };
-  return { review: row.review, test: row.test, ab: row.ab };
+  return { review: row.review, test: row.test };
 }
 
 export function clampSetTargets(input: Partial<SetTargets>): SetTargets {
@@ -795,7 +795,7 @@ export async function saveSetTargets(
 /* ------------------------------------------------------------------ */
 
 export interface CurationViolation {
-  code: 'count' | 'isolation' | 'ab_balance' | 'missing_type' | 'boundary_ratio';
+  code: 'count' | 'isolation' | 'missing_type' | 'boundary_ratio';
   severity: 'error' | 'warning';
   message: string;
   messageIds?: number[];
@@ -849,22 +849,6 @@ export function validateCuration(
       severity: 'error',
       message: `${untyped.length} unclassified question(s) in a set — run Refresh classification`,
       messageIds: untyped,
-    });
-  }
-
-  // A/B needs 2 per type so the cross-dataset item order can be built in
-  // balanced blocks (every 4 consecutive items = both datasets, rotating
-  // types), which is what keeps a 16→12→8 pilot truncation unbiased.
-  const abPerType = SCORE_QUERY_TYPES.map(
-    (type) =>
-      state.members.filter((m) => m.setKind === 'ab' && questionType(state, m.messageId) === type)
-        .length
-  );
-  if (abPerType.some((n) => n !== targets.ab)) {
-    out.push({
-      code: 'ab_balance',
-      severity: 'error',
-      message: `A/B blocks unbalanced — needs exactly ${targets.ab} per type`,
     });
   }
 

@@ -62,8 +62,7 @@ function sinceLabel(iso: string): string {
 function measurementTone(p: ParticipantStatus): 'plain' | 'ok' {
   const testTotal = p.clones.reduce((n, c) => n + c.testTotal, 0);
   const testDone = p.clones.reduce((n, c) => n + c.testAnswered, 0);
-  const complete =
-    testTotal > 0 && testDone === testTotal && p.ab.total > 0 && p.ab.answered === p.ab.total;
+  const complete = testTotal > 0 && testDone === testTotal;
   return complete ? 'ok' : 'plain';
 }
 
@@ -142,7 +141,7 @@ export default function SessionConsole({
       `${p.id}:${move}`
     );
 
-  const generate = async (p: ParticipantStatus, kind: 'test' | 'ab', block?: 1 | 2) => {
+  const generate = async (p: ParticipantStatus, kind: 'test', block?: 1 | 2) => {
     const data = await post(
       '/api/study/admin/participants/generate',
       { participantId: p.id, kind, block },
@@ -282,7 +281,7 @@ export default function SessionConsole({
                 ))}
                 <Chip tone={measurementTone(p)}>
                   test {p.clones.reduce((n, c) => n + c.testAnswered, 0)}/
-                  {p.clones.reduce((n, c) => n + c.testTotal, 0)} · A/B {p.ab.answered}/{p.ab.total}
+                  {p.clones.reduce((n, c) => n + c.testTotal, 0)}
                 </Chip>
                 {p.lastActivityAt && (
                   <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
@@ -470,7 +469,7 @@ function CloneCard({
 }: {
   clone: CloneStatus;
   busy: string | null;
-  onGenerate: (kind: 'test' | 'ab') => void;
+  onGenerate: (kind: 'test') => void;
   onReset: () => void;
 }) {
   const readiness = (r: { missing: number; stale: number; current: boolean }) =>
@@ -522,24 +521,6 @@ function CloneCard({
         </button>
       </div>
 
-      <div className="flex items-center gap-2 flex-wrap text-[11px]">
-        <span className="text-[hsl(var(--muted-foreground))] w-14">A/B</span>
-        {readiness(clone.ab)}
-        <button
-          onClick={() => onGenerate('ab')}
-          disabled={busy !== null || !clone.deployed}
-          className="text-[10.5px] font-semibold px-2 py-0.5 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"
-        >
-          Generate (both)
-        </button>
-        <button
-          onClick={onReset}
-          disabled={busy !== null}
-          className="ml-auto text-[10.5px] font-semibold px-2 py-0.5 rounded border border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"
-        >
-          Reset clone
-        </button>
-      </div>
     </div>
   );
 }

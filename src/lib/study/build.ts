@@ -276,8 +276,6 @@ async function inspectMaster(
 /* 2 · question bank                                                   */
 /* ------------------------------------------------------------------ */
 
-const TYPE_ROTATION = ['planning', 'translating', 'reviewing', 'drafting'] as const;
-
 interface Candidate {
   messageId: number;
   datasetKey: string;
@@ -285,21 +283,10 @@ interface Candidate {
   subtype: string | null;
 }
 
-export interface BalanceRow {
-  cut: number;
-  datasets: Record<string, number>;
-  types: Record<string, number>;
-  even: boolean;
-}
-
 export interface BankBuildResult {
   status: 'built' | 'planned' | 'blocked';
   reason?: string;
   testCandidates: number;
-  abCandidates: number;
-  /** e.g. ["sp","np","st",…] — dataset initial + type initial, in served order */
-  abOrder: string[];
-  balance: BalanceRow[];
   replaced: number;
   written: number;
   warnings: string[];
@@ -311,18 +298,14 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
   const base: BankBuildResult = {
     status: 'blocked',
     testCandidates: 0,
-    abCandidates: 0,
-    abOrder: [],
-    balance: [],
     replaced: 0,
     written: 0,
     warnings: [],
   };
 
-  // Both datasets, always: the A/B order interleaves them, so half a bank is
-  // not a smaller bank — it is an unbalanced one.
+  // Both datasets, always: a participant's two blocks are one per dataset, so
+  // half a bank is a study that cannot run its second block.
   const test: Candidate[] = [];
-  const ab: Candidate[] = [];
   for (const dataset of CURATION_DATASETS) {
     if (!(await isLocked(dataset.key))) {
       return { ...base, reason: `${dataset.key}: curation is not confirmed — lock the sets first` };
@@ -330,26 +313,12 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
     for (const row of await getConfirmedSet(dataset.key, 'test')) {
       test.push({ ...row, datasetKey: dataset.key });
     }
-    for (const row of await getConfirmedSet(dataset.key, 'ab')) {
-      ab.push({ ...row, datasetKey: dataset.key });
-    }
   }
 
-  const ordered = balancedAbOrder(ab);
-  const partial: BankBuildResult = {
-    ...base,
-    testCandidates: test.length,
-    abCandidates: ab.length,
-    abOrder: ordered.map((c) => `${c.datasetKey[0]}${(c.queryType ?? '?')[0]}`),
-    balance: reportBalance(ordered),
-  };
-  for (const row of partial.balance) {
-    if (!row.even) partial.warnings.push(`first ${row.cut} A/B items are unbalanced across datasets`);
-  }
+  const partial: BankBuildResult = { ...base, testCandidates: test.length };
 
   // Freeze the text: prior turns + the question itself, as of now.
-  const all = [...test, ...ab];
-  const frozen = await freezeQuestions(all);
+  const frozen = await freezeQuestions(test);
 
   if (!opts.apply) return { ...partial, status: 'planned' };
 
@@ -404,87 +373,12 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
       });
     });
   }
-  ordered.forEach((c, i) => {
-    const f = frozen.get(c.messageId);
-    if (!f) return;
-    rows.push({
-      datasetKey: c.datasetKey,
-      kind: 'ab',
-      position: i,
-      sourceMessageId: c.messageId,
-      context: f.context,
-      question: f.question,
-      queryType: c.queryType,
-      subtype: c.subtype,
-      createdAt: new Date(),
-    });
-  });
-
   if (rows.length === 0) {
-    return { ...partial, status: 'blocked', reason: 'nothing to write — no test or A/B items' };
+    return { ...partial, status: 'blocked', reason: 'nothing to write — no block-test items' };
   }
 
   await db.insert(studyQuestionBank).values(rows);
   return { ...partial, status: 'built', written: rows.length };
-}
-
-/**
- * Interleave into blocks of four: both datasets twice, types rotating. Built by
- * taking one item at a time from each (dataset, type) bucket in a fixed order,
- * so any prefix that is a multiple of four is balanced by construction.
- */
-function balancedAbOrder(items: Candidate[]): Candidate[] {
-  const buckets = new Map<string, Candidate[]>();
-  for (const item of items) {
-    const key = `${item.datasetKey}:${item.queryType ?? 'unknown'}`;
-    const list = buckets.get(key) ?? [];
-    list.push(item);
-    buckets.set(key, list);
-  }
-  const datasets = [...new Set(items.map((i) => i.datasetKey))].sort();
-  const out: Candidate[] = [];
-  // Round r takes type rotation[r] from each dataset in turn, twice over the
-  // four types → 4 items per round, 2 per dataset, all four types across two
-  // rounds.
-  for (let round = 0; round < TYPE_ROTATION.length; round++) {
-    for (const datasetKey of datasets) {
-      const type = TYPE_ROTATION[round];
-      const bucket = buckets.get(`${datasetKey}:${type}`);
-      while (bucket && bucket.length > 0) {
-        out.push(bucket.shift()!);
-        break; // one per (dataset, type) per round; the second pass takes the rest
-      }
-    }
-  }
-  // Second pass for the remaining item of each (dataset, type) pair.
-  for (let round = 0; round < TYPE_ROTATION.length; round++) {
-    for (const datasetKey of datasets) {
-      const bucket = buckets.get(`${datasetKey}:${TYPE_ROTATION[round]}`);
-      if (bucket && bucket.length > 0) out.push(bucket.shift()!);
-    }
-  }
-  // Anything left (an unexpected type, or an unbalanced set) goes at the end
-  // rather than being dropped.
-  for (const bucket of buckets.values()) out.push(...bucket);
-  return out;
-}
-
-/** Show that every planned truncation point stays balanced. */
-function reportBalance(ordered: Candidate[]): BalanceRow[] {
-  const out: BalanceRow[] = [];
-  for (const cut of [8, 12, 16]) {
-    if (ordered.length < cut) continue;
-    const prefix = ordered.slice(0, cut);
-    const datasets: Record<string, number> = {};
-    const types: Record<string, number> = {};
-    for (const c of prefix) {
-      datasets[c.datasetKey] = (datasets[c.datasetKey] ?? 0) + 1;
-      types[c.queryType ?? '?'] = (types[c.queryType ?? '?'] ?? 0) + 1;
-    }
-    const counts = Object.values(datasets);
-    out.push({ cut, datasets, types, even: counts.every((n) => n === counts[0]) });
-  }
-  return out;
 }
 
 /** The question text plus the turns before it, taken from the source master. */

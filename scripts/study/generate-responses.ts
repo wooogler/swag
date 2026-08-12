@@ -31,7 +31,7 @@ async function main() {
   const statusOnly = process.argv.includes('--status');
 
   if (!participantNumber) throw new Error('Pass --participant <number>');
-  if (kind !== 'test' && kind !== 'ab') throw new Error('--kind must be test | ab');
+  if (kind !== 'test') throw new Error('--kind must be test');
 
   const [participant] = await db
     .select()

@@ -186,11 +186,14 @@ export async function ensureStudyTables(): Promise<void> {
           "id" integer PRIMARY KEY NOT NULL DEFAULT 1,
           "review" integer NOT NULL,
           "test" integer NOT NULL,
-          "ab" integer NOT NULL,
           "updated_at" timestamp NOT NULL,
           "updated_by" text,
           CONSTRAINT "study_set_targets_singleton" CHECK (id = 1)
         )`);
+      // Design v2 dropped the blind A/B, so the third target has nothing to
+      // size. NOT NULL with no default, so it has to go rather than be ignored:
+      // an insert that omitted it would fail at the database, not the type.
+      await db.execute(sql`ALTER TABLE "study_set_targets" DROP COLUMN IF EXISTS "ab"`);
 
       // The questionnaire, as a researcher currently has it worded. Singleton
       // JSON rather than a row per item: the whole instrument is edited and
@@ -271,21 +274,6 @@ export async function ensureStudyTables(): Promise<void> {
         )`);
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_test_answers_unique" ON "study_test_answers" ("clone_assignment_id","bank_item_id")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_test_answers_participant_idx" ON "study_test_answers" ("participant_id")`);
-
-      // Blind A/B: which configuration was shown on which side is recorded with
-      // the choice — without it a left/right answer cannot be attributed.
-      await db.execute(sql`
-        CREATE TABLE IF NOT EXISTS "study_ab_answers" (
-          "id" serial PRIMARY KEY NOT NULL,
-          "participant_id" text NOT NULL,
-          "bank_item_id" integer NOT NULL,
-          "left_clone_assignment_id" text NOT NULL,
-          "right_clone_assignment_id" text NOT NULL,
-          "choice" text NOT NULL,
-          "answered_at" timestamp NOT NULL
-        )`);
-      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_ab_answers_unique" ON "study_ab_answers" ("participant_id","bank_item_id")`);
-
       // Per-block questionnaire. One row per answered item, so adding or
       // rewording a scale between the pilot and the study changes the config
       // rather than the schema.

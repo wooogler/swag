@@ -12,7 +12,6 @@ import { db } from '@/db/db';
 import {
   baselinePromptVersions,
   scoreChatDeploys,
-  studyAbAnswers,
   studyClones,
   studyEvents,
   studyParticipants,
@@ -21,7 +20,6 @@ import {
   studyTestAnswers,
   type StudyParticipant,
 } from '@/db/schema';
-import { STUDY_DATASETS } from './config';
 import { isGenerationCurrent, type BankKind } from './generate';
 import {
   blockPlan,
@@ -62,7 +60,6 @@ export interface CloneStatus {
   deployLabel: string | null;
   /** Frozen-answer readiness, per bank kind. */
   test: { missing: number; stale: number; current: boolean };
-  ab: { missing: number; stale: number; current: boolean };
   work: CloneWork;
   /** Block test answered / total, for this clone's own dataset. */
   testAnswered: number;
@@ -87,7 +84,6 @@ export interface ParticipantStatus {
   phaseMinutes: number | null;
   /** The most recent trace of them doing anything at all. */
   lastActivityAt: string | null;
-  ab: { answered: number; total: number };
 }
 
 function conditionOf(clone: { condition: string }): 'score' | 'baseline' {
@@ -203,21 +199,6 @@ async function answeredFor(
   return { answered: row?.n ?? 0, total: bank.length };
 }
 
-/** A/B progress: choices made over the bank's size (both datasets). */
-async function abProgressFor(participantId: string): Promise<{ answered: number; total: number }> {
-  const [[bank], [answered]] = await Promise.all([
-    db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(studyQuestionBank)
-      .where(eq(studyQuestionBank.kind, 'ab')),
-    db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(studyAbAnswers)
-      .where(eq(studyAbAnswers.participantId, participantId)),
-  ]);
-  return { answered: answered?.n ?? 0, total: bank?.n ?? 0 };
-}
-
 /** When the facilitator last moved them — the clock the 30-minute cap runs on. */
 async function lastPhaseChange(participantId: string): Promise<Date | null> {
   const [row] = await db
@@ -268,14 +249,6 @@ async function lastActivityFor(
     candidates.push(rated?.ratedAt ?? null);
   }
 
-  const [answered] = await db
-    .select({ answeredAt: studyAbAnswers.answeredAt })
-    .from(studyAbAnswers)
-    .where(eq(studyAbAnswers.participantId, participant.id))
-    .orderBy(desc(studyAbAnswers.answeredAt))
-    .limit(1);
-  candidates.push(answered?.answeredAt ?? null);
-
   const times = candidates.filter((d): d is Date => !!d).map((d) => d.getTime());
   return times.length > 0 ? new Date(Math.max(...times)) : null;
 }
@@ -295,27 +268,12 @@ export async function getParticipantStatus(
     clones.map(async (clone) => {
       const deploy = await deployStateFor(clone);
       const block = plan.find((p) => p.datasetKey === clone.datasetKey)?.block ?? null;
-      // Block test asks the clone's OWN dataset; A/B asks both, so readiness is
-      // the worst of the two.
+      // A block test asks the clone's OWN dataset, and only that.
       const test = await isGenerationCurrent({
         cloneAssignmentId: clone.assignmentId,
         datasetKey: clone.datasetKey,
         kind: 'test',
       }).catch(() => ({ current: false, missing: 0, stale: 0 }));
-      const abParts = await Promise.all(
-        STUDY_DATASETS.map((d) =>
-          isGenerationCurrent({
-            cloneAssignmentId: clone.assignmentId,
-            datasetKey: d.key,
-            kind: 'ab',
-          }).catch(() => ({ current: false, missing: 0, stale: 0 }))
-        )
-      );
-      const ab = {
-        missing: abParts.reduce((n, p) => n + p.missing, 0),
-        stale: abParts.reduce((n, p) => n + p.stale, 0),
-        current: abParts.every((p) => p.current),
-      };
       const [work, testProgress, surveyCount] = await Promise.all([
         workFor(clone.assignmentId),
         answeredFor(clone.assignmentId, clone.datasetKey),
@@ -338,7 +296,6 @@ export async function getParticipantStatus(
         deployed: deploy.deployed,
         deployLabel: deploy.label,
         test,
-        ab,
         work,
         testAnswered: testProgress.answered,
         testTotal: testProgress.total,
@@ -348,10 +305,9 @@ export async function getParticipantStatus(
     })
   );
 
-  const [phaseSince, lastActivityAt, abProgress] = await Promise.all([
+  const [phaseSince, lastActivityAt] = await Promise.all([
     lastPhaseChange(participant.id),
     lastActivityFor(participant, cloneStatuses),
-    abProgressFor(participant.id),
   ]);
 
   return {
@@ -366,7 +322,6 @@ export async function getParticipantStatus(
     phaseSince: phaseSince ? phaseSince.toISOString() : null,
     phaseMinutes: phaseSince ? Math.floor((Date.now() - phaseSince.getTime()) / 60_000) : null,
     lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
-    ab: abProgress,
   };
 }
 
@@ -386,7 +341,7 @@ export async function listParticipantStatuses(): Promise<ParticipantStatus[]> {
 
 /**
  * Why the NEXT phase cannot be entered yet. Only the measurement phases have
- * preconditions: a test or A/B screen shows FROZEN answers, so they must exist
+ * preconditions: a test screen shows FROZEN answers, so they must exist
  * and still match what is deployed right now — a participant who tweaked and
  * redeployed after generation would otherwise be tested against a chatbot they
  * no longer have.
@@ -408,16 +363,6 @@ export function advanceBlockers(phase: StudyPhase, clones: CloneStatus[]): strin
 
   if (phase === 'block1_work') checkTest(1);
   if (phase === 'block2_work') checkTest(2);
-  if (phase === 'block2_survey') {
-    for (const clone of clones) {
-      if (!clone.deployed) blockers.push(`${clone.datasetKey}: not deployed`);
-      else if (!clone.ab.current) {
-        blockers.push(
-          `${clone.datasetKey}: A/B answers ${clone.ab.missing} missing, ${clone.ab.stale} stale`
-        );
-      }
-    }
-  }
   return blockers;
 }
 
@@ -461,4 +406,4 @@ export async function allowedAssignmentIds(participant: StudyParticipant): Promi
 }
 
 /** Bank kinds the console can trigger generation for, in session order. */
-export const GENERATION_KINDS: BankKind[] = ['test', 'ab'];
+export const GENERATION_KINDS: BankKind[] = ['test'];

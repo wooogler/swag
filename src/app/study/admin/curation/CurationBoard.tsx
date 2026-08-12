@@ -7,7 +7,7 @@
  * (score_query_types) and, nested under them, the starter subtypes with their
  * judge grades (● clearly_in / ◐ probably_in). Nothing is labelled by hand here;
  * the researcher reads and ASSIGNS — every question lands in review, block-test,
- * A/B, or nothing, and the sets are exclusive by construction.
+ * or nothing, and the sets are exclusive by construction.
  *
  * Layout, chips and row markup are the studio board's, so a researcher who
  * knows the board can already read this screen.
@@ -66,7 +66,6 @@ const TYPE_DOT: Record<ScoreQueryType, string> = {
 const SET_LABELS: Record<CurationSetKind, string> = {
   review: 'Review set',
   test: 'Block test',
-  ab: 'A/B',
 };
 
 function Badge({ children, tone = 'plain' }: { children: React.ReactNode; tone?: 'plain' | 'warn' | 'ok' }) {
@@ -265,7 +264,7 @@ export default function CurationBoard({
 
   /**
    * Per subtype, how many of its questions are already in each set —
-   * [review, block test, A/B].
+   * [review, block test].
    *
    * Counted over every subtype a question matches, not the single label frozen
    * on the member row: a question that two subtypes claim is spoken for on both
@@ -273,8 +272,8 @@ export default function CurationBoard({
    * columns sum to more than the sets contain, on purpose.
    */
   const assignedBySubtype = useMemo(() => {
-    const slot: Record<CurationSetKind, 0 | 1 | 2> = { review: 0, test: 1, ab: 2 };
-    const tally = new Map<number, [number, number, number]>();
+    const slot: Record<CurationSetKind, 0 | 1> = { review: 0, test: 1 };
+    const tally = new Map<number, [number, number]>();
     for (const m of state.members) {
       const q = questionById.get(m.messageId);
       if (!q) continue;
@@ -282,7 +281,7 @@ export default function CurationBoard({
       if (i === undefined) continue;
       for (const intentId of Object.keys(q.matches)) {
         const id = Number(intentId);
-        const cur = tally.get(id) ?? ([0, 0, 0] as [number, number, number]);
+        const cur = tally.get(id) ?? ([0, 0] as [number, number]);
         cur[i] += 1;
         tally.set(id, cur);
       }
@@ -612,7 +611,7 @@ export default function CurationBoard({
   // Counts and the per-set notes live in the cards; anything else (demo
   // isolation, unclassified questions) still needs saying out loud.
   const otherViolations = violations.filter(
-    (v) => v.code !== 'count' && v.code !== 'ab_balance' && v.code !== 'boundary_ratio'
+    (v) => v.code !== 'count' && v.code !== 'boundary_ratio'
   );
 
   const header = (
@@ -761,7 +760,7 @@ export default function CurationBoard({
           checks, so they are shown as the work rather than as a list of
           errors — a count list of twelve had to be truncated, which hid the
           one violation that was not a count. */}
-      <div className="mb-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
+      <div className="mb-3 grid grid-cols-1 lg:grid-cols-2 gap-2">
         {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
           const have = setCounts.get(kind) ?? 0;
           const want = targets[kind] * SCORE_QUERY_TYPES.length;
@@ -770,9 +769,7 @@ export default function CurationBoard({
           const complete = have === want;
           // Violations that belong to this set rather than to a type count.
           const setNotes = violations.filter(
-            (v) =>
-              (v.code === 'ab_balance' && kind === 'ab') ||
-              (v.code === 'boundary_ratio' && v.message.startsWith(kind))
+            (v) => v.code === 'boundary_ratio' && v.message.startsWith(kind)
           );
           return (
             <div
@@ -925,8 +922,8 @@ export default function CurationBoard({
                 </button>
               </div>
               <p className="mt-1 text-[10.5px] text-violet-800">
-                Builds the reduced study masters and freezes the block-test / A/B question
-                bank. Both datasets must be confirmed for the bank.
+                Builds the reduced study masters and freezes the block-test question bank.
+                Both datasets must be confirmed for the bank.
               </p>
               {buildReport && <BuildReport report={buildReport} />}
             </div>
@@ -1019,7 +1016,7 @@ export default function CurationBoard({
                       last={i === list.length - 1}
                       active={selection.kind === 'subtype' && selection.intentId === s.intentId}
                       isDemo={state.meta.demoSubtypes.includes(s.title)}
-                      assigned={assignedBySubtype.get(s.intentId) ?? [0, 0, 0]}
+                      assigned={assignedBySubtype.get(s.intentId) ?? [0, 0]}
                       onClick={() => setSelection({ kind: 'subtype', intentId: s.intentId })}
                     />
                   ))}
@@ -1168,7 +1165,7 @@ export default function CurationBoard({
                                 : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
                             }`}
                           >
-                            {kind === 'review' ? 'Review' : kind === 'test' ? 'Test' : 'A/B'}
+                            {kind === 'review' ? 'Review' : 'Test'}
                           </button>
                         ))}
                       </span>
@@ -1318,12 +1315,6 @@ function SetTargetsModal({
               </div>
             );
           })}
-
-          <p className="text-[10.5px] text-[hsl(var(--muted-foreground))] leading-relaxed pt-1">
-            A/B is drawn from both datasets, so a participant sees twice that (
-            {draft.ab * 8}); the order is built in balanced blocks, so truncating from
-            the end during the pilot keeps home and away even.
-          </p>
 
           {locked && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
@@ -1606,11 +1597,11 @@ function SubtypeRow({
   last: boolean;
   active: boolean;
   isDemo: boolean;
-  /** [review, block test, A/B] already assigned from this subtype. */
-  assigned: [number, number, number];
+  /** [review, block test] already assigned from this subtype. */
+  assigned: [number, number];
   onClick: () => void;
 }) {
-  const anyAssigned = assigned[0] + assigned[1] + assigned[2] > 0;
+  const anyAssigned = assigned[0] + assigned[1] > 0;
   return (
     <button
       onClick={onClick}
@@ -1639,9 +1630,9 @@ function SubtypeRow({
       {anyAssigned && (
         <span
           className="text-[10px] font-bold tabular-nums whitespace-nowrap text-violet-600"
-          title={`assigned from this subtype — review ${assigned[0]} · block test ${assigned[1]} · A/B ${assigned[2]}`}
+          title={`assigned from this subtype — review ${assigned[0]} · block test ${assigned[1]}`}
         >
-          {assigned[0]}/{assigned[1]}/{assigned[2]}
+          {assigned[0]}/{assigned[1]}
         </span>
       )}
     </button>
@@ -2010,19 +2001,10 @@ function BuildReport({ report }: { report: BuildResponse }) {
         )}
         <span className="text-[hsl(var(--muted-foreground))]">
           {' '}
-          · {report.bank.testCandidates} test + {report.bank.abCandidates} A/B candidate(s)
+          · {report.bank.testCandidates} block-test candidate(s)
           {report.bank.written > 0 && ` · wrote ${report.bank.written} item(s)`}
           {report.bank.replaced > 0 && ` · replaced ${report.bank.replaced}`}
         </span>
-        {report.bank.balance.map((b) => (
-          <span key={b.cut} className="block text-[hsl(var(--muted-foreground))]">
-            first {b.cut}:{' '}
-            {Object.entries(b.datasets)
-              .map(([k, v]) => `${k}=${v}`)
-              .join(' ')}{' '}
-            {b.even ? '✓' : '✗ unbalanced'}
-          </span>
-        ))}
         {report.bank.warnings.map((w, i) => (
           <span key={i} className="block text-amber-700 font-semibold">
             ! {w}

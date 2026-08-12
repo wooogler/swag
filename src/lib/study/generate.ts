@@ -49,7 +49,7 @@ const CALL_OPTIONS = { timeoutMs: 45_000, maxRetries: 2 };
 /** Retries of the WHOLE resolve+generate step when it fails open. */
 const FAIL_OPEN_RETRIES = 2;
 
-export type BankKind = 'test' | 'ab';
+export type BankKind = 'test';
 
 export interface GenerateOutcome {
   bankItemId: number;

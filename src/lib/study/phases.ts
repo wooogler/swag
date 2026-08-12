@@ -25,7 +25,6 @@ export const STUDY_PHASES = [
   'block2_work',
   'block2_test',
   'block2_survey',
-  'ab',
   'done',
 ] as const;
 
@@ -44,7 +43,6 @@ export const PHASE_LABELS: Record<StudyPhase, string> = {
   block2_work: 'Block 2 · configure',
   block2_test: 'Block 2 · test',
   block2_survey: 'Block 2 · survey',
-  ab: 'Blind A/B',
   done: 'Done',
 };
 
@@ -58,7 +56,7 @@ export function prevPhase(phase: StudyPhase): StudyPhase | null {
   return i > 0 ? STUDY_PHASES[i - 1] : null;
 }
 
-/** Which block (1 or 2) a phase belongs to; null for break / A-B / endpoints. */
+/** Which block (1 or 2) a phase belongs to; null for the break and endpoints. */
 export function blockOf(phase: StudyPhase): 1 | 2 | null {
   if (phase.startsWith('block1')) return 1;
   if (phase.startsWith('block2')) return 2;
@@ -134,7 +132,6 @@ export interface PhaseAccess {
   /** The block whose frozen answers the test screen should show. */
   testBlock: 1 | 2 | null;
   showSurvey: boolean;
-  showAb: boolean;
   isBreak: boolean;
   isDone: boolean;
 }
@@ -145,23 +142,21 @@ export function phaseAccess(participantNumber: string, phase: StudyPhase): Phase
 
   switch (phase) {
     case 'block1_work':
-      return { workDatasetKey: datasetOf(1), testBlock: null, showSurvey: false, showAb: false, isBreak: false, isDone: false };
+      return { workDatasetKey: datasetOf(1), testBlock: null, showSurvey: false, isBreak: false, isDone: false };
     case 'block2_work':
-      return { workDatasetKey: datasetOf(2), testBlock: null, showSurvey: false, showAb: false, isBreak: false, isDone: false };
+      return { workDatasetKey: datasetOf(2), testBlock: null, showSurvey: false, isBreak: false, isDone: false };
     case 'block1_test':
-      return { workDatasetKey: null, testBlock: 1, showSurvey: false, showAb: false, isBreak: false, isDone: false };
+      return { workDatasetKey: null, testBlock: 1, showSurvey: false, isBreak: false, isDone: false };
     case 'block2_test':
-      return { workDatasetKey: null, testBlock: 2, showSurvey: false, showAb: false, isBreak: false, isDone: false };
+      return { workDatasetKey: null, testBlock: 2, showSurvey: false, isBreak: false, isDone: false };
     case 'block1_survey':
     case 'block2_survey':
-      return { workDatasetKey: null, testBlock: null, showSurvey: true, showAb: false, isBreak: false, isDone: false };
+      return { workDatasetKey: null, testBlock: null, showSurvey: true, isBreak: false, isDone: false };
     case 'break':
-      return { workDatasetKey: null, testBlock: null, showSurvey: false, showAb: false, isBreak: true, isDone: false };
-    case 'ab':
-      return { workDatasetKey: null, testBlock: null, showSurvey: false, showAb: true, isBreak: false, isDone: false };
+      return { workDatasetKey: null, testBlock: null, showSurvey: false, isBreak: true, isDone: false };
     case 'done':
-      return { workDatasetKey: null, testBlock: null, showSurvey: false, showAb: false, isBreak: false, isDone: true };
+      return { workDatasetKey: null, testBlock: null, showSurvey: false, isBreak: false, isDone: true };
     default:
-      return { workDatasetKey: null, testBlock: null, showSurvey: false, showAb: false, isBreak: false, isDone: false };
+      return { workDatasetKey: null, testBlock: null, showSurvey: false, isBreak: false, isDone: false };
   }
 }

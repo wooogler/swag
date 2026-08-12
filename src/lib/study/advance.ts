@@ -3,17 +3,16 @@
  *
  * The session is watched over a shared screen rather than gated, so what a
  * facilitator used to do by hand at each hand-off has to happen here instead —
- * and that is not merely a phase bump. A block test and the blind A/B show
- * FROZEN answers, which exist only once something generates them, so the two
- * hand-offs that lead into a measurement await a generation batch before the
- * phase moves at all. A participant who lands on "Not ready yet" has been let
- * through a door that should not have opened.
+ * and that is not merely a phase bump. A block test shows FROZEN answers, which
+ * exist only once something generates them, so the hand-off that leads into one
+ * awaits a generation batch before the phase moves at all. A participant who
+ * lands on "Not ready yet" has been let through a door that should not have
+ * opened.
  *
  * Forward only, one step at a time, and never past a missing deploy. `force`,
  * `back` and arbitrary jumps stay in the console, where a facilitator can see
  * what they are overriding.
  */
-import { STUDY_DATASETS } from './config';
 import { deployStateFor, setParticipantPhase } from './console-store';
 import { logParticipantEvent } from './events';
 import { generateForClone, type BankKind } from './generate';
@@ -23,18 +22,13 @@ import { warmInFlight } from './warm';
 import type { StudyParticipant } from '@/db/schema';
 
 /**
- * What has to be frozen on the way OUT of a phase.
- *
- * The A/B halves are split rather than done together: block 1's configuration
- * is final once its survey is in, so its answers are made on the way into the
- * break, leaving only block 2's in front of the study's primary measure
- * (generate.ts §5).
+ * What has to be frozen on the way OUT of a phase: each block's configuration
+ * is final once the work is done, so its answers are made on the way into the
+ * test that reads them.
  */
 const PREP_ON_LEAVING: Partial<Record<StudyPhase, { kind: BankKind; block: 1 | 2 }>> = {
   block1_work: { kind: 'test', block: 1 },
   block2_work: { kind: 'test', block: 2 },
-  block1_survey: { kind: 'ab', block: 1 },
-  block2_survey: { kind: 'ab', block: 2 },
 };
 
 export type AdvanceRefusal =
@@ -107,12 +101,8 @@ export async function advanceParticipant(
     // over each other, and waiting is what usually makes this hand-off instant.
     await warmInFlight(clone.assignmentId);
 
-    // Block test = this clone's own dataset. A/B = both datasets, which is how
-    // one configuration comes to answer the other set's questions.
-    const datasetKeys =
-      prep.kind === 'test' ? [clone.datasetKey] : STUDY_DATASETS.map((d) => d.key);
-
-    for (const datasetKey of datasetKeys) {
+    // A block test is always over this clone's OWN dataset.
+    for (const datasetKey of [clone.datasetKey]) {
       let failed = 0;
       let thrown: string | null = null;
       try {

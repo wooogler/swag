@@ -30,7 +30,7 @@ const inFlight = new Map<string, Promise<void>>();
 const queued = new Set<string>();
 
 /** Test first: it is the hand-off the participant reaches first. */
-const WARM_KINDS: BankKind[] = ['test', 'ab'];
+const WARM_KINDS: BankKind[] = ['test'];
 
 /**
  * Kick off (or re-queue) the warm-up for a clone. Returns immediately — the

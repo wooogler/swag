@@ -2,13 +2,10 @@
  * Post-session export: one CSV per unit of analysis, into a directory.
  *
  * Everything here is derived, never re-measured — the session already recorded
- * it. Two derivations are worth naming because the design defines them:
- *
- *  • Prediction accuracy folds the 5-point fit rating to a yes/no (≤3 reads as
- *    "no, that is not what I intended", design §6) and compares it with the
- *    prediction made before the answer was visible.
- *  • Home vs away splits each A/B item by whether the question came from the
- *    dataset that configuration was built on — the portability read.
+ * it. One derivation is worth naming because the design defines it: prediction
+ * accuracy folds the 5-point fit rating to a yes/no (≤3 reads as "no, that is
+ * not what I intended", design v2 §6) and compares it with the prediction made
+ * before the answer was visible.
  *
  * The covered/uncovered classification the design asks for is emitted for the
  * SCORE arm only, where the routing record says which of the participant's own
@@ -24,7 +21,6 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import {
   baselinePromptVersions,
-  studyAbAnswers,
   studyClones,
   studyEvents,
   studyGeneratedResponses,
@@ -141,40 +137,6 @@ async function main() {
     };
   });
   write('block_test.csv', testRows);
-
-  // ── blind A/B, with the attribution the participant never saw ───────
-  const abAnswers = await db.select().from(studyAbAnswers);
-  const abRows = abAnswers.map((a) => {
-    const participant = participants.find((p) => p.id === a.participantId);
-    const left = cloneByAssignment.get(a.leftCloneAssignmentId);
-    const right = cloneByAssignment.get(a.rightCloneAssignmentId);
-    const item = bankById.get(a.bankItemId);
-    const chosen =
-      a.choice === 'left' ? left : a.choice === 'right' ? right : null;
-    // Home = the question came from the dataset that configuration was built on.
-    const homeFor = (c: typeof left) => (c && item ? c.datasetKey === item.datasetKey : null);
-    return {
-      participant: participant?.participantNumber ?? '',
-      bank_item: a.bankItemId,
-      position: item?.position ?? '',
-      question_dataset: item?.datasetKey ?? '',
-      query_type: item?.queryType ?? '',
-      left_condition: left?.condition ?? '',
-      right_condition: right?.condition ?? '',
-      left_dataset: left?.datasetKey ?? '',
-      right_dataset: right?.datasetKey ?? '',
-      choice: a.choice,
-      chosen_condition: chosen?.condition ?? (a.choice === 'both' ? 'both' : a.choice === 'neither' ? 'neither' : ''),
-      // For the home/away split: was the CHOSEN configuration on home ground?
-      chosen_home: chosen ? (homeFor(chosen) ? 1 : 0) : '',
-      score_was_home: (() => {
-        const score = left?.condition === 'score' ? left : right?.condition === 'score' ? right : null;
-        return score ? (homeFor(score) ? 1 : 0) : '';
-      })(),
-      answered_at: a.answeredAt.toISOString(),
-    };
-  });
-  write('ab_choices.csv', abRows);
 
   // ── survey ──────────────────────────────────────────────────────────
   const surveys = await db.select().from(studySurveyAnswers);

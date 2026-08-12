@@ -99,7 +99,7 @@ export function curationDataset(key: string): CurationDataset | undefined {
  * design marks review-set size and A/B item count as things the pilot settles,
  * and a pilot that needs a redeploy to try 12 instead of 16 will not try it.
  */
-export const DEFAULT_SET_TARGETS = { review: 15, test: 2, ab: 2 } as const;
+export const DEFAULT_SET_TARGETS = { review: 15, test: 2 } as const;
 export type CurationSetKind = keyof typeof DEFAULT_SET_TARGETS;
 export type SetTargets = Record<CurationSetKind, number>;
 export const CURATION_SET_KINDS = Object.keys(DEFAULT_SET_TARGETS) as CurationSetKind[];
@@ -108,7 +108,6 @@ export const CURATION_SET_KINDS = Object.keys(DEFAULT_SET_TARGETS) as CurationSe
 export const SET_TARGET_LIMITS: Record<CurationSetKind, { min: number; max: number }> = {
   review: { min: 1, max: 40 },
   test: { min: 1, max: 10 },
-  ab: { min: 1, max: 10 },
 };
 
 export function isCurationSetKind(v: unknown): v is CurationSetKind {

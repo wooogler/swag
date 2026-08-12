@@ -1,5 +1,5 @@
 /**
- * Freeze the block-test and A/B questions into the question bank.
+ * Freeze the block-test questions into the question bank.
  *
  * A thin CLI over src/lib/study/build.ts — the curation tool's build button
  * calls the same function, so there is no "proper" way and a second way.
@@ -16,17 +16,7 @@ async function main() {
   const { buildQuestionBank } = await import('../../src/lib/study/build');
 
   const r = await buildQuestionBank({ apply: APPLY });
-  console.log(`test candidates ${r.testCandidates} · A/B candidates ${r.abCandidates}`);
-  if (r.abOrder.length > 0) console.log(`A/B order: ${r.abOrder.join(' ')}`);
-  for (const b of r.balance) {
-    console.log(
-      `  first ${String(b.cut).padStart(2)}: datasets ${Object.entries(b.datasets)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(' ')} ${b.even ? '✓' : '✗ UNBALANCED'} · types ${Object.entries(b.types)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(' ')}`
-    );
-  }
+  console.log(`block-test candidates ${r.testCandidates}`);
   for (const w of r.warnings) console.log(`! ${w}`);
 
   if (r.status === 'blocked') {

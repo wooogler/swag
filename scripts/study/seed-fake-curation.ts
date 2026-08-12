@@ -70,7 +70,7 @@ async function main() {
         });
 
       let cursor = 0;
-      for (const kind of ['review', 'test', 'ab'] as const) {
+      for (const kind of ['review', 'test'] as const) {
         const want = SET_TARGETS_PER_TYPE[kind];
         let taken = 0;
         while (taken < want && cursor < pool.length) {

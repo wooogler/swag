@@ -649,7 +649,7 @@ export const studyEvents = pgTable('study_events', {
 export const studySetMembers = pgTable('study_set_members', {
   id: serial('id').primaryKey(),
   datasetKey: text('dataset_key').notNull(),
-  setKind: text('set_kind').notNull(), // 'review' | 'test' | 'ab'
+  setKind: text('set_kind').notNull(), // 'review' | 'test'
   sourceMessageId: integer('source_message_id').notNull(),
   position: doublePrecision('position'),
   // Classification snapshot AT ASSIGNMENT TIME. Kept denormalized so a later
@@ -694,7 +694,7 @@ export const studyCurationMeta = pgTable('study_curation_meta', {
 export const studyQuestionBank = pgTable('study_question_bank', {
   id: serial('id').primaryKey(),
   datasetKey: text('dataset_key').notNull(),
-  kind: text('kind').notNull(), // 'test' | 'ab'
+  kind: text('kind').notNull(), // 'test'
   position: integer('position').notNull(), // presentation order (A/B: balanced blocks)
   sourceMessageId: integer('source_message_id'), // provenance only
   context: jsonb('context').notNull(),
@@ -719,7 +719,7 @@ export const studyGeneratedResponses = pgTable('study_generated_responses', {
   participantId: text('participant_id').notNull(),
   cloneAssignmentId: text('clone_assignment_id').notNull(),
   bankItemId: integer('bank_item_id').notNull(),
-  purpose: text('purpose').notNull(), // 'test' | 'ab'
+  purpose: text('purpose').notNull(), // 'test'
   configRef: jsonb('config_ref').notNull(),
   applied: jsonb('applied'), // SCORE routing audit: intent, outcome, type
   outcome: text('outcome').notNull(), // 'routed' | 'empty_config' (never fail_open)
@@ -753,7 +753,6 @@ export const studySetTargets = pgTable('study_set_targets', {
   id: integer('id').primaryKey().default(1),
   review: integer('review').notNull(),
   test: integer('test').notNull(),
-  ab: integer('ab').notNull(),
   updatedAt: timestamp('updated_at').notNull(),
   updatedBy: text('updated_by'),
 });
@@ -788,22 +787,6 @@ export const studyTestAnswers = pgTable('study_test_answers', {
   uniq: uniqueIndex('study_test_answers_unique').on(table.cloneAssignmentId, table.bankItemId),
   participantIdx: index('study_test_answers_participant_idx').on(table.participantId),
 }));
-
-// Blind A/B: the two configurations answer the same question side by side.
-// Which one sat on which side is recorded WITH the choice — a bare
-// left/right/both/neither cannot be attributed afterwards.
-export const studyAbAnswers = pgTable('study_ab_answers', {
-  id: serial('id').primaryKey(),
-  participantId: text('participant_id').notNull(),
-  bankItemId: integer('bank_item_id').notNull(),
-  leftCloneAssignmentId: text('left_clone_assignment_id').notNull(),
-  rightCloneAssignmentId: text('right_clone_assignment_id').notNull(),
-  choice: text('choice').notNull(), // 'left' | 'right' | 'both' | 'neither'
-  answeredAt: timestamp('answered_at').notNull(),
-}, (table) => ({
-  uniq: uniqueIndex('study_ab_answers_unique').on(table.participantId, table.bankItemId),
-}));
-
 // Per-block questionnaire answers, one row per item. Item keys come from a
 // config rather than the schema, so rewording a scale after the pilot is a
 // content change; `block` (not the clone) is the unit, because the questions
@@ -905,4 +888,3 @@ export type StudyCurationMeta = typeof studyCurationMeta.$inferSelect;
 export type StudyQuestionBankItem = typeof studyQuestionBank.$inferSelect;
 export type StudyGeneratedResponse = typeof studyGeneratedResponses.$inferSelect;
 export type StudyTestAnswer = typeof studyTestAnswers.$inferSelect;
-export type StudyAbAnswer = typeof studyAbAnswers.$inferSelect;

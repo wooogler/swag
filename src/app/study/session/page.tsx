@@ -140,20 +140,6 @@ export default async function StudySessionPage() {
                   Start
                 </a>
               </>
-            ) : access.showAb ? (
-              <>
-                <h1 className="text-lg font-semibold mb-2">Comparing the two chatbots</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                  Last step: the two chatbots you built today answer the same questions side
-                  by side, and you pick the answer you would want.
-                </p>
-                <a
-                  href="/study/session/ab"
-                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
-                >
-                  Start
-                </a>
-              </>
             ) : access.isDone ? (
               <>
                 <h1 className="text-lg font-semibold mb-2">All done — thank you</h1>

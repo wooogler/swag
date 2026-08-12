@@ -2,7 +2,7 @@
  * A whole session, driven end to end on a throwaway participant.
  *
  * Deploys both arms, walks every phase in order, answers the block tests, the
- * surveys and the blind A/B, and leaves the data an export would read. Proves
+ * surveys, and leaves the data an export would read. Proves
  * the pieces compose — the phase gates let the right things through and stop
  * the rest — rather than each working alone.
  *
@@ -35,8 +35,6 @@ async function main() {
     getTestItems,
     recordGuess,
     recordRating,
-    getAbItems,
-    recordAbChoice,
   } = await import('../../src/lib/study/measure-store');
   const { buildChatDeploySnapshot, recordChatDeploy } = await import(
     '../../src/lib/score/deploy-store'
@@ -146,34 +144,7 @@ async function main() {
       if (block === 1) await advanceTo('break');
     }
 
-    // A/B: both configurations answer both datasets
-    console.log('\n── blind A/B ──');
-    const p = await reload(participant.id);
-    const clones = await db.select().from(studyClones).where(eq(studyClones.participantId, p.id));
-    for (const clone of clones) {
-      for (const ds of STUDY_DATASETS) {
-        await generateForClone({
-          cloneAssignmentId: clone.assignmentId,
-          datasetKey: ds.key,
-          kind: 'ab',
-        });
-      }
-    }
-    await advanceTo('ab');
-    const abItems = await getAbItems(p);
-    console.log(`   ${abItems.length} A/B item(s) ready`);
-    const choices = ['left', 'right', 'both', 'neither'] as const;
-    for (const [i, item] of abItems.entries()) {
-      await recordAbChoice({
-        participant: p,
-        bankItemId: item.bankItemId,
-        leftCloneAssignmentId: item.leftCloneAssignmentId,
-        rightCloneAssignmentId: item.rightCloneAssignmentId,
-        choice: choices[i % choices.length],
-      });
-    }
     await advanceTo('done');
-    console.log(`   recorded ${abItems.length} choice(s)\n`);
 
     const final = await getParticipantStatus(await reload(participant.id));
     console.log(`final phase: ${final.phase}`);

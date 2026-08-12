@@ -22,7 +22,7 @@ export const maxDuration = 800;
 
 const bodySchema = z.object({
   participantId: z.string().min(1),
-  kind: z.enum(['test', 'ab']),
+  kind: z.literal('test'),
   /** Restrict to one block's clone (A/B is generated per block). */
   block: z.union([z.literal(1), z.literal(2)]).optional(),
   force: z.boolean().optional(),

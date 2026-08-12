@@ -98,14 +98,12 @@ export async function deleteParticipantClones(participant: StudyParticipant): Pr
   await db.transaction(async (tx) => {
     for (const c of clones) await deleteCloneAssignment(tx, c.assignmentId);
     await tx.delete(studyClones).where(eq(studyClones.participantId, participant.id));
-    // Participant-scoped measurements go with them: an A/B choice names the two
-    // clone assignments it compared, and a block survey is about the workspace
-    // just discarded. Keeping either would leave answers pointing at nothing.
-    for (const table of ['study_ab_answers', 'study_survey_answers'] as const) {
-      await tx.execute(
-        sql`DELETE FROM ${sql.identifier(table)} WHERE participant_id = ${participant.id}`
-      );
-    }
+    // Participant-scoped measurements go with them: a block survey is about the
+    // workspace just discarded, so keeping it would leave answers pointing at
+    // nothing.
+    await tx.execute(
+      sql`DELETE FROM "study_survey_answers" WHERE participant_id = ${participant.id}`
+    );
   });
   return clones.length;
 }

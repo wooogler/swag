@@ -1,0 +1,98 @@
+[
+  {
+    "id": 886,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1479,
+    "position": null,
+    "query_type": "planning",
+    "subtype": "Answer a Topic Question",
+    "rating": "boundary",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:53:59.613"
+  },
+  {
+    "id": 905,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1633,
+    "position": null,
+    "query_type": "translating",
+    "subtype": "Paragraph from Idea",
+    "rating": "certain",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:54:49.972"
+  },
+  {
+    "id": 887,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1495,
+    "position": null,
+    "query_type": "planning",
+    "subtype": "Answer a Topic Question",
+    "rating": "boundary",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:54:01.146"
+  },
+  {
+    "id": 945,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1285,
+    "position": null,
+    "query_type": "drafting",
+    "subtype": "Write Conclusion",
+    "rating": "boundary",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:55:55.531"
+  },
+  {
+    "id": 906,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1653,
+    "position": null,
+    "query_type": "translating",
+    "subtype": "Sentence from Idea",
+    "rating": "certain",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:54:50.884"
+  },
+  {
+    "id": 925,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1251,
+    "position": null,
+    "query_type": "reviewing",
+    "subtype": "Check vs. Prompt",
+    "rating": "boundary",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:55:22.354"
+  },
+  {
+    "id": 946,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1287,
+    "position": null,
+    "query_type": "drafting",
+    "subtype": "Write Conclusion",
+    "rating": "boundary",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:55:56.079"
+  },
+  {
+    "id": 926,
+    "dataset_key": "nirvana",
+    "set_kind": "ab",
+    "source_message_id": 1255,
+    "position": null,
+    "query_type": "reviewing",
+    "subtype": "Give Feedback",
+    "rating": "certain",
+    "added_by": "R1",
+    "created_at": "2026-08-10 17:55:23.084"
+  }
+]
