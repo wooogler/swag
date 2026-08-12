@@ -27,9 +27,8 @@ import { SCORE_RATING_MODEL } from '@/lib/score/models';
 import { runShardedRate } from './rate-runner';
 import {
   AlertTriangle,
-  ChevronDown,
   ChevronRight,
-  ChevronUp,
+  GripVertical,
   Loader2,
   Maximize2,
   MessageSquare,
@@ -662,19 +661,27 @@ function HoverReveal({
   children,
   placement = 'bottom',
   className,
+  suppressed = false,
 }: {
   content: React.ReactNode;
   children: React.ReactNode;
   placement?: 'bottom' | 'right';
   className?: string;
+  /** Hold the card back — during a drag it would cover the very rows the
+   * pointer is aiming between. */
+  suppressed?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; transform?: string } | null>(null);
+  useEffect(() => {
+    if (suppressed) setPos(null);
+  }, [suppressed]);
   return (
     <div
       ref={ref}
       className={className}
       onMouseEnter={() => {
+        if (suppressed) return;
         const r = ref.current?.getBoundingClientRect();
         if (!r) return;
         const width = Math.min(320, window.innerWidth * 0.8); // w-80 / max-w-[80vw]
@@ -698,7 +705,7 @@ function HoverReveal({
       onMouseLeave={() => setPos(null)}
     >
       {children}
-      {pos && (
+      {pos && !suppressed && (
         <div
           role="tooltip"
           className="fixed z-[60] w-80 max-w-[80vw] rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 shadow-lg pointer-events-none"
@@ -1101,6 +1108,20 @@ export default function IntentBoard({
   } | null>(null);
 
   const [placementBusy, setPlacementBusy] = useState<number | null>(null);
+  /**
+   * Dragging a set to reorder it. `drag` is what is being carried (with the
+   * chain it belongs to, since only siblings are valid targets); `dropAt` is
+   * where it would land, as the id it would go BEFORE — the same vocabulary the
+   * placement API takes, so the drop is a single call with nothing to convert.
+   */
+  const [drag, setDrag] = useState<{
+    id: number;
+    parentIntentId: number | null;
+    type: ScoreQueryType;
+  } | null>(null);
+  const [dropAt, setDropAt] = useState<{ beforeId: number | null; afterId: number | null } | null>(
+    null
+  );
   async function moveIntent(
     intentId: number,
     where: { parentIntentId?: number | null; beforeIntentId?: number | null }
@@ -1739,11 +1760,74 @@ export default function IntentBoard({
     // Just landed from the workbench: ring the saved intent so the eye finds
     // it in the refreshed chain (cleared by the board's flag timer).
     const flagged = flagIntent === intent.id;
+    // Only SIBLINGS are drop targets: order decides which of two sets that both
+    // match a question answers it, and that question never arises between sets
+    // in different chains. (Re-parenting is a different act — it changes what a
+    // set can see at all — and stays out of a drag.)
+    const isTarget =
+      drag !== null &&
+      drag.id !== intent.id &&
+      drag.type === type &&
+      drag.parentIntentId === (intent.parentIntentId ?? null);
+    const dropBefore = isTarget && dropAt?.beforeId === intent.id;
+    const dropAfter = isTarget && dropAt?.afterId === intent.id;
     return (
       <div>
         <div
           ref={flagged ? flagRowRef : undefined}
+          draggable={placementBusy === null && !boardRefreshing}
+          onDragStart={(e) => {
+            e.stopPropagation();
+            e.dataTransfer.effectAllowed = 'move';
+            // Firefox refuses to start a drag without data on the transfer.
+            e.dataTransfer.setData('text/plain', String(intent.id));
+            setDrag({
+              id: intent.id,
+              parentIntentId: intent.parentIntentId ?? null,
+              type,
+            });
+          }}
+          onDragEnd={() => {
+            setDrag(null);
+            setDropAt(null);
+          }}
+          onDragOver={(e) => {
+            if (!isTarget) return;
+            e.preventDefault(); // this is a valid target — allow the drop
+            e.dataTransfer.dropEffect = 'move';
+            const box = e.currentTarget.getBoundingClientRect();
+            const above = e.clientY < box.top + box.height / 2;
+            // "Before this row" or "after it" — and after means before the NEXT
+            // sibling, which is null at the end of the list.
+            setDropAt(
+              above
+                ? { beforeId: intent.id, afterId: null }
+                : { beforeId: siblings[idx + 1]?.id ?? null, afterId: intent.id }
+            );
+          }}
+          onDragLeave={() => {
+            if (dropBefore || dropAfter) setDropAt(null);
+          }}
+          onDrop={(e) => {
+            if (!isTarget || !drag || !dropAt) return;
+            e.preventDefault();
+            const { beforeId } = dropAt;
+            setDropAt(null);
+            const dragged = drag;
+            setDrag(null);
+            // Dropping either side of where it already sits changes nothing —
+            // and would still cost a version entry.
+            if (beforeId === dragged.id) return;
+            if (beforeId === (siblings[siblings.findIndex((s) => s.id === dragged.id) + 1]?.id ?? null)) {
+              return;
+            }
+            void moveIntent(dragged.id, { beforeIntentId: beforeId });
+          }}
           className={`group relative flex items-center gap-1 pl-3 pr-2 py-1 cursor-pointer transition-shadow ${
+            drag?.id === intent.id ? 'opacity-40' : ''
+          } ${dropBefore ? 'border-t-2 border-t-[hsl(var(--primary))]' : ''} ${
+            dropAfter ? 'border-b-2 border-b-[hsl(var(--primary))]' : ''
+          } ${
             flagged
               ? 'ring-2 ring-inset ring-emerald-400 bg-emerald-50'
               : active
@@ -1753,6 +1837,7 @@ export default function IntentBoard({
           onClick={() => setSelection({ kind: 'intent', id: intent.id })}
         >
           <HoverReveal
+            suppressed={drag !== null}
             content={
               <div className="space-y-1.5 text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
                 <p>
@@ -1798,33 +1883,20 @@ export default function IntentBoard({
               )}
             </div>
           </HoverReveal>
-          {/* Row actions, right of the text: [up] [down] [delete]. Order is
-              routing (the set above answers first), so the movers stay visible
-              on the row you are working with (§3.7); delete opens the confirm
-              that shows where this set's questions will fall. */}
+          {/* Row actions, right of the text: [drag] [delete]. Order is routing
+              (the set above answers first), so the handle stays on the row you
+              are working with (§3.7); delete opens the confirm that shows where
+              this set's questions will fall. */}
           <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                void moveIntent(intent.id, { beforeIntentId: siblings[idx - 1]?.id ?? null });
-              }}
-              disabled={idx <= 0 || placementBusy !== null}
-              className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
-              title="Answer earlier than the intent above"
-            >
-              <ChevronUp className="w-3 h-3" />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                void moveIntent(intent.id, { beforeIntentId: siblings[idx + 2]?.id ?? null });
-              }}
-              disabled={idx < 0 || idx >= siblings.length - 1 || placementBusy !== null}
-              className="p-0.5 rounded disabled:opacity-30 hover:bg-[hsl(var(--muted))]"
-              title="Answer later than the intent below"
-            >
-              <ChevronDown className="w-3 h-3" />
-            </button>
+            {siblings.length > 1 && (
+              <span
+                className="cursor-grab p-0.5 text-[hsl(var(--muted-foreground))] active:cursor-grabbing"
+                title="Drag to reorder — the set above answers first"
+                aria-hidden="true"
+              >
+                <GripVertical className="w-3 h-3" />
+              </span>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
