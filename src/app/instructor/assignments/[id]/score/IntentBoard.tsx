@@ -2192,17 +2192,6 @@ export default function IntentBoard({
             setFlagIntent(savedIntentId ?? null);
             startBoardRefresh(() => router.refresh());
           }}
-          // The overlap chips' shortcut: jump straight into the overlapping
-          // intent's editor (re-keys this workbench onto it). Only while editing
-          // an existing intent — a create draft has nothing to swap away from.
-          onEditIntent={
-            editIntent
-              ? (iid) => {
-                  const target = intentById.get(iid);
-                  if (target && !target.archived) setEditIntent(target);
-                }
-              : undefined
-          }
         />
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 flex-1 min-h-0">

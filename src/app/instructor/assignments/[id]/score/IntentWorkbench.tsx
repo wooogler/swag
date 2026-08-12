@@ -39,7 +39,6 @@ import {
   GitCompareArrows,
   Loader2,
   Minimize2,
-  Pencil,
   RotateCcw,
   Save as SaveIcon,
   Search,
@@ -74,12 +73,32 @@ interface RatingRow {
    * disagreed with the rating. The fold's main fuel. Null otherwise. */
   reason: string | null;
   /** An EARLIER node in this intent's chain that takes the question first
-   * (v7 first-match routing) — null when nothing shadows it. */
+   * (v7 first-match routing) — null when nothing shadows it. Not displayed:
+   * both panes use it to drop the question entirely (see `reaches`). */
   shadowedBy: number | null;
-  shadowedByTitle: string | null;
   /** Message split into Material vs Request(s), for the expand view. */
   dissection: Dissection | null;
 }
+
+/**
+ * Does this question REACH this intent at all? Under first-match it does not
+ * when an earlier node in the chain already claims it.
+ *
+ * Both panes filter on this, because neither can act on a question that never
+ * arrives: listing one in "In this intent" overstates what the intent answers,
+ * and labelling one in "Needs decision" teaches a definition about a question it
+ * will never judge — the label lands, the fold absorbs it, and the row still
+ * goes to the intent that comes first. (That is what "send here" existed to work
+ * around; it left this workbench with it.) Interception belongs to the board,
+ * which can see the whole chain and offers the fixes — reorder, narrow the
+ * earlier set — that neither of these two lists can perform.
+ */
+const reaches = (r: { shadowedBy: number | null }) => r.shadowedBy === null;
+
+/** Membership, in one place — so the lists and the diff's +N/−N can never
+ * disagree about what counts as being in this intent. */
+const isMember = (r: { rating: RatingLevel | null; shadowedBy: number | null }) =>
+  r.rating === 'clearly_in' && reaches(r);
 
 // The two pin-driven orders both rank by the same embedding score (max cosine
 // to the IN pins − max cosine to the OUT pins), just in opposite directions.
@@ -93,8 +112,6 @@ interface RatingsPayload {
   ratedCount: number;
   staleCount: number;
   includedCount: number;
-  /** Earlier chain nodes intercepting questions this intent matches. */
-  shadowedBy: { intentId: number; title: string; count: number }[];
   versionNo: number;
 }
 
@@ -235,10 +252,6 @@ interface IntentWorkbenchProps {
    * takes seconds and the board gives no other sign that the just-made intent
    * actually arrived. */
   onExit: (savedIntentId?: number | null) => void;
-  /** Jump to editing ANOTHER intent (the overlap chips' shortcut): the parent
-   * swaps `editIntent`, re-keying this workbench onto the target. Absent in
-   * create/prompt-holder mounts, where the amber chip stays a static tag. */
-  onEditIntent?: (intentId: number) => void;
 }
 
 export default function IntentWorkbench({
@@ -252,7 +265,6 @@ export default function IntentWorkbench({
   scopeAncestorIds,
   scopeLabel,
   onExit,
-  onEditIntent,
 }: IntentWorkbenchProps) {
   const isEdit = mode.kind === 'edit';
   const intent = isEdit ? mode.intent : null;
@@ -292,11 +304,6 @@ export default function IntentWorkbench({
   const [refining, setRefining] = useState(false);
   // The review gate. `foldOpen` is the modal; `foldProposals` is null until the
   // fold returns, which is what puts the loading state inside the review.
-  /** messageId → the intents a "send here" just corrected out. The workbench
-   * loads only this intent's rows, so the correction written on the intercepting
-   * intent has nowhere else to show — and without it "send here" looks like it
-   * did nothing but light the in pill. */
-  const [redirectedBy, setRedirectedBy] = useState<Record<number, string[]>>({});
   const [foldOpen, setFoldOpen] = useState(false);
   const [foldProposals, setFoldProposals] = useState<FoldProposalView[] | null>(null);
   const [foldBusy, setFoldBusy] = useState(false);
@@ -1061,14 +1068,7 @@ export default function IntentWorkbench({
    * correction does not move the row — it changes nothing for students until
    * "Update definition" folds it in — so the pill going active IS the feedback.
    */
-  async function togglePin(
-    row: RatingRow,
-    verdict: 'in' | 'out',
-    reason?: string,
-    /** Also record an out-correction on every earlier intent that currently
-     * answers this question — the only way routing can actually move. */
-    routeHere?: boolean
-  ) {
+  async function togglePin(row: RatingRow, verdict: 'in' | 'out', reason?: string) {
     // Checkout is a read-only view of a past version.
     if (intentId === null || checkout !== null) return;
     const next = row.pinned === verdict ? null : verdict;
@@ -1100,7 +1100,6 @@ export default function IntentWorkbench({
                 messageId: row.messageId,
                 verdict,
                 ...(nextReason ? { reason: nextReason } : {}),
-                ...(routeHere ? { routeHere: true } : {}),
               }),
             });
       if (!res.ok) {
@@ -1108,25 +1107,6 @@ export default function IntentWorkbench({
         throw new Error(
           typeof d?.error === 'string' ? `Correction failed: ${d.error}` : 'Failed to record the correction.'
         );
-      }
-      if (next === null) {
-        // Withdrawing the in-correction also withdraws the out-correction the
-        // send-here left on the intercepting intent (the server does it in one
-        // transaction), so the note goes with it.
-        setRedirectedBy((m) => {
-          if (!(row.messageId in m)) return m;
-          const rest = { ...m };
-          delete rest[row.messageId];
-          return rest;
-        });
-      } else if (routeHere) {
-        const d = await res.json().catch(() => ({}));
-        const titles = Array.isArray(d?.redirected)
-          ? d.redirected
-              .map((x: unknown) => (x as { title?: unknown })?.title)
-              .filter((t: unknown): t is string => typeof t === 'string')
-          : [];
-        setRedirectedBy((m) => ({ ...m, [row.messageId]: titles }));
       }
       // Refetch to pick up the server's correction ids — the fold consumes them.
       await fetchRatings(intentId, new AbortController().signal);
@@ -1219,15 +1199,13 @@ export default function IntentWorkbench({
     [data, scopeSet]
   );
   const scopedStaleCount = useMemo(() => scopedRows.filter((r) => r.stale).length, [scopedRows]);
+
   // Both panes read the JUDGMENT. A correction deliberately does NOT move its
   // row: until the definition absorbs it nothing has changed for students, and
   // a row that jumped on click would claim otherwise. The row stays put with
   // its pill lit — "taught, not yet learned" — and moves for real after the
   // update re-rates it. That is the loop made visible.
-  const inThisIntent = useMemo(
-    () => scopedRows.filter((r) => r.rating === 'clearly_in'),
-    [scopedRows]
-  );
+  const inThisIntent = useMemo(() => scopedRows.filter(isMember), [scopedRows]);
   // Needs decision is the probably-IN side alone. Making an intent is settling
   // where its boundary runs, and the questions that test a boundary are the ones
   // just inside it; probably-out (and the legacy unsure/unrated rows) are a
@@ -1235,7 +1213,7 @@ export default function IntentWorkbench({
   // return by widening the definition, which is the move that actually claims
   // them — not by labelling one at a time.
   const needsDecision = useMemo(
-    () => scopedRows.filter((r) => r.rating === 'probably_in'),
+    () => scopedRows.filter((r) => r.rating === 'probably_in' && reaches(r)),
     [scopedRows]
   );
   /** Pending corrections — what "Update definition" will fold in. */
@@ -1270,8 +1248,9 @@ export default function IntentWorkbench({
   // correction is not membership: it is a request for the definition to change,
   // and counting it here would report an intent as already fixed while students
   // still get the old routing.
-  const effectiveIn = (rowsIn: { messageId: number; rating: RatingLevel | null }[]) =>
-    new Set(rowsIn.filter((r) => r.rating === 'clearly_in').map((r) => r.messageId));
+  const effectiveIn = (
+    rowsIn: { messageId: number; rating: RatingLevel | null; shadowedBy: number | null }[]
+  ) => new Set(rowsIn.filter(isMember).map((r) => r.messageId));
   const effectiveInNow = useMemo(() => (data ? effectiveIn(data.rows) : new Set<number>()), [data]);
 
   // The version the diff is anchored to: the latest SAVE (major) by default —
@@ -1396,15 +1375,6 @@ export default function IntentWorkbench({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinSorted, data, intentId, similarScores]);
-
-  // Overlapping captures (another intent also owns the question, or it sits in
-  // a boundary) float to the top of "In this intent" — they are the pending
-  // ownership decisions. Stable within each partition.
-  const isShadowedRow = (r: RatingRow) => r.shadowedBy !== null;
-  const overlapsFirst = (list: RatingRow[]) => [
-    ...list.filter(isShadowedRow),
-    ...list.filter((r) => !isShadowedRow(r)),
-  ];
 
   // Filter by the pane's search box, then sort by the chosen mode. The pin sorts
   // hold the incoming order until the scores land (null = still fetching), and
@@ -1546,9 +1516,9 @@ export default function IntentWorkbench({
     const showButtons = checkout === null;
     // Needs-decision drift chip: only rows whose standing CHANGED since the
     // diff base get one, stating the base-version verdict outright ("clearly
-    // in/out · v1") — 'was in/out' read too close to the probably-in/out tabs.
-    // Colors follow the verdict (in = emerald, out = rose), same as the pin
-    // buttons; the drop/rise direction is implied by the row sitting here now.
+    // in/out · v1"). Colors follow the verdict (in = emerald, out = rose), same
+    // as the pin buttons; the drop/rise direction is implied by the row sitting
+    // here now.
     const baseBucket = pane === 'nd' ? baseline?.buckets.get(r.messageId) : undefined;
     const drift =
       baseBucket === 'in'
@@ -1564,24 +1534,6 @@ export default function IntentWorkbench({
               title: `Clearly out of this intent at ${diffBaseLabel} — rose to undecided since`,
             }
           : null;
-    // SHADOWED = an earlier node in this intent's chain takes the question
-    // first, so this intent never actually gets it. In this intent → a visible
-    // amber tag (these rows also sort to the top); Needs decision keeps the
-    // quieter text note. The chip is a shortcut into the intercepting intent.
-    const overlapChip: { intentId: number | null; label: string; title: string } | null =
-      pane === 'in' && r.shadowedBy !== null
-        ? {
-            intentId: r.shadowedBy,
-            label: `taken by · ${r.shadowedByTitle ?? 'an earlier intent'}`,
-            title: onEditIntent
-              ? `“${r.shadowedByTitle ?? 'An earlier intent'}” comes first in this type and takes this question — click to edit it, or move this intent ahead of it`
-              : `“${r.shadowedByTitle ?? 'An earlier intent'}” comes first in this type and takes this question`,
-          }
-        : null;
-    const priorLabel =
-      pane === 'nd' && r.shadowedBy !== null
-        ? `taken first by “${r.shadowedByTitle ?? 'an earlier intent'}”`
-        : '';
     // The row whose conversation you last opened in THIS pane, marked so a
     // return from the thread lands somewhere recognizable.
     const marked = lastOpened[pane] === r.messageId;
@@ -1629,15 +1581,6 @@ export default function IntentWorkbench({
                 marked {r.pinned} — waiting for the definition update
               </p>
             )}
-            {/* The half of "send here" that happens on the OTHER intent. Naming
-                it is the point: only narrowing that intent can move the
-                question, and both definitions update together. */}
-            {r.pinned === 'in' && redirectedBy[r.messageId]?.length ? (
-              <p className="mt-0.5 text-xs text-rose-700">
-                also marked out of {redirectedBy[r.messageId].map((t) => `“${t}”`).join(', ')} — both
-                definitions update together
-              </p>
-            ) : null}
             {/* MARKER — a correction already folded in. Quiet when the rating
                 agrees (it is just "I reviewed this"); loud when it does not,
                 because that is a teaching that did not hold. */}
@@ -1659,40 +1602,8 @@ export default function IntentWorkbench({
                 </p>
               );
             })()}
-            {(r.rationale || drift || overlapChip) && (
+            {(r.rationale || drift) && (
               <p className="mt-1 flex flex-wrap items-baseline gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
-                {overlapChip &&
-                  (overlapChip.intentId != null && onEditIntent ? (
-                    // Shortcut INTO the overlapping intent's editor. role=button
-                    // span (+ stopPropagation), NOT a <button> — this lives inside
-                    // QueryTextButton, which is itself a <button>.
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        guardLeave(() => onEditIntent(overlapChip.intentId!));
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Enter' && e.key !== ' ') return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        guardLeave(() => onEditIntent(overlapChip.intentId!));
-                      }}
-                      title={overlapChip.title}
-                      className="group/chip shrink-0 inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 hover:border-amber-300"
-                    >
-                      {overlapChip.label}
-                      <Pencil className="w-2.5 h-2.5 opacity-0 group-hover/chip:opacity-100" />
-                    </span>
-                  ) : (
-                    <span
-                      className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-xs font-medium text-amber-700"
-                      title={overlapChip.title}
-                    >
-                      {overlapChip.label}
-                    </span>
-                  ))}
                 {drift && (
                   <span
                     className={`shrink-0 rounded border px-1 py-0.5 text-xs font-medium ${drift.cls}`}
@@ -1704,10 +1615,9 @@ export default function IntentWorkbench({
                 {r.rationale && <span className="italic">{r.rationale}</span>}
               </p>
             )}
-            {(priorLabel || r.stale) && (
+            {r.stale && (
               <span className="mt-0.5 block text-xs text-[hsl(var(--muted-foreground))]">
-                {priorLabel}
-                {r.stale ? `${priorLabel ? ' · ' : ''}stale rating` : ''}
+                stale rating
               </span>
             )}
           </QueryTextButton>
@@ -1759,25 +1669,12 @@ export default function IntentWorkbench({
                 : 'border-[hsl(var(--border))] text-emerald-700 hover:bg-emerald-50'
             }`}
             title={
-              row.shadowedBy !== null
-                ? `This question BELONGS here. “${row.shadowedByTitle ?? 'An earlier intent'}” still answers it first — use “send here” to change that.`
-                : disagrees(row, 'in')
-                  ? 'This question BELONGS here — you’ll be asked why, since the classifier disagrees'
-                  : 'This question BELONGS here'
+              disagrees(row, 'in')
+                ? 'This question BELONGS here — you’ll be asked why, since the classifier disagrees'
+                : 'This question BELONGS here'
             }
           >
             in
-          </button>
-        )}
-        {/* A label fixes the JUDGMENT, never the order — so when an earlier set
-            answers this question, offer the one action that actually moves it. */}
-        {pane === 'nd' && row.shadowedBy !== null && (
-          <button
-            onClick={() => togglePin(row, 'in', undefined, true)}
-            className="px-1.5 py-0.5 rounded text-xs font-medium border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-            title={`Answer this question here instead of in “${row.shadowedByTitle ?? 'the earlier intent'}” — labels it in here and out of every intent that currently comes first.`}
-          >
-            send here
           </button>
         )}
         {showOut && (
@@ -2230,24 +2127,8 @@ export default function IntentWorkbench({
                       </select>
                     </span>
                   </div>
-                  <div className="px-3 py-1.5 space-y-1.5">
+                  <div className="px-3 py-1.5">
                     <PaneSearch value={inSearch} onChange={setInSearch} />
-                    {data.shadowedBy.length > 0 && (
-                      <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800 flex items-start gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                        <span>
-                          Taken first by:{' '}
-                          {data.shadowedBy.map((o, i) => (
-                            <span key={o.intentId}>
-                              {i > 0 && ' · '}
-                              <span className="font-medium">{o.title}</span> ({o.count})
-                            </span>
-                          ))}{' '}
-                          — those intents come earlier in this type, so they answer these questions
-                          instead. Narrow them, or move this intent ahead of them.
-                        </span>
-                      </div>
-                    )}
                   </div>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
@@ -2268,7 +2149,7 @@ export default function IntentWorkbench({
                       </button>
                       {newOpen && (
                         <ul className="divide-y divide-emerald-200/60 border-t border-emerald-200/60">
-                          {overlapsFirst(newInRows).map((r) => renderRow(r, 'in'))}
+                          {newInRows.map((r) => renderRow(r, 'in'))}
                         </ul>
                       )}
                     </div>
@@ -2300,7 +2181,7 @@ export default function IntentWorkbench({
                     // New arrivals live in their strip above — the main list
                     // shows the rest of the captures.
                     const rest = inThisIntent.filter((r) => !newlyIn?.has(r.messageId));
-                    const sorted = overlapsFirst(sortRows(rest, inSort, inSearch));
+                    const sorted = sortRows(rest, inSort, inSearch);
                     return sorted.length > 0 ? (
                       <ul className="divide-y divide-[hsl(var(--border))]/60">
                         {sorted.map((r) => renderRow(r, 'in'))}
