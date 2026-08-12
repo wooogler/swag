@@ -781,7 +781,16 @@ export const studyTestAnswers = pgTable('study_test_answers', {
   bankItemId: integer('bank_item_id').notNull(),
   guess: boolean('guess'),
   rating: smallint('rating'), // 1-5 fit with the instructor's intent
+  // The pointing step (design v2 §5). SCORE: 'intent' | 'none' | 'not_sure'.
+  // Baseline: 'span' | 'nothing' | 'not_sure'.
+  pointedKind: text('pointed_kind'),
+  pointedIntentId: integer('pointed_intent_id'),
+  pointedSpanStart: integer('pointed_span_start'),
+  pointedSpanEnd: integer('pointed_span_end'),
+  /** The highlighted text itself — outlives the offsets across a redeploy. */
+  pointedText: text('pointed_text'),
   guessedAt: timestamp('guessed_at'),
+  pointedAt: timestamp('pointed_at'),
   ratedAt: timestamp('rated_at'),
 }, (table) => ({
   uniq: uniqueIndex('study_test_answers_unique').on(table.cloneAssignmentId, table.bankItemId),

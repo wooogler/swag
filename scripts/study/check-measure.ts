@@ -41,6 +41,7 @@ async function main() {
     deployedConfigFor,
     getTestItems,
     recordGuess,
+    recordPointing,
     recordRating,
   } = await import('../../src/lib/study/measure-store');
   const { buildChatDeploySnapshot, recordChatDeploy } = await import(
@@ -150,20 +151,67 @@ async function main() {
     );
 
     const first = items[0];
-    const released = await recordGuess({
+    const guessed = await recordGuess({
       participant,
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
       guess: true,
     });
+    console.log(`   guess recorded: ${JSON.stringify(guessed)}`);
+
+    // The guess alone must NOT release anything — the pointing step is the
+    // last thing asked before the answer, so the reveal belongs to it.
+    items = await getTestItems(participant, clone1);
+    const afterGuess = items.filter((i) => i.response !== null).length;
     console.log(
-      `   after guess: released "${'response' in released ? released.response.slice(0, 60) : released.error}…"`
+      `   after guess only: responses present = ${afterGuess} (expect 0)${afterGuess === 0 ? ' ✓' : ' ✗'}`
+    );
+
+    // Rating cannot slip in ahead of the reveal.
+    const early = await recordRating({
+      cloneAssignmentId: clone1.assignmentId,
+      bankItemId: first.bankItemId,
+      rating: 5,
+    });
+    console.log(
+      `   rating before reveal refused = ${!early.ok}${!early.ok ? ' ✓' : ' ✗'}`
+    );
+
+    const released = await recordPointing({
+      cloneAssignmentId: clone1.assignmentId,
+      bankItemId: first.bankItemId,
+      pointing: { kind: 'not_sure' },
+    });
+    console.log(
+      `   after pointing: released "${'response' in released ? released.response.slice(0, 60) : released.error}…"`
     );
 
     items = await getTestItems(participant, clone1);
     const withResponse = items.filter((i) => i.response !== null).length;
     console.log(
       `   now responses present = ${withResponse} (expect exactly 1)${withResponse === 1 ? ' ✓' : ' ✗'}`
+    );
+
+    // ── 1b. pointing keeps its first answer, and replays on reload ──────
+    await recordPointing({
+      cloneAssignmentId: clone1.assignmentId,
+      bankItemId: first.bankItemId,
+      pointing: { kind: 'span', start: 0, end: 4, text: 'late' },
+    });
+    items = await getTestItems(participant, clone1);
+    const kept = items.find((i) => i.bankItemId === first.bankItemId)?.pointing;
+    console.log(
+      `   pointing kept first answer = ${kept?.kind === 'not_sure'}${kept?.kind === 'not_sure' ? ' ✓' : ' ✗'} (replayed as ${JSON.stringify(kept)})`
+    );
+
+    // A pointing with no guess in front of it is refused outright.
+    const orphan = await recordPointing({
+      cloneAssignmentId: clone1.assignmentId,
+      bankItemId: items[1].bankItemId,
+      pointing: { kind: 'none' },
+    });
+    console.log(
+      `   pointing without a guess refused = ${'error' in orphan && orphan.error === 'guess_first'}${'error' in orphan ? ' ✓' : ' ✗'}`
     );
 
     // ── 2. a second guess must not overwrite the first ──────────────────

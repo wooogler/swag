@@ -272,6 +272,23 @@ export async function ensureStudyTables(): Promise<void> {
           "guessed_at" timestamp,
           "rated_at" timestamp
         )`);
+      // Design v2 §5 adds a POINTING step between the guess and the reveal:
+      // which intent (SCORE) or which stretch of the Rules document (Baseline)
+      // the participant expects to shape the answer. The span is stored as
+      // offsets AND as the text it covered — a redeploy rewrites the document
+      // and the offsets stop meaning anything, while the quotation still does.
+      for (const col of [
+        `"pointed_kind" text`,
+        `"pointed_intent_id" integer`,
+        `"pointed_span_start" integer`,
+        `"pointed_span_end" integer`,
+        `"pointed_text" text`,
+        `"pointed_at" timestamp`,
+      ]) {
+        await db.execute(
+          sql`ALTER TABLE "study_test_answers" ADD COLUMN IF NOT EXISTS ${sql.raw(col)}`
+        );
+      }
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_test_answers_unique" ON "study_test_answers" ("clone_assignment_id","bank_item_id")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_test_answers_participant_idx" ON "study_test_answers" ("participant_id")`);
       // Per-block questionnaire. One row per answered item, so adding or

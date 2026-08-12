@@ -1,5 +1,7 @@
 'use client';
 
+import { useRef } from 'react';
+
 /**
  * The participant's DEPLOYED configuration, read-only, for the block test.
  *
@@ -47,16 +49,31 @@ const TYPE_LABEL: Record<string, string> = {
   drafting: 'Drafting',
 };
 
-export default function SnapshotConfigView({ config }: { config: SnapshotConfig }) {
+export interface RulesSelection {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export default function SnapshotConfigView({
+  config,
+  onRulesSelection,
+}: {
+  config: SnapshotConfig;
+  /**
+   * Baseline pointing: fires when a drag finishes inside the rules text.
+   * Optional because this same view is read-only everywhere else — the block
+   * test is the only screen that asks the document to be pointed at.
+   */
+  onRulesSelection?: (selection: RulesSelection | null) => void;
+}) {
   if (config.condition === 'baseline') {
     return (
       <div className="flex flex-col h-full">
         <Header label="Your rules" version={config.versionLabel} />
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {config.rules?.trim() ? (
-            <pre className="whitespace-pre-wrap font-sans text-[12.5px] leading-relaxed text-[hsl(var(--foreground))]">
-              {config.rules}
-            </pre>
+            <RulesText rules={config.rules} onSelect={onRulesSelection} />
           ) : (
             <p className="text-xs text-[hsl(var(--muted-foreground))]">
               No rules were written, so the chatbot answers with no instructions of yours.
@@ -112,6 +129,57 @@ export default function SnapshotConfigView({ config }: { config: SnapshotConfig 
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The rules document, and — when the block test asks for it — the drag that
+ * points at part of it.
+ *
+ * Offsets are measured by collapsing a Range to the start of this element and
+ * taking the length of what it then spans, rather than by trusting
+ * anchorOffset: the text is one node today, but a selection that begins or ends
+ * outside it would otherwise report a number against the wrong origin. A
+ * selection that is not fully inside clears instead of guessing.
+ */
+function RulesText({
+  rules,
+  onSelect,
+}: {
+  rules: string;
+  onSelect?: (selection: RulesSelection | null) => void;
+}) {
+  const ref = useRef<HTMLPreElement>(null);
+
+  const report = () => {
+    if (!onSelect) return;
+    const el = ref.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) return onSelect(null);
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.startContainer) || !el.contains(range.endContainer)) {
+      return onSelect(null);
+    }
+    const before = range.cloneRange();
+    before.selectNodeContents(el);
+    before.setEnd(range.startContainer, range.startOffset);
+    const start = before.toString().length;
+    const text = range.toString();
+    if (!text.trim()) return onSelect(null);
+    onSelect({ start, end: start + text.length, text });
+  };
+
+  return (
+    <pre
+      ref={ref}
+      onMouseUp={onSelect ? report : undefined}
+      onKeyUp={onSelect ? report : undefined}
+      className={`whitespace-pre-wrap font-sans text-[12.5px] leading-relaxed text-[hsl(var(--foreground))] ${
+        onSelect ? 'cursor-text selection:bg-amber-200' : ''
+      }`}
+    >
+      {rules}
+    </pre>
   );
 }
 

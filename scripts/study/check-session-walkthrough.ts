@@ -34,8 +34,10 @@ async function main() {
     deployedConfigFor,
     getTestItems,
     recordGuess,
+    recordPointing,
     recordRating,
   } = await import('../../src/lib/study/measure-store');
+  type Pointing = import('../../src/lib/study/measure-store').Pointing;
   const { buildChatDeploySnapshot, recordChatDeploy } = await import(
     '../../src/lib/score/deploy-store'
   );
@@ -107,12 +109,28 @@ async function main() {
       const config = await deployedConfigFor(clone);
       console.log(`   config shown: ${config?.condition} ${config?.versionLabel} · ${items.length} question(s)`);
       let released = 0;
+      const firstIntent = (config?.intents ?? []).find((x) => x.kind === 'intent');
       for (const [i, item] of items.entries()) {
-        const r = await recordGuess({
+        await recordGuess({
           participant: current,
           cloneAssignmentId: clone.assignmentId,
           bankItemId: item.bankItemId,
           guess: i % 2 === 0,
+        });
+        // Point the way the participant's own condition would: an intent when
+        // there is one to name, a highlight in the rules otherwise.
+        const pointing: Pointing =
+          config?.condition === 'score'
+            ? firstIntent && i % 3 === 0
+              ? { kind: 'intent', intentId: firstIntent.id }
+              : { kind: i % 3 === 1 ? 'none' : 'not_sure' }
+            : i % 2 === 0
+              ? { kind: 'span', start: 0, end: 12, text: (config?.rules ?? 'rules text').slice(0, 12) }
+              : { kind: 'nothing' };
+        const r = await recordPointing({
+          cloneAssignmentId: clone.assignmentId,
+          bankItemId: item.bankItemId,
+          pointing,
         });
         if ('response' in r) released += 1;
         await recordRating({

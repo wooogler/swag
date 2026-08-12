@@ -1,11 +1,16 @@
 /**
- * Reads and writes for the two measurement screens (block test, blind A/B).
+ * Reads and writes for the block-test screen.
  *
  * The one rule that shapes this module: a frozen response is released to the
- * participant only AFTER their prediction is recorded. The block test measures
- * whether someone can read their own configuration and foresee what it does —
- * a response visible a moment early destroys that, so the gate lives on the
- * server and the client is never sent an answer it should not have yet.
+ * participant only AFTER their prediction is recorded — and design v2 §5 made
+ * the prediction two things, a yes/no and a POINT at the part of the
+ * configuration they expect to act. Both must be on record before the answer
+ * is released, because pointing after seeing the answer is not a prediction.
+ * The gate lives on the server and the client is never sent an answer it
+ * should not have yet.
+ *
+ * Both halves are first-answer-wins for the same reason: a second attempt is
+ * made with knowledge the first did not have.
  */
 import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { db } from '@/db/db';
@@ -28,11 +33,50 @@ export interface MeasureQuestion {
   question: string;
 }
 
+/** Where the participant expects the answer to come from, before seeing it. */
+export type Pointing =
+  | { kind: 'intent'; intentId: number }
+  | { kind: 'none' }
+  | { kind: 'not_sure' }
+  | { kind: 'span'; start: number; end: number; text: string }
+  | { kind: 'nothing' };
+
 export interface TestItem extends MeasureQuestion {
   guess: boolean | null;
+  /** Null until pointed; replayed so a reload resumes mid-item. */
+  pointing: Pointing | null;
   rating: number | null;
-  /** Present ONLY once the guess is recorded. */
+  /** Present ONLY once BOTH the guess and the pointing are recorded. */
   response: string | null;
+}
+
+/** Rebuild the stored columns into the shape the client sent. */
+function readPointing(row: {
+  pointedKind: string | null;
+  pointedIntentId: number | null;
+  pointedSpanStart: number | null;
+  pointedSpanEnd: number | null;
+  pointedText: string | null;
+}): Pointing | null {
+  switch (row.pointedKind) {
+    case 'intent':
+      return row.pointedIntentId === null ? null : { kind: 'intent', intentId: row.pointedIntentId };
+    case 'span':
+      return row.pointedSpanStart === null || row.pointedSpanEnd === null
+        ? null
+        : {
+            kind: 'span',
+            start: row.pointedSpanStart,
+            end: row.pointedSpanEnd,
+            text: row.pointedText ?? '',
+          };
+    case 'none':
+    case 'not_sure':
+    case 'nothing':
+      return { kind: row.pointedKind };
+    default:
+      return null;
+  }
 }
 
 function readContext(raw: unknown): MeasureQuestion['context'] {
@@ -199,44 +243,44 @@ export async function getTestItems(
     `test:${participant.id}:${clone.datasetKey}`
   );
 
-  return ordered
-    .map((item) => {
-      const answer = answerByItem.get(item.id);
-      const guessed = answer?.guess ?? null;
-      return {
-        bankItemId: item.id,
-        position: item.position,
-        context: readContext(item.context),
-        question: item.question,
-        guess: guessed,
-        rating: answer?.rating ?? null,
-        // The gate: no guess on record, no response in the payload.
-        response: guessed === null ? null : responseByItem.get(item.id) ?? null,
-      };
-    });
+  return ordered.map((item) => {
+    const answer = answerByItem.get(item.id);
+    const guessed = answer?.guess ?? null;
+    const pointing = answer ? readPointing(answer) : null;
+    return {
+      bankItemId: item.id,
+      position: item.position,
+      context: readContext(item.context),
+      question: item.question,
+      guess: guessed,
+      pointing,
+      rating: answer?.rating ?? null,
+      // The gate: both halves of the prediction on record, or no response in
+      // the payload. Checked on `pointedAt` rather than on the reconstructed
+      // value so an unreadable row fails closed.
+      response:
+        guessed === null || answer?.pointedAt == null
+          ? null
+          : responseByItem.get(item.id) ?? null,
+    };
+  });
 }
 
-/** Record the prediction and release that item's frozen response. */
+/**
+ * Record the yes/no half of the prediction. Releases nothing — the pointing
+ * step comes next and the reveal belongs to it.
+ */
 export async function recordGuess(args: {
   participant: StudyParticipant;
   cloneAssignmentId: string;
   bankItemId: number;
   guess: boolean;
-}): Promise<{ response: string } | { error: 'no_response' }> {
+}): Promise<{ ok: true } | { error: 'no_response' }> {
   const { participant, cloneAssignmentId, bankItemId, guess } = args;
 
-  const [generated] = await db
-    .select({ response: studyGeneratedResponses.response })
-    .from(studyGeneratedResponses)
-    .where(
-      and(
-        eq(studyGeneratedResponses.cloneAssignmentId, cloneAssignmentId),
-        eq(studyGeneratedResponses.bankItemId, bankItemId)
-      )
-    );
   // Refuse rather than record a prediction we cannot show an answer to: the
   // pair is the measurement.
-  if (!generated) return { error: 'no_response' };
+  if (!(await hasResponse(cloneAssignmentId, bankItemId))) return { error: 'no_response' };
 
   await db
     .insert(studyTestAnswers)
@@ -253,21 +297,100 @@ export async function recordGuess(args: {
       target: [studyTestAnswers.cloneAssignmentId, studyTestAnswers.bankItemId],
     });
 
+  return { ok: true };
+}
+
+async function hasResponse(cloneAssignmentId: string, bankItemId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ id: studyGeneratedResponses.id })
+    .from(studyGeneratedResponses)
+    .where(
+      and(
+        eq(studyGeneratedResponses.cloneAssignmentId, cloneAssignmentId),
+        eq(studyGeneratedResponses.bankItemId, bankItemId)
+      )
+    );
+  return !!row;
+}
+
+/**
+ * Record where they expect the answer to come from, and release it.
+ *
+ * The reveal moved here from recordGuess because this is the last thing asked
+ * before the answer is seen. Refuses without a guess on record, which is what
+ * makes the questionnaire's order (describe → guess → point) enforceable rather
+ * than merely rendered, and keeps the first pointing the way it keeps the first
+ * guess.
+ */
+export async function recordPointing(args: {
+  cloneAssignmentId: string;
+  bankItemId: number;
+  pointing: Pointing;
+}): Promise<{ response: string } | { error: 'no_response' | 'guess_first' }> {
+  const { cloneAssignmentId, bankItemId, pointing } = args;
+
+  const [existing] = await db
+    .select()
+    .from(studyTestAnswers)
+    .where(
+      and(
+        eq(studyTestAnswers.cloneAssignmentId, cloneAssignmentId),
+        eq(studyTestAnswers.bankItemId, bankItemId)
+      )
+    );
+  if (!existing || existing.guess === null) return { error: 'guess_first' };
+
+  const [generated] = await db
+    .select({ response: studyGeneratedResponses.response })
+    .from(studyGeneratedResponses)
+    .where(
+      and(
+        eq(studyGeneratedResponses.cloneAssignmentId, cloneAssignmentId),
+        eq(studyGeneratedResponses.bankItemId, bankItemId)
+      )
+    );
+  if (!generated) return { error: 'no_response' };
+
+  // Already pointed → keep it and re-release the same answer, so a reload
+  // lands where it left off instead of erroring.
+  if (existing.pointedAt == null) {
+    await db
+      .update(studyTestAnswers)
+      .set({
+        pointedKind: pointing.kind,
+        pointedIntentId: pointing.kind === 'intent' ? pointing.intentId : null,
+        pointedSpanStart: pointing.kind === 'span' ? pointing.start : null,
+        pointedSpanEnd: pointing.kind === 'span' ? pointing.end : null,
+        pointedText: pointing.kind === 'span' ? pointing.text : null,
+        pointedAt: new Date(),
+      })
+      .where(eq(studyTestAnswers.id, existing.id));
+  }
+
   return { response: generated.response };
 }
 
+/**
+ * Record the 1-5 fit rating. Only reachable once the answer has been released,
+ * which is the same as saying: only once the prediction is complete. The WHERE
+ * carries that rather than a prior read, so a rating cannot slip in ahead of
+ * the reveal even if a client sent one.
+ */
 export async function recordRating(args: {
   cloneAssignmentId: string;
   bankItemId: number;
   rating: number;
-}): Promise<void> {
-  await db
+}): Promise<{ ok: boolean }> {
+  const updated = await db
     .update(studyTestAnswers)
     .set({ rating: args.rating, ratedAt: new Date() })
     .where(
       and(
         eq(studyTestAnswers.cloneAssignmentId, args.cloneAssignmentId),
-        eq(studyTestAnswers.bankItemId, args.bankItemId)
+        eq(studyTestAnswers.bankItemId, args.bankItemId),
+        isNotNull(studyTestAnswers.pointedAt)
       )
-    );
+    )
+    .returning({ id: studyTestAnswers.id });
+  return { ok: updated.length > 0 };
 }
