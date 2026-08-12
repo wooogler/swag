@@ -39,9 +39,11 @@ import {
   GitCompareArrows,
   Loader2,
   Minimize2,
+  Redo2,
   RotateCcw,
   Save as SaveIcon,
   Search,
+  Undo2,
   Wand2,
   X,
 } from 'lucide-react';
@@ -634,9 +636,9 @@ export default function IntentWorkbench({
     })();
   }
 
-  /** Apply = persist the spec silently (draft on create), then rate the whole
-   * log against it and load the matched-question view. `specOverride` lets a
-   * suggestion pick auto-apply with values not yet committed to state. */
+  /** Apply = persist the spec, then rate the log against it and load the
+   * matched-question view. `specOverride` lets a suggestion pick auto-apply
+   * with values not yet committed to state. */
   async function apply(specOverride?: { title: string; definition: string; createNew?: boolean }) {
     if (busy || saving || !(specOverride?.definition ?? definition).trim()) return;
     const controller = new AbortController();
@@ -644,9 +646,17 @@ export default function IntentWorkbench({
     const { signal } = controller;
     setBusy(true);
     setError(null);
+    // What undo comes back to — read BEFORE persist overwrites it.
+    const before = { ...savedRef.current };
     try {
       const id = await persist(signal, false, specOverride);
       if (id === null || !live(signal)) return;
+      // A definition that actually moved is an undo step. The first Apply of a
+      // create moves from nothing, which is not a state to return to.
+      if (before.definition.trim() && before.definition !== savedRef.current.definition) {
+        setPast((p) => [...p, before]);
+        setFuture([]);
+      }
       // LIVE FILL — refresh the panes while the shards rate, so "In this
       // intent" / "Needs decision" accumulate in place instead of landing all
       // at once when the bar completes. Each shard batch commits its rows
@@ -693,6 +703,70 @@ export default function IntentWorkbench({
     }
   }
 
+  /**
+   * Undo/redo over the APPLIED definitions of this session.
+   *
+   * Costs nothing to walk: every spec that was applied has its ratings stored
+   * under its own hash, so returning to one re-attaches them instantly with no
+   * LLM call — the same store version checkout reads. The stack is session-local
+   * on purpose, exactly as a word processor's is: it undoes the editing you are
+   * doing now, while the durable way back to an earlier state is History, whose
+   * saved versions survive a reload.
+   *
+   * Definition and title only. Labels are the other axis — they persist on click
+   * and are consumed by the fold — and rolling one back silently under an undo
+   * meant for text would be a different promise than the one the button makes.
+   */
+  const [past, setPast] = useState<{ title: string; definition: string }[]>([]);
+  const [future, setFuture] = useState<{ title: string; definition: string }[]>([]);
+
+  /** Put an already-applied spec back in force: persist it (no version, no
+   * rename offer) and re-read its stored ratings. */
+  async function restoreSpec(spec: { title: string; definition: string }) {
+    const controller = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = controller;
+    setBusy(true);
+    setError(null);
+    try {
+      setTitle(spec.title);
+      setDefinition(spec.definition);
+      setCheckout(null); // the working draft is what you are back on
+      const id = await persist(controller.signal, false, spec, { silent: true });
+      if (id === null || !live(controller.signal)) return;
+      await fetchRatings(id, controller.signal);
+      if (live(controller.signal)) {
+        setSimilarScores(null);
+        setBaselineNonce((n) => n + 1);
+      }
+    } catch (e) {
+      if ((e as Error)?.name !== 'AbortError' && live(controller.signal)) {
+        setError((e as Error).message);
+      }
+    } finally {
+      if (live(controller.signal)) setBusy(false);
+    }
+  }
+
+  const canUndo = past.length > 0 && !busy && !saving && checkout === null;
+  const canRedo = future.length > 0 && !busy && !saving && checkout === null;
+
+  async function undo() {
+    if (!canUndo) return;
+    const target = past[past.length - 1];
+    setPast((p) => p.slice(0, -1));
+    setFuture((f) => [...f, { ...savedRef.current }]);
+    await restoreSpec(target);
+  }
+
+  async function redo() {
+    if (!canRedo) return;
+    const target = future[future.length - 1];
+    setFuture((f) => f.slice(0, -1));
+    setPast((p) => [...p, { ...savedRef.current }]);
+    await restoreSpec(target);
+  }
+
   const specDirty = () =>
     intentId === null ||
     title.trim() !== savedRef.current.title ||
@@ -730,9 +804,11 @@ export default function IntentWorkbench({
     const isCreate = !!specOverride?.createNew || intentId === null;
     // Only worth asking for on an EXISTING named intent whose definition moved:
     // a create just took the instructor's own words, and an unchanged definition
-    // would only regenerate the name it already has.
+    // would only regenerate the name it already has. A `silent` restore is
+    // exempt — undo returns to a definition that was already named once, and
+    // charging it an LLM call to re-offer that name would be absurd.
     const suggestTitle =
-      !isCreate && !!titleText && defText !== savedRef.current.definition.trim();
+      !isCreate && !opts?.silent && !!titleText && defText !== savedRef.current.definition.trim();
     const payload = {
       title: autoTitle ? undefined : titleText,
       definition: defText,
@@ -1774,6 +1850,32 @@ export default function IntentWorkbench({
               // nothing to apply. (A changed TITLE alone also enables it: Apply
               // is the rename's persistence path — the tooltip says so.)
               action={
+                <span className="flex items-center gap-0.5">
+                {/* Undo/redo walk the definitions applied this session. Free —
+                    each one's ratings are already stored under its own hash —
+                    so stepping back is instant and costs no LLM call. */}
+                <button
+                  onClick={() => void undo()}
+                  disabled={!canUndo}
+                  title={
+                    canUndo
+                      ? `Undo — back to the definition applied before this one (instant; ${past.length} step${past.length === 1 ? '' : 's'} back)`
+                      : 'Nothing to undo — this is the first definition applied in this session'
+                  }
+                  aria-label="Undo"
+                  className="rounded p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => void redo()}
+                  disabled={!canRedo}
+                  title={canRedo ? 'Redo — forward again (instant)' : 'Nothing to redo'}
+                  aria-label="Redo"
+                  className="rounded p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  <Redo2 className="h-3.5 w-3.5" />
+                </button>
                 <button
                   onClick={() => apply()}
                   disabled={busy || saving || !definition.trim() || !openaiConfigured || applied}
@@ -1800,6 +1902,7 @@ export default function IntentWorkbench({
                   )}
                   Apply
                 </button>
+                </span>
               }
             />
 
