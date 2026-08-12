@@ -12,9 +12,11 @@ export const metadata = { title: 'Check your chatbot' };
 /**
  * Block test — the participant predicts, then sees, then rates.
  *
- * Reached only during the matching phase; the facilitator opens it. Responses
- * for items not yet predicted are NOT in this payload (measure-store enforces
- * that), so there is nothing on the page to peek at.
+ * Reached only during the matching phase, which the participant enters by
+ * finishing their setup — and that transition generates these answers first
+ * (advance.ts), so "Not ready yet" below means someone was moved here by hand.
+ * Responses for items not yet predicted are NOT in this payload (measure-store
+ * enforces that), so there is nothing on the page to peek at.
  */
 export default async function BlockTestPage() {
   await ensureStudyTables();
@@ -46,5 +48,5 @@ export default async function BlockTestPage() {
     );
   }
 
-  return <BlockTest config={config} items={items} />;
+  return <BlockTest config={config} items={items} phase={phase} />;
 }

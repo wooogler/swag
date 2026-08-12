@@ -37,6 +37,7 @@ export default async function SurveyPage() {
       min={SURVEY_SCALE_MIN}
       max={scaleMax}
       initial={Object.fromEntries(prior.map((p) => [p.itemKey, p.value]))}
+      phase={phase}
     />
   );
 }

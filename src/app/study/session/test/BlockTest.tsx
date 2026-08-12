@@ -11,15 +11,18 @@
 
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import PhaseAdvance from '@/components/study/PhaseAdvance';
 import SnapshotConfigView, { type SnapshotConfig } from '@/components/study/SnapshotConfigView';
 import type { TestItem } from '@/lib/study/measure-store';
 
 export default function BlockTest({
   config,
   items,
+  phase,
 }: {
   config: SnapshotConfig;
   items: TestItem[];
+  phase: string;
 }) {
   const firstUnfinished = Math.max(
     0,
@@ -109,9 +112,12 @@ export default function BlockTest({
           {finished ? (
             <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 text-center">
               <h2 className="text-lg font-semibold mb-2">All done</h2>
-              <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                That is all the questions. Your facilitator will take it from here.
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">
+                That is all the questions for this chatbot.
               </p>
+              <div className="flex flex-col items-center">
+                <PhaseAdvance from={phase} label="Continue" />
+              </div>
             </div>
           ) : (
             <div className="space-y-4">

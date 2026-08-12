@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import PhaseAdvance from '@/components/study/PhaseAdvance';
 import type { SurveyItem } from '@/lib/study/survey-items';
 
 export default function BlockSurvey({
@@ -18,11 +19,13 @@ export default function BlockSurvey({
   min,
   max,
   initial,
+  phase,
 }: {
   items: SurveyItem[];
   min: number;
   max: number;
   initial: Record<string, number>;
+  phase: string;
 }) {
   const [answers, setAnswers] = useState<Record<string, number>>(initial);
   const [busy, setBusy] = useState(false);
@@ -92,13 +95,20 @@ export default function BlockSurvey({
           ))}
         </div>
 
+        {/* Saving and moving on stay separate clicks: moving on is what starts
+            the next block, and an answer changed after a mis-click should not
+            need the session unwound to fix. */}
         <div className="mt-8 flex items-center gap-3">
           <button
             onClick={submit}
             disabled={busy || remaining > 0}
-            className="rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+            className={`rounded-lg px-5 py-2.5 text-sm font-semibold disabled:opacity-40 ${
+              saved
+                ? 'border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]'
+                : 'bg-[hsl(var(--primary))] text-white'
+            }`}
           >
-            {busy ? 'Saving…' : saved ? 'Save again' : 'Done'}
+            {busy ? 'Saving…' : saved ? 'Save again' : 'Save answers'}
           </button>
           {remaining > 0 && (
             <span className="text-xs text-[hsl(var(--muted-foreground))]">
@@ -107,11 +117,20 @@ export default function BlockSurvey({
           )}
           {busy && <Loader2 className="w-3.5 h-3.5 animate-spin text-[hsl(var(--muted-foreground))]" />}
           {saved && remaining === 0 && !busy && (
-            <span className="text-xs text-emerald-700 font-semibold">
-              Saved — your facilitator will move on.
-            </span>
+            <span className="text-xs text-emerald-700 font-semibold">Saved</span>
           )}
         </div>
+
+        {saved && remaining === 0 && (
+          <div className="mt-6 pt-5 border-t border-[hsl(var(--border))]">
+            <PhaseAdvance
+              from={phase}
+              label="Continue"
+              waits
+              waitLabel="Getting the last part ready — your chatbot is answering a few more questions."
+            />
+          </div>
+        )}
         {error && (
           <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
             {error}

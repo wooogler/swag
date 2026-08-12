@@ -12,6 +12,7 @@
 
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import PhaseAdvance from '@/components/study/PhaseAdvance';
 
 export interface BlindAbItem {
   bankItemId: number;
@@ -22,7 +23,7 @@ export interface BlindAbItem {
   choice: 'left' | 'right' | 'both' | 'neither' | null;
 }
 
-export default function BlindAb({ items }: { items: BlindAbItem[] }) {
+export default function BlindAb({ items, phase }: { items: BlindAbItem[]; phase: string }) {
   const firstUnanswered = items.findIndex((i) => i.choice === null);
   const [index, setIndex] = useState(firstUnanswered === -1 ? items.length - 1 : firstUnanswered);
   const [state, setState] = useState(items);
@@ -61,9 +62,12 @@ export default function BlindAb({ items }: { items: BlindAbItem[] }) {
       <div className="min-h-screen flex items-center justify-center px-6">
         <div className="max-w-md text-center">
           <h1 className="text-lg font-semibold mb-2">That is everything — thank you</h1>
-          <p className="text-sm text-[hsl(var(--muted-foreground))]">
-            Your facilitator will pick up from here.
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">
+            One last click to finish the session.
           </p>
+          <div className="flex flex-col items-center">
+            <PhaseAdvance from={phase} label="Finish" />
+          </div>
         </div>
       </div>
     );

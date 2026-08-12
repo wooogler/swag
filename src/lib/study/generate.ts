@@ -183,8 +183,17 @@ export async function generateForClone(args: {
     configRef = { deployVersionNo: snapshot.versionNo };
   }
 
+  // "Cached" has to mean cached FOR THIS CONFIGURATION. A participant who
+  // tweaks and redeploys leaves rows pinned to the old version behind, and
+  // counting those as done would test them against a chatbot they no longer
+  // have — the exact drift the pin exists to catch, read the same way
+  // isGenerationCurrent reads it below. Without this a re-run reports
+  // everything cached and the staleness never clears.
   const existing = await db
-    .select({ bankItemId: studyGeneratedResponses.bankItemId })
+    .select({
+      bankItemId: studyGeneratedResponses.bankItemId,
+      configRef: studyGeneratedResponses.configRef,
+    })
     .from(studyGeneratedResponses)
     .where(
       and(
@@ -195,7 +204,10 @@ export async function generateForClone(args: {
         )
       )
     );
-  const done = new Set(existing.map((e) => e.bankItemId));
+  const pinned = JSON.stringify(configRef);
+  const done = new Set(
+    existing.filter((e) => JSON.stringify(e.configRef) === pinned).map((e) => e.bankItemId)
+  );
 
   const run = createLimiter(SCORE_CONCURRENCY);
   const results: GenerateOutcome[] = [];

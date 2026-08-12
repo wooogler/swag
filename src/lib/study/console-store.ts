@@ -94,7 +94,8 @@ function conditionOf(clone: { condition: string }): 'score' | 'baseline' {
   return clone.condition === 'baseline' ? 'baseline' : 'score';
 }
 
-async function deployStateFor(clone: {
+/** Exported because the participant's own advance checks it too (advance.ts). */
+export async function deployStateFor(clone: {
   assignmentId: string;
   condition: string;
 }): Promise<{ deployed: boolean; label: string | null }> {
@@ -370,7 +371,13 @@ export async function getParticipantStatus(
 }
 
 export async function listParticipantStatuses(): Promise<ParticipantStatus[]> {
-  const participants = await db.select().from(studyParticipants);
+  // Demo accounts run the identical session on the isolated demo subtypes, so
+  // they look exactly like participants here — which is why they are filtered
+  // out rather than left for a facilitator to recognise mid-session.
+  const participants = await db
+    .select()
+    .from(studyParticipants)
+    .where(eq(studyParticipants.isDemo, false));
   const statuses = await Promise.all(participants.map((p) => getParticipantStatus(p)));
   return statuses.sort((a, b) =>
     a.participantNumber.localeCompare(b.participantNumber, undefined, { numeric: true })

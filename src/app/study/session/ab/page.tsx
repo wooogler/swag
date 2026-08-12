@@ -51,5 +51,5 @@ export default async function BlindAbPage() {
     choice: i.choice,
   }));
 
-  return <BlindAb items={blind} />;
+  return <BlindAb items={blind} phase={phase} />;
 }

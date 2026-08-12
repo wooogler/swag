@@ -2,10 +2,11 @@
  * Session state for a study participant: which counterbalancing cell they are
  * in, and where they are in the two-block protocol.
  *
- * The facilitator drives the phase from the console (the session is moderated
- * over Zoom, and a participant clicking ahead would skip a measurement), so
- * this module owns the ordering rules and the app only renders what the current
- * phase allows.
+ * The participant drives the phase themselves (advance.ts), one step forward at
+ * a time; the session is watched over a shared screen rather than gated, and
+ * the console keeps the moves — back, jump, force — that only exist to recover
+ * a run. So this module owns the ordering rules and the app only renders what
+ * the current phase allows.
  */
 // STUDY_DATASETS, not the curation masters: a block is over what the
 // participant actually holds a clone of.

@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { ensureStudyTables } from '@/lib/study/store';
 import { deployBaselinePrompt, logStudyEvent } from '@/lib/study/baseline-store';
+import { warmClone } from '@/lib/study/warm';
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -21,6 +22,9 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   try {
     const versionNo = await deployBaselinePrompt(id);
     await logStudyEvent(id, 'prompt_deploy', { versionNo });
+    // Start freezing this version's measurement answers now, while the
+    // participant is still working. Deliberately not awaited (warm.ts).
+    warmClone(id);
     return NextResponse.json({ versionNo });
   } catch (error) {
     console.error('Baseline deploy error:', error);

@@ -1,12 +1,16 @@
 'use client';
 
 /**
- * Facilitator console — one row per participant, run left to right.
+ * Facilitator console — one row per participant, read left to right.
  *
- * Everything a moderator needs mid-session without leaving the page: where the
- * participant is, whether each clone is deployed, whether the frozen answers
- * the next phase depends on exist and are still current, and the buttons to
- * generate them, advance, or (when a run goes wrong) reset or remove.
+ * A watching tool first: the participant moves themselves through the protocol
+ * and generates their own frozen answers on the way (advance.ts), so a session
+ * that is going well needs nothing from this page. What it shows is where each
+ * participant is, whether each clone is deployed, and whether the answers the
+ * next phase depends on exist and are still current.
+ *
+ * The buttons are the recovery half — generate by hand, step back, jump, force
+ * past a blocker, reset or remove — for the runs that go wrong.
  */
 
 import { useCallback, useEffect, useState } from 'react';

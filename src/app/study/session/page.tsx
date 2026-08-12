@@ -4,7 +4,11 @@ import { db } from '@/db/db';
 import { studyClones } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
-import { isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
+import { TUTORIAL_VIDEOS } from '@/lib/study/config';
+import { advanceWaits } from '@/lib/study/advance';
+import { blockPlan, isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
+import PhaseAdvance from '@/components/study/PhaseAdvance';
+import TutorialStep from '@/components/study/TutorialStep';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,11 +17,12 @@ export const metadata = { title: 'Chatbot Studio' };
 /**
  * The participant's home during a session.
  *
- * Shows exactly ONE thing: whatever the current phase permits. The facilitator
- * moves the phase from the console, so a participant cannot wander into the
- * next block's workspace (which would let the second condition's material be
- * seen before its tutorial) or back into a finished block (which would change
- * a configuration the measurements have already been frozen against).
+ * Shows exactly ONE thing: whatever the current phase permits. A participant
+ * cannot wander into the next block's workspace (which would let the second
+ * condition's material be seen before its walkthrough) or back into a finished
+ * block (which would change a configuration the measurements have already been
+ * frozen against) — the phase decides, and the only move offered is the next
+ * one, which they make themselves. The console watches; it does not drive.
  *
  * Nothing here names the conditions: a participant sees "your chatbot", never
  * SCORE or baseline.
@@ -29,6 +34,8 @@ export default async function StudySessionPage() {
 
   const phase: StudyPhase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
   const access = phaseAccess(participant.participantNumber, phase);
+  const plan = blockPlan(participant.participantNumber);
+  const conditionOfBlock = (block: 1 | 2) => plan.find((p) => p.block === block)?.condition;
 
   let workAssignmentId: string | null = null;
   if (access.workDatasetKey) {
@@ -44,100 +51,131 @@ export default async function StudySessionPage() {
     workAssignmentId = clone?.assignmentId ?? null;
   }
 
+  // The walkthrough steps carry a video, so they get room the one-line cards
+  // do not need.
+  const isTutorial = phase === 'not_started' || phase === 'break';
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--background))] px-6 py-12">
-      <div className="w-full max-w-lg">
+      <div className={`w-full ${isTutorial ? 'max-w-2xl' : 'max-w-lg'}`}>
         <div className="mb-6 text-center">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
             Participant {participant.participantNumber}
           </p>
         </div>
 
-        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 text-center">
-          {workAssignmentId ? (
-            <>
-              <h1 className="text-lg font-semibold mb-2">Set up your chatbot</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                Read through the conversations students had with the chatbot. Wherever a
-                reply is not what you would want, change the setup so it answers the way
-                you intend. Deploy when you are satisfied.
-              </p>
-              <a
-                href={`/instructor/assignments/${workAssignmentId}/score`}
-                className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
-              >
-                Open Chatbot Studio
-              </a>
-            </>
-          ) : access.testBlock ? (
-            <>
-              <h1 className="text-lg font-semibold mb-2">Check your chatbot</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                A few new student questions. For each one you will say whether you expect
-                your chatbot to answer the way you intend, then see what it actually says.
-              </p>
-              <a
-                href="/study/session/test"
-                className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
-              >
-                Start
-              </a>
-            </>
-          ) : access.showSurvey ? (
-            <>
-              <h1 className="text-lg font-semibold mb-2">A few questions</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                A short questionnaire about the setup you just did.
-              </p>
-              <a
-                href="/study/session/survey"
-                className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
-              >
-                Start
-              </a>
-            </>
-          ) : access.showAb ? (
-            <>
-              <h1 className="text-lg font-semibold mb-2">Comparing the two chatbots</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                Last step: the two chatbots you built today answer the same questions side
-                by side, and you pick the answer you would want.
-              </p>
-              <a
-                href="/study/session/ab"
-                className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
-              >
-                Start
-              </a>
-            </>
-          ) : access.isBreak ? (
-            <>
-              <h1 className="text-lg font-semibold mb-2">Take a short break</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
-                We will pick up with the second version in a few minutes.
-              </p>
-            </>
-          ) : access.isDone ? (
-            <>
-              <h1 className="text-lg font-semibold mb-2">All done — thank you</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
-                That is the end of the session. Your facilitator will take it from here.
-              </p>
-            </>
-          ) : (
-            <>
-              <h1 className="text-lg font-semibold mb-2">Ready when you are</h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
-                Your facilitator will start the session in a moment. You can leave this
-                page open.
-              </p>
-            </>
-          )}
-        </div>
+        {phase === 'not_started' ? (
+          <TutorialStep
+            title="Before you start"
+            body="A quick look at the tool you will use for the first part."
+            videoUrl={TUTORIAL_VIDEOS[conditionOfBlock(1) ?? 'score']}
+            fromPhase={phase}
+            buttonLabel="Start"
+          />
+        ) : phase === 'break' ? (
+          <TutorialStep
+            title="Second part"
+            body="Take a moment first. The second chatbot is set up with a different tool — here is how that one works."
+            videoUrl={TUTORIAL_VIDEOS[conditionOfBlock(2) ?? 'score']}
+            fromPhase={phase}
+            buttonLabel="I'm ready"
+          />
+        ) : (
+          <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 text-center">
+            {workAssignmentId ? (
+              <>
+                <h1 className="text-lg font-semibold mb-2">Set up your chatbot</h1>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                  Read through the conversations students had with the chatbot. Wherever a
+                  reply is not what you would want, change the setup so it answers the way
+                  you intend. Deploy when you are satisfied.
+                </p>
+                <a
+                  href={`/instructor/assignments/${workAssignmentId}/score`}
+                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+                >
+                  Open Chatbot Studio
+                </a>
+                {/* The same exit the studio header offers, for a participant
+                    who came back here instead. Quieter than the studio link,
+                    and asking the same question before it acts: one click
+                    should not end a block in one place and two in another. */}
+                <div className="mt-6 pt-5 border-t border-[hsl(var(--border))] flex flex-col items-center">
+                  <p className="text-xs text-[hsl(var(--muted-foreground))] mb-3">
+                    Finished setting it up?
+                  </p>
+                  <PhaseAdvance
+                    from={phase}
+                    label="I'm done — check my chatbot"
+                    waits={advanceWaits(phase)}
+                    waitLabel="Your chatbot is answering the check questions now."
+                    confirm="This ends the setup for this chatbot and moves you on to checking it. You will not be able to come back and change it."
+                  />
+                </div>
+              </>
+            ) : access.testBlock ? (
+              <>
+                <h1 className="text-lg font-semibold mb-2">Check your chatbot</h1>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                  A few new student questions. For each one you will say whether you expect
+                  your chatbot to answer the way you intend, then see what it actually says.
+                </p>
+                <a
+                  href="/study/session/test"
+                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+                >
+                  Start
+                </a>
+              </>
+            ) : access.showSurvey ? (
+              <>
+                <h1 className="text-lg font-semibold mb-2">A few questions</h1>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                  A short questionnaire about the setup you just did.
+                </p>
+                <a
+                  href="/study/session/survey"
+                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+                >
+                  Start
+                </a>
+              </>
+            ) : access.showAb ? (
+              <>
+                <h1 className="text-lg font-semibold mb-2">Comparing the two chatbots</h1>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                  Last step: the two chatbots you built today answer the same questions side
+                  by side, and you pick the answer you would want.
+                </p>
+                <a
+                  href="/study/session/ab"
+                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+                >
+                  Start
+                </a>
+              </>
+            ) : access.isDone ? (
+              <>
+                <h1 className="text-lg font-semibold mb-2">All done — thank you</h1>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
+                  That is the end of the session. Your facilitator will take it from here.
+                </p>
+              </>
+            ) : (
+              // Only reachable when a work phase has no clone behind it — the
+              // participant has nothing to do here and cannot fix it.
+              <>
+                <h1 className="text-lg font-semibold mb-2">One moment</h1>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
+                  This step is not ready on our side. Let your facilitator know.
+                </p>
+              </>
+            )}
+          </div>
+        )}
 
         <p className="mt-6 text-center text-[11px] text-[hsl(var(--muted-foreground))]">
-          This page follows along with the session — it will update when your facilitator
-          moves to the next step.
+          Go at your own pace — your facilitator is watching along and can help at any point.
         </p>
       </div>
     </div>

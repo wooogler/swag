@@ -15,6 +15,7 @@ import { db } from '@/db/db';
 import { scoreConfigVersions, scoreRuleVersions } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { logStudyEvent } from '@/lib/study/events';
+import { warmClone } from '@/lib/study/warm';
 import {
   buildChatDeploySnapshot,
   canonicalChatConfig,
@@ -261,6 +262,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const versionNo = await recordChatDeploy(id, auth.instructor.id, snapshot, note);
   await logStudyEvent(id, 'deploy', { condition: 'score', versionNo });
+  // Start freezing this version's measurement answers now, while the
+  // participant is still working. Deliberately not awaited (warm.ts).
+  warmClone(id);
   const latest = await getLatestChatDeploy(id);
   return NextResponse.json(
     {

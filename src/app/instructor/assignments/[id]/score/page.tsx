@@ -30,7 +30,6 @@ import {
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { isLegacySnapshot, listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
-import BaselineDeployButton from './BaselineDeployButton';
 import StudioShell from './StudioShell';
 import {
   DISSECTION_VERSION,
@@ -50,6 +49,9 @@ import IntentBoard, {
 } from './IntentBoard';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { allowedAssignmentIds } from '@/lib/study/console-store';
+import { advanceWaits, currentPhase } from '@/lib/study/advance';
+import PhaseAdvance from '@/components/study/PhaseAdvance';
+import StudyDeployButton from '@/components/study/StudyDeployButton';
 import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
 import { ensureStudyTables } from '@/lib/study/store';
@@ -380,12 +382,29 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     }))
     .sort((a, b) => SCORE_QUERY_TYPES.indexOf(a.type) - SCORE_QUERY_TYPES.indexOf(b.type));
 
+  // A study participant's way out of the block, offered only once they have
+  // deployed something to measure. Read the same deploy state the study's own
+  // gate reads (console-store.deployStateFor): a baseline is live when a
+  // version carries a deployedAt, SCORE when a chat deploy exists at all.
+  const studyDeployed = isBaselineView
+    ? baselineState?.deployedVersionNo != null
+    : chatDeploys.length > 0;
+  const studyBlockDone =
+    participant && studyDeployed && !deployView
+      ? { phase: currentPhase(participant), waits: advanceWaits(currentPhase(participant)) }
+      : null;
+
   return (
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
       <StudioShell
         header={
           <div className="flex items-center gap-4">
-            <Link href={`/instructor/assignments/${id}`}>
+            {/* Back out of a demo is back to the tool that started it, not up
+                the participant's own hierarchy — a researcher filming has no
+                use for the assignment page, and this is the only exit the demo
+                can carry without putting a control in the recording. Identical
+                to look at, so the frame is unchanged either way. */}
+            <Link href={participant?.isDemo ? '/api/study/admin/demo/exit' : `/instructor/assignments/${id}`}>
               <Button variant="ghost" size="icon" className="hover:bg-[hsl(var(--muted))]">
                 <ChevronLeft className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />
               </Button>
@@ -400,13 +419,42 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                   : 'Organize · Revise · Evaluate — instructor intents own the log'}
               </p>
             </div>
-            {isBaselineView ? (
-              <BaselineDeployButton assignmentId={id} deployedVersionNo={baselineState?.deployedVersionNo ?? null} />
+            {/* Participants get the same one-click control in both arms; the
+                version dropdown and the review modal are researcher tools, and
+                giving them to only one arm would let SCORE inspect and name
+                what it published while the baseline could not. */}
+            {isBaselineView || participant ? (
+              <StudyDeployButton
+                assignmentId={id}
+                condition={isBaselineView ? 'baseline' : 'score'}
+                deployedVersionNo={
+                  isBaselineView
+                    ? baselineState?.deployedVersionNo ?? null
+                    : chatDeploys[0]?.versionNo ?? null
+                }
+              />
             ) : (
               <DeployControls
                 assignmentId={id}
                 versions={deployVersions}
                 selectedVersion={deployView?.versionNo ?? null}
+              />
+            )}
+            {/* Finishing the block belongs next to Deploy, because deploying is
+                what makes it possible: it appears the moment there is a version
+                to be measured, and both deploy paths router.refresh() so it
+                arrives on its own. Hidden while browsing an older version — the
+                block does not end from a page that is only being read. The
+                phase gate above already guarantees this board is the one the
+                participant's current phase is about. */}
+            {studyBlockDone && (
+              <PhaseAdvance
+                compact
+                from={studyBlockDone.phase}
+                label="I'm done"
+                waits={studyBlockDone.waits}
+                waitLabel="Your chatbot is answering the check questions now."
+                confirm="This ends the setup for this chatbot and moves you on to checking it. You will not be able to come back and change it."
               />
             )}
             <InstructorHeaderActions email={instructor.email} />
