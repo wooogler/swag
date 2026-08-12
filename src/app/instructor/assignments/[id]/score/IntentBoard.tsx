@@ -391,12 +391,6 @@ function BaselineFilterTree({
       {SCORE_QUERY_TYPES.map((t) => {
         const typeActive = selection.kind === 'type' && selection.typeKey === t;
         const mine = filters.filter((f) => f.type === t);
-        // The create row belongs to the scope being looked at — this type, or
-        // one of its own filters (a filter has no inside, so creation from it
-        // still lands beside it).
-        const scopeHere =
-          typeActive ||
-          (selection.kind === 'search' && mine.some((f) => `search:${f.id}` === selection.key));
         return (
           <div key={t} className="border-b border-[hsl(var(--border))]">
             <div
@@ -414,22 +408,23 @@ function BaselineFilterTree({
             <div className="pb-1">
               {renderBranch([
                 ...mine.map((f) => ({ key: f.id, node: filterRow(f) })),
-                ...(scopeHere
-                  ? [
-                      {
-                        key: 'new',
-                        node: (
-                          <NewIntentRow
-                            scope={{
-                              label: `Create a filter in ${QUERY_TYPE_LABELS[t]}`,
-                              buttonLabel: `New filter in ${QUERY_TYPE_LABELS[t]}`,
-                            }}
-                            onClick={() => onNewFilter(t)}
-                          />
-                        ),
-                      },
-                    ]
-                  : []),
+                // On every section, always — the same change SCORE's create row
+                // gets. Making it conditional on the selection would hand one
+                // arm a standing invitation to build and the other a hidden one,
+                // which is a difference in the tool, not in the model it
+                // teaches (§0 principle 1).
+                {
+                  key: 'new',
+                  node: (
+                    <NewIntentRow
+                      scope={{
+                        label: `Create a filter in ${QUERY_TYPE_LABELS[t]}`,
+                        buttonLabel: `New filter in ${QUERY_TYPE_LABELS[t]}`,
+                      }}
+                      onClick={() => onNewFilter(t)}
+                    />
+                  ),
+                },
               ])}
             </div>
           </div>
@@ -1918,10 +1913,10 @@ export default function IntentBoard({
   );
 
   /**
-   * Where a new set would land, read off the CURRENT selection. Creating from a
-   * type section (or its Uncategorized bucket) makes a top-level set of that
-   * type; creating while a set is selected carves a subset out of it. There is
-   * no placement picker — the scope you are looking at is the answer.
+   * Creating INSIDE a set — the only placement that still follows the
+   * selection, because a subset is defined by which set it is carved out of and
+   * there is no other way to say which one that is. (Creating at type level is
+   * offered on every section unconditionally; see the type-level create row.)
    */
   const newIntentScope = useMemo((): {
     type: ScoreQueryType;
@@ -1942,24 +1937,7 @@ export default function IntentBoard({
             buttonLabel: `New intent inside “${scope.title}”`,
           }
         : null;
-    if (selection.kind === 'type') {
-      return {
-        type: selection.typeKey,
-        parentIntentId: null,
-        label: `Create an intent inside ${QUERY_TYPE_LABELS[selection.typeKey]}`,
-        buttonLabel: `New intent in ${QUERY_TYPE_LABELS[selection.typeKey]}`,
-      };
-    }
     if (selection.kind === 'residue') {
-      const root = typeRoots.find((t) => t.id === selection.scopeId);
-      if (root) {
-        return {
-          type: root.type,
-          parentIntentId: null,
-          label: `Create an intent for the questions ${QUERY_TYPE_LABELS[root.type]} does not cover yet`,
-          buttonLabel: `New intent in ${QUERY_TYPE_LABELS[root.type]}`,
-        };
-      }
       const scope = intentById.get(selection.scopeId);
       return scope ? forScope(scope) : null;
     }
@@ -1968,7 +1946,7 @@ export default function IntentBoard({
       return scope ? forScope(scope) : null;
     }
     return null;
-  }, [selection, isBaseline, typeRoots, intentById]);
+  }, [selection, isBaseline, intentById]);
 
   /**
    * Every intent is created through the chooser — a blank form does not tell an
@@ -2355,10 +2333,6 @@ export default function IntentBoard({
                 const total =
                   residue + entry.topLevel.reduce((n, i) => n + subtreeCount(i.id), 0);
                 const typeActive = selection.kind === 'type' && selection.typeKey === root.type;
-                // A new top-level set of this type — the button belongs at the
-                // top level of this section's tree, not in a fixed slot.
-                const createsAtTypeLevel =
-                  newIntentScope?.type === root.type && newIntentScope.parentIntentId === null;
                 return (
                   <div key={root.id} className="border-b border-[hsl(var(--border))]">
                     {/* Section header = the type root. Clicking browses every
@@ -2409,19 +2383,34 @@ export default function IntentBoard({
                               },
                             ]
                           : []),
-                        ...(createsAtTypeLevel && newIntentScope
-                          ? [
-                              {
-                                key: 'new',
-                                node: (
-                                  <NewIntentRow
-                                    scope={newIntentScope}
-                                    onClick={() => openIntentChooser(newIntentScope, anchorRow)}
-                                  />
-                                ),
-                              },
-                            ]
-                          : []),
+                        // Creating an intent in a TYPE is offered on every
+                        // section, always. It used to appear only under the
+                        // selected one, which made the board's central act
+                        // conditional on having already navigated somewhere —
+                        // and left three of the four types looking like places
+                        // where nothing could be made. The row still sits where
+                        // the set will land, so it says the placement without a
+                        // picker; there are simply four of them.
+                        {
+                          key: 'new',
+                          node: (
+                            <NewIntentRow
+                              scope={{
+                                label: `Create an intent inside ${QUERY_TYPE_LABELS[root.type]}`,
+                                buttonLabel: `New intent in ${QUERY_TYPE_LABELS[root.type]}`,
+                              }}
+                              onClick={() =>
+                                openIntentChooser(
+                                  { type: root.type, parentIntentId: null },
+                                  // The question in view only seeds the
+                                  // proposals, and only when it is one this
+                                  // type would actually route.
+                                  anchorRow?.queryType === root.type ? anchorRow : null
+                                )
+                              }
+                            />
+                          ),
+                        },
                       ])}
                     </div>
                   </div>
