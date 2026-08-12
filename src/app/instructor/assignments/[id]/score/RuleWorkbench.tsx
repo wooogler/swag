@@ -1115,7 +1115,7 @@ export default function RuleWorkbench({
     const label = versionLabel(viewed);
     if (
       !window.confirm(
-        `Revert to ${label}?\n\nThis makes ${label} the live rule and permanently deletes the ${laterCount} later step(s) — including any Apply among them. This cannot be undone.`
+        `Revert to ${label}?\n\nThis makes ${label} the live rule and permanently deletes the ${laterCount} later step(s) — including any Save among them. This cannot be undone.`
       )
     ) {
       return;
@@ -1326,7 +1326,7 @@ export default function RuleWorkbench({
                 </p>
                 {!readOnly && dirty && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
-                    not applied yet
+                    not saved yet
                   </span>
                 )}
               </div>
@@ -1378,7 +1378,8 @@ export default function RuleWorkbench({
               />
               <div className="mt-1.5 flex items-center justify-end gap-2">
                 {/* Apply the rule you edited directly — regenerates the active
-                    question's response and records a simulated step. */}
+                    question's response and records a simulated step. Nothing
+                    reaches students until Save. */}
                 <button
                   onClick={() => {
                     void (async () => {
@@ -1401,27 +1402,27 @@ export default function RuleWorkbench({
                     readOnly
                       ? 'Viewing an old step — Revert to make it live, or return to the latest to edit'
                       : boxEdited
-                        ? 'Try this edit — regenerates the response and records a step (students are not affected)'
-                        : 'Edit the rule text to try a change'
+                        ? 'Apply this edit — regenerates the response and records a step (students are not affected)'
+                        : 'Edit the rule text to apply a change'
                   }
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border border-[hsl(var(--primary))]/60 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50 disabled:border-[hsl(var(--border))] disabled:text-[hsl(var(--muted-foreground))]"
                 >
                   {simulating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-                  Try edit
+                  Apply edit
                 </button>
-                {/* APPLY is THE consequential action here — it makes this
-                    rule the intent's live rule, visible on the board the
-                    moment you go back. Same verb as the intent workbench's
-                    live-making Apply; the simulate button is "Try edit" so
-                    the two never share a word (the old "Apply edit"/"Save"
-                    pair put the live boundary on opposite verbs per bench). */}
+                {/* SAVE is THE consequential action here — it makes this rule
+                    the intent's live rule, visible on the board the moment you
+                    go back. Two verbs, the same pair in both benches: Apply
+                    iterates and students never see it, Save is the one that
+                    reaches them. The live boundary sits on the same word
+                    everywhere, which is the whole point of sharing them. */}
                 <button
                   onClick={() => void saveVersion()}
                   disabled={!dirty || !viewingLatest || boxEdited || saving || proposing || simulating}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 disabled:opacity-50"
                   title={
                     boxEdited
-                      ? 'Try the edited rule first, then apply'
+                      ? 'Apply the edited rule first, then save'
                       : !viewingLatest
                         ? 'Viewing an old step — Revert to make it live instead'
                         : dirty
@@ -1433,11 +1434,11 @@ export default function RuleWorkbench({
                             : variant === 'type-root'
                               ? `Make this the live ${scopeLabel ?? 'type'} rule — the board shows it as soon as you go back`
                               : "Make this the intent's live rule — the board shows it as soon as you go back"
-                          : 'Nothing to apply — try a change first'
+                          : 'Nothing to save — apply a change first'
                   }
                 >
                   {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
-                  {monolith ? 'Apply rules' : 'Apply rule'}
+                  {monolith ? 'Save rules' : 'Save rule'}
                 </button>
               </div>
             </div>
@@ -2017,17 +2018,17 @@ export default function RuleWorkbench({
                 onClick={(e) => e.stopPropagation()}
               >
                 <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
-                  {loss === 'edit' ? 'Untried edit' : 'Not applied yet'}
+                  {loss === 'edit' ? 'Unapplied edit' : 'Not saved yet'}
                 </h3>
                 <p className="mt-1.5 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
                   {/* Condition-neutral on purpose: this modal fires for all
                       three targets, and "the intent" is the treatment's object
                       noun — a control participant must never read it. */}
                   {loss === 'edit'
-                    ? 'The rule text you edited hasn’t been tried yet — leaving discards it.'
+                    ? 'The rule text you edited hasn’t been applied yet — leaving discards it.'
                     : `Your latest steps are simulations — students still get the old ${
                         monolith ? 'rules' : 'rule'
-                      }. Apply to make ${monolith ? 'these the live rules' : 'this the live rule'}; if you leave, the steps stay here as drafts you can apply later.`}
+                      }. Save to make ${monolith ? 'these the live rules' : 'this the live rule'}; if you leave, the steps stay here as drafts you can save later.`}
                 </p>
                 <div className="mt-3 flex items-center justify-end gap-2">
                   <button
@@ -2043,7 +2044,7 @@ export default function RuleWorkbench({
                     }}
                     className="px-2.5 py-1.5 rounded border border-rose-300 text-xs font-medium text-rose-700 hover:bg-rose-50"
                   >
-                    {loss === 'edit' ? 'Discard & leave' : 'Leave without applying'}
+                    {loss === 'edit' ? 'Discard & leave' : 'Leave without saving'}
                   </button>
                   {canSaveNow && (
                     <button
@@ -2060,7 +2061,7 @@ export default function RuleWorkbench({
                       className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-[hsl(var(--primary))] text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
                     >
                       {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <SaveIcon className="w-3 h-3" />}
-                      Apply &amp; leave
+                      Save &amp; leave
                     </button>
                   )}
                 </div>
