@@ -64,7 +64,9 @@ async function main() {
   const SURVEY_ITEMS = await getSurveyItems();
   mkdirSync(OUT, { recursive: true });
 
-  const participants = await db.select().from(studyParticipants);
+  // Demo runs produce real rows in every measurement table; they are not study
+  // data, so they never reach the export.
+  const participants = (await db.select().from(studyParticipants)).filter((p) => !p.isDemo);
   const clones = await db.select().from(studyClones);
   const bank = await db.select().from(studyQuestionBank);
   const bankById = new Map(bank.map((b) => [b.id, b]));
