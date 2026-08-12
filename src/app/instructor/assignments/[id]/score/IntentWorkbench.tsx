@@ -709,26 +709,23 @@ export default function IntentWorkbench({
     title.trim() !== savedRef.current.title ||
     definition.trim() !== savedRef.current.definition;
 
-  /** Create or update the intent spec. Registration model:
-   *  - Apply (force=false) persists SILENTLY as a discovery draft — a create
-   *    lands as is_template=true with no version entry, so nothing is
-   *    registered on the board yet. (A draft cloned from a library template
-   *    behaves identically — the shared template itself is never mutated.)
-   *  - Save (force=true) is the registration: flips is_template off and records
-   *    the version (v1 = created).
-   *  Returns the intent id. */
+  /** Create or update the intent spec. Returns the intent id.
+   *
+   * Both Apply and Save persist the text; what separates them is the RECORD.
+   * Apply writes the working draft — the spec is stored, so it survives a
+   * reload and the ratings key to it, but History gains nothing. Save records
+   * the version. This is the word processor's model, and the reason for it is
+   * that the two questions differ: "does this definition capture the right
+   * questions?" is asked many times per version, and a History with an entry
+   * per attempt buried the versions that were actually decided among them.
+   * The FIRST persist of a create is a major regardless — creating an intent is
+   * the decision to have it, so its opening state IS v1. */
   async function persist(
     signal?: AbortSignal,
     force = false,
     specOverride?: { title: string; definition: string; createNew?: boolean },
     opts?: { silent?: boolean }
   ): Promise<number | null> {
-    // Every Apply persists (and records a minor version), even when only the
-    // labels changed and the definition matches the live one: since labels
-    // stopped self-versioning, Apply is what snapshots the current label set
-    // into History. The Apply button is disabled once `applied` is true, so a
-    // true no-op (definition AND labels clean) never reaches here — no
-    // redundant versions. A `silent` persist (Retire labels) still records none.
     const titleText = (specOverride?.title ?? title).trim();
     const defText = (specOverride?.definition ?? definition).trim();
     // Auto-naming applies ONLY to an intent that has no name yet (a fresh
@@ -752,15 +749,9 @@ export default function IntentWorkbench({
       definition: defText,
       autoTitle,
       ...(suggestTitle ? { suggestTitle: true } : {}),
-      // Save records a MAJOR version; Apply records a MINOR one — an Apply costs
-      // an LLM re-rate, so it must be revertible from History too. The FIRST
-      // persist of a create is a major regardless: creating an intent is the
-      // decision to have it, so its opening state IS v1 (never a v0.x draft).
-      // `silent` persists the spec with NO version (used by Retire labels,
-      // which folds the just-refined definition in before dropping the labels).
-      ...(opts?.silent
-        ? { recordVersion: false }
-        : { recordVersion: true, ...(force || isCreate ? {} : { minorVersion: true }) }),
+      // Only a Save (or a create's first persist) is a version. An Apply — and
+      // a `silent` persist — stores the text and stops there.
+      recordVersion: !opts?.silent && (force || isCreate),
       stats,
       // A create is registered on arrival — the chooser was the moment of
       // intent, not Save. It carries its PLACEMENT: the scope it was invoked
@@ -778,8 +769,6 @@ export default function IntentWorkbench({
               ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
             }
           : {}),
-      // Rollback: restore the checked-out version's pin set alongside the spec.
-      ...(checkout !== null && !isCreate ? { pinsFromVersion: checkout } : {}),
     };
     const res = await fetch(
       isCreate
@@ -1750,14 +1739,18 @@ export default function IntentWorkbench({
   // "Applied" is judged on the VISIBLE scope: the background sweep may still
   // be filling out-of-scope rows, and that must not hold Save hostage.
   const applied = !!data && !specDirty() && scopedStaleCount === 0;
+  /** The last version anyone recorded — what Save is asked to move past. */
+  const latestMajor = versions?.find((v) => !v.minor) ?? null;
   // …and being up to date is not by itself a reason to save. `applied` is true
-  // precisely when everything is current, which left Save enabled forever: it
-  // stayed lit after a save and would write a second MAJOR identical to the
-  // one just written. What Save commits is the work sitting on top of the last
-  // one, so the question is whether the newest entry is still a minor — every
-  // real change routes through an Apply, and an Apply records one. Same test
-  // as the rule workbench's `dirty`.
-  const savePending = versions?.[0]?.minor === true;
+  // precisely when everything is current, which on its own left Save enabled
+  // forever, writing a second version identical to the first. So the question
+  // is the word processor's: does the working draft differ from what is
+  // recorded? Title is left out — a rename is applied without a version of its
+  // own (acceptTitleSuggestion), so comparing it would light Save for a change
+  // that is already saved.
+  const savePending =
+    latestMajor !== null &&
+    (latestMajor.definition ?? '').trim() !== savedRef.current.definition.trim();
 
   return (
     <div className="flex flex-col gap-2 flex-1 min-h-0">
@@ -1836,9 +1829,10 @@ export default function IntentWorkbench({
                         : definition.trim() === savedRef.current.definition && scopedStaleCount === 0 && !!data
                           ? 'Keep the new name — the definition is unchanged, nothing re-rates'
                           : isEdit
-                            ? // In edit mode Apply IS persistent (a minor version) — saying
-                              // otherwise is what made leaving-after-Apply feel like loss.
-                              'Rate every question against this definition — the change is kept (revertible from History)'
+                            ? // Apply IS persistent — saying otherwise is what made
+                              // leaving-after-Apply feel like loss. It is just not a
+                              // version yet, which is what Save is for.
+                              'Rate every question against this definition — kept as the working draft, until Save records it as a version'
                             : 'Rate every question against this definition (nothing is registered until Save)'
                   }
                   className="inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2 py-0.5 text-[11px] font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-40"
