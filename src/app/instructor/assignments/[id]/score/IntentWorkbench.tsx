@@ -119,8 +119,8 @@ interface IntentVersion {
   versionNo: number;
   /** This intent's OWN major version number (v1, v2, …), not the global config no. */
   intentVersion: number;
-  /** Minor entry (an Apply / a label) — folded into the accordion under its
-   * preceding major; numbered {major}.{minorNo}. */
+  /** Minor entry. Applies no longer write one; what remains is older data and
+   * the row the fold records to date its markers. History filters them out. */
   minor: boolean;
   minorNo: number | null;
   createdAt: string;
@@ -130,8 +130,6 @@ interface IntentVersion {
   definition: string | null;
   included: number;
   excluded: number;
-  /** The labeled questions in effect at this version — the Apply entry's tooltip. */
-  labeled: { verdict: 'in' | 'out'; text: string }[];
   stats: { included: number; excluded: number; inCount: number } | null;
 }
 
@@ -149,23 +147,14 @@ const ACTION_LABELS: Record<string, string> = {
   revert: 'reverted',
 };
 
-/** "v2" for majors, "v2.3" for minors (v0.x = applies before the first save). */
+/** "v2" for majors, "v2.3" for the minors older data still carries. */
 function versionLabel(v: IntentVersion): string {
   return v.minor ? `v${v.intentVersion}.${v.minorNo}` : `v${v.intentVersion}`;
 }
 
-/** What the entry DID, in one word — minors that persisted a spec are applies. */
+/** What the entry DID, in one word. */
 function versionAction(v: IntentVersion): string {
-  if (v.minor && (v.action === 'update_intent' || v.action === 'create_intent')) return 'applied';
   return ACTION_LABELS[v.action] ?? v.action.replace(/_/g, ' ');
-}
-
-/** The labeled questions at this version, one per line — the count's hover tooltip. */
-function labeledTooltip(v: IntentVersion): string | undefined {
-  if (!v.labeled?.length) return undefined;
-  return v.labeled
-    .map((l) => `${l.verdict === 'in' ? 'in  · ' : 'out · '}${l.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`)
-    .join('\n');
 }
 
 /** The free-text "Other" row of the out-reason picker. Keeps its own input
@@ -987,11 +976,14 @@ export default function IntentWorkbench({
   async function revertToCheckout() {
     if (intentId === null || checkout === null || busy || saving) return;
     const target = versions?.find((x) => x.versionNo === checkout);
-    const laterCount = versions?.filter((x) => x.versionNo > checkout).length ?? 0;
+    // Counted over what History SHOWS. The revert deletes the minor rows after
+    // this point too, but they are not versions anyone was shown, so naming
+    // them in the count would only make the number unrecognizable.
+    const laterCount = majors.filter((x) => x.versionNo > checkout).length;
     const label = target ? versionLabel(target) : `v${checkout}`;
     if (
       !window.confirm(
-        `Revert to ${label}?\n\nThis makes ${label} the live version and permanently deletes the ${laterCount} later step(s) — including any Save among them. This cannot be undone.`
+        `Revert to ${label}?\n\nThis makes ${label} the live version and permanently deletes the ${laterCount} version(s) saved after it, along with any unsaved work. This cannot be undone.`
       )
     ) {
       return;
@@ -1315,27 +1307,11 @@ export default function IntentWorkbench({
     return v ? versionLabel(v) : `v${baseline.versionNo}`;
   }, [baseline, versions]);
 
-  // History accordion: each MAJOR (Save/create/…) owns the minors that came
-  // after it (the applies/labels building toward the next save). Minors before
-  // the first save (v0.x drafting) form a trailing group of their own.
-  const versionGroups = useMemo(() => {
-    if (!versions) return [];
-    const groups: { key: string; major: IntentVersion | null; minors: IntentVersion[] }[] = [];
-    let pending: IntentVersion[] = [];
-    for (const v of versions) {
-      if (v.minor) {
-        pending.push(v);
-      } else {
-        groups.push({ key: `v${v.versionNo}`, major: v, minors: pending });
-        pending = [];
-      }
-    }
-    if (pending.length > 0) groups.push({ key: 'draft', major: null, minors: pending });
-    return groups;
-  }, [versions]);
-  // Which accordion groups the user has explicitly toggled; the NEWEST group
-  // defaults open (its minors are the work since the last save).
-  const [groupToggles, setGroupToggles] = useState<Record<string, boolean>>({});
+  // History is the SAVED versions, one line each. Minor rows still exist in
+  // older data (and the fold writes one to date its markers), but they were
+  // never the story — they were the attempts between the versions — and reading
+  // them meant expanding an accordion over every save.
+  const majors = useMemo(() => (versions ?? []).filter((v) => !v.minor), [versions]);
 
   // Pin-propagation score map (max cosine to IN pins − to OUT pins), feeding both
   // pin-driven sorts. Empty {} on failure so it doesn't refetch forever.
@@ -1388,17 +1364,17 @@ export default function IntentWorkbench({
   // the small "diff" control anchors the membership comparison instead (no
   // nested buttons — the row is a clickable div). `compact` renders the
   // one-line MINOR variant used inside the accordion.
-  const versionEntry = (v: IntentVersion, compact: boolean) => {
+  const versionEntry = (v: IntentVersion) => {
     const active = v.versionNo === checkout;
-    // The newest entry IS the live spec — clicking it returns to live (no
-    // read-only checkout of a state you are already on), and it reads as
-    // "current" whenever nothing is checked out.
-    const isNewest = versions?.[0]?.versionNo === v.versionNo;
-    const highlighted = active || (checkout === null && isNewest);
+    // The newest version is the live spec ONLY while there is no unsaved work —
+    // otherwise the draft row above holds "current", and this becomes an
+    // ordinary checkout of the last thing that was recorded.
+    const isLive = latestMajor?.versionNo === v.versionNo && !savePending;
+    const highlighted = active || (checkout === null && isLive);
     const isDiffBase = v.versionNo === diffBaseNo;
     const activate = () => {
       if (busy || saving) return;
-      if (active || isNewest) backToLatest();
+      if (active || isLive) backToLatest();
       else openVersion(v.versionNo);
     };
     const diffButton = (
@@ -1438,7 +1414,7 @@ export default function IntentWorkbench({
           activate();
         }}
         title={
-          isNewest
+          isLive
             ? 'The live version — click to return to it'
             : `${v.title ? `${v.title} — ` : ''}${v.definition ?? ''}\n${[
                 `included ${v.included}`,
@@ -1448,18 +1424,18 @@ export default function IntentWorkbench({
                 .filter(Boolean)
                 .join(' · ')}\n\n${absoluteTime} — click to view this state (loads instantly)`
         }
-        className={`group w-full cursor-pointer text-left rounded border text-xs ${
-          compact ? 'px-2 py-1' : 'px-2 py-1.5'
-        } ${
+        className={`group w-full cursor-pointer text-left rounded border px-2 py-1.5 text-xs ${
           highlighted
             ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5'
             : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]/40'
         } ${busy || saving ? 'opacity-50 pointer-events-none' : ''}`}
       >
+        {/* ONE line — the definition and label counts live in the row tooltip.
+            Version-shy instructors read "v2 · saved · 2h ago", nothing more. */}
         <div className="flex items-center justify-between gap-2 text-[hsl(var(--muted-foreground))]">
           <span className="shrink-0 font-mono" title={`config v${v.versionNo}`}>
             {versionLabel(v)}
-            {isNewest && checkout === null && (
+            {isLive && checkout === null && (
               <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 py-px font-sans text-[11px] font-semibold text-[hsl(var(--primary))]">
                 current
               </span>
@@ -1471,26 +1447,6 @@ export default function IntentWorkbench({
             {diffButton}
           </span>
         </div>
-        {compact && v.detail && (
-          // What the step actually did — full text, wrapping (a truncated
-          // "label removed “that concl…" is impossible to act on).
-          <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-[hsl(var(--muted-foreground))]">
-            {v.detail}
-          </p>
-        )}
-        {/* An Apply's label summary: just the count, with the labeled questions
-            on hover (they no longer clutter the history as one entry each). */}
-        {compact && v.included + v.excluded > 0 && (
-          <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]" title={labeledTooltip(v)}>
-            {v.included + v.excluded} label{v.included + v.excluded === 1 ? '' : 's'} ·{' '}
-            <span className="text-emerald-700">{v.included} in</span>
-            {' · '}
-            <span className="text-rose-700">{v.excluded} out</span>
-          </p>
-        )}
-        {/* Majors are ONE line — the definition and label counts live in the
-            row tooltip. Version-shy instructors read "v2 · saved · 2h ago",
-            nothing more. */}
       </div>
     );
   };
@@ -2003,42 +1959,55 @@ export default function IntentWorkbench({
                   )}
                 </div>
                 <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                  Every applied version is a snapshot you can click to revisit.
+                  Every saved version is a snapshot you can click to revisit.
                 </p>
                 <ul className="space-y-1.5">
-                  {versionGroups.map((g) => {
-                    // Collapsed by default — the applies/labels between saves
-                    // are detail; the saves are the story.
-                    const open = groupToggles[g.key] ?? false;
-                    // Minors display OLDEST-FIRST inside the group so v2.1,
-                    // v2.2, … read as the progression on top of v2.
-                    const minorsAsc = [...g.minors].reverse();
-                    return (
-                      <li key={g.key} className="space-y-1">
-                        {g.major ? (
-                          versionEntry(g.major, false)
-                        ) : (
-                          <p className="px-1 text-xs font-medium text-[hsl(var(--muted-foreground))]">
-                            Draft steps — before the first Save
-                          </p>
-                        )}
-                        {g.minors.length > 0 && (
-                          <div className="ml-3 border-l border-[hsl(var(--border))] pl-2 space-y-1">
-                            <button
-                              onClick={() => setGroupToggles((t) => ({ ...t, [g.key]: !open }))}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                              title="Applies and label changes on top of this version"
-                            >
-                              {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                              {g.minors.length} step{g.minors.length === 1 ? '' : 's'}
-                              {g.major ? ` since ${versionLabel(g.major)}` : ''}
-                            </button>
-                            {open && minorsAsc.map((v) => versionEntry(v, true))}
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
+                  {/* The working draft — applied but not recorded. It sits
+                      where the next version will, so Save reads as "write this
+                      down" rather than "do something to the list". */}
+                  {savePending && (
+                    <li>
+                      <div
+                        {...(checkout !== null
+                          ? {
+                              role: 'button',
+                              tabIndex: 0,
+                              onClick: backToLatest,
+                              onKeyDown: (e: React.KeyboardEvent) => {
+                                if (e.key !== 'Enter' && e.key !== ' ') return;
+                                e.preventDefault();
+                                void backToLatest();
+                              },
+                            }
+                          : {})}
+                        className={`rounded border border-dashed px-2 py-1.5 text-xs ${
+                          checkout === null
+                            ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5'
+                            : 'cursor-pointer border-[hsl(var(--border))] opacity-70 hover:opacity-100 hover:bg-[hsl(var(--muted))]/40'
+                        }`}
+                        title={
+                          checkout !== null
+                            ? 'Your unsaved work — click to come back to it'
+                            : 'The definition you have applied but not saved. It is the live spec either way; Save records it as the next version.'
+                        }
+                      >
+                        <div className="flex items-center justify-between gap-2 text-[hsl(var(--muted-foreground))]">
+                          <span className="shrink-0 font-mono">
+                            —
+                            {checkout === null && (
+                              <span className="ml-1 rounded bg-[hsl(var(--primary))]/10 px-1 py-px font-sans text-[11px] font-semibold text-[hsl(var(--primary))]">
+                                current
+                              </span>
+                            )}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">working — not saved yet</span>
+                        </div>
+                      </div>
+                    </li>
+                  )}
+                  {majors.map((v) => (
+                    <li key={v.versionNo}>{versionEntry(v)}</li>
+                  ))}
                 </ul>
               </div>
             )}
