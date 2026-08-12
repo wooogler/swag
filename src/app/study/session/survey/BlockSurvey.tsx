@@ -57,9 +57,12 @@ export default function BlockSurvey({
   return (
     <div className="min-h-screen bg-[hsl(var(--background))] py-10 px-6">
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-lg font-semibold mb-1">A few questions about that setup</h1>
+        <h1 className="text-lg font-semibold mb-1">A few questions</h1>
+        {/* The questionnaire's own instruction (문항지 §4), which names WHICH
+            version is being rated — the participant uses two today. */}
         <p className="text-sm text-[hsl(var(--muted-foreground))] mb-8">
-          There are no right answers — we are asking about your experience just now.
+          Thinking about the version you just used, please rate your agreement with each
+          statement.
         </p>
 
         <div className="space-y-5">

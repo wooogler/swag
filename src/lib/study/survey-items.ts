@@ -1,14 +1,16 @@
 /**
- * The per-block questionnaire.
+ * The per-block questionnaire — the five items of `USER_STUDY 문항지 v1.md` §4,
+ * verbatim.
  *
- * ⚠ PLACEHOLDER WORDING. The design (§5, §9) leaves two things to the advisor
- * meeting: the exact item wording for control/trust, and whether load is
- * measured with three NASA-TLX items or the UBS mental/emotional subscales.
- * The items below are stand-ins with the right SHAPE — same constructs, same
- * count, same scale — so the flow can be built and piloted; replace the text
- * (and, for load, possibly the item set) once that is settled. Changing them is
- * a content edit here: `item_key` is what the data is keyed by, so keep keys
- * stable if wording changes, and mint new keys if the construct changes.
+ * Wording is the questionnaire's, not a paraphrase: these are read aloud to
+ * nobody and answered by everybody, so the participant-facing string is the
+ * instrument. Two items ask about the FUTURE ("will behave", "future student
+ * questions") on purpose — the construct is control over and trust in what was
+ * deployed, not satisfaction with the screen just left.
+ *
+ * `key` is what the answers are stored under, so reword freely but keep the key
+ * — and mint a new one if the construct changes rather than redefining an old
+ * one. `load` is the questionnaire's 부담 (TLX mental demand / frustration).
  */
 
 export interface SurveyItem {
@@ -29,76 +31,48 @@ export const DEFAULT_SURVEY_SCALE_MAX = 7;
 export const SURVEY_SCALE_CHOICES = [5, 7] as const;
 
 export const DEFAULT_SURVEY_ITEMS: SurveyItem[] = [
-  // Sense of control (design: 3-4 items)
+  // C1 · C2 — sense of control
   {
-    key: 'control_predict',
+    key: 'control_future',
     construct: 'control',
-    text: 'I could predict how the chatbot would answer a new student question.',
+    text: 'I felt in control of how the chatbot will behave.',
     low: 'Strongly disagree',
     high: 'Strongly agree',
   },
   {
-    key: 'control_change',
+    key: 'control_achieve',
     construct: 'control',
-    text: 'When I wanted the chatbot to behave differently, I knew what to change.',
-    low: 'Strongly disagree',
-    high: 'Strongly agree',
-  },
-  {
-    key: 'control_scope',
-    construct: 'control',
-    text: 'I could tell which questions each change would affect.',
-    low: 'Strongly disagree',
-    high: 'Strongly agree',
-  },
-  {
-    key: 'control_overall',
-    construct: 'control',
-    text: 'Overall, I felt in control of how the chatbot behaved.',
+    text: 'I could get the chatbot to behave the way I wanted.',
     low: 'Strongly disagree',
     high: 'Strongly agree',
   },
 
-  // Trust (design: 2-3 items)
-  {
-    key: 'trust_deploy',
-    construct: 'trust',
-    text: 'I would be comfortable letting my students use this chatbot as it is now.',
-    low: 'Strongly disagree',
-    high: 'Strongly agree',
-  },
-  {
-    key: 'trust_consistency',
-    construct: 'trust',
-    text: 'I expect the chatbot to follow my intent consistently, not just sometimes.',
-    low: 'Strongly disagree',
-    high: 'Strongly agree',
-  },
-
-  // Load (design: 3 items — NASA-TLX mental demand / effort / frustration)
+  // B1 · B2 — burden, NASA-TLX mental demand and frustration, put on the same
+  // agree/disagree scale as the rest so a block is one instrument, not three.
   {
     key: 'load_mental',
     construct: 'load',
-    text: 'How mentally demanding was setting up the chatbot?',
-    low: 'Very low',
-    high: 'Very high',
-    reverse: true,
-  },
-  {
-    key: 'load_effort',
-    construct: 'load',
-    text: 'How hard did you have to work to get the chatbot where you wanted it?',
-    low: 'Very low',
-    high: 'Very high',
+    text: 'Setting up the chatbot was mentally demanding.',
+    low: 'Strongly disagree',
+    high: 'Strongly agree',
     reverse: true,
   },
   {
     key: 'load_frustration',
     construct: 'load',
-    text: 'How irritated or frustrated did you feel while working?',
-    low: 'Not at all',
-    high: 'Very much',
+    text: 'I felt frustrated while setting it up.',
+    low: 'Strongly disagree',
+    high: 'Strongly agree',
     reverse: true,
+  },
+
+  // T1 — trust, about the questions it has not been asked yet
+  {
+    key: 'trust_future',
+    construct: 'trust',
+    text: 'I trust this chatbot to handle future student questions in line with my intent.',
+    low: 'Strongly disagree',
+    high: 'Strongly agree',
   },
 ];
 
