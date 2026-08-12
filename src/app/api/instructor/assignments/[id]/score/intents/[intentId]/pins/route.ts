@@ -7,8 +7,10 @@
  * marker ("you marked this in at v2").
  *
  * POST   {messageId, verdict, reason?} → record/replace a correction. Re-labelling
- *        a question whose earlier correction was consumed returns the row to
- *        'pending' — you are teaching it again.
+ *        a question whose earlier correction was consumed (or held) returns the
+ *        row to 'pending' — you are teaching it again.
+ * PATCH  {retireMessageIds} → retire HELD corrections the definition has caught
+ *        up with (see the handler).
  * DELETE ?messageId=N → withdraw a correction (and its marker).
  * DELETE ?all=1       → withdraw every correction of this intent.
  *
@@ -208,6 +210,62 @@ export async function POST(req: Request, { params }: RouteParams) {
     // intent is what changed — that is where the question actually moves from.
     redirected: redirected.map((rid) => ({ intentId: rid, title: titleById.get(rid) ?? `Intent ${rid}` })),
   });
+}
+
+const patchSchema = z.object({
+  /** Held corrections the definition now reproduces on its own — retire them.
+   * The caller must have checked that against a FRESH rating (the workbench
+   * does it after an Apply); this route only records the outcome. */
+  retireMessageIds: z.array(z.number().int().positive()).min(1).max(500),
+});
+
+/**
+ * PATCH → retire held corrections that the definition has caught up with.
+ *
+ * A held correction is scaffolding: it overrides the judgment because the
+ * definition measurably could not reproduce the instructor's decision. Once a
+ * later definition does, the override is no longer holding anything up, and
+ * keeping it would quietly make the board show a routing the deployed chatbot
+ * reaches by itself — the same drift consuming exists to prevent. Retiring
+ * writes no version: nothing about the configuration changed, the definition
+ * simply grew into a decision that was already being honoured.
+ */
+export async function PATCH(req: Request, { params }: RouteParams) {
+  const { id, intentId: intentIdRaw } = await params;
+  const auth = await authorizeAssignment(id);
+  if ('error' in auth) {
+    const { body, status } = authErrorResponse(auth.error);
+    return NextResponse.json(body, { status });
+  }
+  const intent = await resolveIntent(id, intentIdRaw);
+  if (!intent) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+
+  let body: z.infer<typeof patchSchema>;
+  try {
+    body = patchSchema.parse(await req.json());
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: 'invalid_input', details: error.errors }, { status: 400 });
+    }
+    return NextResponse.json({ error: 'invalid_input' }, { status: 400 });
+  }
+
+  const retired = await db
+    .update(scoreIntentPins)
+    .set({ status: 'consumed', consumedAt: new Date(), consumedAtVersion: null })
+    .where(
+      and(
+        eq(scoreIntentPins.assignmentId, id),
+        eq(scoreIntentPins.intentId, intent.id),
+        // HELD only. A pending correction has never been tried, so agreeing with
+        // it proves nothing — it is waiting for a fold, not for a rating.
+        eq(scoreIntentPins.status, 'held'),
+        inArray(scoreIntentPins.messageId, body.retireMessageIds)
+      )
+    )
+    .returning({ id: scoreIntentPins.id });
+
+  return NextResponse.json({ retired: retired.length });
 }
 
 export async function DELETE(req: Request, { params }: RouteParams) {

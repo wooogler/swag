@@ -72,8 +72,12 @@ export interface ScoreQueryRow {
   /** v6 intent layer: per-intent 5-level rating (+staleness vs the intent's
    * current defHash) and the message dissection, when rated. */
   intentRatings: Record<number, { rating: RatingLevel; rationale: string | null; stale: boolean }>;
-  /** Instructor pin verdicts on this question — override its ratings (§1.6). */
+  /** Instructor corrections still live on this question (pending or held). */
   pinnedIntents: Record<number, 'in' | 'out'>;
+  /** The HELD subset — decisions the fold was measured against and could not
+   * reproduce, so routing follows them instead of the rating until a definition
+   * catches up. These are the only corrections that move a question. */
+  heldPins: Record<number, 'in' | 'out'>;
   /** Which chat DEPLOY version served this query's reply (reply metadata) —
    * null for pre-deploy / imported logs. */
   chatDeployVersion: number | null;
@@ -1358,19 +1362,28 @@ export default function IntentBoard({
   }, [tree, activeIntents]);
 
   /**
-   * The ratings one row routes by — the JUDGMENT, nothing else. Stale ratings
-   * still count, for display continuity.
+   * The ratings one row routes by: the JUDGMENT, except where a HELD correction
+   * stands in for it. Stale ratings still count, for display continuity.
    *
-   * Corrections used to override this. They no longer do: the board's job is to
-   * show what the DEPLOYED chatbot does, and the chatbot routes from the
-   * definitions alone. A correction that has not been folded into a definition
-   * yet has changed nothing for students, so counting it here made the board
-   * disagree with the runtime it exists to mirror — and a folded one would have
-   * gone on faking the routing forever, since a consumed marker is still a row.
+   * Pending corrections deliberately do not count. The board's job is to show
+   * what the deployed chatbot does, and the chatbot routes from the definitions
+   * alone, so a correction nobody has folded in yet has changed nothing for
+   * students — counting it made the board disagree with the runtime it exists to
+   * mirror.
+   *
+   * A held correction is different in kind. It exists because the fold ran, was
+   * measured against the real classifier, and could not make the definition
+   * reproduce the decision; the system then keeps the decision rather than
+   * discarding it. So on the questions it covers, the decision IS the routing —
+   * here and in the deploy snapshot, which carries the pins — and showing the
+   * rating instead would misreport what a student gets.
    */
   const effectiveRatings = (r: ScoreQueryRow): Map<number, RatingLevel> => {
     const ratings = new Map<number, RatingLevel>();
     for (const [idStr, v] of Object.entries(r.intentRatings)) ratings.set(Number(idStr), v.rating);
+    for (const [idStr, verdict] of Object.entries(r.heldPins)) {
+      ratings.set(Number(idStr), verdict === 'in' ? 'clearly_in' : 'clearly_out');
+    }
     return ratings;
   };
 

@@ -107,6 +107,7 @@ export default async function CurationPage({
     // subtype tree instead of as per-row intent chips.
     intentRatings: {},
     pinnedIntents: {},
+    heldPins: {},
     dissection: dissectionByMessage.get(rec.messageId) ?? null,
     queryType: typeByMessage.get(rec.messageId) ?? null,
   }));

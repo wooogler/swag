@@ -1,15 +1,17 @@
 /**
- * SCORE — APPLY a reviewed fold: write the new definition(s) and consume the
- * corrections they absorbed, in one transaction.
+ * SCORE — APPLY a reviewed fold: write the new definition(s), consume the
+ * corrections they carry, and hold the ones they do not, in one transaction.
  *
- * POST {applies: [{intentId, definition, title?}], correctionIds: number[]}
+ * POST {applies: [{intentId, definition, title?}], correctionIds, holdIds?}
  *
- * This is the moment a correction stops being live: its row flips to
- * 'consumed' and survives only as a display marker ("you marked this in at
- * v2"). Consuming and rewriting MUST be atomic — a definition saved without
- * consuming would re-fold the same corrections forever, and corrections
- * consumed without the definition would erase the instructor's teaching
- * outright.
+ * Which is which was MEASURED by the refine route (it rated each corrected
+ * question against the candidate with the real classifier), so this split is a
+ * result rather than a guess. A consumed correction survives only as a display
+ * marker ("you marked this in at v2"); a held one keeps overriding the judgment
+ * until some later definition reproduces it. Consuming and rewriting MUST be
+ * atomic — a definition saved without consuming would re-fold the same
+ * corrections forever, and corrections consumed without the definition would
+ * erase the instructor's teaching outright.
  *
  * The definition sent here is whatever the instructor left in the modal, not
  * necessarily what the model proposed: the review gate exists so they can edit
@@ -44,10 +46,18 @@ const bodySchema = z.object({
     )
     .min(1)
     .max(10),
-  /** The corrections these definitions absorbed. Ids are re-checked server-side
+  /** The corrections these definitions absorbed — verified to survive in the
+   * text, so they can stop being corrections. Ids are re-checked server-side
    * against the intents being written, so a stale client cannot consume
-   * somebody else's pending work. */
-  correctionIds: z.array(z.number().int().positive()).min(1).max(500),
+   * somebody else's pending work. May be EMPTY: a fold where the classifier
+   * reproduced none of the decisions still writes the definition, and holds all
+   * of them. */
+  correctionIds: z.array(z.number().int().positive()).max(500),
+  /** The corrections the definitions did NOT absorb. They stay, as HELD: the
+   * instructor decided, the definition measurably cannot reproduce it, so the
+   * decision keeps overriding the judgment until it can. Passing none is fine —
+   * a fold where everything held has nothing to hold back. */
+  holdIds: z.array(z.number().int().positive()).max(500).optional(),
 });
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
@@ -103,20 +113,38 @@ export async function POST(req: Request, { params }: RouteParams) {
         .where(and(eq(scoreIntents.id, a.intentId), eq(scoreIntents.assignmentId, id)));
     }
 
-    // Consume ONLY pending corrections that belong to the intents just
-    // rewritten. Anything else in the id list is ignored rather than trusted.
+    // Consume ONLY live corrections that belong to the intents just rewritten.
+    // Anything else in the id list is ignored rather than trusted. HELD rows are
+    // consumable too: a held decision that the new definition finally reproduces
+    // is one the definition has caught up with, which is the whole point of
+    // holding it.
     const consumed = await tx
       .update(scoreIntentPins)
       .set({ status: 'consumed', consumedAt: now, consumedAtVersion: null })
       .where(
         and(
           eq(scoreIntentPins.assignmentId, id),
-          eq(scoreIntentPins.status, 'pending'),
+          inArray(scoreIntentPins.status, ['pending', 'held']),
           inArray(scoreIntentPins.intentId, targetIds),
           inArray(scoreIntentPins.id, body.correctionIds)
         )
       )
       .returning({ id: scoreIntentPins.id });
+
+    // …and the ones it could not carry become (or stay) held.
+    if (body.holdIds?.length) {
+      await tx
+        .update(scoreIntentPins)
+        .set({ status: 'held' })
+        .where(
+          and(
+            eq(scoreIntentPins.assignmentId, id),
+            inArray(scoreIntentPins.status, ['pending', 'held']),
+            inArray(scoreIntentPins.intentId, targetIds),
+            inArray(scoreIntentPins.id, body.holdIds)
+          )
+        );
+    }
 
     const titleOf = new Map(owned.map((o) => [o.id, o.title]));
     const summary: VersionSummary = {

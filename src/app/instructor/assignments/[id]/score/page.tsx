@@ -258,12 +258,18 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     ])
   );
 
-  // PENDING corrections per (message, intent) — teaching the definitions have
-  // not absorbed yet. Consumed rows are excluded on purpose: they are markers of
+  // Live corrections per (message, intent) — teaching the definitions have not
+  // absorbed yet. Consumed rows are excluded on purpose: they are markers of
   // teaching already folded in, and a board that read them as live labels would
   // keep flagging a question as corrected long after the correction became part
   // of the definition.
   const pinsByMessage = new Map<number, Record<number, 'in' | 'out'>>();
+  // HELD corrections separately, because they mean something stronger: the fold
+  // was measured against them and could not reproduce them, so the system routes
+  // by the decision instead of the definition until it can. Only these override
+  // the judgment (see effectiveRatings) — a pending correction is still just a
+  // request for the definition to change.
+  const heldByMessage = new Map<number, Record<number, 'in' | 'out'>>();
   for (const p of intentState.pins.filter((x) => x.status !== 'consumed')) {
     let m = pinsByMessage.get(p.messageId);
     if (!m) {
@@ -271,6 +277,14 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       pinsByMessage.set(p.messageId, m);
     }
     m[p.intentId] = p.verdict as 'in' | 'out';
+    if (p.status === 'held') {
+      let h = heldByMessage.get(p.messageId);
+      if (!h) {
+        h = {};
+        heldByMessage.set(p.messageId, h);
+      }
+      h[p.intentId] = p.verdict as 'in' | 'out';
+    }
   }
 
   // Latest saved RULE version per intent (the intents panel's "Then vN name").
@@ -327,6 +341,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         queryTimestamp: rec.queryTimestamp.toISOString(),
         intentRatings: intentRatingsByMessage.get(rec.messageId) ?? {},
         pinnedIntents: pinsByMessage.get(rec.messageId) ?? {},
+        heldPins: heldByMessage.get(rec.messageId) ?? {},
         dissection: dissection
           ? {
               materialKinds: dissection.materialKinds,

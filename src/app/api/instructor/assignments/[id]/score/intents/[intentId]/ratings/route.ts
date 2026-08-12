@@ -171,18 +171,28 @@ export async function GET(req: Request, { params }: RouteParams) {
   wantedHash.set(intentId, specHash);
   const byMessage = pickDisplayRatings(ratingRows, wantedHash);
 
-  // Corrections split by state. A PENDING one is live instructor teaching that
-  // the definition has not absorbed yet; a CONSUMED one is only a marker of
-  // teaching already folded in — it must never read as an active label, or the
-  // instructor would think a correction is still waiting when it is done.
-  const pendingByMessage = new Map<number, { id: number | null; verdict: 'in' | 'out'; reason: string | null }>();
+  // Corrections split by state. A PENDING one is live instructor teaching the
+  // definition has not absorbed yet; a HELD one is teaching the fold measurably
+  // could not absorb, which the system honours in place of the definition until
+  // it catches up; a CONSUMED one is only a marker of teaching already folded in
+  // — it must never read as an active label, or the instructor would think a
+  // correction is still waiting when it is done.
+  const pendingByMessage = new Map<
+    number,
+    { id: number | null; verdict: 'in' | 'out'; reason: string | null; status: 'pending' | 'held' }
+  >();
   const markerByMessage = new Map<number, { verdict: 'in' | 'out'; versionNo: number | null }>();
   for (const p of pinRows) {
     const verdict = p.verdict as 'in' | 'out';
     if (p.status === 'consumed') {
       markerByMessage.set(p.messageId, { verdict, versionNo: p.consumedAtVersion ?? null });
     } else {
-      pendingByMessage.set(p.messageId, { id: p.id ?? null, verdict, reason: p.reason ?? null });
+      pendingByMessage.set(p.messageId, {
+        id: p.id ?? null,
+        verdict,
+        reason: p.reason ?? null,
+        status: p.status === 'held' ? 'held' : 'pending',
+      });
     }
   }
 
@@ -272,10 +282,14 @@ export async function GET(req: Request, { params }: RouteParams) {
       rating: mineRating,
       rationale: mineRow?.rationale ?? null,
       stale: !!mineRow && !mineFresh,
-      /** A PENDING correction on this question — the instructor overruled the
-       * judge and the definition has not been updated yet. Null otherwise. */
+      /** A correction still in force on this question — the instructor overruled
+       * the judge and the definition does not carry it yet. Null otherwise. */
       pinned: pendingByMessage.get(rec.messageId)?.verdict ?? null,
-      /** The pending correction's row id — what the fold consumes. */
+      /** 'pending' = taught, not folded yet (changes nothing on its own).
+       * 'held' = the fold was measured against it and failed, so this decision
+       * overrides the judgment until the definition catches up. */
+      pinStatus: pendingByMessage.get(rec.messageId)?.status ?? null,
+      /** The correction's row id — what the fold consumes. */
       correctionId: pendingByMessage.get(rec.messageId)?.id ?? null,
       /** Why they overruled it (asked only when the correction disagreed). */
       reason: pendingByMessage.get(rec.messageId)?.reason ?? null,
