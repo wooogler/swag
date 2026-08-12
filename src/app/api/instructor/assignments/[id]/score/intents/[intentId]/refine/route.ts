@@ -91,6 +91,9 @@ interface FoldProposal {
   attempts: number;
   corrections: {
     id: number;
+    /** The question itself — the review modal acts on corrections through the
+     * pins API, which is keyed by message. */
+    messageId: number;
     verdict: 'in' | 'out';
     queryText: string;
     reason: string | null;
@@ -242,6 +245,7 @@ export async function POST(req: Request, { params }: RouteParams) {
             const o = outcomeById.get(p.id);
             return {
               id: p.id,
+              messageId: p.messageId,
               verdict: p.verdict as 'in' | 'out',
               queryText: p.queryText,
               reason: p.reason,

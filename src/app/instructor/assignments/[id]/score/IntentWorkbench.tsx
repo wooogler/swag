@@ -48,7 +48,10 @@ import {
 import { runShardedRate } from './rate-runner';
 import { DefinitionEditor, PaneSearch, QueryTextButton, WorkbenchTopBar } from './workbench-shared';
 import type { Dissection } from './materials';
-import FoldReviewModal, { type FoldProposalView } from './FoldReviewModal';
+import FoldReviewModal, {
+  type FoldCorrectionView,
+  type FoldProposalView,
+} from './FoldReviewModal';
 import { ConversationThread } from './conversation';
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 
@@ -1018,13 +1021,15 @@ export default function IntentWorkbench({
   }
 
   /**
-   * Commit the reviewed fold: write the definition(s) the instructor left in
-   * the modal and consume the corrections they absorbed, atomically. The
-   * corrections become markers; the new definition makes every rating stale, so
-   * the next Apply re-rates against it — which is the only real test that the
-   * fold held.
+   * Commit the reviewed fold: write the definition(s) the instructor left in the
+   * modal, retire the decisions the verification showed it carries, and hold the
+   * rest — atomically. The new definition makes every rating stale, so the next
+   * Apply re-rates against it, and that pass is what can let a held decision go.
    */
-  async function applyFold(edited: Record<number, string>) {
+  async function applyFold(
+    edited: Record<number, string>,
+    split: { consume: number[]; hold: number[] }
+  ) {
     if (!foldProposals || intentId === null) return;
     setFoldBusy(true);
     setFoldError(null);
@@ -1036,13 +1041,16 @@ export default function IntentWorkbench({
           ? { title: p.suggestedTitle }
           : {}),
       }));
-      const correctionIds = foldProposals.flatMap((p) => p.corrections.map((c) => c.id));
       const res = await fetch(
         `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/fold`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ applies, correctionIds }),
+          body: JSON.stringify({
+            applies,
+            correctionIds: split.consume,
+            holdIds: split.hold,
+          }),
         }
       );
       const d = await res.json().catch(() => ({}));
@@ -1071,6 +1079,53 @@ export default function IntentWorkbench({
       if (mountedRef.current) setFoldError((e as Error).message);
     } finally {
       if (mountedRef.current) setFoldBusy(false);
+    }
+  }
+
+  /**
+   * Re-teach one decision from inside the review: replace its reason and fold
+   * again. Costs another fold, which is why it is offered once per decision —
+   * but it is the one retry that is not a re-roll, because the instructor is
+   * answering the classifier's stated reading rather than guessing.
+   */
+  async function reteachCorrection(c: FoldCorrectionView, reason: string) {
+    if (intentId === null) return;
+    setFoldError(null);
+    try {
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/pins`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messageId: c.messageId, verdict: c.verdict, reason }),
+        }
+      );
+      if (!res.ok) throw new Error('Could not save the new reason.');
+      await fetchRatings(intentId, new AbortController().signal);
+    } catch (e) {
+      if (mountedRef.current) setFoldError((e as Error).message);
+      return;
+    }
+    // Fold again from the rewritten reason. openFoldReview owns the loading
+    // state, so the modal shows its own wait rather than freezing.
+    await openFoldReview();
+  }
+
+  /** Take a decision back — the instructor read the classifier's reading and
+   * decided it was right. Withdrawing here deletes the correction outright; the
+   * modal keeps it struck through so the change is visible where it was made. */
+  async function withdrawCorrection(c: FoldCorrectionView) {
+    if (intentId === null) return;
+    setFoldError(null);
+    try {
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/pins?messageId=${c.messageId}`,
+        { method: 'DELETE' }
+      );
+      if (!res.ok) throw new Error('Could not withdraw that decision.');
+      await fetchRatings(intentId, new AbortController().signal);
+    } catch (e) {
+      if (mountedRef.current) setFoldError((e as Error).message);
     }
   }
 
@@ -2581,6 +2636,7 @@ export default function IntentWorkbench({
             // than it is about to work on.
             corrections: [...pinnedIn, ...pinnedOut, ...heldRows].map((r) => ({
               id: r.correctionId ?? r.messageId,
+              messageId: r.messageId,
               verdict: (r.pinned ?? 'in') as 'in' | 'out',
               queryText: r.queryText,
               reason: r.reason,
@@ -2589,6 +2645,8 @@ export default function IntentWorkbench({
           busy={foldBusy}
           error={foldError}
           onApply={applyFold}
+          onReteach={reteachCorrection}
+          onWithdraw={withdrawCorrection}
           onCancel={() => {
             if (foldBusy) return;
             // Closing drops the PROPOSAL only. The corrections stay pending, so
