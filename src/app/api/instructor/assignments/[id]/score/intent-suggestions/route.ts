@@ -28,21 +28,43 @@ import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES } from '@/lib/score/intents';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const bodySchema = z.object({
-  messageId: z.number().int().positive(),
-  currentIntentId: z.number().int().positive().optional(),
-  /** v7: the query type the new set will live in. Sent when creation starts
-   * from a question, so the candidates read as a refinement of a scope the
-   * instructor is already looking at rather than as free-floating ideas. */
-  scopeType: z.enum(SCORE_QUERY_TYPES).optional(),
-});
+const bodySchema = z
+  .object({
+    /** The question creation started from. Absent in a spin-off, which starts
+     * from a pile of them instead. */
+    messageId: z.number().int().positive().optional(),
+    currentIntentId: z.number().int().positive().optional(),
+    /** v7: the query type the new set will live in. Sent when creation starts
+     * from a question, so the candidates read as a refinement of a scope the
+     * instructor is already looking at rather than as free-floating ideas. */
+    scopeType: z.enum(SCORE_QUERY_TYPES).optional(),
+    /** A SPIN-OFF: the questions an instructor just ruled OUT of an intent,
+     * with the reasons they gave. Those reasons already say what separates
+     * these from the intent they were carved off — which is most of what a new
+     * definition has to say — so the candidates are drafted from the pile. */
+    seedQueries: z
+      .array(
+        z.object({
+          text: z.string().trim().min(1).max(2000),
+          reason: z.string().trim().max(400).nullable().optional(),
+        })
+      )
+      .min(1)
+      .max(12)
+      .optional(),
+  })
+  .refine((b) => b.messageId !== undefined || (b.seedQueries?.length ?? 0) > 0, {
+    message: 'need a question or a seed pile to draft from',
+  });
 
 const SYSTEM = `You draft intent candidates for SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT has a TITLE (imperative noun phrase, at most 5 words, git-commit style) and a DEFINITION that a classifier will read verbatim to decide whether a question belongs.
 
-Given ONE student question — the query type it was classified into, and (when there is one) the intent that currently answers it — propose exactly THREE candidates for a new intent that would own this question, each from a different altitude:
-1. SPECIFIC — tightly scoped to this request's action and object.
-2. CATEGORY — the broader family of requests this one belongs to.
-3. REFRAMED — an alternative cut (e.g., by pedagogical purpose or workflow stage) that would still clearly capture this question.
+You are given EITHER one student question, or a pile of questions an instructor has just ruled out of an existing intent (with their reasons) — plus the query type, and the scope the new intent relates to. Propose exactly THREE candidates for a new intent that would own what you were given, each from a different altitude:
+1. SPECIFIC — tightly scoped to the request's action and object.
+2. CATEGORY — the broader family of requests it belongs to.
+3. REFRAMED — an alternative cut (e.g., by pedagogical purpose or workflow stage) that would still clearly capture it.
+
+When given a pile, every candidate must cover ALL of them — the instructor put them together by ruling them out of the same place, and a candidate that only owns some leaves the rest homeless. Their stated reasons say what these have in common; build the action clause from that rather than from any one question.
 
 DEFINITION FORMAT — follow it exactly:
 
@@ -51,14 +73,14 @@ DEFINITION FORMAT — follow it exactly:
 - Start with the literal words "asks the chatbot to".
 - The action clause is one clause, not a paragraph. Concrete over generic: name the work products involved.
 - Then exactly THREE example questions, each in double quotes, comma-separated, with "or" before the last.
-- The SPECIFIC candidate must quote the student's actual request as one of its three. Keep their wording, shortened to about 20 words if it runs long.
+- The SPECIFIC candidate must quote the student's actual request as one of its three (from a pile: quote the ones that differ most, so the three examples span it). Keep their wording, shortened to about 20 words if it runs long.
 - The CATEGORY and REFRAMED candidates pick examples that show their RANGE. They may include the student's request, but three restatements of it means the candidate was not actually broader — at least one example must be something the SPECIFIC candidate would not cover.
 - Where a student pastes their own writing, the assignment prompt, or any other material, write it as a bracketed placeholder — "Fix the grammar in the following text: [text]" — never reproduce it.
 - An example is always a REQUEST. When the student's question is mostly pasted material with little or no request in it, write the request that the paste implies and attach the placeholder — "Review this draft: [text]" — never a bare placeholder on its own.
 
 Rules:
 - Each candidate must be meaningfully DIFFERENT from the current intent's definition and from each other.
-- The new intent lives INSIDE the given query type, and (when a current intent is shown) is carved out of it — so it must be NARROWER than that scope, not a restatement of it.
+- The new intent lives INSIDE the given query type. When a current intent is shown as the scope it is carved OUT OF, it must be NARROWER than that scope, not a restatement of it. When the scope is one the questions were ruled out of, the new intent sits BESIDE it: it must not overlap that definition at all.
 
 Answer in JSON: { "suggestions": [ { "title", "definition" } × 3 ] }.`;
 
@@ -122,8 +144,11 @@ export async function POST(req: Request, { params }: RouteParams) {
   }
 
   await ensureIntentTables();
-  const queryText = await getAssignmentMessageText(id, body.messageId);
-  if (!queryText) {
+  const seeds = body.seedQueries ?? [];
+  // A spin-off has no single anchor question; the pile is the anchor.
+  const queryText =
+    body.messageId !== undefined ? await getAssignmentMessageText(id, body.messageId) : null;
+  if (body.messageId !== undefined && !queryText) {
     return NextResponse.json({ error: 'message_not_found' }, { status: 404 });
   }
   let currentDefinition: string | null = null;
@@ -137,12 +162,23 @@ export async function POST(req: Request, { params }: RouteParams) {
 
   try {
     const user = [
-      `STUDENT QUESTION (verbatim):\n${queryText.slice(0, 4000)}`,
+      seeds.length > 0
+        ? `QUESTIONS TO OWN — the instructor just ruled these OUT of the scope below, with their reasons. The new intent is what should answer them instead:\n${seeds
+            .map(
+              (s) =>
+                `- "${s.text.replace(/\s+/g, ' ').trim().slice(0, 400)}"${
+                  s.reason?.trim() ? `\n    why it does not belong there: ${s.reason.trim()}` : ''
+                }`
+            )
+            .join('\n')}`
+        : `STUDENT QUESTION (verbatim):\n${(queryText ?? '').slice(0, 4000)}`,
       body.scopeType
         ? `QUERY TYPE: ${QUERY_TYPE_LABELS[body.scopeType]} — ${TYPE_SCOPE_HINT[body.scopeType]}`
         : 'QUERY TYPE: (unknown)',
       currentDefinition
-        ? `CURRENT SCOPE the new intent is carved out of:\n${currentDefinition}`
+        ? seeds.length > 0
+          ? `THE SCOPE THEY WERE RULED OUT OF (the new intent sits BESIDE this one, not inside it — it must not overlap):\n${currentDefinition}`
+          : `CURRENT SCOPE the new intent is carved out of:\n${currentDefinition}`
         : 'CURRENT SCOPE: the query type itself — nothing narrower answers this question yet.',
     ].join('\n\n');
     const raw = await callModel(

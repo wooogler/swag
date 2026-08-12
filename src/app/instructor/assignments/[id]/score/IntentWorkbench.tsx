@@ -37,6 +37,7 @@ import {
   GitCompareArrows,
   Loader2,
   Minimize2,
+  Plus,
   Redo2,
   RotateCcw,
   Save as SaveIcon,
@@ -260,6 +261,10 @@ interface IntentWorkbenchProps {
    * takes seconds and the board gives no other sign that the just-made intent
    * actually arrived. */
   onExit: (savedIntentId?: number | null) => void;
+  /** Make a NEW intent out of the questions ruled out of this one. Absent in a
+   * create (nothing has been ruled out of an intent that does not exist yet)
+   * and on a type-less legacy intent, which has no placement to sit beside. */
+  onSpinOff?: (queries: { text: string; reason: string | null }[]) => void;
 }
 
 export default function IntentWorkbench({
@@ -273,6 +278,7 @@ export default function IntentWorkbench({
   scopeAncestorIds,
   scopeLabel,
   onExit,
+  onSpinOff,
 }: IntentWorkbenchProps) {
   const isEdit = mode.kind === 'edit';
   const intent = isEdit ? mode.intent : null;
@@ -1408,6 +1414,13 @@ export default function IntentWorkbench({
     () => (data ? data.rows.filter((r) => r.pinStatus === 'held') : []),
     [data]
   );
+  /** Every question ruled OUT of this intent and not yet absorbed — waiting or
+   * held alike. What the spin-off is offered on: they have left this intent but
+   * not the scope around it, so they still need an intent to answer them. */
+  const outDecisions = useMemo(
+    () => [...pinnedOut, ...heldRows.filter((r) => r.pinned === 'out')],
+    [pinnedOut, heldRows]
+  );
   /** Decisions the definition carries by itself now. */
   const absorbedCount = useMemo(
     () => (data ? data.rows.filter((r) => r.marker !== null && r.pinned === null).length : 0),
@@ -2192,6 +2205,30 @@ export default function IntentWorkbench({
                   Update definition · {pinCount + heldRows.length} decision
                   {pinCount + heldRows.length === 1 ? '' : 's'}
                 </button>
+                )}
+                {/* Ruling questions out is also finding a pile with no home.
+                    The button is HERE, on that pile, because that is what
+                    decides where the new intent lands: these questions left
+                    this intent but stayed inside whatever encloses it, so the
+                    only place they can be answered is beside it. */}
+                {onSpinOff && outDecisions.length > 0 && (
+                  <button
+                    onClick={() =>
+                      guardLeave(() =>
+                        onSpinOff(
+                          outDecisions.map((r) => ({ text: r.queryText, reason: r.reason }))
+                        )
+                      )
+                    }
+                    disabled={busy || saving || refining}
+                    title={`Draft a new intent for the ${outDecisions.length} question${
+                      outDecisions.length === 1 ? '' : 's'
+                    } you ruled out — it lands beside this one, where they can actually be answered`}
+                    className="mt-1.5 inline-flex items-center gap-1 rounded border border-dashed border-[hsl(var(--primary))]/60 px-2 py-1 text-xs font-medium text-[hsl(var(--primary))] hover:border-solid hover:bg-[hsl(var(--primary))]/10 disabled:opacity-50"
+                  >
+                    <Plus className="h-3 w-3" />
+                    New intent from {outDecisions.length} ruled out
+                  </button>
                 )}
               </div>
             )}

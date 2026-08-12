@@ -111,6 +111,11 @@ interface CandidateChooserProps {
   /** The question in view when they asked, if any. Anchors the AI proposals
    * and ranks the starter sets. */
   anchorRow: ScoreQueryRow | null;
+  /** SPIN-OFF: the questions just ruled OUT of `parentIntentId`, with the
+   * reasons given. When present these anchor the proposals instead of a single
+   * question — the pile is what the new intent has to own — and the scope is
+   * one to sit BESIDE rather than inside. */
+  seedQueries?: { text: string; reason: string | null }[];
   /** The taxonomy, built once by the page. */
   jelsonSuggestions: JelsonSuggestion[];
   /** Prepared starter templates — a definition match means no rating pass. */
@@ -132,6 +137,7 @@ export default function CandidateChooser({
   scopeType,
   parentIntentId = null,
   anchorRow,
+  seedQueries,
   jelsonSuggestions,
   templates,
   existingDefinitions,
@@ -176,10 +182,11 @@ export default function CandidateChooser({
   );
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0); // bump to re-propose
-  const wantsAi = !!anchorRow && openaiConfigured;
+  const seedPile = seedQueries ?? [];
+  const wantsAi = (!!anchorRow || seedPile.length > 0) && openaiConfigured;
 
   useEffect(() => {
-    if (!wantsAi || !anchorRow) return;
+    if (!wantsAi) return;
     const controller = new AbortController();
     setSuggestions(null);
     setSuggestError(null);
@@ -194,7 +201,9 @@ export default function CandidateChooser({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              messageId: anchorRow.messageId,
+              ...(seedPile.length > 0
+                ? { seedQueries: seedPile }
+                : { messageId: anchorRow!.messageId }),
               ...(parentIntentId !== null ? { currentIntentId: parentIntentId } : {}),
               scopeType,
             }),
@@ -343,7 +352,30 @@ export default function CandidateChooser({
             written against, so hiding it behind a disclosure just means
             opening it again on every edit. Long ones scroll in place rather
             than pushing the panes down. */}
-        {anchorRow && (
+        {/* SPIN-OFF: the pile that started this, with the reasons — the same
+            slot the single anchor question uses, because it plays the same
+            part (what the candidates below have to own). */}
+        {seedPile.length > 0 && (
+          <div className="shrink-0 px-4 py-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+              The {seedPile.length} question{seedPile.length === 1 ? '' : 's'} you ruled out
+            </p>
+            <ul className="mt-0.5 max-h-32 space-y-1 overflow-y-auto">
+              {seedPile.map((s, i) => (
+                <li key={i} className="text-xs leading-relaxed">
+                  <span className="text-[hsl(var(--foreground))]">
+                    “{s.text.replace(/\s+/g, ' ').trim().slice(0, 120)}
+                    {s.text.length > 120 ? '…' : ''}”
+                  </span>
+                  {s.reason && (
+                    <span className="block italic text-rose-700">why not: {s.reason}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {anchorRow && seedPile.length === 0 && (
           <div className="shrink-0 px-4 py-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
               The question
@@ -362,7 +394,7 @@ export default function CandidateChooser({
           {/* LEFT — every way to start, in one scannable list. */}
           <div className="w-60 shrink-0 overflow-y-auto border-r border-[hsl(var(--border))] py-2">
             {wantsAi && (
-              <Group label="From this question">
+              <Group label={seedPile.length > 0 ? 'From what you ruled out' : 'From this question'}>
                 {suggestError ? (
                   <div className="px-3 py-2 space-y-1.5">
                     <p className="flex items-start gap-1.5 text-[11px] text-red-600">

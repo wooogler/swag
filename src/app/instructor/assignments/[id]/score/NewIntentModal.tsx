@@ -37,6 +37,11 @@ interface NewIntentModalProps {
    * modal shows in place of the create button's position in the tree. */
   scope: { type: ScoreQueryType; parentIntentId: number | null };
   anchorRow: ScoreQueryRow | null;
+  /** A SPIN-OFF: the questions ruled out of `spinOffFrom`, which the new intent
+   * is being made to answer instead. */
+  seedQueries?: { text: string; reason: string | null }[];
+  /** The intent they were ruled out of — the new one lands BESIDE it. */
+  spinOffFrom?: string | null;
   /** The set the new one is carved out of — `scope.parentIntentId` resolved.
    * Null when the type's own rule is what answers the scope today. */
   currentIntent: { id: number; title: string } | null;
@@ -59,6 +64,8 @@ export default function NewIntentModal({
   assignmentId,
   scope,
   anchorRow,
+  seedQueries,
+  spinOffFrom,
   currentIntent,
   jelsonSuggestions,
   templates,
@@ -112,6 +119,16 @@ export default function NewIntentModal({
           <>Answers {typeLabel} questions no existing intent claims first.</>
         )}
       </p>
+      {/* A spin-off lands BESIDE the intent the questions were ruled out of,
+          not inside it: inside, it could only ever answer what that intent
+          answers, and these are precisely the ones it does not. */}
+      {spinOffFrom && (
+        <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))]">
+          Beside{' '}
+          <span className="font-medium text-[hsl(var(--foreground))]">“{spinOffFrom}”</span> — the
+          questions you ruled out of it need somewhere to go.
+        </p>
+      )}
     </>
   );
 
@@ -121,6 +138,7 @@ export default function NewIntentModal({
       scopeType={scope.type}
       parentIntentId={scope.parentIntentId}
       anchorRow={anchorRow}
+      seedQueries={seedQueries}
       jelsonSuggestions={jelsonSuggestions}
       templates={templates}
       existingDefinitions={liveDefinitions}

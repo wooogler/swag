@@ -1100,6 +1100,9 @@ export default function IntentBoard({
   const [newIntentRequest, setNewIntentRequest] = useState<{
     scope: { type: ScoreQueryType; parentIntentId: number | null };
     anchorRow: ScoreQueryRow | null;
+    /** A SPIN-OFF from the workbench: the questions just ruled out of an
+     * intent, and that intent's title. The new set lands beside it. */
+    spinOff?: { from: string; queries: { text: string; reason: string | null }[] };
   } | null>(null);
 
   const [placementBusy, setPlacementBusy] = useState<number | null>(null);
@@ -2205,6 +2208,21 @@ export default function IntentBoard({
             setFlagIntent(savedIntentId ?? null);
             startBoardRefresh(() => router.refresh());
           }}
+          // Ruling questions out of an intent is also finding a pile that needs
+          // a home. The chooser opens over the workbench (it renders outside
+          // this branch), so this never goes via the board.
+          onSpinOff={
+            editIntent && editIntent.type
+              ? (queries) =>
+                  setNewIntentRequest({
+                    // BESIDE, not inside: a subset only answers what its parent
+                    // answers, and these are the ones this intent does not.
+                    scope: { type: editIntent.type!, parentIntentId: editIntent.parentIntentId },
+                    anchorRow: null,
+                    spinOff: { from: editIntent.title, queries },
+                  })
+              : undefined
+          }
         />
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 flex-1 min-h-0">
@@ -2912,6 +2930,8 @@ export default function IntentBoard({
             assignmentId={assignmentId}
             scope={newIntentRequest.scope}
             anchorRow={newIntentRequest.anchorRow}
+            seedQueries={newIntentRequest.spinOff?.queries}
+            spinOffFrom={newIntentRequest.spinOff?.from ?? null}
             currentIntent={parent ? { id: parent.id, title: parent.title } : null}
             jelsonSuggestions={jelsonSuggestions}
             templates={templateOptions}
@@ -2922,6 +2942,11 @@ export default function IntentBoard({
             onCancel={() => setNewIntentRequest(null)}
             onPick={(seed) => {
               setNewIntentRequest(null);
+              // A spin-off is chosen from ON TOP of the workbench that started
+              // it, and editIntent outranks the create mode — so leaving it set
+              // would drop the instructor back into the intent they just carved
+              // this out of instead of the new one.
+              setEditIntent(null);
               openNewIntent(newIntentRequest.scope, seed);
             }}
           />
