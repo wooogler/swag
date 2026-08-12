@@ -196,7 +196,16 @@ export type PromptDissection = DissectionResult & { materials: MaterialSpan[] };
  *     ("[OWN DRAFT · 390 words · 100%]") followed by an abridged excerpt of the
  *     run. ASSIGNMENT PROMPT runs carry NO excerpt — the same text for every
  *     student, and the source of the "pasted question read as the student's own
- *     question" error. Rating only; the TYPE prompt is byte-identical. */
+ *     question" error. Rating only; the TYPE prompt is byte-identical.
+ * v6: a run must be longer than MIN_MATERIAL_WORDS to be marked at all
+ *     (material-render.ts). Short verbatim overlaps — a shared phrase, a few
+ *     words carried over from the assignment prompt — now reach the judge as
+ *     the prose they read as, instead of as "[ASSIGNMENT PROMPT · 1%]" sitting
+ *     beside the real blocks; those fragments are the same mechanism as the v5
+ *     error, at a size where the excerpt cannot disambiguate them. Markers for
+ *     runs above the floor are byte-identical, so only messages that carried a
+ *     short run actually change — but the hash is per intent, not per message,
+ *     so it moves for all of them. TYPE prompt still untouched. */
 export type MaterialPromptMode = 'verbatim' | 'abridged';
 
 /**
@@ -216,7 +225,7 @@ export const MATERIAL_PROMPT_MODE: MaterialPromptMode = 'abridged';
 /** Derived from the mode — a table rather than a comparison, because TS narrows
  * a const to its initializer's literal type and would call the comparison dead.
  * The point is that the prompt cannot change without the hash moving with it. */
-const RATING_VERSION_BY_MODE: Record<MaterialPromptMode, number> = { verbatim: 4, abridged: 5 };
+const RATING_VERSION_BY_MODE: Record<MaterialPromptMode, number> = { verbatim: 4, abridged: 6 };
 export const INTENT_RATING_VERSION = RATING_VERSION_BY_MODE[MATERIAL_PROMPT_MODE];
 
 /** Version of the dissection method/output. Rows below this are stale and

@@ -42,6 +42,30 @@ export function wordsLabel(n: number): string {
 }
 
 /**
+ * How long a run has to be before it counts as pasted Material at all.
+ *
+ * The locator finds every verbatim overlap, including ones nobody would call a
+ * paste: a shared phrase, a few words carried over from the assignment prompt.
+ * Tagged, those buried the real blocks under a row of "[ASSIGNMENT PROMPT · 1%]"
+ * markers — 1% because `coveragePct` floors at 1, so even a three-word overlap
+ * arrives looking like a measured quantity.
+ *
+ * The floor is counted in WORDS rather than as a share of the source, because a
+ * share does not say how much text there is: 1% of a long assignment prompt is a
+ * paragraph, and 30% of a two-line draft is half a sentence. Below it the run
+ * renders as the plain text it reads as — for the instructor and for the judge
+ * alike, since this module is the one renderer for both. That second reader is
+ * the bigger win: fragments of the prompt tagged as pasted material are the
+ * mechanism behind "pasted prompt rated as the student's own question".
+ */
+export const MIN_MATERIAL_WORDS = 20;
+
+/** Is this run big enough to be called Material? Strictly more than the floor. */
+export function isMaterialRun(text: string): boolean {
+  return wordCount(text) > MIN_MATERIAL_WORDS;
+}
+
+/**
  * The marker's inside, without the brackets, so the rating prompt can append an
  * excerpt inside the same pair. `materialTag` below is what the UI renders.
  *
@@ -121,17 +145,27 @@ function segmentFromMaterials(text: string, materials: MaterialSpan[]): MsgSeg[]
   const segs: MsgSeg[] = [];
   const lower = text.toLowerCase();
   let cursor = 0;
+  // Located runs, INCLUDING the ones the word floor drops. Falling back is for
+  // rows whose runs cannot be found at all (pre-v4); a row whose runs were all
+  // found and all judged too short has been answered — the answer is "none of
+  // this is pasted material", and re-deriving it from request gaps below would
+  // hand back the very fragments the floor just rejected.
+  let located = 0;
   for (const m of materials) {
     const t = m.text.trim();
     if (!t) continue;
     let idx = text.indexOf(t, cursor);
     if (idx === -1) idx = lower.indexOf(t.toLowerCase(), cursor);
     if (idx === -1) continue;
+    located++;
+    // Too short to tag: leave it in place as prose. The cursor does not move,
+    // so the run stays inside the next plain-text slice.
+    if (!isMaterialRun(t)) continue;
     if (idx > cursor) segs.push({ kind: 'text', text: text.slice(cursor, idx) });
     segs.push({ kind: 'material', text: text.slice(idx, idx + t.length), mk: m.kind, span: m });
     cursor = idx + t.length;
   }
-  if (!segs.some((s) => s.kind === 'material')) return null;
+  if (located === 0) return null;
   if (cursor < text.length) segs.push({ kind: 'text', text: text.slice(cursor) });
   return segs;
 }
@@ -166,8 +200,15 @@ export function segmentForMaterials(
     }
     const lead = g.length - g.trimStart().length;
     const trail = g.length - g.trimEnd().length;
+    const core = g.slice(lead, g.length - trail);
+    // Same floor as the stored-run path: a gap this short is the student
+    // writing, not something they pasted in.
+    if (!isMaterialRun(core)) {
+      segs.push({ kind: 'text', text: g });
+      return;
+    }
     if (lead) segs.push({ kind: 'text', text: g.slice(0, lead) });
-    segs.push({ kind: 'material', text: g.slice(lead, g.length - trail), mk });
+    segs.push({ kind: 'material', text: core, mk });
     if (trail) segs.push({ kind: 'text', text: g.slice(g.length - trail) });
   };
   if (requests.length === 0) {
