@@ -26,7 +26,13 @@ import {
   Scale,
   Trash2,
   X,
+  Hammer,
+  PlayCircle,
+  Check,
 } from 'lucide-react';
+// Types only — erased at compile, so the build module's server-side imports
+// never follow it into the client bundle.
+import type { BankBuildResult, MasterBuildResult } from '@/lib/study/build';
 import type { ScoreQueryRow } from '@/app/instructor/assignments/[id]/score/IntentBoard';
 import { ConversationThread } from '@/app/instructor/assignments/[id]/score/conversation';
 import { PaneSearch, QueryTextButton } from '@/app/instructor/assignments/[id]/score/workbench-shared';
@@ -215,6 +221,7 @@ export default function CurationBoard({
   const [expanded, setExpanded] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [buildReport, setBuildReport] = useState<BuildResponse | null>(null);
 
   const locked = !!state.meta.lockedAt;
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
@@ -306,6 +313,64 @@ export default function CurationBoard({
     },
     [state.members, questionById, subtypeById]
   );
+
+  /**
+   * What isolating a set of subtypes would cost, before committing to it.
+   *
+   * Isolation is whole-STUDENT: one question clearly in a demo subtype takes
+   * that student's entire log out of circulation. So the number that predicts
+   * the damage is the student count, not the subtype's own question count —
+   * "Shorten / Trim" is 7 questions and removes 49.
+   *
+   * Computed here rather than server-side because the board already holds every
+   * question with its matches and its participant token; the whole thing is one
+   * pass over ~500 rows, and a per-checkbox round trip would make picking feel
+   * like committing.
+   */
+  const { questions: allQuestions, subtypes: allSubtypes, members: allMembers } = state;
+  const demoCost = useMemo(() => {
+    const memberIds = new Set(allMembers.map((m) => m.messageId));
+    const byToken = new Map<string, typeof allQuestions>();
+    for (const q of allQuestions) {
+      const list = byToken.get(q.participantToken) ?? [];
+      list.push(q);
+      byToken.set(q.participantToken, list);
+    }
+    // Titles, not intent ids: the same subtype title can sit under more than
+    // one type, and isolation is declared by title.
+    const idsByTitle = new Map<string, number[]>();
+    for (const s of allSubtypes) {
+      idsByTitle.set(s.title, [...(idsByTitle.get(s.title) ?? []), s.intentId]);
+    }
+
+    const costOf = (titles: string[]) => {
+      const ids = new Set(titles.flatMap((t) => idsByTitle.get(t) ?? []));
+      const tokens = new Set<string>();
+      let own = 0;
+      for (const q of allQuestions) {
+        for (const [id, grade] of Object.entries(q.matches)) {
+          if (grade === 'clearly_in' && ids.has(Number(id))) {
+            tokens.add(q.participantToken);
+            own += 1;
+            break;
+          }
+        }
+      }
+      let questions = 0;
+      let inSet = 0;
+      for (const token of tokens) {
+        for (const q of byToken.get(token) ?? []) {
+          questions += 1;
+          if (memberIds.has(q.messageId)) inSet += 1;
+        }
+      }
+      return { students: tokens.size, own, questions, inSet };
+    };
+
+    const perTitle = new Map<string, ReturnType<typeof costOf>>();
+    for (const title of idsByTitle.keys()) perTitle.set(title, costOf([title]));
+    return { costOf, perTitle };
+  }, [allQuestions, allSubtypes, allMembers]);
 
   /** How many of a set's questions SHOULD be boundary, at the natural ratio. */
   const boundaryTargetFor = useCallback(
@@ -405,6 +470,36 @@ export default function CurationBoard({
     setBusy(null);
   }, [state.dataset.key, refresh]);
 
+  /**
+   * Confirmed sets → the material a participant actually meets. Two steps in
+   * one click (reduced masters, then the question bank) because neither is
+   * useful alone, and a preview first because both replace what is there.
+   */
+  const runBuild = useCallback(
+    async (apply: boolean) => {
+      setBusy(apply ? 'build' : 'build-preview');
+      setError(null);
+      setBuildReport(null);
+      try {
+        const res = await fetch('/api/study/admin/curation/build', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apply }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(data.message ?? 'Build failed.');
+          return;
+        }
+        setBuildReport(data);
+        if (apply) await refresh();
+      } finally {
+        setBusy(null);
+      }
+    },
+    [refresh]
+  );
+
   const toggleLock = useCallback(async () => {
     setBusy('lock');
     setError(null);
@@ -427,19 +522,56 @@ export default function CurationBoard({
   }, [locked, state.dataset.key, refresh]);
 
   const setDemo = useCallback(
-    async (title: string | null) => {
+    async (titles: string[]) => {
       setBusy('demo');
       setError(null);
       const res = await fetch('/api/study/admin/curation/demo-subtype', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ datasetKey: state.dataset.key, demoSubtype: title }),
+        body: JSON.stringify({ datasetKey: state.dataset.key, demoSubtypes: titles }),
       });
-      if (!res.ok) setError('Could not set the demo subtype.');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.message ?? 'Could not set the demo subtypes.');
+      }
       await refresh();
       setBusy(null);
     },
     [state.dataset.key, refresh]
+  );
+
+  /**
+   * Open the demo: the participant's own session, straight into the studio, on
+   * a workspace holding only the isolated subtypes' conversations. Navigating
+   * rather than fetching, so the browser lands there with the participant's
+   * session cookie in place.
+   *
+   * Leaving the demo is a visit to /study/admin — nothing is added to the demo
+   * itself, because anything added would be in the recording.
+   */
+  const runDemo = useCallback(
+    async (condition: 'score' | 'baseline') => {
+      setBusy(`demo:${condition}`);
+      setError(null);
+      try {
+        const res = await fetch('/api/study/admin/curation/demo/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ datasetKey: state.dataset.key, condition }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(data.message ?? 'Could not start the demo.');
+          setBusy(null);
+          return;
+        }
+        window.location.assign(data.url);
+      } catch {
+        setError('Could not start the demo.');
+        setBusy(null);
+      }
+    },
+    [state.dataset.key]
   );
 
   /* ── which questions the middle column shows ── */
@@ -513,23 +645,60 @@ export default function CurationBoard({
     <StudioShell header={header}>
       {/* ── strip: set totals, demo isolation, classification, lock ── */}
       <div className="flex items-center gap-2 flex-wrap px-1 pb-2 border-b border-[hsl(var(--border))] mb-3">
-        <span className="text-[11px] text-[hsl(var(--muted-foreground))]">Demo subtype</span>
-        <select
-          value={state.meta.demoSubtype ?? ''}
-          disabled={locked || busy !== null}
-          onChange={(e) => setDemo(e.target.value || null)}
-          className="text-xs border border-[hsl(var(--border))] rounded px-1.5 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
-        >
-          <option value="">— none —</option>
-          {state.subtypes
-            .map((s) => (
-              <option key={s.intentId} value={s.title}>
-                {s.title}
-              </option>
-            ))}
-        </select>
-        {state.meta.demoSubtype && (
-          <Chip tone="violet">{state.excludedMessageIds.length} isolated</Chip>
+        {/* Not disabled by the lock: confirmed sets only forbid a change that
+            would isolate a question already in a set, which the server checks
+            and reports. */}
+        <DemoSubtypePicker
+          subtypes={state.subtypes}
+          selected={state.meta.demoSubtypes}
+          disabled={busy !== null}
+          onChange={setDemo}
+          costOf={demoCost.costOf}
+          perTitle={demoCost.perTitle}
+        />
+        {state.meta.demoSubtypes.length > 0 && (
+          <>
+            <Chip tone="violet">
+              {demoCost.costOf(state.meta.demoSubtypes).students} students ·{' '}
+              {state.excludedMessageIds.length} questions isolated
+            </Chip>
+            {/* Whole-student isolation almost always overlaps a dataset curated
+                before the demo was reserved. Harmless for a dev preview or a
+                talk; disqualifying for a video shown to participants — so it is
+                stated rather than blocked. */}
+            {state.demoSetOverlap > 0 && (
+              <Chip tone="warn">{state.demoSetOverlap} also in a set</Chip>
+            )}
+            {/* The demo runs as a participant, on a workspace built from just
+                these conversations — the same screens a participant gets, so
+                it doubles as the dev preview and the recording set-up. */}
+            <button
+              onClick={() => runDemo('score')}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+              title="Open the SCORE studio for these subtypes, as the participant sees it"
+            >
+              {busy === 'demo:score' ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <PlayCircle className="w-3 h-3" />
+              )}
+              Run demo · SCORE
+            </button>
+            <button
+              onClick={() => runDemo('baseline')}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+              title="Open the baseline studio for these subtypes, as the participant sees it"
+            >
+              {busy === 'demo:baseline' ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <PlayCircle className="w-3 h-3" />
+              )}
+              Run demo · Baseline
+            </button>
+          </>
         )}
         <div className="flex-1" />
         <button
@@ -719,8 +888,47 @@ export default function CurationBoard({
       {(error || locked || otherViolations.length > 0) && (
         <div className="mb-3 space-y-1.5">
           {locked && (
-            <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-4 py-2 text-xs font-semibold text-violet-800">
-              🔒 Confirmed · {new Date(state.meta.lockedAt!).toLocaleString()} · {state.meta.lockedBy} — these sets feed the study-master and question-bank builds.
+            <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-4 py-2.5">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-xs font-semibold text-violet-800">
+                  🔒 Confirmed · {new Date(state.meta.lockedAt!).toLocaleString()} ·{' '}
+                  {state.meta.lockedBy}
+                </span>
+                <div className="flex-1" />
+                {/* Preview first: both halves REPLACE what is there, and the
+                    refusals (clones still holding the old master, answers
+                    already recorded against the bank) are worth reading before
+                    the click that acts rather than after it. */}
+                <button
+                  onClick={() => runBuild(false)}
+                  disabled={busy !== null}
+                  className="inline-flex items-center gap-1.5 rounded border border-violet-300 bg-[hsl(var(--card))] px-2.5 py-1 text-[11px] font-semibold text-violet-800 hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                >
+                  {busy === 'build-preview' && <Loader2 className="w-3 h-3 animate-spin" />}
+                  Preview build
+                </button>
+                {/* The app's primary-button vocabulary, not a new violet stop:
+                    utilities that appear nowhere else in the codebase do not
+                    survive this project's Tailwind build, and a bg that never
+                    ships leaves white text on a white banner. */}
+                <button
+                  onClick={() => runBuild(true)}
+                  disabled={busy !== null}
+                  className="inline-flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                >
+                  {busy === 'build' ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Hammer className="w-3 h-3" />
+                  )}
+                  Build study material
+                </button>
+              </div>
+              <p className="mt-1 text-[10.5px] text-violet-800">
+                Builds the reduced study masters and freezes the block-test / A/B question
+                bank. Both datasets must be confirmed for the bank.
+              </p>
+              {buildReport && <BuildReport report={buildReport} />}
             </div>
           )}
           {error && (
@@ -810,7 +1018,7 @@ export default function CurationBoard({
                       subtype={s}
                       last={i === list.length - 1}
                       active={selection.kind === 'subtype' && selection.intentId === s.intentId}
-                      isDemo={state.meta.demoSubtype === s.title}
+                      isDemo={state.meta.demoSubtypes.includes(s.title)}
                       assigned={assignedBySubtype.get(s.intentId) ?? [0, 0, 0]}
                       onClick={() => setSelection({ kind: 'subtype', intentId: s.intentId })}
                     />
@@ -1733,5 +1941,273 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+
+interface BuildResponse {
+  applied: boolean;
+  masters: MasterBuildResult[];
+  bank: BankBuildResult;
+}
+
+/**
+ * What the build did, or would do.
+ *
+ * Reports both halves even when one refused: they fail for unrelated reasons,
+ * and a researcher fixing the master should not have to click again to learn
+ * the bank was also going to stop.
+ */
+function BuildReport({ report }: { report: BuildResponse }) {
+  const tone = (status: string) =>
+    status === 'built'
+      ? 'text-emerald-700'
+      : status === 'blocked'
+        ? 'text-rose-700'
+        : status === 'skipped'
+          ? 'text-amber-700'
+          : 'text-violet-800';
+
+  return (
+    <div className="mt-2 rounded border border-violet-200 bg-[hsl(var(--card))] px-3 py-2 space-y-1.5">
+      <p className="text-[10.5px] font-bold uppercase tracking-wide text-violet-700">
+        {report.applied ? 'Build result' : 'Preview — nothing was written'}
+      </p>
+
+      {report.masters.map((m) => (
+        <div key={m.datasetKey} className="text-[11px] leading-relaxed">
+          <span className="font-semibold">{m.label}</span>{' '}
+          <span className={`font-semibold ${tone(m.status)}`}>{m.status}</span>
+          {m.reason && <span className="text-[hsl(var(--muted-foreground))]"> — {m.reason}</span>}
+          {m.status !== 'skipped' && (
+            <span className="text-[hsl(var(--muted-foreground))]">
+              {' '}
+              · {m.reviewQuestions} review question(s) across {m.threads} thread(s), cut from{' '}
+              {m.sourceMessages} messages
+            </span>
+          )}
+          {m.perType && Object.keys(m.perType).length > 0 && (
+            <span className="text-[hsl(var(--muted-foreground))]">
+              {' '}
+              · per type{' '}
+              {Object.entries(m.perType)
+                .map(([k, v]) => `${k}=${v}`)
+                .join(' ')}
+            </span>
+          )}
+          {m.warnings.map((w, i) => (
+            <span key={i} className="block text-amber-700 font-semibold">
+              ! {w}
+            </span>
+          ))}
+        </div>
+      ))}
+
+      <div className="text-[11px] leading-relaxed border-t border-violet-200 pt-1.5">
+        <span className="font-semibold">Question bank</span>{' '}
+        <span className={`font-semibold ${tone(report.bank.status)}`}>{report.bank.status}</span>
+        {report.bank.reason && (
+          <span className="text-[hsl(var(--muted-foreground))]"> — {report.bank.reason}</span>
+        )}
+        <span className="text-[hsl(var(--muted-foreground))]">
+          {' '}
+          · {report.bank.testCandidates} test + {report.bank.abCandidates} A/B candidate(s)
+          {report.bank.written > 0 && ` · wrote ${report.bank.written} item(s)`}
+          {report.bank.replaced > 0 && ` · replaced ${report.bank.replaced}`}
+        </span>
+        {report.bank.balance.map((b) => (
+          <span key={b.cut} className="block text-[hsl(var(--muted-foreground))]">
+            first {b.cut}:{' '}
+            {Object.entries(b.datasets)
+              .map(([k, v]) => `${k}=${v}`)
+              .join(' ')}{' '}
+            {b.even ? '✓' : '✗ unbalanced'}
+          </span>
+        ))}
+        {report.bank.warnings.map((w, i) => (
+          <span key={i} className="block text-amber-700 font-semibold">
+            ! {w}
+          </span>
+        ))}
+      </div>
+
+      {report.applied && report.masters.some((m) => m.status === 'built') && (
+        <p className="text-[10.5px] text-violet-700 border-t border-violet-200 pt-1.5">
+          New participants clone the reduced master from now on. Existing participants keep
+          the copy they were given — reset them from the session console to move them over.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Which subtypes the demo runs on — and, by the same act, which students are
+ * withheld from every set.
+ *
+ * A popover of checkboxes rather than a multi-select: there are ~26 subtypes
+ * across four types, and the thing a researcher checks here is "is this one in
+ * the demo", one row at a time. Grouped by query type so the list reads the
+ * same way the tree on the left does. Saves on close, once, rather than firing
+ * a request per tick — each write recomputes the isolated set.
+ */
+interface DemoCost {
+  /** Students taken out of circulation — the number that drives the rest. */
+  students: number;
+  /** Questions that ARE the subtype (what the demo would actually show). */
+  own: number;
+  /** Every question those students asked, all of it isolated. */
+  questions: number;
+  /** Of those, how many are already assigned to a set — future violations. */
+  inSet: number;
+}
+
+function DemoSubtypePicker({
+  subtypes,
+  selected,
+  disabled,
+  onChange,
+  costOf,
+  perTitle,
+}: {
+  subtypes: { intentId: number; title: string; type: ScoreQueryType | null }[];
+  selected: string[];
+  disabled: boolean;
+  onChange: (titles: string[]) => void;
+  /** Combined cost of a selection — students overlap, so this is a union. */
+  costOf: (titles: string[]) => DemoCost;
+  perTitle: Map<string, DemoCost>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string[]>(selected);
+
+  // Titles, not intent ids: a subtype title is shared across the two datasets
+  // (that is how one choice isolates both), and the same title can appear under
+  // more than one type.
+  const byType = useMemo(() => {
+    const out = new Map<string, string[]>();
+    for (const s of subtypes) {
+      const key = s.type ?? 'other';
+      const list = out.get(key) ?? [];
+      if (!list.includes(s.title)) list.push(s.title);
+      out.set(key, list);
+    }
+    return out;
+  }, [subtypes]);
+
+  const draftCost = useMemo(() => costOf(draft), [costOf, draft]);
+
+  const close = (commit: boolean) => {
+    setOpen(false);
+    if (!commit) return;
+    const same =
+      draft.length === selected.length && draft.every((t) => selected.includes(t));
+    if (!same) onChange(draft);
+  };
+
+  return (
+    <span className="relative inline-flex items-center gap-2">
+      <span className="text-[11px] text-[hsl(var(--muted-foreground))]">Demo subtypes</span>
+      <button
+        onClick={() => {
+          setDraft(selected);
+          setOpen((v) => !v);
+        }}
+        disabled={disabled}
+        className="text-xs border border-[hsl(var(--border))] rounded px-2 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+      >
+        {selected.length === 0 ? '— none —' : `${selected.length} selected`}
+      </button>
+
+      {open && (
+        <>
+          {/* Click-away commits: the popover has no Save, so leaving it is the
+              gesture that means "these are the ones". */}
+          <div className="fixed inset-0 z-40" onClick={() => close(true)} />
+          <div className="absolute top-full left-0 mt-1 z-50 w-72 max-h-96 overflow-y-auto rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg p-1">
+            {/* The union, not the sum: two subtypes usually share students, so
+                adding the rows would overstate what the demo costs. */}
+            <div className="flex items-center gap-2 px-2 py-1 border-b border-[hsl(var(--border))] mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                {draft.length} selected
+              </span>
+              {draft.length > 0 && (
+                <span className="text-[10px] tabular-nums text-[hsl(var(--muted-foreground))]">
+                  {draftCost.students} students · {draftCost.questions} questions
+                  {draftCost.inSet > 0 && (
+                    <span className="text-amber-700 font-semibold"> · {draftCost.inSet} in a set</span>
+                  )}
+                </span>
+              )}
+              <div className="flex-1" />
+              <button
+                onClick={() => setDraft([])}
+                className="text-[10.5px] font-semibold text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => close(true)}
+                className="text-[10.5px] font-semibold text-[hsl(var(--primary-foreground))] px-1.5 py-0.5 rounded bg-[hsl(var(--primary))] text-white"
+              >
+                Done
+              </button>
+            </div>
+
+            <p className="px-2 pb-1 text-[10px] text-[hsl(var(--muted-foreground))] leading-relaxed border-b border-[hsl(var(--border))] mb-1">
+              Isolation is whole-student: one matching question removes that
+              student&apos;s whole log. Rows read{' '}
+              <span className="tabular-nums">students👤 questions-isolated-q</span>
+              {' '}· <span className="text-amber-700 font-semibold tabular-nums">n⚠</span> = already
+              in a set.
+            </p>
+
+            {[...byType].map(([type, titles]) => (
+              <div key={type} className="mb-1">
+                <p className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  {QUERY_TYPE_LABELS[type as ScoreQueryType] ?? type}
+                </p>
+                {titles.map((title) => {
+                  const on = draft.includes(title);
+                  const cost = perTitle.get(title);
+                  return (
+                    <button
+                      key={`${type}:${title}`}
+                      onClick={() =>
+                        setDraft((prev) =>
+                          prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title]
+                        )
+                      }
+                      className="w-full flex items-center gap-2 px-2 py-1 rounded text-left hover:bg-[hsl(var(--muted))]"
+                    >
+                      <span
+                        className={`w-3.5 h-3.5 shrink-0 rounded border flex items-center justify-center ${
+                          on
+                            ? 'bg-[hsl(var(--primary))] border-[hsl(var(--primary))]'
+                            : 'border-[hsl(var(--border))]'
+                        }`}
+                      >
+                        {on && <Check className="w-2.5 h-2.5 text-white" />}
+                      </span>
+                      <span className="text-[11.5px] truncate flex-1">{title}</span>
+                      {/* Read as: this subtype is `own` questions, but picking
+                          it removes `students` students and `questions` of
+                          their questions. The gap is the point. */}
+                      <span className="text-[10px] tabular-nums text-[hsl(var(--muted-foreground))] shrink-0">
+                        {cost ? `${cost.students}👤 ${cost.questions}q` : '—'}
+                      </span>
+                      {cost && cost.inSet > 0 && (
+                        <span className="text-[10px] tabular-nums font-semibold text-amber-700 shrink-0">
+                          {cost.inSet}⚠
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </span>
   );
 }

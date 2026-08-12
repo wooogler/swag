@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
+  assignments,
   instructors,
   scoreIntents,
   studyClones,
@@ -31,7 +32,13 @@ import {
 } from '@/db/schema';
 import { ensureScoreTable } from '@/lib/score/queries';
 import { ensureIntentTables } from '@/lib/score/intent-store';
-import { STUDY_DATASETS, STUDY_EMAIL_DOMAIN, conditionForDataset, type StudyDataset } from './config';
+import {
+  STUDY_DATASETS,
+  STUDY_EMAIL_DOMAIN,
+  conditionForDataset,
+  studyMasterToken,
+  type StudyDataset,
+} from './config';
 import {
   ensureStudyTables,
   getParticipantByNumber,
@@ -457,16 +464,35 @@ export async function ensureParticipantAccount(participantNumber: string): Promi
   }
 }
 
+/**
+ * The master a clone is actually made from: the reduced study master once one
+ * has been built, otherwise the full log named in STUDY_DATASETS.
+ *
+ * Resolved by share token at provision time rather than by editing config.ts
+ * after each build. A rebuild mints a NEW assignment id, so a hard-coded id
+ * would have to be corrected by hand every time — and a source edit that has
+ * to follow a button is the step that gets forgotten, silently handing the
+ * next participant the whole 507-message log.
+ */
+export async function resolveMasterAssignmentId(dataset: StudyDataset): Promise<string> {
+  const [built] = await db
+    .select({ id: assignments.id })
+    .from(assignments)
+    .where(eq(assignments.shareToken, studyMasterToken(dataset.key)));
+  return built?.id ?? dataset.assignmentId;
+}
+
 async function provisionClone(participant: StudyParticipant, dataset: StudyDataset): Promise<StudyClone> {
   const assignmentId = randomUUID();
   const shareToken = `study-${participant.participantNumber.toLowerCase()}-${dataset.key}`;
   // Participant-facing clean title (no "… Dataset" / no participant-number
   // suffix). The researcher distinguishes clones by owner in the admin dashboard.
   const newTitle = dataset.cloneTitle;
+  const sourceAssignmentId = await resolveMasterAssignmentId(dataset);
 
   return db.transaction(async (tx) => {
     await cloneStarterSet(tx, {
-      sourceAssignmentId: dataset.assignmentId,
+      sourceAssignmentId,
       newAssignmentId: assignmentId,
       newInstructorId: participant.instructorId,
       shareToken,
@@ -480,7 +506,7 @@ async function provisionClone(participant: StudyParticipant, dataset: StudyDatas
         participantId: participant.id,
         datasetKey: dataset.key,
         assignmentId,
-        sourceAssignmentId: dataset.assignmentId,
+        sourceAssignmentId,
         condition: conditionForDataset(participant.participantNumber, dataset.key),
         createdAt: new Date(),
       })

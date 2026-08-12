@@ -134,6 +134,11 @@ export async function ensureStudyTables(): Promise<void> {
       await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "cell" integer`);
       await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "block_order" text`);
       await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "phase" text NOT NULL DEFAULT 'not_started'`);
+      // Demo accounts run the identical session on the isolated demo subtypes;
+      // this is what keeps their rows out of the console and the export.
+      await db.execute(
+        sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "is_demo" boolean NOT NULL DEFAULT false`
+      );
 
       // ── Set curation (researcher admin tool) ────────────────────────────
       // Which MASTER question sits in which curated set. Keyed by master
@@ -162,6 +167,16 @@ export async function ensureStudyTables(): Promise<void> {
           "locked_at" timestamp,
           "locked_by" text
         )`);
+      // A demo runs on more than one subtype, so the isolated set became a
+      // list. The old single-value column stays and is folded in below, because
+      // a dataset confirmed before this change still carries its choice there.
+      await db.execute(
+        sql`ALTER TABLE "study_curation_meta" ADD COLUMN IF NOT EXISTS "demo_subtypes" jsonb`
+      );
+      await db.execute(sql`
+        UPDATE "study_curation_meta"
+           SET "demo_subtypes" = jsonb_build_array("demo_subtype")
+         WHERE "demo_subtypes" IS NULL AND "demo_subtype" IS NOT NULL`);
 
       // Set sizes, editable by a researcher. Singleton: the design requires the
       // two datasets to carry matching set sizes, so this is deliberately NOT

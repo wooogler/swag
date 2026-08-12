@@ -1,14 +1,8 @@
 /**
  * Build the reduced STUDY masters from a confirmed review set.
  *
- * A participant should meet exactly the curated 60 questions, not the whole
- * 507/348-message log. Doing that by filtering the board would leave the
- * uncurated questions one request away and the test/A-B questions sitting in
- * the same log a participant is browsing; building a smaller master instead
- * makes the reduction structural — the questions are simply not there.
- *
- * Each kept thread is cut at its last curated turn, so a participant reads the
- * same context the chatbot had and never a turn from after it.
+ * A thin CLI over src/lib/study/build.ts — the curation tool's build button
+ * calls the same function, so there is no "proper" way and a second way.
  *
  *   npx tsx --env-file=.env scripts/study/build-study-masters.ts            # plan only
  *   npx tsx --env-file=.env scripts/study/build-study-masters.ts --apply
@@ -17,17 +11,8 @@
  * Idempotent by share token: rebuilding replaces the previous study master.
  * Refuses while a participant still holds a clone OF that master.
  */
-import { randomUUID } from 'node:crypto';
-import type { CloneRestriction } from '../../src/lib/study/provision';
-import { and, eq, inArray, sql } from 'drizzle-orm';
-import { db } from '../../src/db/db';
-import {
-  assignments,
-  chatMessages,
-  scoreIntentPins,
-  scoreIntents,
-  studyClones,
-} from '../../src/db/schema';
+// Module scope, not the shared global one every script would otherwise share.
+export {};
 
 function argValue(flag: string): string | null {
   const i = process.argv.indexOf(flag);
@@ -37,192 +22,47 @@ function argValue(flag: string): string | null {
 const APPLY = process.argv.includes('--apply');
 const ONLY = argValue('--dataset');
 
-/** Study masters are addressed by a stable token, not by id. */
-export function studyMasterToken(datasetKey: string): string {
-  return `${datasetKey}-study`;
-}
-
 async function main() {
-  const { CURATION_DATASETS, curationDataset } = await import('../../src/lib/study/config');
-  const { getConfirmedSet, isLocked } = await import('../../src/lib/study/curation');
-  const { cloneStarterSet } = await import('../../src/lib/study/provision');
-  const { ensureStudyTables } = await import('../../src/lib/study/store');
-  const { deleteCloneAssignment } = await import('../../src/lib/study/teardown');
-  await ensureStudyTables();
+  const { buildStudyMasters } = await import('../../src/lib/study/build');
 
-  const targets = CURATION_DATASETS.filter((d) => !ONLY || d.key === ONLY);
-  if (targets.length === 0) throw new Error(`unknown --dataset ${ONLY}`);
-
-  for (const dataset of targets) {
-    const source = curationDataset(dataset.key)!;
-    console.log(`\n=== ${dataset.label} (${dataset.key}) ===`);
-
-    if (!(await isLocked(dataset.key))) {
-      console.log('  curation is NOT confirmed — lock the sets first. Skipping.');
-      continue;
-    }
-
-    const review = await getConfirmedSet(dataset.key, 'review');
-    if (review.length === 0) {
-      console.log('  review set is empty. Skipping.');
-      continue;
-    }
-
-    // Each curated question's thread, cut at the LAST curated turn in it.
-    const rows = await db
-      .select({
-        messageId: chatMessages.id,
-        conversationId: chatMessages.conversationId,
-        sequenceNumber: chatMessages.sequenceNumber,
-      })
-      .from(chatMessages)
-      .where(inArray(chatMessages.id, review.map((r) => r.messageId)));
-    const cutoffs = new Map<string, number>();
-    for (const row of rows) {
-      const prev = cutoffs.get(row.conversationId) ?? 0;
-      // +1 keeps the chatbot's reply to the last curated question: the board
-      // shows a question WITH its answer, which is the thing being reviewed.
-      cutoffs.set(row.conversationId, Math.max(prev, row.sequenceNumber + 1));
-    }
-    const restrictTo: CloneRestriction[] = [...cutoffs].map(([conversationId, maxSequence]) => ({
-      conversationId,
-      maxSequence,
-    }));
-
-    const totalMsgs = await db.execute<{ n: number }>(sql`
-      SELECT count(*)::int AS n FROM chat_messages m
-      JOIN chat_conversations c ON c.id = m.conversation_id
-      JOIN student_sessions s ON s.id = c.session_id
-      WHERE s.assignment_id = ${source.masterAssignmentId}
-    `);
+  const results = await buildStudyMasters({ apply: APPLY, datasetKey: ONLY ?? undefined });
+  for (const r of results) {
+    console.log(`\n=== ${r.label} (${r.datasetKey}) ===`);
     console.log(
-      `  review questions ${review.length} · threads ${restrictTo.length} · source messages ${totalMsgs[0]?.n ?? 0}`
+      `  review questions ${r.reviewQuestions} · threads ${r.threads} · source messages ${r.sourceMessages}`
     );
+    for (const w of r.warnings) console.log(`  ! ${w}`);
 
-    const token = studyMasterToken(dataset.key);
-    const existing = await db.query.assignments.findFirst({
-      where: eq(assignments.shareToken, token),
-    });
-    if (existing) {
-      const holders = await db
-        .select({ id: studyClones.id })
-        .from(studyClones)
-        .where(eq(studyClones.sourceAssignmentId, existing.id));
-      if (holders.length > 0) {
-        console.log(
-          `  ✗ ${holders.length} participant clone(s) still point at the existing study master — deprovision them first.`
-        );
-        continue;
-      }
-      console.log(`  existing study master ${existing.id.slice(0, 8)}… will be replaced`);
+    if (r.status === 'blocked' || r.status === 'skipped') {
+      console.log(`  ${r.status === 'blocked' ? '✗' : '–'} ${r.reason}`);
+      continue;
     }
-
-    if (!APPLY) {
+    if (r.status === 'planned') {
       console.log('  (plan only — re-run with --apply)');
       continue;
     }
 
-    // The study master belongs to whoever owns the source master — a research
-    // dataset, not a participant.
-    const sourceRow = await db.query.assignments.findFirst({
-      where: eq(assignments.id, source.masterAssignmentId),
-    });
-    const ownerId = sourceRow?.instructorId;
-    if (!ownerId) throw new Error('source master has no owner to inherit');
-
-    const newId = randomUUID();
-    await db.transaction(async (tx) => {
-      if (existing) await deleteCloneAssignment(tx, existing.id);
-      const counts = await cloneStarterSet(tx, {
-        sourceAssignmentId: source.masterAssignmentId,
-        newAssignmentId: newId,
-        newInstructorId: ownerId,
-        shareToken: token,
-        newTitle: `${dataset.label} (study)`,
-        includeEditorEvents: false,
-        restrictTo,
-        // The curated questions, marked. The threads around them come along as
-        // context, so without this the board would list those earlier turns as
-        // material to review and the per-type balance would be whatever the
-        // threads happened to contain.
-        markReviewSourceMessageIds: review.map((r) => r.messageId),
-      });
-      // The study forbids the assignment description reaching the prompt; a
-      // reduced master must never re-enable it by inheritance.
-      await tx
-        .update(assignments)
-        .set({ includeInstructionInPrompt: false })
-        .where(eq(assignments.id, newId));
-      console.log(`  built ${newId.slice(0, 8)}… ${JSON.stringify(counts)}`);
-    });
-
-    await report(newId, source.masterAssignmentId, review.length);
+    console.log(`  built ${r.assignmentId!.slice(0, 8)}…`);
+    for (const [label, n] of Object.entries(r.counts ?? {})) {
+      console.log(`    ${label.padEnd(10)} ${n}`);
+    }
+    console.log(
+      `    per type   ${Object.entries(r.perType ?? {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' ')} (review set)`
+    );
+    const questions = r.counts?.questions ?? 0;
+    const marked = r.counts?.['review-set'] ?? 0;
+    console.log(
+      `    ${questions} messages in the log, ${marked} listed as review material; the rest are context inside those threads.`
+    );
+    if (r.templatePins) {
+      console.log(`    template pins ${r.templatePins.kept}/${r.templatePins.source}`);
+    }
   }
 
-  console.log(
-    '\nNext: point STUDY_DATASETS at these study masters (src/lib/study/config.ts), then re-provision.'
-  );
+  console.log('\nNext: build the question bank, then re-provision participants.');
   process.exit(0);
-}
-
-/** What the built master actually contains, and what the cut cost. */
-async function report(newId: string, sourceId: string, expectedQuestions: number) {
-  const counts = await db.execute<{ label: string; n: number }>(sql`
-    SELECT 'questions' AS label, count(*)::int AS n
-      FROM chat_messages m
-      JOIN chat_conversations c ON c.id = m.conversation_id
-      JOIN student_sessions s ON s.id = c.session_id
-      WHERE s.assignment_id = ${newId} AND m.role = 'user'
-    UNION ALL
-    SELECT 'students', count(*)::int FROM student_sessions WHERE assignment_id = ${newId}
-    UNION ALL
-    SELECT 'templates', count(*)::int FROM score_intents WHERE assignment_id = ${newId} AND is_template
-    UNION ALL
-    SELECT 'ratings', count(*)::int FROM score_intent_ratings WHERE assignment_id = ${newId}
-    UNION ALL
-    SELECT 'types', count(*)::int FROM score_query_types WHERE assignment_id = ${newId}
-    UNION ALL
-    SELECT 'review-set', count(*)::int FROM study_review_questions WHERE assignment_id = ${newId}
-  `);
-  for (const row of counts) console.log(`    ${row.label.padEnd(10)} ${row.n}`);
-
-  // Per type over the MARKED questions — what the board will actually list.
-  const byType = await db.execute<{ type: string; n: number }>(sql`
-    SELECT t.type, count(*)::int AS n
-    FROM score_query_types t
-    JOIN study_review_questions rq ON rq.message_id = t.message_id AND rq.assignment_id = ${newId}
-    WHERE t.assignment_id = ${newId}
-    GROUP BY t.type ORDER BY t.type
-  `);
-  console.log(`    per type   ${byType.map((r) => `${r.type}=${r.n}`).join(' ')} (review set)`);
-
-  const questions = counts.find((c) => c.label === 'questions')?.n ?? 0;
-  const marked = counts.find((c) => c.label === 'review-set')?.n ?? 0;
-  if (marked !== expectedQuestions) {
-    console.log(`    ✗ marked ${marked} but curated ${expectedQuestions} — the board would list the wrong set.`);
-  }
-  console.log(
-    `    ${questions} messages in the log, ${marked} listed as review material; the rest are context inside those threads.`
-  );
-
-  // Template pins copy through _msg_map, so a starter boundary example pinned
-  // to a question outside the review set is dropped. Not fatal — but it changes
-  // what the starter suggestions carry, so it gets said out loud.
-  const [srcPins, newPins] = await Promise.all([
-    db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(scoreIntentPins)
-      .innerJoin(scoreIntents, eq(scoreIntents.id, scoreIntentPins.intentId))
-      .where(and(eq(scoreIntentPins.assignmentId, sourceId), eq(scoreIntents.isTemplate, true))),
-    db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(scoreIntentPins)
-      .where(eq(scoreIntentPins.assignmentId, newId)),
-  ]);
-  const lost = (srcPins[0]?.n ?? 0) - (newPins[0]?.n ?? 0);
-  console.log(
-    `    template pins ${newPins[0]?.n ?? 0}/${srcPins[0]?.n ?? 0}${lost > 0 ? ` — ${lost} dropped (pinned outside the review set)` : ''}`
-  );
 }
 
 main().catch((err) => {

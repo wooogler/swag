@@ -42,6 +42,18 @@ export const STUDY_DATASETS: StudyDataset[] = [
   },
 ];
 
+/**
+ * The share token a built study master is addressed by.
+ *
+ * Lives here, in the leaf module, because both ends need it: build.ts writes
+ * the master under this token and provision.ts looks it up to decide what a
+ * clone is made from. Addressing by token rather than id is what lets a
+ * rebuild replace the master without any id being edited anywhere.
+ */
+export function studyMasterToken(datasetKey: string): string {
+  return `${datasetKey}-study`;
+}
+
 // Accepted participant-number shape AFTER normalization (trim/upper/no spaces).
 // Keeps typos from spawning junk clones; still permissive (e.g. P01, 7, A12).
 export const PARTICIPANT_NUMBER_RE = /^[A-Z0-9][A-Z0-9_-]{0,31}$/;
@@ -133,6 +145,20 @@ export function conditionForDataset(participantNumber: string, datasetKey: strin
   if (datasetKey === 'nirvana') return even ? 'baseline' : 'score';
   return 'score'; // fallback for any future dataset
 }
+
+/**
+ * The walkthrough a participant watches before each block, keyed by the
+ * condition that block runs.
+ *
+ * Both are null until the recordings exist — the screen still appears and still
+ * asks for a click, because the step is what paces the session (the facilitator
+ * demonstrates live over the shared screen meanwhile). Dropping a URL in here
+ * is then the entire change.
+ */
+export const TUTORIAL_VIDEOS: Record<StudioView, string | null> = {
+  score: null,
+  baseline: null,
+};
 
 // Baseline monolithic prompt editor character ceiling (matches GPT Builder /
 // Claude ~8k). Both conditions write against the same ceiling.

@@ -117,7 +117,9 @@ export interface CurationState {
   questions: CurationQuestion[];
   subtypes: CurationSubtype[];
   members: CurationMember[];
-  meta: { demoSubtype: string | null; lockedAt: string | null; lockedBy: string | null };
+  meta: { demoSubtypes: string[]; lockedAt: string | null; lockedBy: string | null };
+  /** Assigned questions that are ALSO isolated — a demo/set overlap. */
+  demoSetOverlap: number;
   /** Questions blocked from assignment: the demo subtype's students (design §4
    * isolates the whole student, in BOTH datasets). */
   excludedMessageIds: number[];
@@ -278,10 +280,11 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
   }
 
   const meta = metaRows[0];
-  const demoSubtype = meta?.demoSubtype ?? null;
-  const excludedMessageIds = demoSubtype
-    ? demoIsolatedMessageIds(questions, subtypeById, demoSubtype)
-    : [];
+  const demoSubtypes = readDemoSubtypes(meta);
+  const excludedMessageIds =
+    demoSubtypes.length > 0
+      ? demoIsolatedMessageIds(questions, subtypeById, demoSubtypes)
+      : [];
 
   const classified = gradeCounts.certain + gradeCounts.boundary;
 
@@ -298,11 +301,14 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
       position: m.position,
     })),
     meta: {
-      demoSubtype,
+      demoSubtypes,
       lockedAt: meta?.lockedAt ? meta.lockedAt.toISOString() : null,
       lockedBy: meta?.lockedBy ?? null,
     },
     excludedMessageIds,
+    demoSetOverlap: memberRows.filter((m) =>
+      new Set(excludedMessageIds).has(m.sourceMessageId)
+    ).length,
     typeCounts,
     missingTypeCount,
     naturalBoundaryRatio: classified > 0 ? gradeCounts.boundary / classified : 0,
@@ -350,19 +356,20 @@ function gradeOf(
 }
 
 /**
- * Every question belonging to a student who asked anything in the demo subtype.
+ * Every question belonging to a student who asked anything in ANY demo subtype.
  * Whole-student, because a participant who met that student in the tutorial
- * would recognize their thread in the study material (design §4 step 1).
+ * would recognize their thread in the study material (design §4 step 1) — and
+ * that holds however many subtypes the demo covers, so the isolated set is the
+ * union across all of them.
  */
 function demoIsolatedMessageIds(
   questions: CurationQuestion[],
   subtypeById: Map<number, CurationSubtype>,
-  demoSubtypeTitle: string
+  demoSubtypeTitles: string[]
 ): number[] {
+  const wanted = new Set(demoSubtypeTitles);
   const demoIds = new Set(
-    [...subtypeById.values()]
-      .filter((s) => s.title === demoSubtypeTitle)
-      .map((s) => s.intentId)
+    [...subtypeById.values()].filter((s) => wanted.has(s.title)).map((s) => s.intentId)
   );
   if (demoIds.size === 0) return [];
   const tokens = new Set<string>();
@@ -458,11 +465,14 @@ export async function isDemoIsolated(datasetKey: string, messageId: number): Pro
   if (!dataset) return false;
 
   const [meta] = await db
-    .select({ demoSubtype: studyCurationMeta.demoSubtype })
+    .select({
+      demoSubtypes: studyCurationMeta.demoSubtypes,
+      demoSubtype: studyCurationMeta.demoSubtype,
+    })
     .from(studyCurationMeta)
     .where(eq(studyCurationMeta.datasetKey, datasetKey));
-  const demoSubtype = meta?.demoSubtype;
-  if (!demoSubtype) return false;
+  const demoSubtypes = readDemoSubtypes(meta);
+  if (demoSubtypes.length === 0) return false;
 
   const demoIntents = await db
     .select({ id: scoreIntents.id })
@@ -471,7 +481,7 @@ export async function isDemoIsolated(datasetKey: string, messageId: number): Pro
       and(
         eq(scoreIntents.assignmentId, dataset.masterAssignmentId),
         eq(scoreIntents.isTemplate, true),
-        eq(scoreIntents.title, demoSubtype)
+        inArray(scoreIntents.title, demoSubtypes)
       )
     );
   if (demoIntents.length === 0) return false;
@@ -618,13 +628,99 @@ export async function clearSet(
   return { removed: targets };
 }
 
-export async function setDemoSubtype(datasetKey: string, demoSubtype: string | null): Promise<void> {
+/**
+ * The demo's isolated subtypes, from whichever column holds them.
+ *
+ * The list column wins; the pre-list single value is read as a one-item list so
+ * a dataset locked before the change keeps isolating what it was locked with.
+ */
+export function readDemoSubtypes(meta?: {
+  demoSubtypes?: string[] | null;
+  demoSubtype?: string | null;
+}): string[] {
+  if (Array.isArray(meta?.demoSubtypes)) return meta.demoSubtypes.filter((t) => !!t);
+  return meta?.demoSubtype ? [meta.demoSubtype] : [];
+}
+
+export async function setDemoSubtypes(datasetKey: string, titles: string[]): Promise<void> {
   await ensureStudyTables();
-  if (await isLocked(datasetKey)) throw new Error('curation_locked');
+  const clean = [...new Set(titles.map((t) => t.trim()).filter(Boolean))].sort();
+
+  // Deliberately allowed even when the sets are confirmed.
+  //
+  // Isolation is whole-student, so on a dataset already curated across many
+  // students almost ANY subtype overlaps something in a set — reserving the
+  // demo is meant to happen before assignment, and refusing afterwards would
+  // just make the demo unusable on a finished dataset. Whether that overlap
+  // matters depends on what the demo is FOR: it disqualifies a participant-
+  // facing tutorial, and means nothing for a dev preview or a talk.
+  //
+  // That is the researcher's call, so this records the choice and lets the
+  // overlap be seen — validateCuration still raises it as a blocking error, so
+  // a curation cannot be re-confirmed while it stands.
+  // Both columns move together: the old one keeps a single-subtype demo
+  // readable by anything not yet updated, and is cleared when the list is.
+  const values = { demoSubtypes: clean, demoSubtype: clean.length === 1 ? clean[0] : null };
   await db
     .insert(studyCurationMeta)
-    .values({ datasetKey, demoSubtype })
-    .onConflictDoUpdate({ target: studyCurationMeta.datasetKey, set: { demoSubtype } });
+    .values({ datasetKey, ...values })
+    .onConflictDoUpdate({ target: studyCurationMeta.datasetKey, set: values });
+}
+
+/**
+ * The questions the demo is ABOUT: clearly in one of the demo subtypes.
+ *
+ * Narrower than the isolated set, deliberately. Isolation is whole-student —
+ * every question by anyone who asked a demo-subtype question, so a participant
+ * cannot meet that student twice. The demo workspace instead lists only the
+ * questions that are the demo, with the rest of their threads kept as context,
+ * exactly the way the study master treats its review set.
+ */
+export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
+  const dataset = curationDataset(datasetKey);
+  if (!dataset) return [];
+  const titles = await getDemoSubtypes(datasetKey);
+  if (titles.length === 0) return [];
+
+  const intents = await db
+    .select({ id: scoreIntents.id })
+    .from(scoreIntents)
+    .where(
+      and(
+        eq(scoreIntents.assignmentId, dataset.masterAssignmentId),
+        eq(scoreIntents.isTemplate, true),
+        inArray(scoreIntents.title, titles)
+      )
+    );
+  if (intents.length === 0) return [];
+
+  const rows = await db
+    .select({ messageId: scoreIntentRatings.messageId })
+    .from(scoreIntentRatings)
+    .where(
+      and(
+        eq(scoreIntentRatings.assignmentId, dataset.masterAssignmentId),
+        eq(scoreIntentRatings.rating, 'clearly_in'),
+        inArray(
+          scoreIntentRatings.intentId,
+          intents.map((i) => i.id)
+        )
+      )
+    );
+  return [...new Set(rows.map((r) => r.messageId))];
+}
+
+/** The demo subtypes recorded for a dataset. */
+export async function getDemoSubtypes(datasetKey: string): Promise<string[]> {
+  await ensureStudyTables();
+  const [row] = await db
+    .select({
+      demoSubtypes: studyCurationMeta.demoSubtypes,
+      demoSubtype: studyCurationMeta.demoSubtype,
+    })
+    .from(studyCurationMeta)
+    .where(eq(studyCurationMeta.datasetKey, datasetKey));
+  return readDemoSubtypes(row);
 }
 
 export async function isLocked(datasetKey: string): Promise<boolean> {

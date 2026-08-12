@@ -510,6 +510,10 @@ export const studyParticipants = pgTable('study_participants', {
   blockOrder: text('block_order'), // e.g. 'swag,nirvana'
   // Where the facilitator has advanced this participant to (StudyPhase).
   phase: text('phase').notNull().default('not_started'),
+  // A demo account (DEMO-SCORE / DEMO-BASELINE), not a study participant. Runs
+  // the identical session on the isolated demo subtypes; excluded from the
+  // console and the metrics export so a demo run cannot become study data.
+  isDemo: boolean('is_demo').notNull().default(false),
   createdAt: timestamp('created_at').notNull(),
   lastLoginAt: timestamp('last_login_at'),
 }, (table) => ({
@@ -666,7 +670,11 @@ export const studyCurationMeta = pgTable('study_curation_meta', {
   datasetKey: text('dataset_key').primaryKey(),
   // Subtype TITLE (not an intent id): template rows are per-assignment, but the
   // demo subtype must be excluded from BOTH datasets, and titles are shared.
+  // Superseded by demoSubtypes — kept so a dataset confirmed before the demo
+  // became multi-subtype still reads back the choice it was locked with.
   demoSubtype: text('demo_subtype'),
+  /** Subtype TITLEs the demo runs on, all isolated from every set. */
+  demoSubtypes: jsonb('demo_subtypes').$type<string[]>(),
   lockedAt: timestamp('locked_at'),
   lockedBy: text('locked_by'),
 });
