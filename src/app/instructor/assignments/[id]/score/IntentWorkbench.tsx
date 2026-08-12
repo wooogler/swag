@@ -6,8 +6,13 @@
  * Editing or creating an intent transforms the BOARD ITSELF: the board's
  * 3-column grid is swapped for this one, keeping the same shape —
  *   LEFT   the spec: title · definition · labeled examples · actions · history
- *   MIDDLE "In this intent" — what the definition captures (clearly-in + pins)
- *   RIGHT  "Needs decision" — the model-uncertain questions to label in/out
+ *   MIDDLE "In this intent" — what the definition captures, labeled OUT
+ *   RIGHT  "Needs decision" — the probably-in questions, labeled IN
+ * The two panes push the boundary from opposite sides, one verdict each: this
+ * workbench is where an intent's border is settled, and a pane that offered
+ * both verdicts asked a two-way question on every row when only one way moves
+ * that border. (An already-pinned row still shows its own pill — see
+ * pinButtons — because withdrawing a label must stay possible.)
  * Clicking a question in either list opens its FULL conversation in place of
  * that list (the board viewer's theater-style thread, shared component), so a
  * labeling call that needs the chatbot's reply never leaves the workbench.
@@ -514,17 +519,9 @@ export default function IntentWorkbench({
   // "In this intent" holds captures that all lean in, so its useful default is
   // out-like first — the members that look like they don't belong.
   const [inSort, setInSort] = useState<NdSort>('out-like');
-  // Needs-decision lean tab: the probably-in or the probably-out side.
-  // Everything without a clear in-lean (probably_out, legacy unsure, not
-  // rated) lands on the out side so no row is ever hidden.
-  const [ndFilter, setNdFilter] = useState<'in' | 'out'>('in');
-  // One sort per lean tab, so each remembers its own order. Each defaults to the
-  // "surprising" side — the probably-in questions that look OUT-like, and the
-  // probably-out questions that look IN-like: the rows most likely mislabeled.
-  const [ndSortIn, setNdSortIn] = useState<NdSort>('out-like');
-  const [ndSortOut, setNdSortOut] = useState<NdSort>('in-like');
-  const ndSort = ndFilter === 'in' ? ndSortIn : ndSortOut;
-  const setNdSort = ndFilter === 'in' ? setNdSortIn : setNdSortOut;
+  // Needs decision holds the probably-in questions only, so its useful default
+  // is the surprising side: the ones that look OUT-like next to the pins.
+  const [ndSort, setNdSort] = useState<NdSort>('out-like');
   const [similarScores, setSimilarScores] = useState<Record<number, number> | null>(null);
   const [similarBusy, setSimilarBusy] = useState(false);
 
@@ -1231,17 +1228,15 @@ export default function IntentWorkbench({
     () => scopedRows.filter((r) => r.rating === 'clearly_in'),
     [scopedRows]
   );
+  // Needs decision is the probably-IN side alone. Making an intent is settling
+  // where its boundary runs, and the questions that test a boundary are the ones
+  // just inside it; probably-out (and the legacy unsure/unrated rows) are a
+  // longer list that mostly restates what the definition already excludes. They
+  // return by widening the definition, which is the move that actually claims
+  // them — not by labelling one at a time.
   const needsDecision = useMemo(
-    () =>
-      scopedRows.filter(
-        (r) =>
-          r.rating !== 'clearly_in' &&
-          r.rating !== 'clearly_out' &&
-          // During the live fill, not-yet-rated rows stay out — the pane
-          // ACCUMULATES results rather than starting full and thinning.
-          (r.rating !== null || !busy)
-      ),
-    [scopedRows, busy]
+    () => scopedRows.filter((r) => r.rating === 'probably_in'),
+    [scopedRows]
   );
   /** Pending corrections — what "Update definition" will fold in. */
   const pinnedIn = useMemo(() => (data ? data.rows.filter((r) => r.pinned === 'in') : []), [data]);
@@ -1373,18 +1368,6 @@ export default function IntentWorkbench({
   // Which accordion groups the user has explicitly toggled; the NEWEST group
   // defaults open (its minors are the work since the last save).
   const [groupToggles, setGroupToggles] = useState<Record<string, boolean>>({});
-
-  const ndProbablyIn = needsDecision.filter((r) => r.rating === 'probably_in').length;
-  const ndProbablyOut = needsDecision.length - ndProbablyIn;
-  // The rows the active lean tab shows (sorting/search apply on top of this).
-  // The two tabs PARTITION the list — out = everything that isn't probably_in.
-  const ndFiltered = useMemo(
-    () =>
-      needsDecision.filter((r) =>
-        ndFilter === 'in' ? r.rating === 'probably_in' : r.rating !== 'probably_in'
-      ),
-    [needsDecision, ndFilter]
-  );
 
   // Pin-propagation score map (max cosine to IN pins − to OUT pins), feeding both
   // pin-driven sorts. Empty {} on failure so it doesn't refetch forever.
@@ -1738,45 +1721,57 @@ export default function IntentWorkbench({
               r.pinned || reasonPicker?.messageId === r.messageId ? 'opacity-100' : 'opacity-0'
             }`}
           >
-            {pinButtons(r)}
+            {pinButtons(r, pane)}
           </span>
         )}
       </li>
     );
   };
 
-  // The in/out pin pair — shared by list rows and the conversation header so a
+  // The pin buttons — shared by list rows and the conversation header so a
   // decision that needed the chatbot's reply is made without leaving the thread.
   // A render HELPER (not a nested component) so React doesn't see a fresh
   // component type each render and remount the buttons.
-  const pinButtons = (row: RatingRow) => (
-    <>
-        <button
-          onClick={(e) =>
-            row.pinned === 'in'
-              ? togglePin(row, 'in') // already corrected → withdraw
-              : disagrees(row, 'in')
-                ? openReasonPicker(row, 'in', e.currentTarget.getBoundingClientRect())
-                : togglePin(row, 'in') // agrees with the rating → one click
-          }
-          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
-            row.pinned === 'in' || (reasonPicker?.messageId === row.messageId && reasonPicker.verdict === 'in')
-              ? 'bg-emerald-600 text-white border-emerald-600'
-              : 'border-[hsl(var(--border))] text-emerald-700 hover:bg-emerald-50'
-          }`}
-          title={
-            row.shadowedBy !== null
-              ? `This question BELONGS here. “${row.shadowedByTitle ?? 'An earlier intent'}” still answers it first — use “send here” to change that.`
-              : disagrees(row, 'in')
-                ? 'This question BELONGS here — you’ll be asked why, since the classifier disagrees'
-                : 'This question BELONGS here'
-          }
-        >
-          in
-        </button>
+  //
+  // ONE verdict per pane, in the direction that pane exists to settle: "In this
+  // intent" is the list you carve members OUT of, "Needs decision" the list you
+  // pull members IN from. Offering both everywhere made every row a two-way
+  // question when only one way moves the boundary. The opposite verdict still
+  // renders when it is already pinned — that pill is the only way to withdraw
+  // the label, and a label with no undo is a trap.
+  const pinButtons = (row: RatingRow, pane: 'in' | 'nd') => {
+    const showIn = pane === 'nd' || row.pinned === 'in';
+    const showOut = pane === 'in' || row.pinned === 'out';
+    return (
+      <>
+        {showIn && (
+          <button
+            onClick={(e) =>
+              row.pinned === 'in'
+                ? togglePin(row, 'in') // already corrected → withdraw
+                : disagrees(row, 'in')
+                  ? openReasonPicker(row, 'in', e.currentTarget.getBoundingClientRect())
+                  : togglePin(row, 'in') // agrees with the rating → one click
+            }
+            className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
+              row.pinned === 'in' || (reasonPicker?.messageId === row.messageId && reasonPicker.verdict === 'in')
+                ? 'bg-emerald-600 text-white border-emerald-600'
+                : 'border-[hsl(var(--border))] text-emerald-700 hover:bg-emerald-50'
+            }`}
+            title={
+              row.shadowedBy !== null
+                ? `This question BELONGS here. “${row.shadowedByTitle ?? 'An earlier intent'}” still answers it first — use “send here” to change that.`
+                : disagrees(row, 'in')
+                  ? 'This question BELONGS here — you’ll be asked why, since the classifier disagrees'
+                  : 'This question BELONGS here'
+            }
+          >
+            in
+          </button>
+        )}
         {/* A label fixes the JUDGMENT, never the order — so when an earlier set
             answers this question, offer the one action that actually moves it. */}
-        {row.shadowedBy !== null && (
+        {pane === 'nd' && row.shadowedBy !== null && (
           <button
             onClick={() => togglePin(row, 'in', undefined, true)}
             className="px-1.5 py-0.5 rounded text-xs font-medium border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
@@ -1785,33 +1780,36 @@ export default function IntentWorkbench({
             send here
           </button>
         )}
-        <button
-          onClick={(e) =>
-            row.pinned === 'out'
-              ? togglePin(row, 'out') // already corrected → withdraw
-              : disagrees(row, 'out')
-                ? openReasonPicker(row, 'out', e.currentTarget.getBoundingClientRect())
-                : togglePin(row, 'out') // agrees with the rating → one click
-          }
-          className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
-            row.pinned === 'out' || (reasonPicker?.messageId === row.messageId && reasonPicker.verdict === 'out')
-              ? 'bg-rose-600 text-white border-rose-600'
-              : 'border-[hsl(var(--border))] text-rose-700 hover:bg-rose-50'
-          }`}
-          title={
-            disagrees(row, 'out')
-              ? 'This question does NOT belong here — you’ll be asked why, since the classifier disagrees'
-              : 'This question does NOT belong here'
-          }
-        >
-          out
-        </button>
+        {showOut && (
+          <button
+            onClick={(e) =>
+              row.pinned === 'out'
+                ? togglePin(row, 'out') // already corrected → withdraw
+                : disagrees(row, 'out')
+                  ? openReasonPicker(row, 'out', e.currentTarget.getBoundingClientRect())
+                  : togglePin(row, 'out') // agrees with the rating → one click
+            }
+            className={`px-1.5 py-0.5 rounded text-xs font-medium border ${
+              row.pinned === 'out' || (reasonPicker?.messageId === row.messageId && reasonPicker.verdict === 'out')
+                ? 'bg-rose-600 text-white border-rose-600'
+                : 'border-[hsl(var(--border))] text-rose-700 hover:bg-rose-50'
+            }`}
+            title={
+              disagrees(row, 'out')
+                ? 'This question does NOT belong here — you’ll be asked why, since the classifier disagrees'
+                : 'This question does NOT belong here'
+            }
+          >
+            out
+          </button>
+        )}
       </>
-  );
+    );
+  };
 
   // Conversation view for one pane: the clicked question's full thread, with
-  // Exit + (Needs-decision pane) the same in/out buttons as the row — the
-  // pinned state reads live from `data`, so labeling from here is identical.
+  // Exit + the same pin button as the row — the pinned state reads live from
+  // `data`, so labeling from here is identical.
   function renderConvo(pane: 'in' | 'nd') {
     if (!convo || convo.pane !== pane) return null;
     const boardRow = rowByMessage.get(convo.messageId) ?? null;
@@ -1835,7 +1833,7 @@ export default function IntentWorkbench({
               <span className="mr-1 text-xs text-[hsl(var(--muted-foreground))]">
                 label this question:
               </span>
-              {pinButtons(ratingRow)}
+              {pinButtons(ratingRow, pane)}
             </span>
           )}
         </div>
@@ -2330,7 +2328,8 @@ export default function IntentWorkbench({
           {!data ? (
             <div className="flex-1 flex items-center justify-center p-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
               <span className="max-w-[26ch]">
-                The model-uncertain questions appear here for you to label in/out.
+                The questions the model nearly captured appear here — pull the ones that
+                belong in.
               </span>
             </div>
           ) : (
@@ -2374,40 +2373,13 @@ export default function IntentWorkbench({
                       </select>
                     </span>
                   </div>
-                  <div className="px-3 py-1.5 flex items-center gap-2">
-                    {/* Lean tabs — the two sides partition the list, so the
-                        row chips repeating the lean are unnecessary. */}
-                    <span className="flex items-center rounded border border-[hsl(var(--border))] overflow-hidden shrink-0">
-                      {(
-                        [
-                          { key: 'in' as const, label: `probably in ${ndProbablyIn}`, on: 'bg-emerald-100 text-emerald-800', off: 'text-emerald-700' },
-                          { key: 'out' as const, label: `probably out ${ndProbablyOut}`, on: 'bg-rose-100 text-rose-800', off: 'text-rose-700' },
-                        ]
-                      ).map((t, i) => (
-                        <button
-                          key={t.key}
-                          onClick={() => setNdFilter(t.key)}
-                          className={`px-2 py-1 text-xs font-medium whitespace-nowrap ${
-                            i > 0 ? 'border-l border-[hsl(var(--border))]' : ''
-                          } ${ndFilter === t.key ? t.on : `${t.off} hover:bg-[hsl(var(--muted))]/50`}`}
-                          title={
-                            t.key === 'in'
-                              ? 'The questions the model leans IN on'
-                              : 'The questions the model leans OUT on (plus the rare unrated ones)'
-                          }
-                        >
-                          {t.label}
-                        </button>
-                      ))}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <PaneSearch value={ndSearch} onChange={setNdSearch} />
-                    </div>
+                  <div className="px-3 py-1.5">
+                    <PaneSearch value={ndSearch} onChange={setNdSearch} />
                   </div>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   {(() => {
-                    const sorted = sortRows(ndFiltered, ndSort, ndSearch);
+                    const sorted = sortRows(needsDecision, ndSort, ndSearch);
                     return sorted.length > 0 ? (
                       <ul className="divide-y divide-[hsl(var(--border))]/60">
                         {sorted.map((r) => renderRow(r, 'nd'))}
@@ -2418,9 +2390,7 @@ export default function IntentWorkbench({
                           ? 'No matching question.'
                           : busy
                             ? 'Rating the log — uncertain questions appear here as they land…'
-                            : needsDecision.length > 0
-                              ? 'No question on this side — switch tabs.'
-                              : 'Nothing to decide — every question is settled.'}
+                            : 'Nothing to decide — every question is settled.'}
                       </p>
                     );
                   })()}
