@@ -270,6 +270,9 @@ type IntentSelection =
   // unclaimed) or an intent (it matched, and none of its subsets did). Rendered
   // as that scope's "Uncategorized" leaf.
   | { kind: 'residue'; scopeId: number }
+  // The questions an intent MATCHES but never receives, because an earlier set
+  // in its chain answers them first. Reached from the warning chip on the row.
+  | { kind: 'shadowed'; id: number }
   | { kind: 'pending' }
   // BASELINE — a saved filter: its clearly-in questions by messageId (from the
   // probe cache, intersected with the filter's own type). Clicking a filter
@@ -1422,6 +1425,49 @@ export default function IntentBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, chains]);
 
+  /**
+   * Two things a set's owner needs to see, both invisible under first-match:
+   *   shadowedBy — an EARLIER sibling in the same chain answers questions this
+   *                set also matches, so they never reach it (§3.7).
+   *   outsideParent — questions this set matches that its ENCLOSING sets do
+   *                not. Containment means it can never win them; the fix is to
+   *                widen the parent or move the set out.
+   * Both are derived from the same walk the router does, so they can never
+   * disagree with what actually happens.
+   */
+  const treeDiagnostics = useMemo(() => {
+    // The shadowed questions are kept, not just counted: the number is the
+    // diagnostic, but the fix — narrow the earlier set, move this one ahead of
+    // it — is only decidable by reading the questions themselves.
+    const shadowed = new Map<number, { intentId: number; ids: Set<number> }>();
+    const outside = new Map<number, number>();
+    for (const r of rows) {
+      if (!r.queryType) continue;
+      const chain = chains.get(r.queryType);
+      if (!chain) continue;
+      const eff = effectiveRatings(r);
+      const winner = resolveRoute(chain, eff);
+      const winnerId = winner.kind === 'matched' ? winner.intentId : null;
+      for (const id of chain.order) {
+        if (id === winnerId) continue;
+        if (!isIncludedRating(eff.get(id))) continue; // it did not claim this one
+        const blocked = (chain.ancestorsOf.get(id) ?? []).some(
+          (a) => !isIncludedRating(eff.get(a))
+        );
+        if (blocked) {
+          outside.set(id, (outside.get(id) ?? 0) + 1);
+        } else if (winnerId !== null) {
+          const prev = shadowed.get(id);
+          if (prev) prev.ids.add(r.messageId);
+          else shadowed.set(id, { intentId: winnerId, ids: new Set([r.messageId]) });
+        }
+      }
+    }
+    return { shadowed, outside };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, chains]);
+  const shadowedBy = treeDiagnostics.shadowed;
+
   const counts = useMemo(() => {
     const perIntent = new Map<number, number>();
     // Queries that no intent claimed, per type — each type's own rule answers
@@ -1512,11 +1558,16 @@ export default function IntentBoard({
       (selection.kind === 'residue' &&
         !typeRoots.some((t) => t.id === selection.scopeId) &&
         !activeIntents.some((i) => i.id === selection.scopeId)) ||
+      // The overlap this list is about can be RESOLVED while it is open —
+      // narrowing the earlier set is one of the fixes it exists to prompt — and
+      // an emptied list is not where anyone should be left standing.
+      (selection.kind === 'shadowed' &&
+        !(treeDiagnostics.shadowed.get(selection.id)?.ids.size ?? 0)) ||
       (selection.kind === 'pending' && untypedCount === 0);
     if (gone) {
       setSelection({ kind: 'type', typeKey: SCORE_QUERY_TYPES[0] });
     }
-  }, [selection, activeIntents, untypedCount, typeRoots]);
+  }, [selection, activeIntents, untypedCount, typeRoots, treeDiagnostics]);
 
   const filteredRows = useMemo(() => {
     return listRows.filter((r) => {
@@ -1540,6 +1591,11 @@ export default function IntentBoard({
           if (root) return res.kind === 'type_default' && r.queryType === root.type;
           return res.kind === 'matched' && res.intentId === selection.scopeId;
         }
+        case 'shadowed':
+          // Questions this intent matches that an earlier set answers first.
+          // Read off the same walk the router does, so this list is exactly
+          // what the chip counted.
+          return treeDiagnostics.shadowed.get(selection.id)?.ids.has(r.messageId) ?? false;
         case 'pending':
           return res.kind === 'pending';
         case 'search':
@@ -1548,7 +1604,7 @@ export default function IntentBoard({
           return selection.ids.includes(r.messageId);
       }
     });
-  }, [listRows, resolutions, selection, subtreeIds, typeRoots]);
+  }, [listRows, resolutions, selection, subtreeIds, typeRoots, treeDiagnostics]);
 
   const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1693,53 +1749,14 @@ export default function IntentBoard({
           ? `${QUERY_TYPE_LABELS[root.type]} · Uncategorized`
           : `${titleOf(selection.scopeId)} · Uncategorized`;
       }
+      case 'shadowed':
+        return `${titleOf(selection.id)} · answered first by another intent`;
       case 'pending':
         return 'Not yet categorized';
       case 'search':
         return `Filter · ${selection.label}`;
     }
   })();
-
-  // Viewing a past deploy → the read-only version board replaces everything.
-  /**
-   * Two things a set's owner needs to see, both invisible under first-match:
-   *   shadowedBy — an EARLIER sibling in the same chain answers questions this
-   *                set also matches, so they never reach it (§3.7).
-   *   outsideParent — questions this set matches that its ENCLOSING sets do
-   *                not. Containment means it can never win them; the fix is to
-   *                widen the parent or move the set out.
-   * Both are derived from the same walk the router does, so they can never
-   * disagree with what actually happens.
-   */
-  const treeDiagnostics = useMemo(() => {
-    const shadowed = new Map<number, { intentId: number; count: number }>();
-    const outside = new Map<number, number>();
-    for (const r of rows) {
-      if (!r.queryType) continue;
-      const chain = chains.get(r.queryType);
-      if (!chain) continue;
-      const eff = effectiveRatings(r);
-      const winner = resolveRoute(chain, eff);
-      const winnerId = winner.kind === 'matched' ? winner.intentId : null;
-      for (const id of chain.order) {
-        if (id === winnerId) continue;
-        if (!isIncludedRating(eff.get(id))) continue; // it did not claim this one
-        const blocked = (chain.ancestorsOf.get(id) ?? []).some(
-          (a) => !isIncludedRating(eff.get(a))
-        );
-        if (blocked) {
-          outside.set(id, (outside.get(id) ?? 0) + 1);
-        } else if (winnerId !== null) {
-          const prev = shadowed.get(id);
-          if (prev) prev.count += 1;
-          else shadowed.set(id, { intentId: winnerId, count: 1 });
-        }
-      }
-    }
-    return { shadowed, outside };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, chains]);
-  const shadowedBy = treeDiagnostics.shadowed;
 
   /** One set in the left column's tree, then its subsets under it. */
   function renderTreeNode(
@@ -1866,12 +1883,33 @@ export default function IntentBoard({
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-sm truncate">{intent.title}</span>
               {shadow && (
-                <SmallChip
-                  className="bg-amber-50 text-amber-700 border-amber-200 shrink-0"
-                  title={`“${titleOf(shadow.intentId)}” comes earlier in ${QUERY_TYPE_LABELS[type]} and answers ${shadow.count} question${shadow.count === 1 ? '' : 's'} this intent also matches. Narrow it, move this intent above it, or nest this intent inside it.`}
+                // Clickable: the count says there is a problem, and the only
+                // way to decide between the fixes — narrow the earlier set,
+                // move this one ahead of it — is to read the questions it is
+                // about. role=button rather than <button> because this sits
+                // inside a row that is itself clickable.
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelection({ kind: 'shadowed', id: intent.id });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelection({ kind: 'shadowed', id: intent.id });
+                  }}
+                  title={`“${titleOf(shadow.intentId)}” comes earlier in ${QUERY_TYPE_LABELS[type]} and answers ${shadow.ids.size} question${shadow.ids.size === 1 ? '' : 's'} this intent also matches — click to read them. Narrow it, move this intent above it, or nest this intent inside it.`}
+                  className={`shrink-0 inline-flex items-center gap-1 rounded border px-1 py-px text-[11px] font-medium tabular-nums ${
+                    selection.kind === 'shadowed' && selection.id === intent.id
+                      ? 'border-amber-400 bg-amber-200 text-amber-900'
+                      : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  }`}
                 >
-                  <AlertTriangle className="w-3 h-3" /> {shadow.count}
-                </SmallChip>
+                  <AlertTriangle className="w-3 h-3" /> {shadow.ids.size}
+                </span>
               )}
               {outsideCount > 0 && (
                 <SmallChip
