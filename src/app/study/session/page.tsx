@@ -4,9 +4,8 @@ import { db } from '@/db/db';
 import { studyClones } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
-import { TUTORIAL_VIDEOS } from '@/lib/study/config';
 import { advanceWaits } from '@/lib/study/advance';
-import { blockPlan, isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
+import { isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
 import PhaseAdvance from '@/components/study/PhaseAdvance';
 import TutorialStep from '@/components/study/TutorialStep';
 
@@ -34,8 +33,6 @@ export default async function StudySessionPage() {
 
   const phase: StudyPhase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
   const access = phaseAccess(participant.participantNumber, phase);
-  const plan = blockPlan(participant.participantNumber);
-  const conditionOfBlock = (block: 1 | 2) => plan.find((p) => p.block === block)?.condition;
 
   let workAssignmentId: string | null = null;
   if (access.workDatasetKey) {
@@ -67,16 +64,14 @@ export default async function StudySessionPage() {
         {phase === 'not_started' ? (
           <TutorialStep
             title="Before you start"
-            body="A quick look at the tool you will use for the first part."
-            videoUrl={TUTORIAL_VIDEOS[conditionOfBlock(1) ?? 'score']}
+            body="Your facilitator will show you the tool you will use for the first part."
             fromPhase={phase}
             buttonLabel="Start"
           />
         ) : phase === 'break' ? (
           <TutorialStep
             title="Second part"
-            body="Take a moment first. The second chatbot is set up with a different tool — here is how that one works."
-            videoUrl={TUTORIAL_VIDEOS[conditionOfBlock(2) ?? 'score']}
+            body="Take a moment first. The second chatbot is set up with a different tool, and your facilitator will show you that one."
             fromPhase={phase}
             buttonLabel="I'm ready"
           />

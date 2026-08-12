@@ -145,20 +145,6 @@ export function conditionForDataset(participantNumber: string, datasetKey: strin
   return 'score'; // fallback for any future dataset
 }
 
-/**
- * The walkthrough a participant watches before each block, keyed by the
- * condition that block runs.
- *
- * Both are null until the recordings exist — the screen still appears and still
- * asks for a click, because the step is what paces the session (the facilitator
- * demonstrates live over the shared screen meanwhile). Dropping a URL in here
- * is then the entire change.
- */
-export const TUTORIAL_VIDEOS: Record<StudioView, string | null> = {
-  score: null,
-  baseline: null,
-};
-
 // Baseline monolithic prompt editor character ceiling (matches GPT Builder /
 // Claude ~8k). Both conditions write against the same ceiling.
 export const STUDY_PROMPT_CHAR_LIMIT = Number(process.env.STUDY_PROMPT_CHAR_LIMIT ?? 8000);
