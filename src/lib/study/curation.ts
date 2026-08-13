@@ -117,7 +117,15 @@ export interface CurationState {
   questions: CurationQuestion[];
   subtypes: CurationSubtype[];
   members: CurationMember[];
-  meta: { demoSubtypes: string[]; lockedAt: string | null; lockedBy: string | null };
+  meta: {
+    demoSubtypes: string[];
+    /** Students isolated by name, beside whoever a subtype swept in. */
+    demoParticipants: string[];
+    lockedAt: string | null;
+    lockedBy: string | null;
+  };
+  /** Every student token in the log, for the isolate-by-student picker. */
+  participantTokens: string[];
   /** Assigned questions that are ALSO isolated — a demo/set overlap. */
   demoSetOverlap: number;
   /** Questions blocked from assignment: the demo subtype's students (design §4
@@ -281,10 +289,13 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
 
   const meta = metaRows[0];
   const demoSubtypes = readDemoSubtypes(meta);
-  const excludedMessageIds =
-    demoSubtypes.length > 0
-      ? demoIsolatedMessageIds(questions, subtypeById, demoSubtypes)
-      : [];
+  const demoParticipants = readDemoParticipants(meta);
+  const excludedMessageIds = demoIsolatedMessageIds(
+    questions,
+    subtypeById,
+    demoSubtypes,
+    demoParticipants
+  );
 
   const classified = gradeCounts.certain + gradeCounts.boundary;
 
@@ -302,9 +313,13 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
     })),
     meta: {
       demoSubtypes,
+      demoParticipants,
       lockedAt: meta?.lockedAt ? meta.lockedAt.toISOString() : null,
       lockedBy: meta?.lockedBy ?? null,
     },
+    participantTokens: [...new Set(questions.map((q) => q.participantToken))]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
     excludedMessageIds,
     demoSetOverlap: memberRows.filter((m) =>
       new Set(excludedMessageIds).has(m.sourceMessageId)
@@ -362,22 +377,35 @@ function gradeOf(
  * that holds however many subtypes the demo covers, so the isolated set is the
  * union across all of them.
  */
+/**
+ * The isolated questions: everything belonging to an isolated STUDENT.
+ *
+ * Two ways in, one result. A subtype sweeps in whoever asked it — indirect, and
+ * expensive: one SWAG subtype took 50 of 507 questions. Naming students takes
+ * exactly the threads a demo needs. Both end at the same place because
+ * isolation was always whole-student — a participant who met a student in the
+ * tutorial must not meet them again in the study material, and which door that
+ * student came through does not change that.
+ */
 function demoIsolatedMessageIds(
   questions: CurationQuestion[],
   subtypeById: Map<number, CurationSubtype>,
-  demoSubtypeTitles: string[]
+  demoSubtypeTitles: string[],
+  demoParticipants: string[]
 ): number[] {
+  const tokens = new Set(demoParticipants);
   const wanted = new Set(demoSubtypeTitles);
   const demoIds = new Set(
     [...subtypeById.values()].filter((s) => wanted.has(s.title)).map((s) => s.intentId)
   );
-  if (demoIds.size === 0) return [];
-  const tokens = new Set<string>();
-  for (const q of questions) {
-    for (const [intentId, grade] of Object.entries(q.matches)) {
-      if (grade === 'clearly_in' && demoIds.has(Number(intentId))) tokens.add(q.participantToken);
+  if (demoIds.size > 0) {
+    for (const q of questions) {
+      for (const [intentId, grade] of Object.entries(q.matches)) {
+        if (grade === 'clearly_in' && demoIds.has(Number(intentId))) tokens.add(q.participantToken);
+      }
     }
   }
+  if (tokens.size === 0) return [];
   return questions.filter((q) => tokens.has(q.participantToken)).map((q) => q.messageId);
 }
 
@@ -468,10 +496,25 @@ export async function isDemoIsolated(datasetKey: string, messageId: number): Pro
     .select({
       demoSubtypes: studyCurationMeta.demoSubtypes,
       demoSubtype: studyCurationMeta.demoSubtype,
+      demoParticipants: studyCurationMeta.demoParticipants,
     })
     .from(studyCurationMeta)
     .where(eq(studyCurationMeta.datasetKey, datasetKey));
   const demoSubtypes = readDemoSubtypes(meta);
+  const demoParticipants = readDemoParticipants(meta);
+  if (demoSubtypes.length === 0 && demoParticipants.length === 0) return false;
+
+  // The student named outright — checked first, because it needs no rating and
+  // settles the question without touching the subtype path at all.
+  if (demoParticipants.length > 0) {
+    const [named] = await db
+      .select({ token: studentSessions.participantToken })
+      .from(chatMessages)
+      .innerJoin(chatConversations, eq(chatConversations.id, chatMessages.conversationId))
+      .innerJoin(studentSessions, eq(studentSessions.id, chatConversations.sessionId))
+      .where(eq(chatMessages.id, messageId));
+    if (named?.token && demoParticipants.includes(named.token)) return true;
+  }
   if (demoSubtypes.length === 0) return false;
 
   const demoIntents = await db
@@ -642,6 +685,33 @@ export function readDemoSubtypes(meta?: {
   return meta?.demoSubtype ? [meta.demoSubtype] : [];
 }
 
+export function readDemoParticipants(meta?: { demoParticipants?: string[] | null }): string[] {
+  return Array.isArray(meta?.demoParticipants) ? meta.demoParticipants.filter(Boolean) : [];
+}
+
+/**
+ * Isolate students by name.
+ *
+ * Allowed while the sets are confirmed, for the same reason setDemoSubtypes is:
+ * whether an overlap with an already-curated set matters depends on what the
+ * demo is FOR, which is the researcher's call. validateCuration still raises the
+ * overlap as a blocking error, so a curation cannot be re-confirmed while it
+ * stands.
+ */
+export async function setDemoParticipants(datasetKey: string, tokens: string[]): Promise<void> {
+  await ensureStudyTables();
+  const clean = [...new Set(tokens.map((t) => t.trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true })
+  );
+  await db
+    .insert(studyCurationMeta)
+    .values({ datasetKey, demoParticipants: clean })
+    .onConflictDoUpdate({
+      target: studyCurationMeta.datasetKey,
+      set: { demoParticipants: clean },
+    });
+}
+
 export async function setDemoSubtypes(datasetKey: string, titles: string[]): Promise<void> {
   await ensureStudyTables();
   const clean = [...new Set(titles.map((t) => t.trim()).filter(Boolean))].sort();
@@ -680,7 +750,28 @@ export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
   const dataset = curationDataset(datasetKey);
   if (!dataset) return [];
   const titles = await getDemoSubtypes(datasetKey);
-  if (titles.length === 0) return [];
+  const tokens = await getDemoParticipants(datasetKey);
+  const out = new Set<number>();
+
+  // A student named outright has no matching question to point at, so the demo
+  // is their thread — all of it. That is the same thing a subtype demo gets,
+  // arrived at by naming the student instead of the question.
+  if (tokens.length > 0) {
+    const rows = await db
+      .select({ messageId: chatMessages.id })
+      .from(chatMessages)
+      .innerJoin(chatConversations, eq(chatConversations.id, chatMessages.conversationId))
+      .innerJoin(studentSessions, eq(studentSessions.id, chatConversations.sessionId))
+      .where(
+        and(
+          eq(studentSessions.assignmentId, dataset.masterAssignmentId),
+          eq(chatMessages.role, 'user'),
+          inArray(studentSessions.participantToken, tokens)
+        )
+      );
+    for (const r of rows) out.add(r.messageId);
+  }
+  if (titles.length === 0) return [...out];
 
   const intents = await db
     .select({ id: scoreIntents.id })
@@ -692,7 +783,7 @@ export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
         inArray(scoreIntents.title, titles)
       )
     );
-  if (intents.length === 0) return [];
+  if (intents.length === 0) return [...out];
 
   const rows = await db
     .select({ messageId: scoreIntentRatings.messageId })
@@ -707,7 +798,8 @@ export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
         )
       )
     );
-  return [...new Set(rows.map((r) => r.messageId))];
+  for (const r of rows) out.add(r.messageId);
+  return [...out];
 }
 
 /** The demo subtypes recorded for a dataset. */
@@ -721,6 +813,15 @@ export async function getDemoSubtypes(datasetKey: string): Promise<string[]> {
     .from(studyCurationMeta)
     .where(eq(studyCurationMeta.datasetKey, datasetKey));
   return readDemoSubtypes(row);
+}
+
+export async function getDemoParticipants(datasetKey: string): Promise<string[]> {
+  await ensureStudyTables();
+  const [row] = await db
+    .select({ demoParticipants: studyCurationMeta.demoParticipants })
+    .from(studyCurationMeta)
+    .where(eq(studyCurationMeta.datasetKey, datasetKey));
+  return readDemoParticipants(row);
 }
 
 export async function isLocked(datasetKey: string): Promise<boolean> {

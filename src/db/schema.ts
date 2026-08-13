@@ -675,6 +675,9 @@ export const studyCurationMeta = pgTable('study_curation_meta', {
   demoSubtype: text('demo_subtype'),
   /** Subtype TITLEs the demo runs on, all isolated from every set. */
   demoSubtypes: jsonb('demo_subtypes').$type<string[]>(),
+  /** Student participant TOKENs isolated outright, whatever they asked. Same
+   * effect as a subtype match, reached by naming the student instead. */
+  demoParticipants: jsonb('demo_participants').$type<string[]>(),
   lockedAt: timestamp('locked_at'),
   lockedBy: text('locked_by'),
 });

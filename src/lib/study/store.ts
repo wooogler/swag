@@ -177,6 +177,12 @@ export async function ensureStudyTables(): Promise<void> {
         UPDATE "study_curation_meta"
            SET "demo_subtypes" = jsonb_build_array("demo_subtype")
          WHERE "demo_subtypes" IS NULL AND "demo_subtype" IS NOT NULL`);
+      // Students named outright, beside the ones a subtype sweeps in. Isolating
+      // by subtype is indirect — one subtype took 50 of SWAG's 507 questions —
+      // and a demo only needs a couple of threads to show.
+      await db.execute(
+        sql`ALTER TABLE "study_curation_meta" ADD COLUMN IF NOT EXISTS "demo_participants" jsonb`
+      );
 
       // Set sizes, editable by a researcher. Singleton: the design requires the
       // two datasets to carry matching set sizes, so this is deliberately NOT

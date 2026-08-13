@@ -368,7 +368,23 @@ export default function CurationBoard({
 
     const perTitle = new Map<string, ReturnType<typeof costOf>>();
     for (const title of idsByTitle.keys()) perTitle.set(title, costOf([title]));
-    return { costOf, perTitle };
+
+    /** Same shape for students named outright — every question is "own". */
+    const costOfTokens = (tokens: string[]) => {
+      let questions = 0;
+      let inSet = 0;
+      for (const token of tokens) {
+        for (const q of byToken.get(token) ?? []) {
+          questions += 1;
+          if (memberIds.has(q.messageId)) inSet += 1;
+        }
+      }
+      return { students: tokens.length, own: questions, questions, inSet };
+    };
+    const perToken = new Map<string, ReturnType<typeof costOfTokens>>();
+    for (const token of byToken.keys()) perToken.set(token, costOfTokens([token]));
+
+    return { costOf, perTitle, costOfTokens, perToken };
   }, [allQuestions, allSubtypes, allMembers]);
 
   /** How many of a set's questions SHOULD be boundary, at the natural ratio. */
@@ -539,6 +555,25 @@ export default function CurationBoard({
     [state.dataset.key, refresh]
   );
 
+  const setDemoStudents = useCallback(
+    async (tokens: string[]) => {
+      setBusy('demo');
+      setError(null);
+      const res = await fetch('/api/study/admin/curation/demo-participants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ datasetKey: state.dataset.key, demoParticipants: tokens }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.message ?? 'Could not set the isolated students.');
+      }
+      await refresh();
+      setBusy(null);
+    },
+    [state.dataset.key, refresh]
+  );
+
   /**
    * Open the demo: the participant's own session, straight into the studio, on
    * a workspace holding only the isolated subtypes' conversations. Navigating
@@ -655,11 +690,26 @@ export default function CurationBoard({
           costOf={demoCost.costOf}
           perTitle={demoCost.perTitle}
         />
-        {state.meta.demoSubtypes.length > 0 && (
+        <DemoStudentPicker
+          tokens={state.participantTokens}
+          selected={state.meta.demoParticipants}
+          disabled={busy !== null}
+          onChange={setDemoStudents}
+          costOf={demoCost.costOfTokens}
+          perToken={demoCost.perToken}
+        />
+        {(state.meta.demoSubtypes.length > 0 || state.meta.demoParticipants.length > 0) && (
           <>
+            {/* Counted from the isolated questions themselves, not summed from
+                the two pickers: a named student may also have asked a demo
+                subtype, and adding the rows would double them. */}
             <Chip tone="violet">
-              {demoCost.costOf(state.meta.demoSubtypes).students} students ·{' '}
-              {state.excludedMessageIds.length} questions isolated
+              {new Set(
+                state.questions
+                  .filter((q) => state.excludedMessageIds.includes(q.messageId))
+                  .map((q) => q.participantToken)
+              ).size}{' '}
+              students · {state.excludedMessageIds.length} questions isolated
             </Chip>
             {/* Whole-student isolation almost always overlaps a dataset curated
                 before the demo was reserved. Harmless for a dev preview or a
@@ -2187,6 +2237,143 @@ function DemoSubtypePicker({
                 })}
               </div>
             ))}
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Isolate students by name.
+ *
+ * The sibling of DemoSubtypePicker, and the reason it exists: isolating by
+ * subtype is indirect, and the bill arrives in students — one SWAG subtype took
+ * 50 of 507 questions, because every student who ever asked it goes with it.
+ * A demo needs two or three threads, and this is how to say exactly which.
+ *
+ * Filterable because a log has scores of students and scanning them is not the
+ * task; the researcher usually arrives already knowing which thread they want
+ * to demo on.
+ */
+function DemoStudentPicker({
+  tokens,
+  selected,
+  disabled,
+  onChange,
+  costOf,
+  perToken,
+}: {
+  tokens: string[];
+  selected: string[];
+  disabled: boolean;
+  onChange: (tokens: string[]) => void;
+  costOf: (tokens: string[]) => { students: number; questions: number; inSet: number };
+  perToken: Map<string, { questions: number; inSet: number }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string[]>(selected);
+  const [filter, setFilter] = useState('');
+  const draftCost = costOf(draft);
+  const shown = filter.trim()
+    ? tokens.filter((t) => t.toLowerCase().includes(filter.trim().toLowerCase()))
+    : tokens;
+
+  const toggle = (token: string) =>
+    setDraft((prev) => (prev.includes(token) ? prev.filter((t) => t !== token) : [...prev, token]));
+
+  const close = (commit: boolean) => {
+    setOpen(false);
+    setFilter('');
+    if (!commit) return;
+    const same = draft.length === selected.length && draft.every((t) => selected.includes(t));
+    if (!same) onChange(draft);
+  };
+
+  return (
+    <span className="relative inline-flex items-center gap-2">
+      <span className="text-[11px] text-[hsl(var(--muted-foreground))]">Demo students</span>
+      <button
+        onClick={() => {
+          setDraft(selected);
+          setOpen((v) => !v);
+        }}
+        disabled={disabled}
+        className="text-xs border border-[hsl(var(--border))] rounded px-2 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+      >
+        {selected.length === 0 ? '— none —' : `${selected.length} selected`}
+      </button>
+
+      {open && (
+        <>
+          {/* Click-away commits, like the subtype picker — no Save button, and
+              leaving is the gesture that means "these are the ones". */}
+          <div className="fixed inset-0 z-40" onClick={() => close(true)} />
+          <div className="absolute top-full left-0 mt-1 z-50 w-64 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg p-1">
+            <div className="flex items-center gap-2 px-2 py-1 border-b border-[hsl(var(--border))] mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                {draft.length} selected
+              </span>
+              {draft.length > 0 && (
+                <span className="text-[10px] tabular-nums text-[hsl(var(--muted-foreground))]">
+                  {draftCost.questions} questions
+                  {draftCost.inSet > 0 && (
+                    <span className="text-amber-700 font-semibold"> · {draftCost.inSet} in a set</span>
+                  )}
+                </span>
+              )}
+              <div className="flex-1" />
+              <button
+                onClick={() => setDraft([])}
+                className="text-[10.5px] font-semibold text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => close(true)}
+                className="text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-[hsl(var(--primary))] text-white"
+              >
+                Done
+              </button>
+            </div>
+
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Find a student…"
+              className="w-full mb-1 px-2 py-1 text-xs border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))]"
+            />
+
+            <div className="max-h-72 overflow-y-auto">
+              {shown.map((token) => {
+                const cost = perToken.get(token);
+                return (
+                  <label
+                    key={token}
+                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[hsl(var(--muted))] cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={draft.includes(token)}
+                      onChange={() => toggle(token)}
+                      className="shrink-0"
+                    />
+                    <span className="text-xs font-mono flex-1">{token}</span>
+                    <span className="text-[10px] tabular-nums text-[hsl(var(--muted-foreground))]">
+                      {cost?.questions ?? 0}q
+                      {cost?.inSet ? (
+                        <span className="text-amber-700 font-semibold"> · {cost.inSet} in set</span>
+                      ) : null}
+                    </span>
+                  </label>
+                );
+              })}
+              {shown.length === 0 && (
+                <p className="px-2 py-3 text-center text-[11px] text-[hsl(var(--muted-foreground))]">
+                  No student matches that.
+                </p>
+              )}
+            </div>
           </div>
         </>
       )}
