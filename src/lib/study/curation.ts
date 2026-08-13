@@ -891,7 +891,13 @@ export function validateCuration(
   for (const kind of CURATION_SET_KINDS) {
     const rows = state.members.filter((m) => m.setKind === kind);
     if (rows.length === 0) continue;
-    const boundary = rows.filter((m) => m.grade === 'boundary').length / rows.length;
+    // Live grade, not the snapshot frozen when the question was assigned. The
+    // ratio it is compared against (naturalBoundaryRatio) is computed from the
+    // current verdicts, so reading stored grades here would compare a set as it
+    // was graded months ago against the log as it is graded now — and a
+    // re-rating is exactly when that gap opens.
+    const boundary =
+      rows.filter((m) => questionGrade(state, m.messageId) === 'boundary').length / rows.length;
     const drift = Math.abs(boundary - state.naturalBoundaryRatio);
     if (drift > 0.15) {
       out.push({
@@ -910,6 +916,14 @@ export function validateCuration(
 function questionType(state: CurationState, messageId: number): ScoreQueryType | null {
   const q = state.questions.find((x) => x.messageId === messageId);
   return q?.queryType ?? null;
+}
+
+/** The grade the board shows: current verdicts, with the member's frozen
+ * snapshot only as a fallback for a question that has since left the log. */
+function questionGrade(state: CurationState, messageId: number): string | null {
+  const q = state.questions.find((x) => x.messageId === messageId);
+  if (q) return q.grade;
+  return state.members.find((m) => m.messageId === messageId)?.grade ?? null;
 }
 
 /* ------------------------------------------------------------------ */
