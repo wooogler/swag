@@ -114,7 +114,19 @@ export interface CurationMember {
 
 export interface CurationState {
   dataset: { key: string; label: string; assignmentId: string };
+  /**
+   * The curation material — isolated questions are NOT in here.
+   *
+   * Isolation reserves a student for the demo, which means their log is not
+   * study material at all; leaving them in the list greyed out still made them
+   * something to skip past, and still counted them in every total the board
+   * reads. They are gone from the browsing lists, the type and grade counts and
+   * the natural ratio, exactly as if the log did not contain them.
+   */
   questions: CurationQuestion[];
+  /** The isolated ones, kept only so the demo pickers can price a selection
+   * (and so a student already isolated is still listed to un-isolate). */
+  isolated: CurationQuestion[];
   subtypes: CurationSubtype[];
   members: CurationMember[];
   meta: {
@@ -254,15 +266,13 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
     // chain will never route to it. Counting cross-type matches here while the
     // grade ignores them would put a question under a subtype badged unmatched.
     if (typeByMessage.get(raw.messageId) !== subtype.type) continue;
-    if (raw.rating === 'clearly_in') subtype.clearlyIn += 1;
-    else subtype.probablyIn += 1;
     const bag = matchesByMessage.get(raw.messageId) ?? {};
     bag[raw.intentId] = raw.rating;
     matchesByMessage.set(raw.messageId, bag);
   }
 
   const typeOfSubtype = (intentId: number) => subtypeById.get(intentId)?.type ?? null;
-  const questions: CurationQuestion[] = records.map((r) => {
+  const allQuestions: CurationQuestion[] = records.map((r) => {
     const matches = matchesByMessage.get(r.messageId) ?? {};
     const queryType = typeByMessage.get(r.messageId) ?? null;
     return {
@@ -276,6 +286,35 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
     };
   });
 
+  // Isolation is computed over the WHOLE log — a student is reserved because of
+  // something they asked, so the question that reserves them has to be in view
+  // to find them — and everything after this point is computed over what is
+  // left. An isolated question is not curation material, so it is not in the
+  // lists, the type counts, the subtype counts, or the natural ratio.
+  const meta = metaRows[0];
+  const demoSubtypes = readDemoSubtypes(meta);
+  const demoParticipants = readDemoParticipants(meta);
+  const excludedMessageIds = demoIsolatedMessageIds(
+    allQuestions,
+    subtypeById,
+    demoSubtypes,
+    demoParticipants
+  );
+  const excludedSet = new Set(excludedMessageIds);
+  const questions = allQuestions.filter((q) => !excludedSet.has(q.messageId));
+  const isolated = allQuestions.filter((q) => excludedSet.has(q.messageId));
+
+  // Subtype tallies come after the split, from the material only — the tree's
+  // numbers have to add up to the lists it opens.
+  for (const q of questions) {
+    for (const [intentId, grade] of Object.entries(q.matches)) {
+      const subtype = subtypeById.get(Number(intentId));
+      if (!subtype) continue;
+      if (grade === 'clearly_in') subtype.clearlyIn += 1;
+      else subtype.probablyIn += 1;
+    }
+  }
+
   const gradeCounts: Record<QuestionGrade, number> = { certain: 0, boundary: 0, unmatched: 0 };
   for (const q of questions) gradeCounts[q.grade] += 1;
 
@@ -287,21 +326,12 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
     else missingTypeCount += 1;
   }
 
-  const meta = metaRows[0];
-  const demoSubtypes = readDemoSubtypes(meta);
-  const demoParticipants = readDemoParticipants(meta);
-  const excludedMessageIds = demoIsolatedMessageIds(
-    questions,
-    subtypeById,
-    demoSubtypes,
-    demoParticipants
-  );
-
   const classified = gradeCounts.certain + gradeCounts.boundary;
 
   return {
     dataset: { key: dataset.key, label: dataset.label, assignmentId },
     questions,
+    isolated,
     subtypes: [...subtypeById.values()].sort((a, b) => a.title.localeCompare(b.title)),
     members: memberRows.map((m) => ({
       messageId: m.sourceMessageId,
@@ -317,7 +347,9 @@ export async function getCurationState(datasetKey: string): Promise<CurationStat
       lockedAt: meta?.lockedAt ? meta.lockedAt.toISOString() : null,
       lockedBy: meta?.lockedBy ?? null,
     },
-    participantTokens: [...new Set(questions.map((q) => q.participantToken))]
+    // Every student in the log, isolated or not: the picker has to list an
+    // already-isolated student for them to be un-isolated.
+    participantTokens: [...new Set(allQuestions.map((q) => q.participantToken))]
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
     excludedMessageIds,
@@ -970,10 +1002,9 @@ export function validateCuration(
     // assigned; a question can match a commonest subtype and still be labelled
     // with another, and flagging that would be flagging an ordering accident.
     const allowed = new Set(top.map((sub) => sub.intentId));
-    const byMessage = new Map(state.questions.map((q) => [q.messageId, q]));
     const strays = state.members.filter((m) => {
       if (m.setKind !== 'test' || questionType(state, m.messageId) !== type) return false;
-      const matched = Object.keys(byMessage.get(m.messageId)?.matches ?? {});
+      const matched = Object.keys(anyQuestion(state, m.messageId)?.matches ?? {});
       if (matched.length === 0) return false; // unmatched is its own violation
       return !matched.some((id) => allowed.has(Number(id)));
     });
@@ -1014,15 +1045,24 @@ export function validateCuration(
   return out;
 }
 
+/** Material AND isolated. A member whose question has since been isolated is
+ * still a member — it has to keep its type and grade so the isolation shows up
+ * as an isolation violation rather than as an unclassified question. */
+function anyQuestion(state: CurationState, messageId: number): CurationQuestion | undefined {
+  return (
+    state.questions.find((x) => x.messageId === messageId) ??
+    state.isolated.find((x) => x.messageId === messageId)
+  );
+}
+
 function questionType(state: CurationState, messageId: number): ScoreQueryType | null {
-  const q = state.questions.find((x) => x.messageId === messageId);
-  return q?.queryType ?? null;
+  return anyQuestion(state, messageId)?.queryType ?? null;
 }
 
 /** The grade the board shows: current verdicts, with the member's frozen
  * snapshot only as a fallback for a question that has since left the log. */
 function questionGrade(state: CurationState, messageId: number): string | null {
-  const q = state.questions.find((x) => x.messageId === messageId);
+  const q = anyQuestion(state, messageId);
   if (q) return q.grade;
   return state.members.find((m) => m.messageId === messageId)?.grade ?? null;
 }

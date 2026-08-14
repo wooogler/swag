@@ -232,7 +232,6 @@ export default function CurationBoard({
     () => new Map(state.members.map((m) => [m.messageId, m])),
     [state.members]
   );
-  const excluded = useMemo(() => new Set(state.excludedMessageIds), [state.excludedMessageIds]);
   const subtypeById = useMemo(
     () => new Map(state.subtypes.map((s) => [s.intentId, s])),
     [state.subtypes]
@@ -326,7 +325,14 @@ export default function CurationBoard({
    * pass over ~500 rows, and a per-checkbox round trip would make picking feel
    * like committing.
    */
-  const { questions: allQuestions, subtypes: allSubtypes, members: allMembers } = state;
+  const { subtypes: allSubtypes, members: allMembers } = state;
+  // Material AND isolated: pricing a demo selection means asking what it WOULD
+  // cost, and a student already isolated has to price at what un-isolating them
+  // would give back.
+  const allQuestions = useMemo(
+    () => [...state.questions, ...state.isolated],
+    [state.questions, state.isolated]
+  );
   const demoCost = useMemo(() => {
     const memberIds = new Set(allMembers.map((m) => m.messageId));
     const byToken = new Map<string, typeof allQuestions>();
@@ -704,12 +710,8 @@ export default function CurationBoard({
                 the two pickers: a named student may also have asked a demo
                 subtype, and adding the rows would double them. */}
             <Chip tone="violet">
-              {new Set(
-                state.questions
-                  .filter((q) => state.excludedMessageIds.includes(q.messageId))
-                  .map((q) => q.participantToken)
-              ).size}{' '}
-              students · {state.excludedMessageIds.length} questions isolated
+              {new Set(state.isolated.map((q) => q.participantToken)).size} students ·{' '}
+              {state.isolated.length} questions isolated
             </Chip>
             {/* Whole-student isolation almost always overlaps a dataset curated
                 before the demo was reserved. Harmless for a dev preview or a
@@ -1120,13 +1122,12 @@ export default function CurationBoard({
             {visible.map((row) => {
               const q = questionById.get(row.messageId);
               const member = memberByMessage.get(row.messageId);
-              const isExcluded = excluded.has(row.messageId);
               return (
                 <li
                   key={row.messageId}
                   className={`group relative px-3 py-2.5 cursor-pointer ${
                     selectedId === row.messageId ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'
-                  } ${isExcluded ? 'opacity-50' : ''}`}
+                  }`}
                   onClick={() => setSelectedId(row.messageId)}
                 >
                   <div className="flex items-center justify-between text-[11px] font-mono text-[hsl(var(--muted-foreground))] tabular-nums mb-1">
@@ -1164,11 +1165,6 @@ export default function CurationBoard({
                           <Chip tone="violet">{SET_LABELS[member.setKind]}</Chip>
                         </span>
                       )}
-                      {isExcluded && (
-                        <span className="font-sans">
-                          <Chip tone="violet">Demo-isolated</Chip>
-                        </span>
-                      )}
                     </span>
                   </div>
                   <QueryTextButton
@@ -1200,7 +1196,7 @@ export default function CurationBoard({
                     {/* In the row's own flow, right-aligned: floating it made
                         the panel sit on the seam between two rows, belonging to
                         neither. Space is reserved so hovering does not reflow. */}
-                    {!locked && !isExcluded && (
+                    {!locked && (
                       <span className="ml-auto flex items-center gap-0.5 rounded-md ring-1 ring-[hsl(var(--border))] bg-[hsl(var(--card))] px-1 py-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                         {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => (
                           <button
