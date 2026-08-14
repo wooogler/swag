@@ -57,7 +57,7 @@
 **B-1. Apply = 임시 저장 (버전 기록 없음)**
 
 - `persist()`에서 일반 Apply의 payload를 `recordVersion: false`로 변경 (`minorVersion` 전송 제거). 스펙은 지금처럼 즉시 영속(새로고침해도 작업본 유지 — 워드프로세서의 임시 저장)되지만 **버전 행은 남기지 않는다.**
-- 예외 유지: create의 첫 persist는 지금처럼 major v1(`create_intent`) — intent의 탄생 기록이자 보드 등록. Save(force)는 지금처럼 major.
+- ~~예외 유지: create의 첫 persist는 major v1~~ → **예외 폐지 (2026-08-12 구현 중 사용자 피드백)**: 새 intent를 만들면 "적용됐지만 저장 안 됨" 상태로 열린다. create의 첫 persist는 `is_template=true` + `recordVersion:false` — 행은 있지만(평가가 붙을 곳이 필요) 보드에도 체인에도 없고 학생 쿼리가 라우팅되지 않는다. **Save가 그 intent를 만드는 행위**(is_template을 뒤집고 서버가 그 전환을 `create_intent` v1로 기록), **뒤로 나가면 purge**(가드 다이얼로그가 먼저 확인). 이유: Apply=시도/Save=확정 규칙에 예외가 있으면, 하필 그 규칙을 배우는 첫 순간에 Save가 비활성으로 보인다.
 - **서버 변경 불필요**: PATCH의 `minorVersion`은 legacy로 계속 받아들이고(다른 호출처 없음 확인), `isMinorVersion()`(intent-store.ts:756)은 기존 참가자 데이터의 옛 minor 행을 계속 minor로 분류한다.
 
 **B-2. Save 게이트 재정의**

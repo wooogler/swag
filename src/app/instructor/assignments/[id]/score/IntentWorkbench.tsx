@@ -418,23 +418,51 @@ export default function IntentWorkbench({
     return ids;
   }, [rows, scopeAncestorIds, mode, seed]);
 
-  // Leave the workbench. A create that was never Applied has no row to point
-  // at (intentId null); everything else is registered and survives.
-  function exit() {
+  /**
+   * Leave the workbench — and if this was a NEW intent nobody saved, take it
+   * with us.
+   *
+   * A create is applied before it is saved, so it has a row (the ratings need
+   * an id to hang on) but no version. That row is a draft: Save is what makes
+   * the intent, and backing out has to mean it was never made — otherwise the
+   * board fills with half-built sets from every abandoned attempt. The delete
+   * is the same purge the board's own delete uses, so the ratings go too.
+   */
+  async function exit() {
+    if (discardOnExit()) {
+      const id = intentId;
+      onExit(null); // leave first — the board should not wait on a cleanup
+      try {
+        await fetch(
+          `/api/instructor/assignments/${assignmentId}/score/intents/${id}?mode=purge`,
+          { method: 'DELETE' }
+        );
+      } catch {
+        /* best-effort: a stray draft is visible and deletable on the board */
+      }
+      return;
+    }
     onExit(intentId);
   }
 
+  /** A created-but-never-saved intent: applied (so it exists and is rated) with
+   * nothing recorded. `versions` must have loaded, or a slow history fetch
+   * would read as "never saved" and delete a real intent. */
+  const discardOnExit = () =>
+    !isEdit && intentId !== null && versions !== null && !versions.some((v) => !v.minor);
+
   /**
    * What leaving RIGHT NOW would actually destroy — the guard dialog names it,
-   * so this must be precise. Pins persist the moment they are clicked, an
-   * Apply persists the spec (a create is even registered by it), so only one
-   * state is at risk: definition/title text that differs from the last
-   * persisted spec (typed but not yet Applied) — client-only, gone on unmount.
-   * A checkout is a read-only view of a past version — its fields deviate from
-   * the live spec by design, so it never counts as loss.
+   * so this must be precise. Pins persist the moment they are clicked and an
+   * Apply persists the spec, so two states are at risk: a new intent that was
+   * never saved (the whole thing goes), and definition/title text that differs
+   * from the last persisted spec (typed but not yet Applied — client-only,
+   * gone on unmount). A checkout is a read-only view of a past version — its
+   * fields deviate from the live spec by design, so it never counts as loss.
    */
-  const leaveLoss = (): 'edits' | null => {
+  const leaveLoss = (): 'edits' | 'intent' | null => {
     if (checkout !== null) return null;
+    if (discardOnExit()) return 'intent';
     if (specDirty() && (title.trim() || definition.trim())) return 'edits';
     return null;
   };
@@ -478,9 +506,13 @@ export default function IntentWorkbench({
         body: JSON.stringify({
           fromTemplateId: templateId,
           ...(title?.trim() ? { title: title.trim() } : {}),
-          // Registered on adoption (v1, action create_intent) — picking a
-          // starter from the chooser IS the decision to have this intent.
-          isTemplate: false,
+          // A DRAFT, like any other create — adopting a starter is still only
+          // the decision to try one, and it lands in the same "applied, not
+          // saved" state so Save means the same thing whichever way you got
+          // here. (The library template it was cloned from is untouched.)
+          isTemplate: true,
+          // …and no version either: Save is what records v1, here as anywhere.
+          recordVersion: false,
           autoTitle: false,
           // The PLACEMENT of the scope this was created from. Library templates
           // are deliberately type-less (they are rated whole-log for the
@@ -886,16 +918,24 @@ export default function IntentWorkbench({
       definition: defText,
       autoTitle,
       ...(suggestTitle ? { suggestTitle: true } : {}),
-      // Only a Save (or a create's first persist) is a version. An Apply — and
-      // a `silent` persist — stores the text and stops there.
-      recordVersion: !opts?.silent && (force || isCreate),
+      // ONLY a Save is a version — including the first one. A create used to
+      // record v1 on its opening Apply, which left the instructor looking at a
+      // result they liked and a Save button that was already greyed out: the
+      // version existed, but nothing on screen said so, and the rhythm the rest
+      // of the workbench teaches (Apply to try, Save to keep) had an exception
+      // at exactly the moment it was being learned.
+      recordVersion: !opts?.silent && force,
       stats,
-      // A create is registered on arrival — the chooser was the moment of
-      // intent, not Save. It carries its PLACEMENT: the scope it was invoked
+      // A create lands as a DRAFT (is_template), which is what keeps "not saved"
+      // honest: the row has to exist for the ratings to hang on it, but until
+      // Save it is off the board, out of every type's chain, and — the part that
+      // matters — not something a student's question can be routed to. Save
+      // flips it, and that flip is what the server reads as the intent's
+      // creation. It carries its PLACEMENT either way: the scope it was invoked
       // from is its parent, and its rule is seeded from that scope (§3.2/§3.5).
       ...(isCreate
         ? {
-            isTemplate: false,
+            isTemplate: true,
             ...(seed?.type ? { type: seed.type, parentIntentId: seed.parentIntentId ?? null } : {}),
           }
         : force
@@ -1962,9 +2002,15 @@ export default function IntentWorkbench({
   // recorded? Title is left out — a rename is applied without a version of its
   // own (acceptTitleSuggestion), so comparing it would light Save for a change
   // that is already saved.
+  //
+  // A new intent has nothing recorded at all, so everything about it is
+  // unsaved: Save is what brings it into being, and it is lit from the first
+  // Apply onwards.
   const savePending =
-    latestMajor !== null &&
-    (latestMajor.definition ?? '').trim() !== savedRef.current.definition.trim();
+    versions !== null &&
+    (latestMajor === null
+      ? savedRef.current.definition.trim().length > 0
+      : (latestMajor.definition ?? '').trim() !== savedRef.current.definition.trim());
 
   return (
     <div className="flex flex-col gap-2 flex-1 min-h-0">
@@ -2268,7 +2314,10 @@ export default function IntentWorkbench({
                 a version CHECKS IT OUT (title/definition/labels/ratings load
                 instantly from the stored state); Revert rolls back to it;
                 "Back to latest" returns to the live spec. */}
-            {versions && versions.length > 0 && (
+            {/* Save lives in this header, so the block has to be here for a
+                new intent too — which has no versions yet, and is exactly the
+                state Save exists to leave. */}
+            {(majors.length > 0 || savePending) && (
               <div className="space-y-1.5 border-t border-[hsl(var(--border))] pt-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
@@ -2277,7 +2326,7 @@ export default function IntentWorkbench({
                       <span className="ml-1.5 normal-case font-normal text-amber-700">
                         viewing{' '}
                         {(() => {
-                          const v = versions.find((x) => x.versionNo === checkout);
+                          const v = majors.find((x) => x.versionNo === checkout);
                           return v ? versionLabel(v) : `v${checkout}`;
                         })()}
                       </span>
@@ -2295,7 +2344,7 @@ export default function IntentWorkbench({
                     >
                       <RotateCcw className="w-3 h-3" /> Revert to{' '}
                       {(() => {
-                        const v = versions.find((x) => x.versionNo === checkout);
+                        const v = majors.find((x) => x.versionNo === checkout);
                         return v ? versionLabel(v) : `v${checkout}`;
                       })()}
                     </button>
@@ -2315,7 +2364,9 @@ export default function IntentWorkbench({
                               ? 'Ratings are stale — Apply to re-rate first'
                               : !savePending
                                 ? 'Nothing new to save — the latest version already holds this state'
-                                : "Record this state as the next version — the board's When version advances"
+                                : latestMajor === null
+                                  ? 'Create this intent — it goes on the board, and this state becomes v1'
+                                  : "Record this state as the next version — the board's When version advances"
                       }
                       className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[hsl(var(--primary))] text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
                     >
@@ -2325,7 +2376,9 @@ export default function IntentWorkbench({
                   )}
                 </div>
                 <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                  Every saved version is a snapshot you can click to revisit.
+                  {latestMajor === null
+                    ? 'This intent is not on the board yet — Save creates it, and leaving discards it.'
+                    : 'Every saved version is a snapshot you can click to revisit.'}
                 </p>
                 <ul className="space-y-1.5">
                   {/* The working draft — applied but not recorded. It sits
@@ -2354,7 +2407,9 @@ export default function IntentWorkbench({
                         title={
                           checkout !== null
                             ? 'Your unsaved work — click to come back to it'
-                            : 'The definition you have applied but not saved. It is the live spec either way; Save records it as the next version.'
+                            : latestMajor === null
+                              ? 'Applied, but not saved — this intent does not exist on the board until you Save it.'
+                              : 'The definition you have applied but not saved. It is the live spec either way; Save records it as the next version.'
                         }
                       >
                         <div className="flex items-center justify-between gap-2 text-[hsl(var(--muted-foreground))]">
@@ -2795,11 +2850,15 @@ export default function IntentWorkbench({
                 className="w-full max-w-sm rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xl"
                 onClick={(e) => e.stopPropagation()}
               >
-                <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">Untried edits</h3>
+                <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
+                  {leaveLoss() === 'intent' ? 'This intent isn’t saved' : 'Untried edits'}
+                </h3>
                 <p className="mt-1.5 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
-                  {intentId !== null
-                    ? 'The edited definition hasn’t been tried — leaving discards it. Everything you tried is kept.'
-                    : 'The typed definition hasn’t been tried — leaving discards it, and no intent is created.'}
+                  {leaveLoss() === 'intent'
+                    ? 'You applied it, but never saved it — leaving discards the whole intent, along with the questions it gathered. Save it first to put it on the board.'
+                    : intentId !== null
+                      ? 'The edited definition hasn’t been tried — leaving discards it. Everything you tried is kept.'
+                      : 'The typed definition hasn’t been tried — leaving discards it, and no intent is created.'}
                 </p>
                 <div className="mt-3 flex items-center justify-end gap-2">
                   <button
@@ -2812,7 +2871,7 @@ export default function IntentWorkbench({
                     onClick={leave}
                     className="px-2.5 py-1.5 rounded border border-rose-300 text-xs font-medium text-rose-700 hover:bg-rose-50"
                   >
-                    Discard edits
+                    {leaveLoss() === 'intent' ? 'Discard this intent' : 'Discard edits'}
                   </button>
                 </div>
               </div>

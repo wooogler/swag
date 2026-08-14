@@ -469,26 +469,81 @@ function BaselineFilterTree({
  * The header has to stay short enough that the question list is still the page,
  * but a rule is now a whole system prompt and an instructor must be able to read
  * what is actually in force without leaving the board. The expander only appears
- * when the text is long enough to be cut — no dead control on a one-liner.
+ * when the clamp actually cut something — no dead control on text already whole.
+ *
+ * Two slots, because the row's right edge belongs to this component: `action` is
+ * the button beside the text (Edit Rule), `note` a label about the text that
+ * rides the expander's line, flush right under that button. Owning both is what
+ * lets the note line up with the action — a note parked outside would right-align
+ * to the text column and stop a button's width short of it.
  */
-function ClampedText({ text, muted = false }: { text: string; muted?: boolean }) {
+function ClampedText({
+  text,
+  muted = false,
+  action,
+  note,
+}: {
+  text: string;
+  muted?: boolean;
+  action?: React.ReactNode;
+  note?: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  const bodyRef = useRef<HTMLSpanElement>(null);
+
+  // Whether the clamp actually cuts anything is a question about the RENDERED
+  // box, and only the box can answer it: the column is a fraction of a resizable
+  // page and a rule wraps differently at every width. The character count that
+  // used to stand in for this measurement was wrong in both directions — it
+  // offered Show more on a 120-character rule that fit, and hid it on a short
+  // one broken across many lines by its own newlines.
+  useEffect(() => {
+    const el = bodyRef.current;
+    // An expanded box always reports "fits"; measuring here would delete the
+    // Show less that is the only way back, so the clamped measurement stands.
+    if (!el || open) return;
+    const measure = () => setClipped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, open]);
+
+  const expandable = clipped || open;
   return (
-    <span className="min-w-0 flex-1">
-      <span
-        className={`block whitespace-pre-wrap text-[11px] leading-relaxed ${open ? '' : 'line-clamp-2'} ${
-          muted ? 'text-[hsl(var(--muted-foreground))]' : 'text-[hsl(var(--foreground))]'
-        }`}
-      >
-        {text}
+    <span className="block min-w-0 flex-1">
+      <span className="flex items-start gap-2">
+        {/* The clamped box stays a BLOCK child of its own cell rather than
+            becoming a flex item itself — flex blockifies its items, and the
+            clamp is exactly a display value that would not survive that. */}
+        <span className="block min-w-0 flex-1">
+          <span
+            ref={bodyRef}
+            // `block` only in the open state: it and line-clamp-2 both set display,
+            // and Tailwind emits .block AFTER .line-clamp-2, so holding both at once
+            // silently won the cascade for display:block and the clamp never applied.
+            className={`whitespace-pre-wrap text-[11px] leading-relaxed ${open ? 'block' : 'line-clamp-2'} ${
+              muted ? 'text-[hsl(var(--muted-foreground))]' : 'text-[hsl(var(--foreground))]'
+            }`}
+          >
+            {text}
+          </span>
+        </span>
+        {action}
       </span>
-      {text.trim().length > 110 && (
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="mt-0.5 text-[10px] font-medium text-[hsl(var(--primary))] hover:underline"
-        >
-          {open ? 'Show less' : 'Show more'}
-        </button>
+      {(expandable || note) && (
+        <span className="mt-0.5 flex items-center gap-2">
+          {expandable && (
+            <button
+              onClick={() => setOpen((v) => !v)}
+              className="text-[10px] font-medium text-[hsl(var(--primary))] hover:underline"
+            >
+              {open ? 'Show less' : 'Show more'}
+            </button>
+          )}
+          {note && <span className="ml-auto">{note}</span>}
+        </span>
       )}
     </span>
   );
@@ -519,11 +574,14 @@ function RuleOrigin({
   if (!rule?.trim()) return null;
   const own = rule.trim() !== enclosing.rule.trim();
   return (
+    // Bare chip: it is passed as ClampedText's `note`, which puts it on the
+    // expander's line and flush right under Edit Rule. Beside the text it read
+    // as a second column and shrank the rule to buy room for a label ABOUT it.
     <SmallChip
       className={
         own
-          ? 'shrink-0 self-start border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))]'
-          : 'shrink-0 self-start border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
+          ? 'shrink-0 border-[hsl(var(--border))] bg-[hsl(var(--background))] text-[hsl(var(--foreground))]'
+          : 'shrink-0 border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
       }
       title={
         own
@@ -543,9 +601,18 @@ function RuleOrigin({
  * A set's When is a definition someone typed and a judge evaluates. A type
  * root's is the leftover of two mechanisms: the type classifier put the
  * question in this type, and no set inside the type claimed it. So it is shown
- * READ-ONLY, with the classifier's own definition available underneath rather
- * than a paraphrase — and with the note that says how to actually narrow it
- * (add a set), since the missing textbox otherwise reads as a bug.
+ * READ-ONLY, and what it shows is `definition` — TYPE_DEFINITIONS verbatim, the
+ * text the classifier itself was given. A board that instead paraphrased the
+ * mechanism ("asks a Planning question that no set captures") answered "which
+ * questions land here?" with the word Planning, which is the very thing the
+ * reader was asking about; the classifier's own words are what actually say it,
+ * and being the real prompt they cannot drift from the judgment they describe.
+ *
+ * `summary` names the mechanism instead, for the workbench header, where the
+ * definition sits under a fold and something has to stand above it. `note` says
+ * how to narrow this rule (add a set), since the missing textbox otherwise
+ * reads as a bug; it is also where the second mechanism — sets take these
+ * questions first — is spelled out for both surfaces.
  */
 function typeRootWhen(type: ScoreQueryType): {
   summary: string;
@@ -2006,7 +2073,11 @@ export default function IntentBoard({
   const templateOptions = useMemo(
     () =>
       intents
-        .filter((i) => i.isTemplate && !i.archived)
+        // A create in progress is also is_template — that is what keeps it off
+        // the board until Save. The library's own starters are type-LESS (they
+        // are rated whole-log), so a typed one is somebody's unsaved draft and
+        // has no business being offered as a starting point.
+        .filter((i) => i.isTemplate && !i.archived && !i.type)
         .map(({ id, title, definition }) => ({ id, title, definition })),
     [intents]
   );
@@ -2585,6 +2656,25 @@ export default function IntentBoard({
                 const res = resolutions.get(r.messageId);
                 return res?.kind === 'matched' && res.intentId === intent.id;
               });
+              // One button, two homes: ClampedText places it when there is a
+              // rule to clamp, the bare row when there is not.
+              const editRule = (
+                <HeaderAction
+                  onClick={() => anchor && setReviseTarget({ row: anchor, intent, viewVersion: null })}
+                  disabled={!anchor}
+                  title={
+                    anchor
+                      ? 'Edit rule — how the chatbot responds to these questions'
+                      : // Matching is not enough: a set whose matches are
+                        // all taken by earlier sets or by its own subsets
+                        // answers nothing, and there is no response to tune.
+                        'Edit rule — this intent has to answer at least one question first'
+                  }
+                  icon={<Pencil className="w-3 h-3" />}
+                >
+                  Edit Rule
+                </HeaderAction>
+              );
               return (
                 <div className="px-3 py-2 space-y-1.5 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
                   <div className="flex items-start gap-2">
@@ -2601,28 +2691,19 @@ export default function IntentBoard({
                   <div className="flex items-start gap-2">
                     <DetailLabel>Then</DetailLabel>
                     {intent.rule?.trim() ? (
-                      <ClampedText text={intent.rule} />
+                      <ClampedText
+                        text={intent.rule}
+                        action={editRule}
+                        note={<RuleOrigin rule={intent.rule} enclosing={enclosingRule(intent)} />}
+                      />
                     ) : (
-                      <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
-                        No rule yet
-                      </span>
+                      <>
+                        <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
+                          No rule yet
+                        </span>
+                        {editRule}
+                      </>
                     )}
-                    <RuleOrigin rule={intent.rule} enclosing={enclosingRule(intent)} />
-                    <HeaderAction
-                      onClick={() => anchor && setReviseTarget({ row: anchor, intent, viewVersion: null })}
-                      disabled={!anchor}
-                      title={
-                        anchor
-                          ? 'Edit rule — how the chatbot responds to these questions'
-                          : // Matching is not enough: a set whose matches are
-                            // all taken by earlier sets or by its own subsets
-                            // answers nothing, and there is no response to tune.
-                            'Edit rule — this intent has to answer at least one question first'
-                      }
-                      icon={<Pencil className="w-3 h-3" />}
-                    >
-                      Edit Rule
-                    </HeaderAction>
                   </div>
                 </div>
               );
@@ -2648,6 +2729,20 @@ export default function IntentBoard({
                     resolutions.get(r.messageId)?.kind === 'type_default'
                 ) ?? null;
               const when = typeRootWhen(root.type);
+              const editRule = (
+                <HeaderAction
+                  onClick={() => anchor && setRootReviseTarget({ row: anchor, root })}
+                  disabled={!anchor}
+                  title={
+                    anchor
+                      ? `Edit the ${QUERY_TYPE_LABELS[root.type]} rule — how unclaimed questions here are answered`
+                      : 'Every question here is claimed by a set — edit those rules instead'
+                  }
+                  icon={<Pencil className="w-3 h-3" />}
+                >
+                  Edit Rule
+                </HeaderAction>
+              );
               return (
                 <div className="px-3 py-2 space-y-1.5 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
                   {/* Same When/Then pair a set gets. That it is read-only is
@@ -2656,35 +2751,31 @@ export default function IntentBoard({
                       telling anyone what to do about it. The why is on hover. */}
                   <div className="flex items-start gap-2" title={when.note}>
                     <DetailLabel>When</DetailLabel>
-                    <ClampedText text={`A student ${when.summary}`} muted />
+                    <ClampedText text={when.definition} muted />
                   </div>
                   <div className="flex items-start gap-2">
                     <DetailLabel>Then</DetailLabel>
                     {root.rule?.trim() ? (
-                      <ClampedText text={root.rule} />
+                      <ClampedText
+                        text={root.rule}
+                        action={editRule}
+                        // A type root's scope is the assignment default —
+                        // nothing encloses it but that.
+                        note={
+                          <RuleOrigin
+                            rule={root.rule}
+                            enclosing={{ rule: basePrompt, scope: DEFAULT_PROMPT_SCOPE }}
+                          />
+                        }
+                      />
                     ) : (
-                      <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
-                        No rule yet — these questions get no system prompt
-                      </span>
+                      <>
+                        <span className="min-w-0 flex-1 text-[11px] italic text-[hsl(var(--muted-foreground))]">
+                          No rule yet — these questions get no system prompt
+                        </span>
+                        {editRule}
+                      </>
                     )}
-                    {/* A type root's scope is the assignment default — nothing
-                        encloses it but that. */}
-                    <RuleOrigin
-                      rule={root.rule}
-                      enclosing={{ rule: basePrompt, scope: DEFAULT_PROMPT_SCOPE }}
-                    />
-                    <HeaderAction
-                      onClick={() => anchor && setRootReviseTarget({ row: anchor, root })}
-                      disabled={!anchor}
-                      title={
-                        anchor
-                          ? `Edit the ${QUERY_TYPE_LABELS[root.type]} rule — how unclaimed questions here are answered`
-                          : 'Every question here is claimed by a set — edit those rules instead'
-                      }
-                      icon={<Pencil className="w-3 h-3" />}
-                    >
-                      Edit Rule
-                    </HeaderAction>
                   </div>
                 </div>
               );

@@ -204,7 +204,8 @@ There is no test suite (`package.json` has no `test` script). The checks are:
 
 ```bash
 npx tsc --noEmit        # clean
-npm run lint            # one pre-existing warning: 'DissectionResult' unused in score/rate/route.ts
+npm run lint            # two pre-existing warnings, both unused vars:
+                        #   score/rate/route.ts 'DissectionResult', SessionConsole.tsx 'onReset'
 npm run build           # ~2 min, clean
 ```
 
