@@ -1121,6 +1121,16 @@ export default function IntentWorkbench({
       loadVersions(intentId);
       setSimilarScores(null);
       setBaselineNonce((n) => n + 1);
+      // …then re-rate, without being asked. A fold exists to change which
+      // questions the definition captures, and the ONLY thing that shows
+      // whether it did — whether the teaching held — is the pass against the
+      // new text. Leaving that behind a button asked the instructor to press
+      // Apply on a decision they had already made, and until they did, every
+      // number on screen described the definition the fold had just replaced.
+      // Passed explicitly: `definition` state has not flushed yet.
+      if (mine) {
+        void apply({ title: mine.title ?? title.trim(), definition: mine.definition });
+      }
     } catch (e) {
       if (mountedRef.current) setFoldError((e as Error).message);
     } finally {

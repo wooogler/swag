@@ -612,7 +612,7 @@ export default function FoldReviewModal({
               {split.consume.length > 0 &&
                 `, retires the ${split.consume.length} decision${split.consume.length === 1 ? '' : 's'} it carries`}
               {heldCount > 0 && `, keeps ${heldCount} as pin${heldCount === 1 ? '' : 's'}`}, and
-              re-rates on the next Apply.
+              re-rates the questions against it right away.
             </span>
             <span className="flex items-center gap-2">
               <button

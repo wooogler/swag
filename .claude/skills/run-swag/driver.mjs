@@ -100,9 +100,11 @@ async function run(line) {
       return;
     }
     case 'wait': {
-      await page.waitForSelector(arg.startsWith('/') || arg.includes('=') ? arg : `text=${arg}`, {
-        timeout: 180_000,
-      });
+      // A bare word is text; `sel:<css>` is a selector. Text is the common case
+      // and CSS-looking text (a slash, an `=`) used to be handed to the parser
+      // as a selector and blow up mid-script.
+      const sel = arg.startsWith('sel:') ? arg.slice(4) : `text=${arg}`;
+      await page.waitForSelector(sel, { timeout: 180_000 });
       say(`  wait ok: ${arg}`);
       return;
     }
