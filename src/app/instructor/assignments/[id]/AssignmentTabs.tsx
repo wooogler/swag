@@ -58,7 +58,7 @@ export default function AssignmentTabs({ assignment, students, shareUrl }: Assig
         <TabPanels>
           <TabPanel>
             <div className="p-0">
-              <StudentTable students={students} />
+              <StudentTable students={students} assignmentId={assignment.id} />
             </div>
           </TabPanel>
 
