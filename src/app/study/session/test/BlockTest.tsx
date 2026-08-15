@@ -220,7 +220,12 @@ export default function BlockTest({
               <span className="text-[10.5px] font-semibold text-emerald-700">· answered</span>
             )}
           </div>
-          <div className="flex-1 min-h-0">
+          {/* Flex column, not a plain div: ChatMessages' root is
+              `flex-1 overflow-y-auto` and owns the scroll, which only resolves
+              against a flex parent with a definite height. As a block parent it
+              grew to fit the thread instead, and the section's overflow-hidden
+              clipped it — a long conversation simply could not be read. */}
+          <div className="flex-1 min-h-0 flex flex-col">
             {item && (
               <ChatMessages
                 // Remount per question: this is a different conversation, not
@@ -391,28 +396,32 @@ function ItemCard({
       </button>
 
       <div className="px-3.5 pb-3.5 space-y-3">
-        <GuessRow
-          value={item.guess}
-          live={live && pass === 'predict' && item.guess === null}
-          busy={busy}
-          onGuess={onGuess}
-        />
-
-        {item.guess !== null && (
-          <PointingRow
-            condition={condition}
-            pointing={item.pointing}
-            live={live && pass === 'predict' && item.pointing === null}
-            busy={busy}
-            pointable={pointable}
-            titleById={titleById}
-            selection={selection}
-            onSubmit={onPointing}
-          />
-        )}
-
-        {pass === 'rate' && (
-          <RatingRow value={item.rating} live={live} busy={busy} onRate={onRate} />
+        {pass === 'predict' ? (
+          <>
+            <GuessRow
+              value={item.guess}
+              live={live && item.guess === null}
+              busy={busy}
+              onGuess={onGuess}
+            />
+            {item.guess !== null && (
+              <PointingRow
+                condition={condition}
+                pointing={item.pointing}
+                live={live && item.pointing === null}
+                busy={busy}
+                pointable={pointable}
+                titleById={titleById}
+                selection={selection}
+                onSubmit={onPointing}
+              />
+            )}
+          </>
+        ) : (
+          <>
+            <Recap guess={item.guess} pointing={item.pointing} titleById={titleById} />
+            <RatingRow value={item.rating} live={live} busy={busy} onRate={onRate} />
+          </>
         )}
       </div>
     </div>
@@ -625,6 +634,71 @@ function PointingRow({
       )}
     </div>
   );
+}
+
+/**
+ * 문항지 §3 Pass 2 ② — the participant's own prediction, put back on screen.
+ *
+ * Pass 2 opens with the facilitator saying "here's what you expected: {guess}
+ * — and you pointed to {pointing}", and the probe at ④ asks them to explain a
+ * prediction they made minutes and seven questions ago. Two-pass buys clean
+ * measurement by moving the reveal away from the prediction, and this is what
+ * pays the cost back: the recall it needs is on the screen, not in their head.
+ *
+ * A record, not the controls again. The Pass 1 question reads in the future
+ * tense and its buttons invite an answer; by Pass 2 the answer is fixed and
+ * what matters is reading it at a glance off a shared screen.
+ */
+function Recap({
+  guess,
+  pointing,
+  titleById,
+}: {
+  guess: boolean | null;
+  pointing: Pointing | null;
+  titleById: Map<number, string>;
+}) {
+  if (guess === null && pointing === null) return null;
+  return (
+    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/60 px-3 py-2">
+      <p className="text-[9.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+        You expected
+      </p>
+      <p className="text-[12px] leading-snug">
+        {guess === null ? '—' : guess ? 'Yes' : 'No'}
+        {pointing && (
+          <>
+            <span className="text-[hsl(var(--muted-foreground))]">
+              {' \u00b7 '}
+              {pointing.kind === 'not_sure' ? '' : 'pointed to '}
+            </span>
+            <span className="font-semibold">{pointedLabel(pointing, titleById)}</span>
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * How a pointing reads back to the person who made it.
+ *
+ * Phrased as a sentence, not echoed as the button label: the facilitator says
+ * this line out loud at Pass 2 ②, and "pointed to Not sure" is not a sentence.
+ */
+function pointedLabel(pointing: Pointing, titleById: Map<number, string>): string {
+  switch (pointing.kind) {
+    case 'intent':
+      return titleById.get(pointing.intentId) ?? 'an intent no longer in your setup';
+    case 'none':
+      return 'none of your intents';
+    case 'nothing':
+      return 'nothing in particular';
+    case 'not_sure':
+      return 'not sure where it would come from';
+    case 'span':
+      return `\u201C${clip(pointing.text)}\u201D`;
+  }
 }
 
 /** 문항지 §3 ③ — the 1-5 fit rating, taken only after the answer is on screen. */
