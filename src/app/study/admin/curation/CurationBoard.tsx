@@ -36,7 +36,7 @@ import type { BankBuildResult, MasterBuildResult } from '@/lib/study/build';
 import type { ScoreQueryRow } from '@/app/instructor/assignments/[id]/score/IntentBoard';
 import { ConversationThread } from '@/app/instructor/assignments/[id]/score/conversation';
 import { PaneSearch, QueryTextButton } from '@/app/instructor/assignments/[id]/score/workbench-shared';
-import { SortSelect, sortQueryRows, type QuerySortMode } from '@/app/instructor/assignments/[id]/score/query-list';
+import { sortQueryRows, type QuerySortMode } from '@/app/instructor/assignments/[id]/score/query-list';
 import StudioShell from '@/app/instructor/assignments/[id]/score/StudioShell';
 import AdminNav from '@/components/study/AdminNav';
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
