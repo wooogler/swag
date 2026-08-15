@@ -14,6 +14,7 @@ import {
   scoreChatDeploys,
   studyClones,
   studyEvents,
+  studyGeneratedResponses,
   studyParticipants,
   studyQuestionBank,
   studySurveyAnswers,
@@ -407,3 +408,110 @@ export async function allowedAssignmentIds(participant: StudyParticipant): Promi
 
 /** Bank kinds the console can trigger generation for, in session order. */
 export const GENERATION_KINDS: BankKind[] = ['test'];
+
+/**
+ * Per-question prediction outcomes for one block — the facilitator's probe list.
+ *
+ * 문항지 §3 ④ probes only the questions where the prediction missed, which the
+ * facilitator has to know DURING the session. Half of it they can see over the
+ * participant's shoulder (a "yes" followed by a 2). The other half they cannot:
+ * whether the pointing matched the intent that actually fired is a comparison
+ * against `applied` in the response record, which appears on no screen. Without
+ * it the choice is probe everything, which the 90-minute session has no room
+ * for, or probe by guesswork.
+ *
+ * The verdicts are the export's, deliberately — a probe decided by one rule in
+ * the room and analysed by another would not be about the same items. The fold
+ * is the questionnaire's: a rating of 3 or less reads as "no".
+ */
+export interface PredictionRow {
+  /** 1-based in the participant's own presentation order, not the bank's. */
+  number: number;
+  question: string;
+  guess: boolean | null;
+  rating: number | null;
+  /** Null while either half is still missing. */
+  guessMissed: boolean | null;
+  pointedLabel: string | null;
+  appliedLabel: string | null;
+  /** SCORE only; null for baseline, and for "not sure", which has no verdict. */
+  pointingMissed: boolean | null;
+}
+
+export async function getBlockPredictions(
+  participant: StudyParticipant,
+  cloneAssignmentId: string
+): Promise<PredictionRow[]> {
+  const [clone] = await db
+    .select()
+    .from(studyClones)
+    .where(eq(studyClones.assignmentId, cloneAssignmentId));
+  if (!clone) return [];
+
+  const { deployedConfigFor, getTestItems } = await import('./measure-store');
+  const [items, config, generated] = await Promise.all([
+    getTestItems(participant, clone),
+    deployedConfigFor({
+      assignmentId: clone.assignmentId,
+      condition: clone.condition === 'baseline' ? 'baseline' : 'score',
+    }),
+    db
+      .select({
+        bankItemId: studyGeneratedResponses.bankItemId,
+        applied: studyGeneratedResponses.applied,
+      })
+      .from(studyGeneratedResponses)
+      .where(eq(studyGeneratedResponses.cloneAssignmentId, cloneAssignmentId)),
+  ]);
+
+  const titleById = new Map((config?.intents ?? []).map((i) => [i.id, i.title]));
+  const appliedByItem = new Map(
+    generated.map((g) => [
+      g.bankItemId,
+      (g.applied ?? null) as { outcome?: string; intentId?: number; intentTitle?: string } | null,
+    ])
+  );
+
+  return items.map((item, i) => {
+    const applied = appliedByItem.get(item.bankItemId) ?? null;
+    const point = item.pointing;
+
+    let pointedLabel: string | null = null;
+    let pointingMissed: boolean | null = null;
+    if (point?.kind === 'intent') {
+      pointedLabel = titleById.get(point.intentId) ?? `#${point.intentId} (deleted)`;
+      pointingMissed = !(applied?.outcome === 'intent' && applied?.intentId === point.intentId);
+    } else if (point?.kind === 'none') {
+      pointedLabel = 'None of them';
+      pointingMissed = !(applied == null || applied.outcome === 'type_default');
+    } else if (point?.kind === 'span') {
+      pointedLabel = `“${point.text.length > 80 ? `${point.text.slice(0, 80)}…` : point.text}”`;
+    } else if (point?.kind === 'nothing') {
+      pointedLabel = 'Nothing specific';
+    } else if (point?.kind === 'not_sure') {
+      pointedLabel = 'Not sure';
+    }
+
+    let appliedLabel: string | null = null;
+    if (clone.condition === 'score' && applied) {
+      appliedLabel =
+        applied.outcome === 'intent'
+          ? applied.intentTitle ?? `#${applied.intentId}`
+          : applied.outcome === 'type_default'
+            ? 'type default'
+            : applied.outcome ?? null;
+    }
+
+    return {
+      number: i + 1,
+      question: item.question.length > 90 ? `${item.question.slice(0, 90)}…` : item.question,
+      guess: item.guess,
+      rating: item.rating,
+      guessMissed:
+        item.guess === null || item.rating === null ? null : item.guess !== item.rating >= 4,
+      pointedLabel,
+      appliedLabel,
+      pointingMissed: clone.condition === 'score' ? pointingMissed : null,
+    };
+  });
+}

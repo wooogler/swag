@@ -25,7 +25,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import AdminNav from '@/components/study/AdminNav';
-import type { ParticipantStatus, CloneStatus } from '@/lib/study/console-store';
+import type { ParticipantStatus, CloneStatus, PredictionRow } from '@/lib/study/console-store';
 import { PHASE_LABELS, type StudyPhase } from '@/lib/study/phases';
 
 function Chip({
@@ -352,6 +352,7 @@ export default function SessionConsole({
                   <CloneCard
                     key={clone.assignmentId}
                     clone={clone}
+                    participantId={p.id}
                     busy={busy}
                     onGenerate={(kind) => generate(p, kind, clone.block ?? undefined)}
                     onReset={() =>
@@ -463,11 +464,13 @@ export default function SessionConsole({
 
 function CloneCard({
   clone,
+  participantId,
   busy,
   onGenerate,
   onReset,
 }: {
   clone: CloneStatus;
+  participantId: string;
   busy: string | null;
   onGenerate: (kind: 'test') => void;
   onReset: () => void;
@@ -521,6 +524,111 @@ function CloneCard({
         </button>
       </div>
 
+      <ProbeList participantId={participantId} assignmentId={clone.assignmentId} />
+    </div>
+  );
+}
+
+/**
+ * Which questions to probe (문항지 §3 ④).
+ *
+ * The facilitator can watch the yes/no miss happen on the shared screen, but
+ * not the pointing one — whether the intent they picked is the intent that
+ * fired is a comparison the participant never sees and, before this, no screen
+ * showed. Collapsed by default and loaded on open: it is read between
+ * questions, not while the participant is answering one.
+ */
+function ProbeList({
+  participantId,
+  assignmentId,
+}: {
+  participantId: string;
+  assignmentId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<PredictionRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `/api/study/admin/participants/predictions?participantId=${participantId}&assignmentId=${assignmentId}`
+      );
+      const data = await res.json().catch(() => ({}));
+      setRows(res.ok && Array.isArray(data.rows) ? (data.rows as PredictionRow[]) : []);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) void load();
+  };
+
+  const missed = (rows ?? []).filter((r) => r.guessMissed || r.pointingMissed);
+
+  return (
+    <div className="pt-1">
+      <button
+        onClick={toggle}
+        className="text-[10.5px] font-semibold text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] underline"
+      >
+        {open ? 'Hide' : 'Probe list'}
+        {open && rows !== null && ` · ${missed.length} missed of ${rows.length}`}
+      </button>
+
+      {open && (
+        <div className="mt-1.5 rounded-lg border border-[hsl(var(--border))] overflow-hidden">
+          {loading && (
+            <p className="px-2.5 py-2 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+              Reading…
+            </p>
+          )}
+          {!loading && rows !== null && rows.length === 0 && (
+            <p className="px-2.5 py-2 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+              Nothing recorded for this block yet.
+            </p>
+          )}
+          {!loading &&
+            (rows ?? []).map((r) => {
+              const miss = r.guessMissed || r.pointingMissed;
+              return (
+                <div
+                  key={r.number}
+                  className={`px-2.5 py-1.5 border-b last:border-b-0 border-[hsl(var(--border))] ${
+                    miss ? 'bg-amber-50' : ''
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 flex-wrap text-[10.5px]">
+                    <span className="font-bold tabular-nums w-4">{r.number}</span>
+                    {r.guess !== null && (
+                      <Chip tone={r.guessMissed ? 'warn' : 'plain'}>
+                        said {r.guess ? 'yes' : 'no'}
+                        {r.rating !== null && ` · rated ${r.rating}`}
+                      </Chip>
+                    )}
+                    {r.pointedLabel && (
+                      <Chip tone={r.pointingMissed ? 'warn' : 'plain'}>
+                        → {r.pointedLabel}
+                      </Chip>
+                    )}
+                    {r.pointingMissed && r.appliedLabel && (
+                      <span className="text-[10px] text-amber-800">
+                        actually {r.appliedLabel}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-[hsl(var(--muted-foreground))] leading-snug mt-0.5">
+                    {r.question}
+                  </p>
+                </div>
+              );
+            })}
+        </div>
+      )}
     </div>
   );
 }
