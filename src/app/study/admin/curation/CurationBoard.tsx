@@ -173,39 +173,40 @@ function ClearButton({
 /**
  * How cleanly a question belongs to the subtype being browsed.
  *
- * Curating is a judgement per question, and the cheapest judgements are the
- * ones where the classifier is not arguing with itself: this subtype claims the
- * question and nothing else does. The expensive ones are where four subtypes
- * all claim it and the curator has to work out which reading wins. Sorting by
- * that puts the quick decisions first, which is the whole point — a 25-minute
- * pass should spend its minutes on the questions that need them.
+ * Curating is a judgement per question, and the cheap ones are where the
+ * classifier is not arguing with itself: this subtype claims the question and
+ * nothing else does. The expensive ones are where four subtypes all claim it
+ * and the curator has to work out which reading wins. Sorting by that puts the
+ * quick calls first, so a timed pass spends its minutes where they are needed.
  *
- * A rival that only PROBABLY claims the question is not really arguing, so it
- * costs less than one that clearly does. Same idea on the near side: a clear
- * claim by the selected subtype is worth more than a hesitant one, but a
- * hesitant exclusive claim still beats a clear contested one — which is what
- * makes boundary questions surface here instead of sinking.
+ * Ranked in two tiers, not one number. Browsing a subtype means looking for
+ * questions that ARE it, so a clear claim by the selected subtype outranks a
+ * hesitant one OUTRIGHT — no amount of quiet from the rivals promotes a
+ * probably_in above a clearly_in. Within a tier the rivals decide, and a rival
+ * that only probably claims the question is not really arguing, so it costs
+ * half of one that clearly does.
  */
-const CLARITY_WEIGHT = {
-  /** The selected subtype's own claim. */
-  own: { clearly_in: 1, probably_in: 0.6 } as Record<string, number>,
-  /** Every other subtype claiming the same question, subtracted. */
-  rival: { clearly_in: 1, probably_in: 0.5 } as Record<string, number>,
-};
+const RIVAL_WEIGHT: Record<string, number> = { clearly_in: 1, probably_in: 0.5 };
 
-function clarityScore(
+interface ClarityRank {
+  /** 1 = the selected subtype clearly claims it, 0 = only probably. */
+  tier: number;
+  /** What the other subtypes take off it — lower is cleaner. */
+  contested: number;
+}
+
+function clarityRank(
   matches: Record<number, string> | undefined,
   intentId: number
-): number {
-  if (!matches) return -Infinity;
-  const own = matches[intentId];
-  if (own === undefined) return -Infinity; // not in this subtype at all
-  let score = CLARITY_WEIGHT.own[own] ?? 0;
-  for (const [id, grade] of Object.entries(matches)) {
+): ClarityRank | null {
+  const own = matches?.[intentId];
+  if (own === undefined) return null; // not in this subtype at all
+  let contested = 0;
+  for (const [id, grade] of Object.entries(matches ?? {})) {
     if (Number(id) === intentId) continue;
-    score -= CLARITY_WEIGHT.rival[grade] ?? 0;
+    contested += RIVAL_WEIGHT[grade] ?? 0;
   }
-  return score;
+  return { tier: own === 'clearly_in' ? 1 : 0, contested };
 }
 
 /* ── selection model ── */
@@ -687,10 +688,16 @@ export default function CurationBoard({
       return list.slice().sort((a, b) => {
         const qa = questionById.get(a.messageId);
         const qb = questionById.get(b.messageId);
-        const d = clarityScore(qb?.matches, intentId) - clarityScore(qa?.matches, intentId);
-        if (d !== 0) return d;
-        // Same clarity → the shorter read wins: a question with less
-        // conversation in front of it is faster to judge.
+        const ra = clarityRank(qa?.matches, intentId);
+        const rb = clarityRank(qb?.matches, intentId);
+        // Anything the subtype does not claim sinks; it should not be in the
+        // list at all, but ordering it rather than throwing keeps the sort
+        // total if the filter ever widens.
+        if (!ra || !rb) return (rb ? 1 : 0) - (ra ? 1 : 0);
+        if (ra.tier !== rb.tier) return rb.tier - ra.tier;
+        if (ra.contested !== rb.contested) return ra.contested - rb.contested;
+        // Same tier, same contest → the shorter read wins: a question with
+        // less conversation in front of it is faster to judge.
         return (qa?.turnIndex ?? 0) - (qb?.turnIndex ?? 0) || a.messageId - b.messageId;
       });
     }
