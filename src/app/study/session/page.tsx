@@ -4,10 +4,8 @@ import { db } from '@/db/db';
 import { studyClones } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
-import { advanceWaits } from '@/lib/study/advance';
 import { cloneForBlock, getTestItems } from '@/lib/study/measure-store';
 import { isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
-import PhaseAdvance from '@/components/study/PhaseAdvance';
 import TutorialStep from '@/components/study/TutorialStep';
 
 export const dynamic = 'force-dynamic';
@@ -108,22 +106,6 @@ export default async function StudySessionPage() {
                 >
                   Open Chatbot Studio
                 </a>
-                {/* The same exit the studio header offers, for a participant
-                    who came back here instead. Quieter than the studio link,
-                    and asking the same question before it acts: one click
-                    should not end a block in one place and two in another. */}
-                <div className="mt-6 pt-5 border-t border-[hsl(var(--border))] flex flex-col items-center">
-                  <p className="text-xs text-[hsl(var(--muted-foreground))] mb-3">
-                    Finished setting it up?
-                  </p>
-                  <PhaseAdvance
-                    from={phase}
-                    label="I'm done — check my chatbot"
-                    waits={advanceWaits(phase)}
-                    waitLabel="Your chatbot is answering the check questions now."
-                    confirm="This ends the setup for this chatbot and moves you on to checking it. You will not be able to come back and change it."
-                  />
-                </div>
               </>
             ) : access.testBlock ? (
               <>
