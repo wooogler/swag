@@ -212,7 +212,9 @@ function clarityRank(
 /* ── selection model ── */
 
 type Selection =
-  | { kind: 'set'; setKind: CurationSetKind }
+  /** `type` narrows the set to one type's slot — what the progress card's rows
+   *  open. Absent means the whole set. */
+  | { kind: 'set'; setKind: CurationSetKind; type?: ScoreQueryType }
   | { kind: 'unassigned' }
   | { kind: 'type'; type: ScoreQueryType }
   | { kind: 'subtype'; intentId: number };
@@ -662,7 +664,16 @@ export default function CurationBoard({
   const visible = useMemo(() => {
     let ids: number[];
     if (selection.kind === 'set') {
-      ids = state.members.filter((m) => m.setKind === selection.setKind).map((m) => m.messageId);
+      // Live type, not the member's frozen snapshot — the same rule the card's
+      // counts use, so a row of "15" opens fifteen questions.
+      ids = state.members
+        .filter(
+          (m) =>
+            m.setKind === selection.setKind &&
+            (!selection.type ||
+              (questionById.get(m.messageId)?.queryType ?? m.queryType) === selection.type)
+        )
+        .map((m) => m.messageId);
     } else if (selection.kind === 'unassigned') {
       ids = state.questions.filter((q) => !memberByMessage.has(q.messageId)).map((q) => q.messageId);
     } else if (selection.kind === 'type') {
@@ -952,12 +963,30 @@ export default function CurationBoard({
                   const nBoundary = setCounts.get(`${kind}:${type}:boundary`) ?? 0;
                   const target = targets[kind];
                   const mix = subtypeMixFor(kind, type);
+                  // A div rather than a button: the clear control lives inside
+                  // it and buttons cannot nest. That control stops propagation,
+                  // so emptying a slot never also navigates into it.
                   return (
                     <div
                       key={type}
+                      role="button"
+                      tabIndex={0}
                       onMouseEnter={() => setHoverRow(`${kind}:${type}`)}
                       onMouseLeave={() => setHoverRow((r) => (r === `${kind}:${type}` ? null : r))}
-                      className="flex items-center gap-1.5 text-[10.5px] leading-5"
+                      onClick={() => setSelection({ kind: 'set', setKind: kind, type })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelection({ kind: 'set', setKind: kind, type });
+                        }
+                      }}
+                      className={`flex items-center gap-1.5 text-[10.5px] leading-5 -mx-1 px-1 rounded cursor-pointer ${
+                        selection.kind === 'set' &&
+                        selection.setKind === kind &&
+                        selection.type === type
+                          ? 'bg-[hsl(var(--muted))]'
+                          : 'hover:bg-[hsl(var(--muted))]/60'
+                      }`}
                       title={
                         mix.length > 0
                           ? `${QUERY_TYPE_LABELS[type]} — subtypes in this slot\n` +
@@ -1792,7 +1821,9 @@ function classifierText(
 function selectionLabel(selection: Selection, subtypes: Map<number, CurationSubtype>): string {
   switch (selection.kind) {
     case 'set':
-      return SET_LABELS[selection.setKind];
+      return selection.type
+        ? `${SET_LABELS[selection.setKind]} · ${QUERY_TYPE_LABELS[selection.type]}`
+        : SET_LABELS[selection.setKind];
     case 'unassigned':
       return 'Unassigned';
     case 'type':
