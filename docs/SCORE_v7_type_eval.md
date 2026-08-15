@@ -250,3 +250,127 @@ v2 문구로 되돌렸다(`TYPE_CLASSIFIER_VERSION`도 2로 복귀 → 캐시된
 
 → 코드 변경 없음. 런타임은 이미 최선의 구성을 쓰고 있다. `type-eval.ts`에 `queryonly`/`response`
 arm을 남겨 두었으니 재현 가능하다(`npx tsx scripts/score/type-eval.ts out.json "" all`).
+
+
+## 10. v3 실측, 그리고 논문을 다시 훑어 찾은 것 (2026-08-15)
+
+§1–§9는 전부 **v2 프롬프트**의 숫자다. v3(`2658ab9`, substance-first + scale-as-cap)은 커밋
+메시지에만 수치가 남아 있었고 이 문서는 갱신되지 않았다. 여기서 그 격차를 메운다.
+
+계기는 사용자 질문이었다 — 타입 오분류가 많으니 **큐레이션에 한해 상위 모델을 쓰면** 어떤가.
+그 답은 §10.4에 있고, 먼저 지금 프롬프트가 실제로 어디서 틀리는지부터.
+
+### 10.1 v3 실측 (라이브 경로, `without` arm, n=331)
+
+| | v2 (§1) | **v3 (현행)** |
+|---|---|---|
+| 정확도 / κ | 79.5% / 0.708 | **78.2% / 0.696** |
+| planning | 72/83 | 74/83 |
+| **translating** | 15/31 (48%) | **18/31 (58%)** |
+| reviewing | 76/93 | 74/95 |
+| drafting | 100/122 | 93/122 |
+
+```
+gold \ pred     planning  translating  reviewing  drafting
+planning              74            3          2         4
+translating            5           18          3         5
+reviewing              4            6         74        11
+drafting              11            7         11        93
+```
+
+v3 커밋이 예고한 그대로다: **전체는 77–79% 띠 안(노이즈), translating만 실질 개선.** 새 회귀 없음.
+
+### 10.2 기각된 두 가지 — 논문 산문에 있고 데이터에는 없다
+
+**(a) "내용을 바꾸나 표현을 바꾸나" 축.** 논문 §4.1.2는 `[문단] make this paragraph stronger`를
+TR01(translating)로, §4.1.3은 `Make this sound more professional`을 RE06(reviewing)로 든다.
+구별 불가능해 보이는 두 예시라 프롬프트가 "general improvement"를 reviewing에 넣은 것이 실책으로
+보였다. **아니다.** 우선 그 TR01 예시는 recoded CSV에 그 코드로 **존재하지 않는다**(논문 표와
+채점 gold가 다르다). 그리고 gold에서 `make it better` 계열이 실제로 갈리는 기준은 딱 하나였다:
+
+```
+[RE06] make it better for an essays introduction "With the increase of..."     ← 학생 글 붙여넣음
+[RE06] can you make it better for the first idea "When many technologies..."   ← 학생 글 붙여넣음
+[RE05] Make this sound more professional: I think that automation is...        ← 학생 글 붙여넣음
+[AL03] can you make it soujnhd more professional and add more details          ← 붙여넣기 없음(=봇 출력)
+[AL03] make it better according to utilitarian view "When we look at..."       ← 봇이 쓴 글
+```
+
+**붙여넣은 학생 글이 있으면 RE, 없으면 AL** — §3에서 세운 WHOSE TEXT 규칙과 정확히 일치한다.
+프롬프트가 맞다.
+
+**(b) 질문형 → drafting 규칙이 과하다는 의심.** 논문 PL01에 과제 프롬프트를 복사한 질문이
+Planning으로 코딩된 예(P36)가 있어 이 규칙이 planning을 9건 잡아먹는 원인으로 보였다. 그러나
+gold에는 `How would I as a gen z college student defend the first utilitarian view...` = **AL01
+(drafting)** 이 있다. 프롬프트에 실린 예시가 곧 gold다. **규칙이 맞다.**
+
+### 10.3 확인된 결함 하나 — 게이트 절이 자기 나열 항목을 부정한다
+
+translating이 아니라 **한 단어짜리 질문**이 문제다. 하위코드별로 재분류해 보면:
+
+| 코드 | 내용 | 정답 |
+|---|---|---|
+| **TR04** | 어휘·표현 질문 | **0/5** |
+| **RE02** | 맞춤법·문법 질문 | 8–9/11 *(어느 건이 새는지가 실행마다 바뀜)* |
+| TR02 | 미완성 문장 완성 | 9/11 |
+| TR03 | 아이디어 주고 문장 | 5/6 |
+| TR01 | 아이디어 주고 문단 | 2/8 |
+
+TR04는 **전부 planning으로** 간다. rationale이 매번 같은 말을 한다:
+
+- `Give me a word for negatively affecting` → *"Asks for a synonym, not essay content."*
+- `sysnonyms for "for example"` → *"Asks for word alternatives, not writing text."*
+
+RE02도 같은 병이고, 더 나쁜 증상이 있다 — 같은 모양인데 **판정이 실행마다 뒤집힌다**
+(1회차 `how do you spell exaggeration` 오답, 2회차 `how to spell sufisticated` 오답,
+`how do you spell maintaince`는 두 번 다 정답). 정의가 결정을 못 해주니 모델이 동전을 던진다.
+
+원인은 하나다. **두 정의 모두 첫머리 게이트가 자기 나열 항목을 배제한다:**
+
+- translating: *"...turn it into **usable text at paragraph scale or smaller**"* ↔ 나열엔
+  "suggesting wording and word choice". 단어 하나는 "usable text"가 아니다.
+- reviewing: *"evaluate or revise **THE STUDENT'S OWN WRITING — text they wrote themselves**"* ↔
+  나열엔 "a spelling or grammar question". `spell egregious`엔 글이 없다.
+
+**§3의 v1 모순과 구조가 같다.** 그리고 고치는 방식도 §7·§8이 실패한 "조건 절 추가"가 아니라
+**모순 제거**라 희석 위험이 없다. 규모는 7–8건/331 ≈ **2%p**.
+
+### 10.4 그럼에도 지금은 고치지 않는다 (사용자 결정, 2026-08-15)
+
+배포 비용이 커밋 `5983c8d`(스터디 생성이 얼린 타입으로 라우팅) 이후 올랐다:
+
+> `TYPE_CLASSIFIER_VERSION` 3→4 → 마스터 2개 재타이핑(~855콜) → 뱅크 재빌드 →
+> **클론 재프로비저닝**. 건너뛰면 `scripts/study/check-type-routing-parity.ts`가
+> clone≠master로 잡아낸다(그게 그 스크립트의 목적이다).
+
+유저스터디 직전에 2%p를 위해 치를 값이 아니다. **다른 이유로 버전을 올릴 때 §10.3의 모순 제거를
+같이 넣는다.** 두 정의의 게이트 절에 "붙여넣은 글이 없는 순수 어휘·맞춤법 질문도 포함"을 여는
+정도이고, 새 규칙을 더하는 것이 아니다.
+
+**모델 상향(사용자 최초 질문)도 하지 않는다.** §4가 이미 기록했듯 이 축은 노이즈 문제가 아니라
+정확도 문제이고, §10.3이 보여주듯 남은 오류의 성격은 모델 용량이 아니라 **정의의 자기모순**이다.
+더 센 모델이 모순을 대신 풀어주지는 않는다. 또 큐레이션에만 상향하면 표시용 타입과 라우팅용
+타입이 갈라지는데, 그 문제는 `5983c8d`가 모델을 바꾸지 않고 이미 닫았다.
+
+### 10.5 계측 오염 — 앞으로 예시를 넣을 때의 주의
+
+현행 프롬프트에 박힌 인라인 예시 9개 중 **6개가 채점 코퍼스에서 온 실제 쿼리**다. 대부분 v1
+오류 분석에서 뽑힌 것이다:
+
+| 프롬프트의 예시 | gold |
+|---|---|
+| `make it sound like a 10th grader` | AL03 (완전 일치) |
+| `make it longer` | AL06 (완전 일치) |
+| `write an intro sentence that says this paper claims X` | TR01 |
+| `how would I defend the utilitarian view?` | AL01 |
+| `analyze my paragraph against the utilitarian view` | AL04 |
+| `rewrite it adding the dystopian view` | AL03 |
+
+따라서 **78.2%는 약간 낙관적**이다. 몇 건 수준이라 결론은 바뀌지 않지만, 언젠가 few-shot 예시
+블록을 시도한다면(§1–§9 어디서도 시험한 적 없는 유일한 레버다 — 구 Classifier A는 26-subtype
+few-shot으로 79.2%/κ0.72였다) **예시로 쓴 행은 채점에서 제외해야 한다.**
+
+→ 코드 변경 없음. §10.1 재현: `npx tsx --env-file=.env scripts/score/type-eval.ts out.json 0 without`.
+§10.3의 하위코드별 분해는 일회용 스크립트로 냈고 남기지 않았다 — `type-eval.ts`가 집계만 쓰고
+행별 예측을 JSON에 담지 않으므로, 다시 필요하면 gold 코드로 필터해 `classifyMessageType`을
+직접 부르는 40여 콜짜리를 새로 쓰면 된다.
