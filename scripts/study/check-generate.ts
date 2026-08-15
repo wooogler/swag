@@ -4,6 +4,8 @@
  * Exercises what the study depends on and what the code refuses to do:
  *   • refuses to generate before a deploy exists
  *   • SCORE arm resolves against a PINNED snapshot and records the applied intent
+ *   • it routes on the bank's FROZEN type rather than classifying the question
+ *     again (the two can disagree, and then a rule never reaches its question)
  *   • baseline arm pins an explicit versionNo (not "latest deployed")
  *   • a second run is cached (frozen — never silently regenerated)
  *   • a redeploy is detected as stale rather than passing as current
@@ -171,12 +173,26 @@ async function main() {
       .from(studyGeneratedResponses)
       .where(inArray(studyGeneratedResponses.bankItemId, bankIds));
     console.log('\n4. stored rows:');
+    const frozenTypeById = new Map(bankRows.map((r) => [r.id, r.queryType]));
     for (const row of stored) {
-      const applied = row.applied as { intentTitle?: string; outcome?: string; type?: string } | null;
+      const applied = row.applied as
+        | { intentTitle?: string; outcome?: string; type?: string; typeSource?: string }
+        | null;
       console.log(
         `   item ${row.bankItemId} · ${row.outcome} · applied=${applied ? `${applied.intentTitle}/${applied.outcome}/${applied.type}` : 'none'} · ${JSON.stringify(row.configRef)}`
       );
       console.log(`     "${row.response.slice(0, 110).replace(/\n/g, ' ')}…"`);
+      // The routing type must be the bank's frozen one, not a fresh verdict:
+      // a re-classification here is what lets a participant's rule sit in a
+      // chain their question never walks.
+      const want = frozenTypeById.get(row.bankItemId) ?? null;
+      if (applied) {
+        const ok = applied.typeSource === 'frozen' && applied.type === want;
+        console.log(
+          `     ${ok ? '✓' : 'FAIL —'} routed on the frozen type` +
+            ` (bank=${want} routed=${applied.type} source=${applied.typeSource ?? 'unset'})`
+        );
+      }
     }
 
     // ── 5. idempotence + staleness ──────────────────────────────────────

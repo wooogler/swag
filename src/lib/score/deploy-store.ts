@@ -22,6 +22,16 @@
  * so writing it would poison the instructor-side cache with a weaker verdict
  * that a version bump alone could never correct. What actually routed the reply
  * is recorded on the reply itself instead (appliedType in its metadata).
+ *
+ * The mirror of that rule: a caller REPLAYING a message that score_query_types
+ * already holds a verdict for must hand it in (`knownType`) rather than let the
+ * weaker live judgment stand in. The stored verdict is the one the rest of the
+ * system already committed to — the board displays it, sets are assembled by
+ * it, an instructor picks a type to write a rule under while looking at it.
+ * Classifying again can land somewhere else, and then the rule sits in a chain
+ * the query never walks: no error, no empty answer, just a rule that quietly
+ * never runs. TWO verdicts for one message is the defect. Which of them is more
+ * accurate is a separate question, and not this module's to settle.
  */
 import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
@@ -316,6 +326,11 @@ export interface DeployedPromptResult {
     rule: string;
     outcome: 'intent' | 'type_default';
     type: ScoreQueryType | null;
+    /** Where `type` came from. 'live' = classified here, the student runtime's
+     * only option for a message no one has typed yet. 'frozen' = handed in by
+     * the caller (see knownType) because the message was ALREADY typed and that
+     * verdict is what a human was shown. */
+    typeSource?: 'live' | 'frozen';
   } | null;
   deployVersion: number | null;
 }
@@ -365,6 +380,12 @@ async function resolveAgainstSnapshot(args: {
   prevQueryText: string | null;
   prevResponseText: string | null;
   callOptions?: { timeoutMs: number; maxRetries: number };
+  /** A type already decided for THIS message, used instead of classifying it
+   * again. Only for callers replaying a message that carries a stored verdict
+   * (score_query_types) — see the header note on two verdicts for one message.
+   * null/undefined ⇒ classify live, which is what the student runtime, facing a
+   * message nobody has typed yet, always does. */
+  knownType?: ScoreQueryType | null;
 }): Promise<SnapshotResolution> {
   const { snapshot } = args;
   // A pre-v7 snapshot has no types and no tree — nothing to route with. The
@@ -383,18 +404,24 @@ async function resolveAgainstSnapshot(args: {
 
   const callOptions = args.callOptions ?? { timeoutMs: 15_000, maxRetries: 0 };
   const rated = judged.slice(0, MAX_INTENTS_PER_CALL);
+  // A handed-in type replaces the call entirely — it is not a hint to check.
+  // Re-classifying and preferring one of the two answers would reintroduce the
+  // very disagreement knownType exists to remove, at full cost.
+  const frozenType = args.knownType ?? null;
   const [typeResult, ratingResult] = await Promise.all([
-    classifyMessageType({
-      queryText: args.queryText,
-      prevQueryText: args.prevQueryText,
-      prevResponseText: args.prevResponseText,
-      // The live path has no dissection: computeDissections re-scans the whole
-      // assignment log from editor events, far too heavy per chat message. The
-      // same gap the rating call already lives with.
-      dissection: null,
-      model: getDefaultScoreModel(),
-      callOptions,
-    }),
+    frozenType
+      ? Promise.resolve({ type: frozenType, rationale: '', raw: '' })
+      : classifyMessageType({
+          queryText: args.queryText,
+          prevQueryText: args.prevQueryText,
+          prevResponseText: args.prevResponseText,
+          // The live path has no dissection: computeDissections re-scans the
+          // whole assignment log from editor events, far too heavy per chat
+          // message. The same gap the rating call already lives with.
+          dissection: null,
+          model: getDefaultScoreModel(),
+          callOptions,
+        }),
     rated.length > 0
       ? rateMessageIntents({
           queryText: args.queryText,
@@ -445,7 +472,14 @@ async function resolveAgainstSnapshot(args: {
     outcome: 'routed',
     systemPrompt: buildInjectedSystemPrompt(rule || null),
     applied: owner
-      ? { intentId: owner.id, intentTitle: owner.title, rule, outcome, type: queryType }
+      ? {
+          intentId: owner.id,
+          intentTitle: owner.title,
+          rule,
+          outcome,
+          type: queryType,
+          typeSource: frozenType ? ('frozen' as const) : ('live' as const),
+        }
       : null,
   };
 }
@@ -490,6 +524,13 @@ export async function resolveDeployedChatPrompt(args: {
  * store an answer the participant's configuration never produced, so it needs
  * to tell "the config genuinely says nothing" from "the classifier timed out";
  * the prompt text alone cannot (see ResolutionOutcome).
+ *
+ * It also accepts `knownType`, which the student runtime has no use for: these
+ * callers replay a message that was already typed once and has been carrying
+ * that type ever since — through the board, the curated sets, and the question
+ * bank. Classifying it a second time can land elsewhere, and then the rule
+ * someone wrote for the type they were looking at never runs, with nothing in
+ * the output saying why. See the header note.
  */
 export async function resolveChatPromptFromSnapshot(args: {
   snapshot: ChatDeploySnapshot;
@@ -498,6 +539,7 @@ export async function resolveChatPromptFromSnapshot(args: {
   prevQueryText: string | null;
   prevResponseText: string | null;
   callOptions?: { timeoutMs: number; maxRetries: number };
+  knownType?: ScoreQueryType | null;
 }): Promise<{
   systemPrompt: string;
   applied: DeployedPromptResult['applied'];

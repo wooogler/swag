@@ -30,10 +30,12 @@ import {
   chatMessages,
   scoreIntentPins,
   scoreIntents,
+  scoreQueryTypes,
   studyClones,
   studyGeneratedResponses,
   studyQuestionBank,
 } from '@/db/schema';
+import { isScoreQueryType, TYPE_CLASSIFIER_VERSION } from '@/lib/score/intents';
 import { CURATION_DATASETS, curationDataset, studyMasterToken } from './config';
 import { getConfirmedSet, isLocked } from './curation';
 import { cloneStarterSet, type CloneRestriction } from './provision';
@@ -319,6 +321,25 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
 
   // Freeze the text: prior turns + the question itself, as of now.
   const frozen = await freezeQuestions(test);
+  // …and the type, which generation now ROUTES on (generate.ts rule 3) instead
+  // of classifying the question again. It has to be the verdict the curation
+  // board shows and the clones hold, so it is read from score_query_types here
+  // rather than taken from study_set_members.query_type — that column froze at
+  // set-confirm time and the board already prefers the live row over it.
+  const currentType = await currentTypeByMessage(test);
+  const untyped = test.filter((c) => !currentType.get(c.messageId));
+  if (untyped.length > 0) {
+    return {
+      ...partial,
+      status: 'blocked',
+      reason:
+        `${untyped.length} of ${test.length} test items have no current type verdict ` +
+        `(message ids ${untyped.slice(0, 5).map((c) => c.messageId).join(', ')}` +
+        `${untyped.length > 5 ? ', …' : ''}) — run classify on the master first. ` +
+        `An untyped item would be re-classified at generation time, which is the ` +
+        `one thing routing on a frozen type exists to avoid.`,
+    };
+  }
 
   if (!opts.apply) return { ...partial, status: 'planned' };
 
@@ -367,7 +388,7 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
         sourceMessageId: c.messageId,
         context: f.context,
         question: f.question,
-        queryType: c.queryType,
+        queryType: currentType.get(c.messageId) ?? c.queryType,
         subtype: c.subtype,
         createdAt: new Date(),
       });
@@ -379,6 +400,38 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
 
   await db.insert(studyQuestionBank).values(rows);
   return { ...partial, status: 'built', written: rows.length };
+}
+
+/**
+ * The type verdict each candidate carries RIGHT NOW on its source master, at
+ * the current classifier version — the same gate curation.ts applies when it
+ * builds the board, so the bank freezes what the board shows. A candidate whose
+ * row is missing or stale is absent from the map, which is what blocks the
+ * build above.
+ */
+async function currentTypeByMessage(candidates: Candidate[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (candidates.length === 0) return out;
+
+  const rows = await db
+    .select({
+      messageId: scoreQueryTypes.messageId,
+      type: scoreQueryTypes.type,
+      version: scoreQueryTypes.version,
+    })
+    .from(scoreQueryTypes)
+    .where(
+      inArray(
+        scoreQueryTypes.messageId,
+        candidates.map((c) => c.messageId)
+      )
+    );
+  for (const row of rows) {
+    if (row.version < TYPE_CLASSIFIER_VERSION) continue;
+    if (!isScoreQueryType(row.type)) continue;
+    out.set(row.messageId, row.type);
+  }
+  return out;
 }
 
 /** The question text plus the turns before it, taken from the source master. */

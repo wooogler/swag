@@ -21,6 +21,18 @@
  *     (which would drift the moment the participant redeploys). Either way the
  *     pin is stored alongside the answer, so staleness is detectable later.
  *
+ *  3. Route on the type the question was CURATED as. A bank question is held
+ *     out of the participant's log, but it is not a new message: it comes from
+ *     the master log, curation typed it once, and that verdict is what put it
+ *     in this block and what the analysis counts it as. Classifying it again
+ *     here asks the same model the same question a second time and can get a
+ *     different answer — and then a rule the participant wrote under Drafting
+ *     is skipped on an item everything else calls Drafting, because this one
+ *     call said reviewing. They see an answer their rule never touched and
+ *     conclude the rule does not work. The frozen bank type goes in as
+ *     knownType, which also drops one LLM call per question and removes
+ *     'unusable_type' as a way for generation to fail.
+ *
  * Context policy, identical in both arms and mirroring /api/chat:
  *   generation  — every context turn plus the question (the route hands the
  *                 model the whole history)
@@ -40,6 +52,7 @@ import {
 } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { getLatestChatDeploy, resolveChatPromptFromSnapshot } from '@/lib/score/deploy-store';
+import { isScoreQueryType } from '@/lib/score/intents';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { isChatConfigured, runChatTurn, type TurnMessage } from './chat-run';
 import { ensureStudyTables } from './store';
@@ -247,6 +260,10 @@ export async function generateForClone(args: {
                 prevQueryText,
                 prevResponseText,
                 callOptions: CALL_OPTIONS,
+                // Rule 3. A bank item with no frozen type falls through to the
+                // live call rather than blocking generation — it is the old
+                // behaviour, and buildQuestionBank refuses to write one.
+                knownType: isScoreQueryType(item.queryType) ? item.queryType : null,
               });
               if (resolved.outcome === 'fail_open') {
                 // The base prompt is NOT this participant's configuration.
