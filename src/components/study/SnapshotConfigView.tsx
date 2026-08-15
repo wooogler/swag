@@ -36,18 +36,54 @@ export interface SnapshotConfig {
 }
 
 const TYPE_ORDER = ['planning', 'translating', 'reviewing', 'drafting'] as const;
-const TYPE_DOT: Record<string, string> = {
+export const TYPE_DOT: Record<string, string> = {
   planning: 'bg-blue-500',
   translating: 'bg-emerald-500',
   reviewing: 'bg-amber-500',
   drafting: 'bg-violet-500',
 };
-const TYPE_LABEL: Record<string, string> = {
+export const TYPE_LABEL: Record<string, string> = {
   planning: 'Planning',
   translating: 'Translating',
   reviewing: 'Reviewing',
   drafting: 'Drafting',
 };
+
+export interface PickerEntry {
+  intent: SnapshotIntentView;
+  depth: number;
+  type: string;
+  /** True on the first entry of each type — the caller draws the heading. */
+  startsType: boolean;
+}
+
+/**
+ * The panel's own reading order, flattened for a list that has to match it.
+ *
+ * The block test asks a participant to find, in a list, an intent they are
+ * looking at in the panel beside it. Any difference between the two orders is
+ * search work charged to a measurement — so both come from here rather than
+ * from two hand-kept sortings that agree until someone edits one of them.
+ */
+export function pickerOrder(intents: SnapshotIntentView[] | undefined): PickerEntry[] {
+  const authored = (intents ?? []).filter((i) => i.kind === 'intent');
+  const out: PickerEntry[] = [];
+  for (const type of TYPE_ORDER) {
+    const mine = authored.filter((i) => i.type === type);
+    orderChain(mine).forEach((intent, i) => {
+      out.push({ intent, depth: depthOf(intent, mine), type, startsType: i === 0 });
+    });
+  }
+  // A type we do not know about would otherwise vanish from the picker while
+  // still routing questions; show it last rather than lose it.
+  const known = new Set(out.map((e) => e.intent.id));
+  for (const intent of authored) {
+    if (!known.has(intent.id)) {
+      out.push({ intent, depth: 0, type: intent.type ?? 'other', startsType: true });
+    }
+  }
+  return out;
+}
 
 export interface RulesSelection {
   start: number;

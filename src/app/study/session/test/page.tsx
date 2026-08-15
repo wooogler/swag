@@ -10,13 +10,14 @@ export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Check your chatbot' };
 
 /**
- * Block test — the participant predicts, then sees, then rates.
+ * Block test — the participant predicts all of them, then sees, then rates.
  *
  * Reached only during the matching phase, which the participant enters by
  * finishing their setup — and that transition generates these answers first
  * (advance.ts), so "Not ready yet" below means someone was moved here by hand.
- * Responses for items not yet predicted are NOT in this payload (measure-store
- * enforces that), so there is nothing on the page to peek at.
+ * Until every question in the block has been predicted, NO response is in this
+ * payload (measure-store enforces that), so there is nothing on the page to
+ * peek at and nothing an early answer could teach a later prediction.
  */
 export default async function BlockTestPage() {
   await ensureStudyTables();
@@ -48,5 +49,14 @@ export default async function BlockTestPage() {
     );
   }
 
-  return <BlockTest config={config} items={items} phase={phase} />;
+  return (
+    <BlockTest
+      config={config}
+      items={items}
+      phase={phase}
+      // NIRVANA turns are raw model output whose single-newline breaks
+      // CommonMark would collapse; SWAG's are this app's own markdown.
+      legacyLineBreaks={clone.datasetKey === 'nirvana'}
+    />
+  );
 }

@@ -1,9 +1,14 @@
 /**
- * Block-test answers: record the prediction, and only then release the frozen
- * response. The prediction is TWO steps (design v2 §5) — the yes/no, then the
- * point at the part of the configuration expected to act — and the reveal
- * belongs to the second. All of it lives behind the participant's own session
- * and refuses unless the current phase is that block's test.
+ * Block-test answers: record every prediction, and only then release the
+ * frozen responses.
+ *
+ * The block runs in two passes. Pass one predicts all eight questions — the
+ * yes/no, then the point at the part of the configuration expected to act
+ * (design v2 §5) — and shows no answers at all. Pass two walks the same eight
+ * again, revealing and rating. Nothing here decides which pass the client is
+ * in; the release rule lives in measure-store and is re-derived from the rows
+ * on every request. All of it sits behind the participant's own session and
+ * refuses unless the current phase is that block's test.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -11,6 +16,8 @@ import { getCurrentStudyParticipant } from '@/lib/study/session';
 import {
   cloneForBlock,
   deployedConfigFor,
+  getTestItems,
+  predictionsComplete,
   recordGuess,
   recordPointing,
   recordRating,
@@ -99,11 +106,25 @@ export async function POST(req: Request) {
     if ('error' in result) {
       return NextResponse.json({ error: result.error }, { status: 409 });
     }
-    return NextResponse.json({ success: true, response: result.response });
+    // If that was the last prediction the block owed, the answers unlock — so
+    // send the refreshed list rather than making the client reload to find out.
+    // It comes from getTestItems, the same gate the page renders through, so
+    // there is one place that decides what is visible.
+    if (await predictionsComplete(clone)) {
+      return NextResponse.json({
+        success: true,
+        revealed: true,
+        items: await getTestItems(participant, clone),
+      });
+    }
+    return NextResponse.json({ success: true, revealed: false });
   }
 
-  // Refused rather than ignored when the answer has not been released: a
-  // rating without a prediction in front of it is not the measurement.
+  // Refused rather than ignored when the answers have not been released: a
+  // rating given before the reveal is not the measurement.
+  if (!(await predictionsComplete(clone))) {
+    return NextResponse.json({ error: 'not_revealed' }, { status: 409 });
+  }
   const rated = await recordRating({
     cloneAssignmentId: clone.assignmentId,
     bankItemId: parsed.bankItemId,

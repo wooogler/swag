@@ -40,6 +40,7 @@ async function main() {
     cloneForBlock,
     deployedConfigFor,
     getTestItems,
+    predictionsComplete,
     recordGuess,
     recordPointing,
     recordRating,
@@ -177,19 +178,19 @@ async function main() {
       `   rating before reveal refused = ${!early.ok}${!early.ok ? ' ✓' : ' ✗'}`
     );
 
-    const released = await recordPointing({
+    const pointed = await recordPointing({
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
       pointing: { kind: 'not_sure' },
     });
-    console.log(
-      `   after pointing: released "${'response' in released ? released.response.slice(0, 60) : released.error}…"`
-    );
+    console.log(`   pointing recorded: ${JSON.stringify(pointed)}`);
 
+    // The release is block-wide, not per item: predicting ONE question must
+    // still show nothing, or the answer would teach the predictions after it.
     items = await getTestItems(participant, clone1);
-    const withResponse = items.filter((i) => i.response !== null).length;
+    const afterOne = items.filter((i) => i.response !== null).length;
     console.log(
-      `   now responses present = ${withResponse} (expect exactly 1)${withResponse === 1 ? ' ✓' : ' ✗'}`
+      `   after 1 of ${items.length} predicted: responses present = ${afterOne} (expect 0)${afterOne === 0 ? ' ✓' : ' ✗'}`
     );
 
     // ── 1b. pointing keeps its first answer, and replays on reload ──────
@@ -212,6 +213,33 @@ async function main() {
     });
     console.log(
       `   pointing without a guess refused = ${'error' in orphan && orphan.error === 'guess_first'}${'error' in orphan ? ' ✓' : ' ✗'}`
+    );
+
+    // ── 1c. the whole block unlocks at once, and only then ──────────────
+    for (const it of items) {
+      if (it.guess === null) {
+        await recordGuess({
+          participant,
+          cloneAssignmentId: clone1.assignmentId,
+          bankItemId: it.bankItemId,
+          guess: true,
+        });
+      }
+      if (it.pointing === null) {
+        await recordPointing({
+          cloneAssignmentId: clone1.assignmentId,
+          bankItemId: it.bankItemId,
+          pointing: { kind: 'not_sure' },
+        });
+      }
+    }
+    const complete = await predictionsComplete(clone1);
+    items = await getTestItems(participant, clone1);
+    const withResponse = items.filter((i) => i.response !== null).length;
+    console.log(
+      `   all predicted (${complete}): responses present = ${withResponse} of ${items.length}${
+        complete && withResponse === items.length ? ' ✓' : ' ✗'
+      }`
     );
 
     // ── 2. a second guess must not overwrite the first ──────────────────

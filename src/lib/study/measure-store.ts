@@ -46,7 +46,7 @@ export interface TestItem extends MeasureQuestion {
   /** Null until pointed; replayed so a reload resumes mid-item. */
   pointing: Pointing | null;
   rating: number | null;
-  /** Present ONLY once BOTH the guess and the pointing are recorded. */
+  /** Present ONLY once EVERY item in the block has been predicted. */
   response: string | null;
 }
 
@@ -243,6 +243,21 @@ export async function getTestItems(
     `test:${participant.id}:${clone.datasetKey}`
   );
 
+  // THE GATE, and it is block-wide: not one answer is released until every
+  // question in the block has been predicted.
+  //
+  // Per-item release let an early answer teach the participant what this
+  // configuration does, and they carried that lesson into the predictions that
+  // followed — so items 6-8 measured a participant who had been shown six
+  // worked examples, and items 1-3 one who had not. The predictions have to be
+  // made under the same information, which means all of them before any reveal.
+  // Checked on `pointedAt` rather than on the reconstructed pointing so an
+  // unreadable row fails closed.
+  const predictionsDone = bank.every((item) => {
+    const answer = answerByItem.get(item.id);
+    return answer?.guess != null && answer?.pointedAt != null;
+  });
+
   return ordered.map((item) => {
     const answer = answerByItem.get(item.id);
     const guessed = answer?.guess ?? null;
@@ -255,15 +270,44 @@ export async function getTestItems(
       guess: guessed,
       pointing,
       rating: answer?.rating ?? null,
-      // The gate: both halves of the prediction on record, or no response in
-      // the payload. Checked on `pointedAt` rather than on the reconstructed
-      // value so an unreadable row fails closed.
-      response:
-        guessed === null || answer?.pointedAt == null
-          ? null
-          : responseByItem.get(item.id) ?? null,
+      response: predictionsDone ? responseByItem.get(item.id) ?? null : null,
     };
   });
+}
+
+/**
+ * Has every question in this block been predicted?
+ *
+ * The reveal pass and the rating both hang off this, and both are checked
+ * server-side — the client's idea of which pass it is in never decides what it
+ * is allowed to see.
+ */
+export async function predictionsComplete(clone: {
+  assignmentId: string;
+  datasetKey: string;
+}): Promise<boolean> {
+  const bank = await db
+    .select({ id: studyQuestionBank.id })
+    .from(studyQuestionBank)
+    .where(
+      and(eq(studyQuestionBank.datasetKey, clone.datasetKey), eq(studyQuestionBank.kind, 'test'))
+    );
+  if (bank.length === 0) return false;
+  const answers = await db
+    .select({ bankItemId: studyTestAnswers.bankItemId })
+    .from(studyTestAnswers)
+    .where(
+      and(
+        eq(studyTestAnswers.cloneAssignmentId, clone.assignmentId),
+        inArray(
+          studyTestAnswers.bankItemId,
+          bank.map((b) => b.id)
+        ),
+        isNotNull(studyTestAnswers.guess),
+        isNotNull(studyTestAnswers.pointedAt)
+      )
+    );
+  return answers.length === bank.length;
 }
 
 /**
@@ -314,19 +358,22 @@ async function hasResponse(cloneAssignmentId: string, bankItemId: number): Promi
 }
 
 /**
- * Record where they expect the answer to come from, and release it.
+ * Record where they expect the answer to come from. Releases nothing.
  *
- * The reveal moved here from recordGuess because this is the last thing asked
- * before the answer is seen. Refuses without a guess on record, which is what
- * makes the questionnaire's order (describe → guess → point) enforceable rather
- * than merely rendered, and keeps the first pointing the way it keeps the first
- * guess.
+ * This closes the prediction for one question, not the block: the answers
+ * arrive together once the last question has been predicted (see the gate in
+ * getTestItems). Refuses without a guess on record, which is what makes the
+ * questionnaire's order (describe → guess → point) enforceable rather than
+ * merely rendered, and keeps the first pointing the way it keeps the first
+ * guess. Still checks that a frozen answer EXISTS — a prediction we could
+ * never show an answer to is not the measurement, and that is worth failing on
+ * now rather than at the reveal.
  */
 export async function recordPointing(args: {
   cloneAssignmentId: string;
   bankItemId: number;
   pointing: Pointing;
-}): Promise<{ response: string } | { error: 'no_response' | 'guess_first' }> {
+}): Promise<{ ok: true } | { error: 'no_response' | 'guess_first' }> {
   const { cloneAssignmentId, bankItemId, pointing } = args;
 
   const [existing] = await db
@@ -340,18 +387,9 @@ export async function recordPointing(args: {
     );
   if (!existing || existing.guess === null) return { error: 'guess_first' };
 
-  const [generated] = await db
-    .select({ response: studyGeneratedResponses.response })
-    .from(studyGeneratedResponses)
-    .where(
-      and(
-        eq(studyGeneratedResponses.cloneAssignmentId, cloneAssignmentId),
-        eq(studyGeneratedResponses.bankItemId, bankItemId)
-      )
-    );
-  if (!generated) return { error: 'no_response' };
+  if (!(await hasResponse(cloneAssignmentId, bankItemId))) return { error: 'no_response' };
 
-  // Already pointed → keep it and re-release the same answer, so a reload
+  // Already pointed → keep the first answer and report success, so a reload
   // lands where it left off instead of erroring.
   if (existing.pointedAt == null) {
     await db
@@ -367,14 +405,16 @@ export async function recordPointing(args: {
       .where(eq(studyTestAnswers.id, existing.id));
   }
 
-  return { response: generated.response };
+  return { ok: true };
 }
 
 /**
  * Record the 1-5 fit rating. Only reachable once the answer has been released,
- * which is the same as saying: only once the prediction is complete. The WHERE
- * carries that rather than a prior read, so a rating cannot slip in ahead of
- * the reveal even if a client sent one.
+ * which now means the WHOLE block has been predicted — a rating is a judgement
+ * of something seen, and nothing in this block is seen before then. The caller
+ * checks the block-wide half (it holds the clone); the per-item `pointedAt`
+ * rides in the WHERE rather than in a prior read, so neither can slip past on
+ * a client's say-so.
  */
 export async function recordRating(args: {
   cloneAssignmentId: string;
