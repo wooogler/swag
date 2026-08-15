@@ -106,7 +106,7 @@ async function main() {
 
   // ── participants ────────────────────────────────────────────────────
   const participantRows = participants.map((p) => {
-    const plan = blockPlan(p.participantNumber);
+    const plan = blockPlan(p);
     return {
       participant: p.participantNumber,
       participant_id: p.id,
@@ -132,7 +132,7 @@ async function main() {
   const testRows = testAnswers.map((a) => {
     const clone = cloneByAssignment.get(a.cloneAssignmentId);
     const participant = participants.find((p) => p.id === a.participantId);
-    const plan = participant ? blockPlan(participant.participantNumber) : [];
+    const plan = participant ? blockPlan(participant) : [];
     const block = plan.find((x) => x.datasetKey === clone?.datasetKey)?.block ?? null;
     const item = bankById.get(a.bankItemId);
     const gen = generatedByKey.get(`${a.cloneAssignmentId}:${a.bankItemId}`);
@@ -265,7 +265,7 @@ async function main() {
   const configRows: Record<string, unknown>[] = [];
   for (const clone of clones) {
     const participant = participants.find((p) => p.id === clone.participantId);
-    const plan = participant ? blockPlan(participant.participantNumber) : [];
+    const plan = participant ? blockPlan(participant) : [];
     const block = plan.find((x) => x.datasetKey === clone.datasetKey)?.block ?? null;
     // One row of counts per clone — the shape of what they built.
     const [counts] = await db.execute<Record<string, number>>(

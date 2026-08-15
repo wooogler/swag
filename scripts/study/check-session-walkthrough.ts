@@ -50,7 +50,7 @@ async function main() {
   const { studySurveyAnswers } = await import('../../src/db/schema');
 
   const { participant } = await ensureParticipantSetup(number);
-  const plan = blockPlan(number);
+  const plan = blockPlan({ participantNumber: number });
   console.log(`participant ${number} · cell plan ${plan.map((p) => `${p.block}:${p.datasetKey}/${p.condition}`).join(' ')}\n`);
 
   try {

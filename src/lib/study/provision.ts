@@ -18,7 +18,7 @@
  * (Same temp-table serial-id remap the one-off scripts/swag/build_swag_dataset.sql
  * uses, generalized + parameterized.)
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
@@ -35,7 +35,6 @@ import { ensureIntentTables } from '@/lib/score/intent-store';
 import {
   STUDY_DATASETS,
   STUDY_EMAIL_DOMAIN,
-  conditionForDataset,
   studyMasterToken,
   type StudyDataset,
 } from './config';
@@ -45,7 +44,7 @@ import {
   normalizeParticipantNumber,
 } from './store';
 import { deleteParticipantClones, deleteParticipantCloneByDataset } from './teardown';
-import { blockPlan, cellForParticipant } from './phases';
+import { blockPlan, cellOf, isStudyCell, planForCell, type StudyCell } from './phases';
 
 export type CloneCounts = Record<string, number>;
 
@@ -418,7 +417,7 @@ export async function cloneStarterSet(
 /* Account + clone lifecycle (find-or-create, race-safe)               */
 /* ------------------------------------------------------------------ */
 
-async function createAccount(number: string): Promise<StudyParticipant> {
+async function createAccount(number: string, cell?: StudyCell): Promise<StudyParticipant> {
   const instructorId = randomUUID();
   const participantId = randomUUID();
   const email = `${number.toLowerCase()}@${STUDY_EMAIL_DOMAIN}`;
@@ -442,6 +441,8 @@ async function createAccount(number: string): Promise<StudyParticipant> {
         participantNumber: number,
         instructorId,
         label: `Study ${number}`,
+        accessToken: newAccessToken(),
+        ...(cell ? { cell, blockOrder: planForCell(cell).map((b) => b.datasetKey).join(',') } : {}),
         createdAt: new Date(),
       })
       .returning();
@@ -451,17 +452,28 @@ async function createAccount(number: string): Promise<StudyParticipant> {
 
 /** Find-or-create the participant's account (no clones yet). Race-safe on the
  * participant_number unique index. */
-export async function ensureParticipantAccount(participantNumber: string): Promise<StudyParticipant> {
+export async function ensureParticipantAccount(
+  participantNumber: string,
+  cell?: StudyCell
+): Promise<StudyParticipant> {
   const number = normalizeParticipantNumber(participantNumber);
   const existing = await getParticipantByNumber(number);
   if (existing) return existing;
   try {
-    return await createAccount(number);
+    return await createAccount(number, cell);
   } catch (err) {
     const after = await getParticipantByNumber(number);
     if (after) return after;
     throw err;
   }
+}
+
+/**
+ * The link a participant is handed IS their credential, so it has to be
+ * unguessable — 32 bytes of urlsafe base64, not the participant number.
+ */
+export function newAccessToken(): string {
+  return randomBytes(24).toString('base64url');
 }
 
 /**
@@ -507,7 +519,10 @@ async function provisionClone(participant: StudyParticipant, dataset: StudyDatas
         datasetKey: dataset.key,
         assignmentId,
         sourceAssignmentId,
-        condition: conditionForDataset(participant.participantNumber, dataset.key),
+        // From the participant's ASSIGNED cell — the researcher chose this
+        // pairing, so it cannot be re-derived from the number here.
+        condition:
+          blockPlan(participant).find((b) => b.datasetKey === dataset.key)?.condition ?? 'score',
         createdAt: new Date(),
       })
       .returning();
@@ -539,13 +554,15 @@ export async function ensureClone(participant: StudyParticipant, dataset: StudyD
  * (first sign-in provisions all clones; returning sign-ins are instant).
  */
 export async function ensureParticipantSetup(
-  participantNumber: string
+  participantNumber: string,
+  /** Only used when the participant does not exist yet; never overwrites. */
+  cell?: StudyCell
 ): Promise<{ participant: StudyParticipant; clones: StudyClone[] }> {
   const number = normalizeParticipantNumber(participantNumber);
   await Promise.all([ensureScoreTable(), ensureIntentTables(), ensureStudyTables()]);
 
-  const participant = await ensureParticipantAccount(number);
-  await recordCounterbalancing(participant);
+  const account = await ensureParticipantAccount(number, cell);
+  const participant = await recordCounterbalancing(account);
   const clones: StudyClone[] = [];
   for (const dataset of STUDY_DATASETS) {
     clones.push(await ensureClone(participant, dataset));
@@ -554,23 +571,28 @@ export async function ensureParticipantSetup(
 }
 
 /**
- * Stamp the counterbalancing cell + block order onto the participant row.
+ * Make sure the row carries the cell it is running, and a link to reach it by.
  *
- * Both are pure functions of the participant number, so this records rather
- * than decides — but recording is what lets the analysis read the cell a
- * session actually ran as, instead of re-deriving it from a rule that may have
- * been edited since. Idempotent; never overwrites an already-stamped row.
+ * The cell is normally assigned at creation. This backfills the two cases that
+ * arrive without one — rows made before the column existed, and the demo
+ * accounts — from the old number rule, which is the cell those rows have
+ * always effectively run. Never overwrites an assignment.
  */
-async function recordCounterbalancing(participant: StudyParticipant): Promise<void> {
-  if (participant.cell != null && participant.blockOrder) return;
-  const plan = blockPlan(participant.participantNumber);
-  await db
+async function recordCounterbalancing(participant: StudyParticipant): Promise<StudyParticipant> {
+  const patch: Partial<typeof studyParticipants.$inferInsert> = {};
+  if (!isStudyCell(participant.cell) || !participant.blockOrder) {
+    const cell = cellOf(participant);
+    patch.cell = cell;
+    patch.blockOrder = planForCell(cell).map((b) => b.datasetKey).join(',');
+  }
+  if (!participant.accessToken) patch.accessToken = newAccessToken();
+  if (Object.keys(patch).length === 0) return participant;
+  const [updated] = await db
     .update(studyParticipants)
-    .set({
-      cell: cellForParticipant(participant.participantNumber),
-      blockOrder: plan.map((p) => p.datasetKey).join(','),
-    })
-    .where(eq(studyParticipants.id, participant.id));
+    .set(patch)
+    .where(eq(studyParticipants.id, participant.id))
+    .returning();
+  return updated ?? participant;
 }
 
 /**

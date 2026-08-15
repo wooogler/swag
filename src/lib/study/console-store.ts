@@ -24,7 +24,7 @@ import {
 import { isGenerationCurrent, type BankKind } from './generate';
 import {
   blockPlan,
-  cellForParticipant,
+  cellOf,
   isStudyPhase,
   phaseAccess,
   type StudyPhase,
@@ -74,6 +74,8 @@ export interface ParticipantStatus {
   participantNumber: string;
   cell: number | null;
   blockOrder: string | null;
+  /** The participant's start link token; null only for rows never provisioned. */
+  accessToken: string | null;
   phase: StudyPhase;
   lastLoginAt: string | null;
   clones: CloneStatus[];
@@ -261,7 +263,7 @@ export async function getParticipantStatus(
     .select()
     .from(studyClones)
     .where(eq(studyClones.participantId, participant.id));
-  const plan = blockPlan(participant.participantNumber);
+  const plan = blockPlan(participant);
   const phase: StudyPhase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
   const surveyItemCount = (await getSurveyItems()).length;
 
@@ -314,8 +316,9 @@ export async function getParticipantStatus(
   return {
     id: participant.id,
     participantNumber: participant.participantNumber,
-    cell: participant.cell ?? cellForParticipant(participant.participantNumber),
+    cell: cellOf(participant),
     blockOrder: participant.blockOrder ?? plan.map((p) => p.datasetKey).join(','),
+    accessToken: participant.accessToken ?? null,
     phase,
     lastLoginAt: participant.lastLoginAt ? participant.lastLoginAt.toISOString() : null,
     clones: cloneStatuses.sort((a, b) => (a.block ?? 9) - (b.block ?? 9)),
@@ -390,7 +393,7 @@ export function allowedWorkDataset(participant: {
   phase: string | null;
 }): string | null {
   const phase: StudyPhase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
-  return phaseAccess(participant.participantNumber, phase).workDatasetKey;
+  return phaseAccess(participant, phase).workDatasetKey;
 }
 
 /** Clone assignment ids a participant may open right now. */

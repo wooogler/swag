@@ -5,6 +5,7 @@ import { studyClones } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
 import { advanceWaits } from '@/lib/study/advance';
+import { cloneForBlock, getTestItems } from '@/lib/study/measure-store';
 import { isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
 import PhaseAdvance from '@/components/study/PhaseAdvance';
 import TutorialStep from '@/components/study/TutorialStep';
@@ -32,7 +33,7 @@ export default async function StudySessionPage() {
   if (!participant) redirect('/study');
 
   const phase: StudyPhase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
-  const access = phaseAccess(participant.participantNumber, phase);
+  const access = phaseAccess(participant, phase);
 
   let workAssignmentId: string | null = null;
   if (access.workDatasetKey) {
@@ -46,6 +47,22 @@ export default async function StudySessionPage() {
         )
       );
     workAssignmentId = clone?.assignmentId ?? null;
+  }
+
+  // How far into the block test they are, so a participant who came back on
+  // their link is told they are resuming rather than being offered "Start" for
+  // work they have already half done.
+  let testProgress: { predicted: number; rated: number; total: number } | null = null;
+  if (access.testBlock) {
+    const clone = await cloneForBlock(participant, access.testBlock);
+    if (clone) {
+      const items = await getTestItems(participant, clone);
+      testProgress = {
+        predicted: items.filter((i) => i.guess !== null && i.pointing !== null).length,
+        rated: items.filter((i) => i.rating !== null).length,
+        total: items.length,
+      };
+    }
   }
 
   // The walkthrough steps carry a video, so they get room the one-line cards
@@ -112,14 +129,17 @@ export default async function StudySessionPage() {
               <>
                 <h1 className="text-lg font-semibold mb-2">Check your chatbot</h1>
                 <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                  A few new student questions. For each one you will say whether you expect
-                  your chatbot to answer the way you intend, then see what it actually says.
+                  {testProgress && testProgress.predicted > 0
+                    ? testProgress.predicted < testProgress.total
+                      ? `You have said what you expect for ${testProgress.predicted} of ${testProgress.total} questions. Pick up where you left off.`
+                      : `You have seen ${testProgress.rated} of ${testProgress.total} answers. Pick up where you left off.`
+                    : 'A few new student questions. For each one you will say whether you expect your chatbot to answer the way you intend, then see what it actually says.'}
                 </p>
                 <a
                   href="/study/session/test"
                   className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
                 >
-                  Start
+                  {testProgress && testProgress.predicted > 0 ? 'Continue' : 'Start'}
                 </a>
               </>
             ) : access.showSurvey ? (

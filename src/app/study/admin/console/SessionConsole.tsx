@@ -23,17 +23,28 @@ import {
   ChevronRight as ChevronRightIcon,
   Trash2,
   RotateCcw,
+  Check,
+  Copy,
+  Plus,
 } from 'lucide-react';
 import AdminNav from '@/components/study/AdminNav';
 import type { ParticipantStatus, CloneStatus, PredictionRow } from '@/lib/study/console-store';
-import { PHASE_LABELS, type StudyPhase } from '@/lib/study/phases';
+import {
+  cellLabel,
+  PHASE_LABELS,
+  STUDY_CELLS,
+  type StudyCell,
+  type StudyPhase,
+} from '@/lib/study/phases';
 
 function Chip({
   children,
   tone = 'plain',
+  title,
 }: {
   children: React.ReactNode;
   tone?: 'plain' | 'ok' | 'warn' | 'bad' | 'violet';
+  title?: string;
 }) {
   const map = {
     plain: 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-[hsl(var(--border))]',
@@ -43,7 +54,10 @@ function Chip({
     violet: 'bg-violet-50 text-violet-700 border-violet-200',
   } as const;
   return (
-    <span className={`inline-flex items-center gap-1 text-[10.5px] font-semibold px-1.5 py-0.5 rounded border ${map[tone]}`}>
+    <span
+      title={title}
+      className={`inline-flex items-center gap-1 text-[10.5px] font-semibold px-1.5 py-0.5 rounded border ${map[tone]}`}
+    >
       {children}
     </span>
   );
@@ -223,9 +237,35 @@ export default function SessionConsole({
           </div>
         )}
 
+        <NewParticipant
+          existing={participants}
+          busy={busy !== null}
+          onCreate={async (participantNumber, cell) => {
+            setBusy('create');
+            setMessage(null);
+            try {
+              const res = await fetch('/api/study/admin/participants/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ participantNumber, cell }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                setMessage({ tone: 'bad', text: data.error ?? 'Could not create that one.' });
+                return null;
+              }
+              await refresh();
+              setMessage({ tone: 'ok', text: `${data.participantNumber} created in cell ${cell}.` });
+              return data.accessToken as string;
+            } finally {
+              setBusy(null);
+            }
+          }}
+        />
+
         {participants.length === 0 && (
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
-            No participants yet. They appear here once someone signs in at /study with their number.
+            No participants yet. Create one above, then hand them their link.
           </p>
         )}
 
@@ -250,7 +290,21 @@ export default function SessionConsole({
                     {p.participantNumber}
                   </span>
                 </button>
-                <Chip tone="violet">cell {p.cell}</Chip>
+                <Chip tone="violet" title={p.cell ? cellLabel(p.cell as StudyCell) : undefined}>
+                  cell {p.cell}
+                </Chip>
+                <CellControl
+                  participant={p}
+                  busy={busy}
+                  onAssign={(cell) =>
+                    post(
+                      '/api/study/admin/participants/cell',
+                      { participantId: p.id, cell },
+                      `${p.id}:cell`
+                    )
+                  }
+                />
+                <LinkButton token={p.accessToken} expired={p.phase === 'done'} />
                 <Chip tone="ok">
                   {PHASE_LABELS[p.phase as StudyPhase] ?? p.phase}
                   {p.phaseMinutes !== null && (
@@ -630,5 +684,244 @@ function ProbeList({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Create a participant and assign their cell.
+ *
+ * The cell used to be arithmetic on the participant number, which meant the
+ * design was decided by the naming and could not be balanced against who
+ * actually showed up. Here it is a choice, defaulted to whichever cell is
+ * currently thinnest so the even split is the path of least resistance rather
+ * than something to keep track of on paper.
+ */
+function NewParticipant({
+  existing,
+  busy,
+  onCreate,
+}: {
+  existing: ParticipantStatus[];
+  busy: boolean;
+  onCreate: (participantNumber: string, cell: StudyCell) => Promise<string | null>;
+}) {
+  const counts = STUDY_CELLS.map((c) => existing.filter((p) => p.cell === c).length);
+  const thinnest = STUDY_CELLS[counts.indexOf(Math.min(...counts))];
+
+  // Left empty on purpose. A suggested "next" number goes wrong in both
+  // directions: recruitment slips and the sequence stops matching the roster,
+  // and some participants need an id that is not in the pattern at all. The
+  // researcher types what this person is actually called.
+  const [open, setOpen] = useState(false);
+  const [number, setNumber] = useState('');
+  const [cell, setCell] = useState<StudyCell>(thinnest);
+  const [made, setMade] = useState<{ number: string; token: string } | null>(null);
+
+  const start = () => {
+    setNumber('');
+    setCell(thinnest);
+    setMade(null);
+    setOpen(true);
+  };
+
+  const submit = async () => {
+    const token = await onCreate(number.trim(), cell);
+    if (token) setMade({ number: number.trim().toUpperCase(), token });
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={start}
+        className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+      >
+        <Plus className="w-3.5 h-3.5" /> New participant
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
+      {made ? (
+        <>
+          <p className="text-xs font-semibold mb-2">
+            {made.number} is ready. Send them this link.
+          </p>
+          <LinkRow token={made.token} />
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={start}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+            >
+              Create another
+            </button>
+            <button
+              onClick={() => setOpen(false)}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+            >
+              Done
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-3 flex-wrap mb-3">
+            <label className="text-[11px] font-semibold">Participant ID</label>
+            <input
+              value={number}
+              onChange={(e) => setNumber(e.target.value)}
+              autoFocus
+              placeholder="e.g. P01"
+              className="w-28 rounded border border-[hsl(var(--border))] px-2 py-1 text-xs font-mono"
+            />
+            <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
+              Creating clones both datasets — about 15 seconds.
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-3">
+            {STUDY_CELLS.map((c, i) => (
+              <button
+                key={c}
+                onClick={() => setCell(c)}
+                className={`text-left rounded-lg border px-3 py-2 ${
+                  cell === c
+                    ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5'
+                    : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]'
+                }`}
+              >
+                <span className="text-[11px] font-bold">Cell {c}</span>
+                <span className="ml-2 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+                  {counts[i]} assigned
+                </span>
+                <span className="block text-[11px] mt-0.5">{cellLabel(c)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={submit}
+              disabled={busy || number.trim().length === 0}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-[hsl(var(--primary))] text-white disabled:opacity-40"
+            >
+              {busy && <Loader2 className="w-3 h-3 animate-spin" />} Create
+            </button>
+            <button
+              onClick={() => setOpen(false)}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The full link, visible — a facilitator often reads it out or pastes it. */
+function LinkRow({ token }: { token: string }) {
+  const url = studyLink(token);
+  return (
+    <div className="flex items-center gap-2">
+      <code className="flex-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1.5 text-[11px] break-all">
+        {url}
+      </code>
+      <CopyButton value={url} label="Copy" />
+    </div>
+  );
+}
+
+/**
+ * The start link, or the fact that it has stopped working.
+ *
+ * Expiry is `phase === 'done'` and nothing else, so the way to reopen a
+ * finished session is the phase control already on this row: set it to the step
+ * they should resume at and the same link is live again. Said here because a
+ * chip that only reads "expired" leaves the researcher hunting for an unlock
+ * button that does not exist.
+ */
+function LinkButton({ token, expired }: { token: string | null; expired: boolean }) {
+  if (!token) return null;
+  if (expired) {
+    return (
+      <Chip tone="plain" title="Set a phase on this row to reopen the link at that step.">
+        link expired
+      </Chip>
+    );
+  }
+  return <CopyButton value={studyLink(token)} label="link" compact />;
+}
+
+function CopyButton({
+  value,
+  label,
+  compact = false,
+}: {
+  value: string;
+  label: string;
+  compact?: boolean;
+}) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+        } catch {
+          // Clipboard is blocked without https or a user gesture on some
+          // setups; the link is on screen either way.
+        }
+        setDone(true);
+        setTimeout(() => setDone(false), 1500);
+      }}
+      title={value}
+      className={`inline-flex items-center gap-1 font-semibold rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] ${
+        compact ? 'text-[10px] px-1.5 py-0.5' : 'text-[11px] px-2.5 py-1.5'
+      }`}
+    >
+      {done ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+      {done ? 'copied' : label}
+    </button>
+  );
+}
+
+/** Absolute, because it is pasted into a chat window on another machine. */
+function studyLink(token: string): string {
+  const origin = typeof window === 'undefined' ? '' : window.location.origin;
+  return `${origin}/study/s/${token}`;
+}
+
+/**
+ * Move someone to a different cell — only before they start.
+ *
+ * Shown as a plain select rather than hidden behind a confirm: mis-assigning
+ * the cell is a thing that happens while setting up sixteen people, and it is
+ * free to fix right up until the moment they begin. After that the server
+ * refuses, because the condition is already stamped on work they have done.
+ */
+function CellControl({
+  participant,
+  busy,
+  onAssign,
+}: {
+  participant: ParticipantStatus;
+  busy: string | null;
+  onAssign: (cell: StudyCell) => void;
+}) {
+  if (participant.phase !== 'not_started') return null;
+  return (
+    <select
+      value={participant.cell ?? ''}
+      disabled={busy !== null}
+      onChange={(e) => onAssign(Number(e.target.value) as StudyCell)}
+      title="Reassign the counterbalancing cell"
+      className="text-[10.5px] rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1 py-0.5"
+    >
+      {STUDY_CELLS.map((c) => (
+        <option key={c} value={c}>
+          {c} · {cellLabel(c)}
+        </option>
+      ))}
+    </select>
   );
 }

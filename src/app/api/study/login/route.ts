@@ -1,11 +1,13 @@
 /**
- * User-study sign-in — self-service, no pre-provisioning.
+ * User-study sign-in by ID + shared passcode — the recovery door.
  *
- * Participant enters their number + the shared study passcode. If the number is
- * new, their own clone of the master dataset is created ON THE SPOT, then the
- * standard `user_session` cookie is set (the participant is a real
- * instructor-role account owning only their clone) and they are sent to their
- * SCORE board. Returning participants just sign back into the same clone.
+ * The way in is normally the participant's own link (/study/s/<token>), issued
+ * by the researcher along with the cell they assigned. This door stays open
+ * because a link can be lost mid-session and a facilitator needs a way back to
+ * a workspace that already exists — but it no longer CREATES anything. An
+ * unknown ID is refused, because a participant who could sign themselves up
+ * would be provisioned into a cell nobody chose, which is the thing assignment
+ * exists to prevent.
  */
 import { NextResponse } from 'next/server';
 import { cookies, headers } from 'next/headers';
@@ -21,6 +23,7 @@ import {
 } from '@/lib/study/config';
 import {
   ensureStudyTables,
+  getParticipantByNumber,
   isValidParticipantNumber,
   normalizeParticipantNumber,
 } from '@/lib/study/store';
@@ -92,8 +95,21 @@ export async function POST(request: Request) {
       );
     }
 
-    // Find-or-create: a brand-new number provisions a clone of every dataset
-    // here (a few seconds on first sign-in); a returning one resolves instantly.
+    // Must already exist — creating participants is the researcher's job, in
+    // the console, where the cell is chosen. Same message as a wrong passcode:
+    // this door should not report which IDs are real.
+    const known = await getParticipantByNumber(number);
+    if (!known) {
+      return NextResponse.json({ error: 'Invalid participant ID or passcode' }, { status: 401 });
+    }
+    // Finished means finished, on this door too — otherwise the recovery path
+    // would quietly be a way around the expiry the link enforces.
+    if (known.phase === 'done') {
+      return NextResponse.json(
+        { error: 'This study session is finished — thank you.' },
+        { status: 403 }
+      );
+    }
     const { participant, clones } = await ensureParticipantSetup(number);
 
     const now = new Date();

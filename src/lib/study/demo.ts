@@ -130,8 +130,9 @@ export async function ensureDemoWorkspace(args: {
       datasetKey,
       assignmentId,
       sourceAssignmentId: source.masterAssignmentId,
-      // Forced, not derived: the demo exists to show a chosen arm, while a real
-      // participant's condition comes from their number.
+      // Forced: the demo exists to show a chosen arm, so BOTH its clones run
+      // that arm — unlike a real participant, whose two blocks split across the
+      // conditions according to the cell the researcher assigned them.
       condition,
       createdAt: new Date(),
     });
@@ -161,7 +162,7 @@ async function ensureDemoParticipant(
 ): Promise<StudyParticipant> {
   const number = demoParticipantNumber(condition);
   const participant = await ensureParticipantAccount(number);
-  const block = blockPlan(number).find((p) => p.datasetKey === datasetKey)?.block ?? 1;
+  const block = blockPlan({ participantNumber: number }).find((p) => p.datasetKey === datasetKey)?.block ?? 1;
 
   await db
     .update(studyParticipants)

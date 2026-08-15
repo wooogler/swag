@@ -95,7 +95,7 @@ export async function cloneForBlock(
   participant: StudyParticipant,
   block: 1 | 2
 ): Promise<{ assignmentId: string; datasetKey: string; condition: 'score' | 'baseline' } | null> {
-  const datasetKey = blockPlan(participant.participantNumber).find((p) => p.block === block)
+  const datasetKey = blockPlan(participant).find((p) => p.block === block)
     ?.datasetKey;
   if (!datasetKey) return null;
   const [clone] = await db

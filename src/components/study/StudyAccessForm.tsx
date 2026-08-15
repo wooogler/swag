@@ -12,7 +12,12 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 
-export default function StudyAccessForm() {
+export default function StudyAccessForm({
+  notice = null,
+}: {
+  /** Why they were sent here from a link, if they were. */
+  notice?: 'invalid' | 'done' | null;
+}) {
   const [participantNumber, setParticipantNumber] = useState('');
   const [passcode, setPasscode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -45,8 +50,11 @@ export default function StudyAccessForm() {
         <CardHeader className="space-y-1 text-center">
           <CardTitle className="text-3xl font-bold tracking-tight">SCORE</CardTitle>
           <CardDescription>
-            Enter your participant ID and the study passcode. Your dataset
-            workspaces are prepared automatically the first time you sign in.
+            {notice === 'done'
+              ? 'This study session is finished — thank you. There is nothing more to do here.'
+              : notice === 'invalid'
+                ? 'That link did not work. Ask your facilitator to send it again, or sign in below.'
+                : 'Enter your participant ID and the study passcode. Your facilitator has both.'}
           </CardDescription>
         </CardHeader>
         <CardContent>

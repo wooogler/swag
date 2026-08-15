@@ -13,13 +13,22 @@ export const metadata = {
 };
 
 /**
- * Dedicated SCORE user-study entry point. A participant is handed a URL, a
- * participant number, and the shared passcode; entering them provisions (on
- * first sign-in) and opens their own dataset boards. If an existing session
- * already belongs to a study participant, skip the form and go to the dashboard.
+ * The study's recovery door.
+ *
+ * A participant normally arrives on their own link (/study/s/<token>), which
+ * the researcher issues when they create them. This page is what a lost link
+ * falls back to: ID plus the shared passcode, for an account that ALREADY
+ * exists. It no longer provisions anyone — self-signup would put a participant
+ * in a cell nobody assigned. If the session already belongs to a participant,
+ * skip the form.
  */
-export default async function StudyAccessPage() {
+export default async function StudyAccessPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ link?: string }>;
+}) {
   await ensureStudyTables();
+  const { link } = await searchParams;
 
   const cookieStore = await cookies();
   const userId = cookieStore.get('user_session')?.value;
@@ -32,5 +41,5 @@ export default async function StudyAccessPage() {
     }
   }
 
-  return <StudyAccessForm />;
+  return <StudyAccessForm notice={link === 'done' ? 'done' : link === 'invalid' ? 'invalid' : null} />;
 }

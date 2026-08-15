@@ -19,7 +19,7 @@ export default async function SurveyPage() {
   if (!participant) redirect('/study');
 
   const phase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
-  if (!phaseAccess(participant.participantNumber, phase).showSurvey) redirect('/study/session');
+  if (!phaseAccess(participant, phase).showSurvey) redirect('/study/session');
   const block = blockOf(phase);
   if (!block) redirect('/study/session');
 

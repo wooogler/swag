@@ -25,7 +25,7 @@ export default async function BlockTestPage() {
   if (!participant) redirect('/study');
 
   const phase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
-  const block = phaseAccess(participant.participantNumber, phase).testBlock;
+  const block = phaseAccess(participant, phase).testBlock;
   if (!block) redirect('/study/session');
 
   const clone = await cloneForBlock(participant, block);

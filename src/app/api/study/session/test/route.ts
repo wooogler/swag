@@ -62,7 +62,7 @@ export async function POST(req: Request) {
   if (!participant) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const phase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
-  const block = phaseAccess(participant.participantNumber, phase).testBlock;
+  const block = phaseAccess(participant, phase).testBlock;
   if (!block) return NextResponse.json({ error: 'wrong_phase' }, { status: 409 });
 
   const clone = await cloneForBlock(participant, block);

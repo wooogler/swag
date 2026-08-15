@@ -49,7 +49,7 @@ export async function POST(req: Request) {
     .select()
     .from(studyClones)
     .where(eq(studyClones.participantId, participant.id));
-  const plan = blockPlan(participant.participantNumber);
+  const plan = blockPlan(participant);
   const blockOf = (datasetKey: string) =>
     plan.find((p) => p.datasetKey === datasetKey)?.block ?? null;
 

@@ -132,6 +132,15 @@ export async function ensureStudyTables(): Promise<void> {
       // RECORDED so the analysis never has to re-derive it) and the phase the
       // facilitator has advanced the participant to.
       await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "cell" integer`);
+      // The per-participant start link. Unique so a token identifies one row;
+      // nullable because existing rows are backfilled on next provision.
+      await db.execute(
+        sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "access_token" text`
+      );
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS "study_participants_access_token_unique"
+        ON "study_participants" USING btree ("access_token")
+      `);
       await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "block_order" text`);
       await db.execute(sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "phase" text NOT NULL DEFAULT 'not_started'`);
       // Demo accounts run the identical session on the isolated demo subtypes;

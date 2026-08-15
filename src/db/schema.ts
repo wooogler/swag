@@ -508,6 +508,9 @@ export const studyParticipants = pgTable('study_participants', {
   // from a rule that might later change.
   cell: integer('cell'),
   blockOrder: text('block_order'), // e.g. 'swag,nirvana'
+  // The participant's own start link. Handed out by the researcher; opening it
+  // signs them in, so it is a credential and is minted random, not derived.
+  accessToken: text('access_token'),
   // Where the facilitator has advanced this participant to (StudyPhase).
   phase: text('phase').notNull().default('not_started'),
   // A demo account (DEMO-SCORE / DEMO-BASELINE), not a study participant. Runs

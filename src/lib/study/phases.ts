@@ -10,7 +10,7 @@
  */
 // STUDY_DATASETS, not the curation masters: a block is over what the
 // participant actually holds a clone of.
-import { STUDY_DATASETS, conditionForDataset, type StudioView } from './config';
+import { STUDY_DATASETS, type StudioView } from './config';
 
 /* ------------------------------------------------------------------ */
 /* Phases                                                              */
@@ -68,18 +68,63 @@ export function blockOf(phase: StudyPhase): 1 | 2 | null {
 /* ------------------------------------------------------------------ */
 
 /**
- * The 4-cell design: condition ORDER × dataset pairing. The pairing half
- * already exists as conditionForDataset (number parity); this adds the order
- * half on the SAME number, so a facilitator still only issues numbers.
+ * The 4-cell design: condition ORDER × dataset pairing.
  *
- *   N%4 → 1: swag first (pairing odd  → swag=baseline)  = Baseline(SWAG) first
- *         2: swag first (pairing even → swag=score)     = SCORE(SWAG) first
- *         3: nirvana first (pairing odd → nirvana=score)= SCORE(NIRVANA) first
- *         0: nirvana first (pairing even→ nirvana=baseline) = Baseline(NIRVANA) first
+ * A cell fully determines the session — pick what block 1 is and block 2 is
+ * forced, because each participant sees both datasets and both conditions:
  *
- * The parity halves line up: 1 and 3 are odd, 2 and 0 are even, so this never
- * contradicts the pairing rule already recorded on the clones.
+ *   1: Baseline(SWAG)    → SCORE(NIRVANA)
+ *   2: SCORE(SWAG)       → Baseline(NIRVANA)
+ *   3: SCORE(NIRVANA)    → Baseline(SWAG)
+ *   4: Baseline(NIRVANA) → SCORE(SWAG)
+ *
+ * The cell is ASSIGNED by the researcher when they create the participant and
+ * stored on the row. It used to be computed from the participant number
+ * (n % 4, with the condition following the number's parity), which meant the
+ * number silently decided the design and a renumbered participant changed
+ * cells. cellFromNumber below still reproduces that rule exactly, as the
+ * fallback for rows created before the cell was stored.
  */
+export type StudyCell = 1 | 2 | 3 | 4;
+
+export function isStudyCell(v: unknown): v is StudyCell {
+  return v === 1 || v === 2 || v === 3 || v === 4;
+}
+
+export const STUDY_CELLS: StudyCell[] = [1, 2, 3, 4];
+
+export interface BlockPlanEntry {
+  block: 1 | 2;
+  datasetKey: string;
+  condition: StudioView;
+}
+
+/** Block 1 of each cell; block 2 is the other dataset in the other condition. */
+const CELL_FIRST: Record<StudyCell, { datasetKey: string; condition: StudioView }> = {
+  1: { datasetKey: 'swag', condition: 'baseline' },
+  2: { datasetKey: 'swag', condition: 'score' },
+  3: { datasetKey: 'nirvana', condition: 'score' },
+  4: { datasetKey: 'nirvana', condition: 'baseline' },
+};
+
+export function planForCell(cell: StudyCell): BlockPlanEntry[] {
+  const first = CELL_FIRST[cell];
+  const keys = STUDY_DATASETS.map((d) => d.key);
+  const firstKey = keys.includes(first.datasetKey) ? first.datasetKey : keys[0] ?? first.datasetKey;
+  const secondKey = keys.find((k) => k !== firstKey) ?? firstKey;
+  return [
+    { block: 1, datasetKey: firstKey, condition: first.condition },
+    { block: 2, datasetKey: secondKey, condition: first.condition === 'score' ? 'baseline' : 'score' },
+  ];
+}
+
+/** What a cell reads as, for the console and the runbook. */
+export function cellLabel(cell: StudyCell): string {
+  return planForCell(cell)
+    .map((p) => `${p.condition}(${p.datasetKey})`)
+    .join(' → ');
+}
+
 export function participantNumberValue(participantNumber: string): number {
   const digits = participantNumber.replace(/\D/g, '');
   return digits
@@ -87,39 +132,41 @@ export function participantNumberValue(participantNumber: string): number {
     : [...participantNumber].reduce((s, c) => s + c.charCodeAt(0), 0);
 }
 
-export function cellForParticipant(participantNumber: string): 1 | 2 | 3 | 4 {
+/** The pre-assignment rule, kept only to place rows that predate the column. */
+export function cellFromNumber(participantNumber: string): StudyCell {
   const mod = participantNumberValue(participantNumber) % 4;
-  // Cells are numbered in the runbook's order; the value is just a label.
-  return (mod === 0 ? 4 : mod) as 1 | 2 | 3 | 4;
+  return (mod === 0 ? 4 : mod) as StudyCell;
 }
 
-/** Which dataset the participant works on FIRST, from the same number. */
-export function firstDatasetFor(participantNumber: string): string {
-  const cell = cellForParticipant(participantNumber);
-  const swagFirst = cell === 1 || cell === 2;
-  const swag = STUDY_DATASETS.find((d) => d.key === 'swag')?.key ?? 'swag';
-  const nirvana = STUDY_DATASETS.find((d) => d.key === 'nirvana')?.key ?? 'nirvana';
-  return swagFirst ? swag : nirvana;
+/**
+ * Anything that knows which cell a participant is in.
+ *
+ * Every caller passes the participant ROW, so the assigned cell is what runs.
+ * The number-derived fallback is for rows stamped before assignment existed —
+ * it returns the same cell those rows already carry, so nothing moves.
+ */
+export interface CellSource {
+  participantNumber: string;
+  cell?: number | null;
+}
+
+export function cellOf(p: CellSource): StudyCell {
+  return isStudyCell(p.cell) ? p.cell : cellFromNumber(p.participantNumber);
+}
+
+/** Which dataset this participant works on FIRST. */
+export function firstDatasetFor(p: CellSource): string {
+  return planForCell(cellOf(p))[0].datasetKey;
 }
 
 /** Dataset order for the two blocks, and the condition each one carries. */
-export function blockPlan(participantNumber: string): {
-  block: 1 | 2;
-  datasetKey: string;
-  condition: StudioView;
-}[] {
-  const first = firstDatasetFor(participantNumber);
-  const second = STUDY_DATASETS.map((d) => d.key).find((k) => k !== first) ?? first;
-  return [
-    { block: 1, datasetKey: first, condition: conditionForDataset(participantNumber, first) },
-    { block: 2, datasetKey: second, condition: conditionForDataset(participantNumber, second) },
-  ];
+export function blockPlan(p: CellSource): BlockPlanEntry[] {
+  return planForCell(cellOf(p));
 }
 
 /** Human-readable cell description for the console and the runbook. */
-export function cellSummary(participantNumber: string): string {
-  const plan = blockPlan(participantNumber);
-  return plan.map((p) => `${p.condition}(${p.datasetKey})`).join(' → ');
+export function cellSummary(p: CellSource): string {
+  return cellLabel(cellOf(p));
 }
 
 /* ------------------------------------------------------------------ */
@@ -136,8 +183,8 @@ export interface PhaseAccess {
   isDone: boolean;
 }
 
-export function phaseAccess(participantNumber: string, phase: StudyPhase): PhaseAccess {
-  const plan = blockPlan(participantNumber);
+export function phaseAccess(p: CellSource, phase: StudyPhase): PhaseAccess {
+  const plan = blockPlan(p);
   const datasetOf = (block: 1 | 2) => plan.find((p) => p.block === block)?.datasetKey ?? null;
 
   switch (phase) {

@@ -63,7 +63,7 @@ async function main() {
     .select()
     .from(studyClones)
     .where(eq(studyClones.participantId, participant.id));
-  const plan = blockPlan(participant.participantNumber);
+  const plan = blockPlan(participant);
   console.log(`participant ${number} · plan ${plan.map((p) => `${p.block}:${p.datasetKey}/${p.condition}`).join(' ')}\n`);
 
   // ── seed a bank: 2 test items per dataset ─────────────────────────────

@@ -21,7 +21,7 @@ export async function POST(req: Request) {
   if (!participant) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const phase = isStudyPhase(participant.phase) ? participant.phase : 'not_started';
-  if (!phaseAccess(participant.participantNumber, phase).showSurvey) {
+  if (!phaseAccess(participant, phase).showSurvey) {
     return NextResponse.json({ error: 'wrong_phase' }, { status: 409 });
   }
   const block = blockOf(phase);
