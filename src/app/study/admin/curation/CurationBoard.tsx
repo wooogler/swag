@@ -249,7 +249,7 @@ export default function CurationBoard({
   // The board's own mode, on top of the shared ones. Kept local because it
   // only means anything against a selected subtype, which the instructor
   // board has no notion of.
-  const [sort, setSort] = useState<QuerySortMode | 'clarity'>('participant-asc');
+  const [sort, setSort] = useState<QuerySortMode | 'clarity'>('clarity');
   // Certainty filter. Assembling a set that follows the log's natural
   // certain/boundary mix (design §4) means being able to go looking for each
   // kind, not just for the ambiguous ones.
@@ -1206,13 +1206,19 @@ export default function CurationBoard({
                 onChange={(e) => setSort(e.target.value as QuerySortMode | 'clarity')}
                 className="text-xs border border-[hsl(var(--border))] rounded px-1.5 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
               >
+                {/* Default, and first: the ordering a curator wants the moment
+                    they open a subtype. It needs a subtype to mean anything, so
+                    it is offered greyed elsewhere and the list falls back — but
+                    it comes back on its own when a subtype is picked, which is
+                    the point of it being the default rather than a mode to
+                    remember to switch into. */}
+                <option value="clarity" disabled={selection.kind !== 'subtype'}>
+                  Clearest first
+                </option>
                 <option value="participant-asc">PID ↑</option>
                 <option value="participant-desc">PID ↓</option>
                 <option value="recent">Newest</option>
                 <option value="oldest">Oldest</option>
-                <option value="clarity" disabled={selection.kind !== 'subtype'}>
-                  Clearest first
-                </option>
               </select>
             </div>
           </div>
