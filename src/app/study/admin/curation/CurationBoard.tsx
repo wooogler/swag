@@ -168,6 +168,46 @@ function ClearButton({
   );
 }
 
+/* ── clarity sort (admin only) ── */
+
+/**
+ * How cleanly a question belongs to the subtype being browsed.
+ *
+ * Curating is a judgement per question, and the cheapest judgements are the
+ * ones where the classifier is not arguing with itself: this subtype claims the
+ * question and nothing else does. The expensive ones are where four subtypes
+ * all claim it and the curator has to work out which reading wins. Sorting by
+ * that puts the quick decisions first, which is the whole point — a 25-minute
+ * pass should spend its minutes on the questions that need them.
+ *
+ * A rival that only PROBABLY claims the question is not really arguing, so it
+ * costs less than one that clearly does. Same idea on the near side: a clear
+ * claim by the selected subtype is worth more than a hesitant one, but a
+ * hesitant exclusive claim still beats a clear contested one — which is what
+ * makes boundary questions surface here instead of sinking.
+ */
+const CLARITY_WEIGHT = {
+  /** The selected subtype's own claim. */
+  own: { clearly_in: 1, probably_in: 0.6 } as Record<string, number>,
+  /** Every other subtype claiming the same question, subtracted. */
+  rival: { clearly_in: 1, probably_in: 0.5 } as Record<string, number>,
+};
+
+function clarityScore(
+  matches: Record<number, string> | undefined,
+  intentId: number
+): number {
+  if (!matches) return -Infinity;
+  const own = matches[intentId];
+  if (own === undefined) return -Infinity; // not in this subtype at all
+  let score = CLARITY_WEIGHT.own[own] ?? 0;
+  for (const [id, grade] of Object.entries(matches)) {
+    if (Number(id) === intentId) continue;
+    score -= CLARITY_WEIGHT.rival[grade] ?? 0;
+  }
+  return score;
+}
+
 /* ── selection model ── */
 
 type Selection =
@@ -203,7 +243,10 @@ export default function CurationBoard({
   const [selection, setSelection] = useState<Selection>({ kind: 'type', type: 'planning' });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<QuerySortMode>('participant-asc');
+  // The board's own mode, on top of the shared ones. Kept local because it
+  // only means anything against a selected subtype, which the instructor
+  // board has no notion of.
+  const [sort, setSort] = useState<QuerySortMode | 'clarity'>('participant-asc');
   // Certainty filter. Assembling a set that follows the log's natural
   // certain/boundary mix (design §4) means being able to go looking for each
   // kind, not just for the ambiguous ones.
@@ -635,6 +678,21 @@ export default function CurationBoard({
     if (search.trim()) {
       const needle = search.trim().toLowerCase();
       list = list.filter((r) => r.queryText.toLowerCase().includes(needle));
+    }
+    if (sort === 'clarity') {
+      // Only a subtype selection gives this a subject; anywhere else it falls
+      // back rather than silently ordering by nothing.
+      if (selection.kind !== 'subtype') return sortQueryRows(list, 'participant-asc');
+      const intentId = selection.intentId;
+      return list.slice().sort((a, b) => {
+        const qa = questionById.get(a.messageId);
+        const qb = questionById.get(b.messageId);
+        const d = clarityScore(qb?.matches, intentId) - clarityScore(qa?.matches, intentId);
+        if (d !== 0) return d;
+        // Same clarity → the shorter read wins: a question with less
+        // conversation in front of it is faster to judge.
+        return (qa?.turnIndex ?? 0) - (qb?.turnIndex ?? 0) || a.messageId - b.messageId;
+      });
     }
     return sortQueryRows(list, sort);
   }, [selection, state.members, state.questions, memberByMessage, rowById, gradeFilter, search, sort, questionById]);
@@ -1102,7 +1160,24 @@ export default function CurationBoard({
                 <option value="boundary">◐ Boundary</option>
                 <option value="unmatched">Unmatched</option>
               </select>
-              <SortSelect value={sort} onChange={setSort} />
+              {/* The board's select rather than the shared one: it carries an
+                  option the instructor board has no subject for. */}
+              <select
+                /* Shows the fallback while it IS the fallback, so the control
+                   never reads as a mode the list is not in — and the choice
+                   comes back the moment a subtype is selected again. */
+                value={selection.kind === 'subtype' || sort !== 'clarity' ? sort : 'participant-asc'}
+                onChange={(e) => setSort(e.target.value as QuerySortMode | 'clarity')}
+                className="text-xs border border-[hsl(var(--border))] rounded px-1.5 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
+              >
+                <option value="participant-asc">PID ↑</option>
+                <option value="participant-desc">PID ↓</option>
+                <option value="recent">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="clarity" disabled={selection.kind !== 'subtype'}>
+                  Clearest first
+                </option>
+              </select>
             </div>
           </div>
           {classifierText(selection, subtypeById) && (
