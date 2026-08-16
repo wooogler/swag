@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
 import { ensureIntentTables } from '@/lib/score/intent-store';
 import { getDefaultScoreModel } from '@/lib/score/models';
@@ -156,6 +157,13 @@ export async function POST(req: Request, { params }: RouteParams) {
           .slice(0, 3)
       : [];
     if (reasons.length === 0) throw new Error('no reasons produced');
+    await logStudyEvent(id, 'suggest_reasons', {
+      intentId,
+      messageId: body.messageId,
+      verdict: body.verdict ?? 'out',
+      count: reasons.length,
+      reasons,
+    });
     return NextResponse.json({ reasons });
   } catch (error) {
     console.error(`SCORE exclusion-reasons failed for intent ${intentId}:`, error);

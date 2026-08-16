@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
 import { REFINE_MODEL } from '@/lib/score/intent-agent';
 import { ensureIntentTables, getAssignmentMessageText } from '@/lib/score/intent-store';
@@ -201,6 +202,14 @@ export async function POST(req: Request, { params }: RouteParams) {
       .slice(0, 3)
       .map((s) => ({ title: s.title.trim().slice(0, 120), definition: s.definition.trim().slice(0, 4000) }));
     if (suggestions.length === 0) throw new Error('no usable suggestions');
+    // What was offered, not what was taken: a suggestion the participant
+    // declines leaves no other trace, and the decline is half the measure of
+    // how a configuration got built (STUDY_TRAIL_SPEC §2.4).
+    await logStudyEvent(id, 'suggest_intents', {
+      messageId: body.messageId,
+      count: suggestions.length,
+      suggestions,
+    });
     return NextResponse.json({ suggestions });
   } catch (error) {
     console.error(`SCORE intent suggestions failed for message ${body.messageId}:`, error);

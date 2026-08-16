@@ -12,6 +12,7 @@ import { and, eq, gt } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { scoreIntents, scoreRuleVersionResponses, scoreRuleVersions } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { ensureIntentTables } from '@/lib/score/intent-store';
 
 export const dynamic = 'force-dynamic';
@@ -67,6 +68,9 @@ export async function POST(_req: Request, { params }: RouteParams) {
           gt(scoreRuleVersionResponses.versionNo, versionNo)
         )
       );
+    // Returning the whole row, not just the id: this delete is the only place
+    // these versions ever existed, and a rewind is itself a finding for RQ1.
+    // Kept in the study event below so the trail can still show what was undone.
     const rows = await tx
       .delete(scoreRuleVersions)
       .where(
@@ -76,9 +80,20 @@ export async function POST(_req: Request, { params }: RouteParams) {
           gt(scoreRuleVersions.versionNo, versionNo)
         )
       )
-      .returning({ id: scoreRuleVersions.id });
-    return rows.length;
+      .returning();
+    return rows;
   });
 
-  return NextResponse.json({ reverted: true, versionNo, deleted });
+  await logStudyEvent(id, 'rule_revert', {
+    intentId,
+    toVersionNo: versionNo,
+    deletedVersions: deleted.map((r) => ({
+      versionNo: r.versionNo,
+      source: r.source,
+      minor: r.minor,
+      rule: r.rule,
+      createdAt: r.createdAt?.toISOString() ?? null,
+    })),
+  });
+  return NextResponse.json({ reverted: true, versionNo, deleted: deleted.length });
 }

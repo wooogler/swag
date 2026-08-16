@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentPins, scoreIntentRatings, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import {
   ensureIntentTables,
   getAssignmentMessageText,
@@ -165,6 +166,14 @@ export async function POST(req: Request, { params }: RouteParams) {
   }
 
   // Recording a correction writes no version — the fold that consumes it does.
+  // It DOES write a study event: the version history is where the study reads
+  // configuration changes from, and a correction never reaches it, so without
+  // this the act of teaching has no timestamp anywhere (STUDY_TRAIL_SPEC §2.1).
+  const [priorPin] = await db
+    .select({ verdict: scoreIntentPins.verdict })
+    .from(scoreIntentPins)
+    .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, body.messageId)));
+
   await db.transaction(async (tx) => {
     await tx
       .insert(scoreIntentPins)
@@ -194,6 +203,16 @@ export async function POST(req: Request, { params }: RouteParams) {
           set: outSet,
         });
     }
+  });
+
+  await logStudyEvent(id, 'pin_set', {
+    intentId: intent.id,
+    messageId: body.messageId,
+    verdict: body.verdict,
+    source: set.source,
+    hasReason: !!set.reason,
+    replaced: !!priorPin,
+    redirected: redirected.length,
   });
 
   const titleById = new Map(
@@ -265,6 +284,11 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     )
     .returning({ id: scoreIntentPins.id });
 
+  await logStudyEvent(id, 'pin_retire', {
+    intentId: intent.id,
+    messageIds: body.retireMessageIds,
+    count: retired.length,
+  });
   return NextResponse.json({ retired: retired.length });
 }
 
@@ -289,6 +313,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
       .delete(scoreIntentPins)
       .where(eq(scoreIntentPins.intentId, intent.id))
       .returning({ id: scoreIntentPins.id });
+    await logStudyEvent(id, 'pin_remove_all', { intentId: intent.id, count: rows.length });
     return NextResponse.json({ removed: rows.length });
   }
 
@@ -304,12 +329,16 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   // exists, and it would be folded in silently the next time that intent is
   // updated. Only PENDING halves are touched: a consumed one is already part of
   // a definition and is now history, not an instruction.
+  // Kept from inside the transaction: a withdrawal leaves no row anywhere, so
+  // the verdict it removed survives only in the event (STUDY_TRAIL_SPEC §2.1).
+  let verdictWas: string | null = null;
   const result = await db.transaction(async (tx) => {
     const mineRows = await tx
       .delete(scoreIntentPins)
       .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, messageId)))
       .returning({ verdict: scoreIntentPins.verdict });
     const withdrewIn = mineRows.some((r) => r.verdict === 'in');
+    verdictWas = mineRows[0]?.verdict ?? null;
     const paired = withdrewIn
       ? await tx
           .delete(scoreIntentPins)
@@ -327,5 +356,11 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return { removed: mineRows.length > 0, alsoWithdrawn: paired.map((p) => p.intentId) };
   });
 
+  await logStudyEvent(id, 'pin_remove', {
+    intentId: intent.id,
+    messageId,
+    verdictWas,
+    alsoWithdrawn: result.alsoWithdrawn,
+  });
   return NextResponse.json({ ...result, messageId });
 }

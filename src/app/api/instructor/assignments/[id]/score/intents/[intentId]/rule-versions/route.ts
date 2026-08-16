@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntents, scoreRuleVersionResponses, scoreRuleVersions } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { generateIntentTitle } from '@/lib/score/intent-agent';
 import { ensureIntentTables } from '@/lib/score/intent-store';
@@ -238,6 +239,15 @@ export async function POST(req: Request, { params }: RouteParams) {
   let row;
   try {
     row = await insertOnce();
+    await logStudyEvent(id, 'rule_save', {
+      intentId,
+      versionNo: row.versionNo,
+      source: body.source,
+      minor: body.minor ?? false,
+      chars: rule?.length ?? 0,
+      hasInstruction: !!body.instruction,
+      anchorMessageId: body.anchorMessageId ?? null,
+    });
   } catch (error) {
     // max+1 can collide under concurrent Saves — the unique (intent, version)
     // index rejects the loser; one recompute-and-retry resolves it.

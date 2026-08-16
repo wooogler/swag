@@ -23,6 +23,7 @@ import { db } from '@/db/db';
 import { scoreIntents, scoreRuleVersionResponses, scoreRuleVersions } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { getChatModel } from '@/lib/score/injection';
 import { ensureIntentTables } from '@/lib/score/intent-store';
@@ -154,6 +155,16 @@ export async function POST(req: Request, { params }: RouteParams) {
         set: { response, model, createdAt: now },
       });
   }
+
+  // Not "make this version live" — this generates and caches what the version
+  // WOULD answer. Logged anyway: trying a rule against real questions before
+  // committing to it is exactly the checking behaviour RQ1 asks about.
+  await logStudyEvent(id, 'rule_apply', {
+    intentId,
+    versionNo: version.versionNo,
+    messageCount: orderedIds.length,
+    failed,
+  });
 
   return NextResponse.json({
     versionNo: version.versionNo,

@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreConfigVersions, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { ensureIntentTables, type IntentConfigSnapshot } from '@/lib/score/intent-store';
 
 export const dynamic = 'force-dynamic';
@@ -104,6 +105,9 @@ export async function POST(req: Request, { params }: RouteParams) {
 
     // Rewind the timeline: drop every LATER version that is solely about this
     // intent. Shared entries survive (they carry another intent's history).
+    // Returning the rows, not just their ids: this delete is the only place
+    // those versions existed, and rewinding is itself a finding for RQ1. The
+    // study event below keeps what was undone (STUDY_TRAIL_SPEC §2.3).
     const deleted = await tx
       .delete(scoreConfigVersions)
       .where(
@@ -113,9 +117,29 @@ export async function POST(req: Request, { params }: RouteParams) {
           sql`${scoreConfigVersions.summary}->'intentIds' = ${JSON.stringify([intentId])}::jsonb`
         )
       )
-      .returning({ id: scoreConfigVersions.id });
-    return { deleted: deleted.length };
+      .returning();
+    return { deleted };
   });
 
-  return NextResponse.json({ reverted: true, versionNo: body.versionNo, deleted: result.deleted });
+  // Only this intent's own entry from each dropped snapshot: the delete filter
+  // is `intentIds == [intentId]`, so that entry is what the version was about,
+  // and carrying whole trees here would bloat the log for nothing.
+  await logStudyEvent(id, 'revert', {
+    intentId,
+    toVersionNo: body.versionNo,
+    deletedVersions: result.deleted.map((v) => {
+      const snap = v.snapshot as { intents?: { id: number }[] } | null;
+      return {
+        versionNo: v.versionNo,
+        createdAt: v.createdAt?.toISOString() ?? null,
+        summary: v.summary,
+        snapshotIntent: snap?.intents?.find((i) => i.id === intentId) ?? null,
+      };
+    }),
+  });
+  return NextResponse.json({
+    reverted: true,
+    versionNo: body.versionNo,
+    deleted: result.deleted.length,
+  });
 }

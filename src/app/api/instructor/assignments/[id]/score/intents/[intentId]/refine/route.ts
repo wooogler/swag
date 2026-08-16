@@ -34,6 +34,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreDissections, scoreIntentPins, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
 import {
@@ -258,6 +259,14 @@ export async function POST(req: Request, { params }: RouteParams) {
         };
       })
     );
+    // Counts only. A fold the participant accepts writes its definition into
+    // the next snapshot anyway, and one they reject is adequately described by
+    // "N corrections went in, M candidates came back".
+    await logStudyEvent(id, 'suggest_fold', {
+      intentId,
+      correctionCount: mine.length,
+      proposalCount: proposals.length,
+    });
     return NextResponse.json({ proposals });
   } catch (error) {
     console.error('SCORE correction fold failed:', error);

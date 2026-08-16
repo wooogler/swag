@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
 import { ensureIntentTables } from '@/lib/score/intent-store';
 import { getDefaultScoreModel } from '@/lib/score/models';
@@ -142,6 +143,12 @@ export async function POST(req: Request, { params }: RouteParams) {
           .slice(0, 5)
       : [];
     if (intents.length === 0) throw new Error('no intents produced');
+    await logStudyEvent(id, 'suggest_rewrite_intents', {
+      intentId,
+      messageId: body.messageId,
+      count: intents.length,
+      intents,
+    });
     return NextResponse.json({ intents });
   } catch (error) {
     console.error(`SCORE rewrite-intents failed for intent ${intentId}:`, error);
