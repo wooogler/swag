@@ -171,6 +171,11 @@ async function main() {
       pointed_span_end: a.pointedSpanEnd ?? '',
       pointed_text: a.pointedText ?? '',
       pointing_correct: pointingCorrect(clone?.condition, a, applied),
+      // The three written answers (문항지 §3, 08-15). V3's coding reads
+      // `expectation` against the response; the other two are RQ3 material.
+      expectation: a.expectation ?? '',
+      whats_off: a.whatsOff ?? '',
+      probe: a.probe ?? '',
       generation_outcome: gen?.outcome ?? '',
       guessed_at: a.guessedAt?.toISOString() ?? '',
       pointed_at: a.pointedAt?.toISOString() ?? '',
@@ -206,6 +211,11 @@ async function main() {
       applied_outcome: r.applied_outcome,
       applied_intent_title: r.applied_intent_title,
       pointing_correct: r.pointing_correct,
+      // What they wrote, on the sheet the coding happens on — the whole point
+      // of taking these as text was that the coder reads them, not a summary.
+      expectation: r.expectation,
+      whats_off: r.whats_off,
+      probe: r.probe,
       misalignment_type: '', // filled by the coder
       note: '',
     }));

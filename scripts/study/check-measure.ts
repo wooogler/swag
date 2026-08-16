@@ -41,8 +41,8 @@ async function main() {
     deployedConfigFor,
     getTestItems,
     predictionsComplete,
-    recordGuess,
-    recordPointing,
+    recordPrediction,
+    recordProbe,
     recordRating,
   } = await import('../../src/lib/study/measure-store');
   const { buildChatDeploySnapshot, recordChatDeploy } = await import(
@@ -152,38 +152,15 @@ async function main() {
     );
 
     const first = items[0];
-    const guessed = await recordGuess({
+    const predicted = await recordPrediction({
       participant,
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
+      expectation: 'asks what they have tried instead of writing it',
       guess: true,
-    });
-    console.log(`   guess recorded: ${JSON.stringify(guessed)}`);
-
-    // The guess alone must NOT release anything — the pointing step is the
-    // last thing asked before the answer, so the reveal belongs to it.
-    items = await getTestItems(participant, clone1);
-    const afterGuess = items.filter((i) => i.response !== null).length;
-    console.log(
-      `   after guess only: responses present = ${afterGuess} (expect 0)${afterGuess === 0 ? ' ✓' : ' ✗'}`
-    );
-
-    // Rating cannot slip in ahead of the reveal.
-    const early = await recordRating({
-      cloneAssignmentId: clone1.assignmentId,
-      bankItemId: first.bankItemId,
-      rating: 5,
-    });
-    console.log(
-      `   rating before reveal refused = ${!early.ok}${!early.ok ? ' ✓' : ' ✗'}`
-    );
-
-    const pointed = await recordPointing({
-      cloneAssignmentId: clone1.assignmentId,
-      bankItemId: first.bankItemId,
       pointing: { kind: 'not_sure' },
     });
-    console.log(`   pointing recorded: ${JSON.stringify(pointed)}`);
+    console.log(`   prediction recorded: ${JSON.stringify(predicted)}`);
 
     // The release is block-wide, not per item: predicting ONE question must
     // still show nothing, or the answer would teach the predictions after it.
@@ -193,45 +170,43 @@ async function main() {
       `   after 1 of ${items.length} predicted: responses present = ${afterOne} (expect 0)${afterOne === 0 ? ' ✓' : ' ✗'}`
     );
 
-    // ── 1b. pointing keeps its first answer, and replays on reload ──────
-    await recordPointing({
+    // Rating cannot slip in ahead of the reveal.
+    const early = await recordRating({
+      cloneAssignmentId: clone1.assignmentId,
+      bankItemId: items[1].bankItemId,
+      rating: 5,
+    });
+    console.log(
+      `   rating an unpredicted item refused = ${!early.ok}${!early.ok ? ' ✓' : ' ✗'}`
+    );
+
+    // ── 1b. a prediction keeps its first answer, and replays on reload ──
+    await recordPrediction({
+      participant,
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
+      expectation: 'CHANGED MY MIND',
+      guess: false,
       pointing: { kind: 'span', start: 0, end: 4, text: 'late' },
     });
     items = await getTestItems(participant, clone1);
-    const kept = items.find((i) => i.bankItemId === first.bankItemId)?.pointing;
+    const kept = items.find((i) => i.bankItemId === first.bankItemId);
+    const heldFirst = kept?.pointing?.kind === 'not_sure' && kept?.guess === true;
     console.log(
-      `   pointing kept first answer = ${kept?.kind === 'not_sure'}${kept?.kind === 'not_sure' ? ' ✓' : ' ✗'} (replayed as ${JSON.stringify(kept)})`
-    );
-
-    // A pointing with no guess in front of it is refused outright.
-    const orphan = await recordPointing({
-      cloneAssignmentId: clone1.assignmentId,
-      bankItemId: items[1].bankItemId,
-      pointing: { kind: 'none' },
-    });
-    console.log(
-      `   pointing without a guess refused = ${'error' in orphan && orphan.error === 'guess_first'}${'error' in orphan ? ' ✓' : ' ✗'}`
+      `   re-predict kept the first = ${heldFirst}${heldFirst ? ' ✓' : ' ✗'} (guess=${kept?.guess}, pointing=${JSON.stringify(kept?.pointing)}, expectation="${kept?.expectation}")`
     );
 
     // ── 1c. the whole block unlocks at once, and only then ──────────────
     for (const it of items) {
-      if (it.guess === null) {
-        await recordGuess({
-          participant,
-          cloneAssignmentId: clone1.assignmentId,
-          bankItemId: it.bankItemId,
-          guess: true,
-        });
-      }
-      if (it.pointing === null) {
-        await recordPointing({
-          cloneAssignmentId: clone1.assignmentId,
-          bankItemId: it.bankItemId,
-          pointing: { kind: 'not_sure' },
-        });
-      }
+      if (it.pointing !== null) continue;
+      await recordPrediction({
+        participant,
+        cloneAssignmentId: clone1.assignmentId,
+        bankItemId: it.bankItemId,
+        expectation: 'short answer, no prose',
+        guess: true,
+        pointing: { kind: 'not_sure' },
+      });
     }
     const complete = await predictionsComplete(clone1);
     items = await getTestItems(participant, clone1);
@@ -242,24 +217,42 @@ async function main() {
       }`
     );
 
-    // ── 2. a second guess must not overwrite the first ──────────────────
-    await recordGuess({
-      participant,
+    // ── 2. the probe opens only where the prediction missed ─────────────
+    for (const it of items) {
+      await recordRating({
+        cloneAssignmentId: clone1.assignmentId,
+        bankItemId: it.bankItemId,
+        rating: 2,
+        whatsOff: 'wrote the paragraph for them',
+      });
+    }
+    items = await getTestItems(participant, clone1);
+    // Every guess above was 'yes' and every rating a 2, so every item folds to
+    // a miss — the probe must be open on all of them.
+    const missed = items.filter((i) => i.missed).length;
+    console.log(
+      `2. guessed yes, rated 2 → probe opens on ${missed} of ${items.length}${missed === items.length ? ' ✓' : ' ✗'}`
+    );
+    const kept2 = items.find((i) => i.bankItemId === first.bankItemId);
+    console.log(
+      `   what's off stored = "${kept2?.whatsOff ?? ''}"${kept2?.whatsOff ? ' ✓' : ' ✗'}`
+    );
+    const probed = await recordProbe({
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
-      guess: false,
+      probe: 'I thought the rule covered that phrasing',
     });
-    const [stored] = await db
-      .select()
-      .from(studyTestAnswers)
-      .where(
-        and(
-          eq(studyTestAnswers.cloneAssignmentId, clone1.assignmentId),
-          eq(studyTestAnswers.bankItemId, first.bankItemId)
-        )
-      );
+    console.log(`   probe stored = ${probed.ok}${probed.ok ? ' ✓' : ' ✗'}`);
+    // Above the fold there is no "what's off" to keep.
+    await recordRating({
+      cloneAssignmentId: clone1.assignmentId,
+      bankItemId: first.bankItemId,
+      rating: 5,
+    });
+    items = await getTestItems(participant, clone1);
+    const cleared = items.find((i) => i.bankItemId === first.bankItemId)?.whatsOff;
     console.log(
-      `2. re-guess kept the first: stored guess = ${stored.guess} (expect true)${stored.guess === true ? ' ✓' : ' ✗'}`
+      `   re-rating to 5 clears what's off = ${cleared === null}${cleared === null ? ' ✓' : ' ✗'}`
     );
 
     await recordRating({

@@ -299,6 +299,13 @@ export async function ensureStudyTables(): Promise<void> {
         `"pointed_span_end" integer`,
         `"pointed_text" text`,
         `"pointed_at" timestamp`,
+        // The block test's three free-text answers (문항지 §3, 08-15: no
+        // spoken items). expectation = Pass 1's description, required and
+        // replayed verbatim in Pass 2; whats_off opens at a rating of 3 or
+        // less; probe opens only where the prediction missed, and may be blank.
+        `"expectation" text`,
+        `"whats_off" text`,
+        `"probe" text`,
       ]) {
         await db.execute(
           sql`ALTER TABLE "study_test_answers" ADD COLUMN IF NOT EXISTS ${sql.raw(col)}`

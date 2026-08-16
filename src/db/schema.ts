@@ -795,6 +795,14 @@ export const studyTestAnswers = pgTable('study_test_answers', {
   pointedSpanEnd: integer('pointed_span_end'),
   /** The highlighted text itself — outlives the offsets across a redeploy. */
   pointedText: text('pointed_text'),
+  // Free text, all three of them (문항지 §3, 08-15: the block test has no
+  // spoken items). `expectation` is Pass 1's description of what they think
+  // the chatbot will do — required, and replayed verbatim in Pass 2.
+  // `whatsOff` opens at a rating of 3 or less; `probe` opens only where the
+  // prediction actually missed, and may be left blank.
+  expectation: text('expectation'),
+  whatsOff: text('whats_off'),
+  probe: text('probe'),
   guessedAt: timestamp('guessed_at'),
   pointedAt: timestamp('pointed_at'),
   ratedAt: timestamp('rated_at'),

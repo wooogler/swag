@@ -33,8 +33,8 @@ async function main() {
     cloneForBlock,
     deployedConfigFor,
     getTestItems,
-    recordGuess,
-    recordPointing,
+    recordPrediction,
+    recordProbe,
     recordRating,
   } = await import('../../src/lib/study/measure-store');
   type Pointing = import('../../src/lib/study/measure-store').Pointing;
@@ -108,15 +108,9 @@ async function main() {
       const items = await getTestItems(current, clone);
       const config = await deployedConfigFor(clone);
       console.log(`   config shown: ${config?.condition} ${config?.versionLabel} · ${items.length} question(s)`);
-      let released = 0;
       const firstIntent = (config?.intents ?? []).find((x) => x.kind === 'intent');
+      // Pass 1: every prediction first, exactly as the screen does it.
       for (const [i, item] of items.entries()) {
-        await recordGuess({
-          participant: current,
-          cloneAssignmentId: clone.assignmentId,
-          bankItemId: item.bankItemId,
-          guess: i % 2 === 0,
-        });
         // Point the way the participant's own condition would: an intent when
         // there is one to name, a highlight in the rules otherwise.
         const pointing: Pointing =
@@ -127,18 +121,39 @@ async function main() {
             : i % 2 === 0
               ? { kind: 'span', start: 0, end: 12, text: (config?.rules ?? 'rules text').slice(0, 12) }
               : { kind: 'nothing' };
-        const r = await recordPointing({
+        await recordPrediction({
+          participant: current,
           cloneAssignmentId: clone.assignmentId,
           bankItemId: item.bankItemId,
+          expectation: `expects it to handle question ${i + 1} the short way`,
+          guess: i % 2 === 0,
           pointing,
         });
-        if ('response' in r) released += 1;
+      }
+      const released = (await getTestItems(current, clone)).filter(
+        (x) => x.response !== null
+      ).length;
+      // Pass 2: rate them all, and answer the probe wherever it opened.
+      for (const [i, item] of items.entries()) {
+        const rating = ((i * 2) % 5) + 1;
         await recordRating({
           cloneAssignmentId: clone.assignmentId,
           bankItemId: item.bankItemId,
-          rating: ((i * 2) % 5) + 1,
+          rating,
+          whatsOff: rating <= 3 ? 'too long, and it wrote the sentence for them' : undefined,
         });
       }
+      const rated = await getTestItems(current, clone);
+      for (const item of rated.filter((x) => x.missed)) {
+        await recordProbe({
+          cloneAssignmentId: clone.assignmentId,
+          bankItemId: item.bankItemId,
+          probe: 'I thought the wording covered it',
+        });
+      }
+      console.log(
+        `   probe opened on ${rated.filter((x) => x.missed).length} of ${rated.length} item(s)`
+      );
       console.log(`   answered ${items.length}, responses released ${released}`);
 
       // survey phase

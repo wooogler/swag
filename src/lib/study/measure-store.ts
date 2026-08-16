@@ -42,10 +42,23 @@ export type Pointing =
   | { kind: 'nothing' };
 
 export interface TestItem extends MeasureQuestion {
+  /** Pass 1's written description of what they expect (문항지 §3 ①). */
+  expectation: string | null;
   guess: boolean | null;
   /** Null until pointed; replayed so a reload resumes mid-item. */
   pointing: Pointing | null;
   rating: number | null;
+  /** Opens at a rating of 3 or less (§3 ③). */
+  whatsOff: string | null;
+  /** Opens only where the prediction missed (§3 ④); may be left blank. */
+  probe: string | null;
+  /**
+   * Whether this item's prediction missed — the condition §3 ④ opens the probe
+   * on. Computed server-side and only once the rating is in, because half of
+   * it IS the rating and the other half is the routing record, which the
+   * participant never sees.
+   */
+  missed: boolean | null;
   /** Present ONLY once EVERY item in the block has been predicted. */
   response: string | null;
 }
@@ -226,6 +239,7 @@ export async function getTestItems(
       .select({
         bankItemId: studyGeneratedResponses.bankItemId,
         response: studyGeneratedResponses.response,
+        applied: studyGeneratedResponses.applied,
       })
       .from(studyGeneratedResponses)
       .where(
@@ -237,6 +251,7 @@ export async function getTestItems(
   ]);
   const answerByItem = new Map(answers.map((a) => [a.bankItemId, a]));
   const responseByItem = new Map(responses.map((r) => [r.bankItemId, r.response]));
+  const appliedByItem = new Map(responses.map((r) => [r.bankItemId, r.applied]));
 
   const ordered = seededShuffle(
     bank.slice().sort((a, b) => a.position - b.position),
@@ -267,12 +282,58 @@ export async function getTestItems(
       position: item.position,
       context: readContext(item.context),
       question: item.question,
+      expectation: answer?.expectation ?? null,
       guess: guessed,
       pointing,
       rating: answer?.rating ?? null,
+      whatsOff: answer?.whatsOff ?? null,
+      probe: answer?.probe ?? null,
+      // Null until rated: the fold needs the rating, and releasing the routing
+      // comparison earlier would hand back part of the answer.
+      missed:
+        answer?.rating == null
+          ? null
+          : predictionMissed({
+              guess: guessed,
+              rating: answer.rating,
+              pointing,
+              applied: appliedByItem.get(item.id) ?? null,
+            }),
       response: predictionsDone ? responseByItem.get(item.id) ?? null : null,
     };
   });
+}
+
+/**
+ * Did the prediction miss? — the condition §3 ④ opens the probe on.
+ *
+ * Two independent halves, either of which counts: the yes/no against the
+ * participant's own rating folded at 3 ("접기 규칙: 5점 3 이하 = '아니오'"), and
+ * — SCORE only — the intent they pointed at against the one that actually
+ * fired. Baseline has no objective second half, so a highlighted span never
+ * counts as a miss on its own; "not sure" is a real answer and is not scored
+ * either way.
+ *
+ * Same rules as the export's pointing_correct, deliberately: a probe asked in
+ * the room and a finding computed afterwards have to be about the same items.
+ */
+export function predictionMissed(args: {
+  guess: boolean | null;
+  rating: number | null;
+  pointing: Pointing | null;
+  applied: unknown;
+}): boolean {
+  const { guess, rating, pointing } = args;
+  if (guess !== null && rating !== null && guess !== rating >= 4) return true;
+
+  const applied = (args.applied ?? null) as { outcome?: string; intentId?: number } | null;
+  if (pointing?.kind === 'intent') {
+    return !(applied?.outcome === 'intent' && applied?.intentId === pointing.intentId);
+  }
+  if (pointing?.kind === 'none') {
+    return !(applied == null || applied.outcome === 'type_default');
+  }
+  return false;
 }
 
 /**
@@ -310,40 +371,7 @@ export async function predictionsComplete(clone: {
   return answers.length === bank.length;
 }
 
-/**
- * Record the yes/no half of the prediction. Releases nothing — the pointing
- * step comes next and the reveal belongs to it.
- */
-export async function recordGuess(args: {
-  participant: StudyParticipant;
-  cloneAssignmentId: string;
-  bankItemId: number;
-  guess: boolean;
-}): Promise<{ ok: true } | { error: 'no_response' }> {
-  const { participant, cloneAssignmentId, bankItemId, guess } = args;
-
-  // Refuse rather than record a prediction we cannot show an answer to: the
-  // pair is the measurement.
-  if (!(await hasResponse(cloneAssignmentId, bankItemId))) return { error: 'no_response' };
-
-  await db
-    .insert(studyTestAnswers)
-    .values({
-      participantId: participant.id,
-      cloneAssignmentId,
-      bankItemId,
-      guess,
-      guessedAt: new Date(),
-    })
-    // A re-submitted guess keeps the FIRST one: the second would be made with
-    // the answer already seen.
-    .onConflictDoNothing({
-      target: [studyTestAnswers.cloneAssignmentId, studyTestAnswers.bankItemId],
-    });
-
-  return { ok: true };
-}
-
+/** Is there a frozen answer for this item at all? */
 async function hasResponse(cloneAssignmentId: string, bankItemId: number): Promise<boolean> {
   const [row] = await db
     .select({ id: studyGeneratedResponses.id })
@@ -358,77 +386,110 @@ async function hasResponse(cloneAssignmentId: string, bankItemId: number): Promi
 }
 
 /**
- * Record where they expect the answer to come from. Releases nothing.
+ * Record a whole prediction — description, yes/no, and pointing — in one write.
  *
- * This closes the prediction for one question, not the block: the answers
- * arrive together once the last question has been predicted (see the gate in
- * getTestItems). Refuses without a guess on record, which is what makes the
- * questionnaire's order (describe → guess → point) enforceable rather than
- * merely rendered, and keeps the first pointing the way it keeps the first
- * guess. Still checks that a frozen answer EXISTS — a prediction we could
- * never show an answer to is not the measurement, and that is worth failing on
- * now rather than at the reveal.
+ * One call because the participant now enters all three and presses Next
+ * (문항지 §3 Pass 1, 08-15): there is no moment between them where a partial
+ * prediction means anything, and three round trips would give a half-recorded
+ * item three ways to end up wrong.
+ *
+ * First submission wins for the item as a whole. Nothing is released here —
+ * the answers unlock only when the last of the eight lands (see the gate in
+ * getTestItems) — so a participant is free to change their mind up until Next,
+ * and has learned nothing that could inform a second attempt afterwards.
  */
-export async function recordPointing(args: {
+export async function recordPrediction(args: {
+  participant: StudyParticipant;
   cloneAssignmentId: string;
   bankItemId: number;
+  expectation: string;
+  guess: boolean;
   pointing: Pointing;
-}): Promise<{ ok: true } | { error: 'no_response' | 'guess_first' }> {
-  const { cloneAssignmentId, bankItemId, pointing } = args;
+}): Promise<{ ok: true } | { error: 'no_response' }> {
+  const { participant, cloneAssignmentId, bankItemId, expectation, guess, pointing } = args;
 
-  const [existing] = await db
-    .select()
-    .from(studyTestAnswers)
-    .where(
-      and(
-        eq(studyTestAnswers.cloneAssignmentId, cloneAssignmentId),
-        eq(studyTestAnswers.bankItemId, bankItemId)
-      )
-    );
-  if (!existing || existing.guess === null) return { error: 'guess_first' };
-
+  // Refuse rather than record a prediction we cannot show an answer to: the
+  // pair is the measurement.
   if (!(await hasResponse(cloneAssignmentId, bankItemId))) return { error: 'no_response' };
 
-  // Already pointed → keep the first answer and report success, so a reload
-  // lands where it left off instead of erroring.
-  if (existing.pointedAt == null) {
-    await db
-      .update(studyTestAnswers)
-      .set({
-        pointedKind: pointing.kind,
-        pointedIntentId: pointing.kind === 'intent' ? pointing.intentId : null,
-        pointedSpanStart: pointing.kind === 'span' ? pointing.start : null,
-        pointedSpanEnd: pointing.kind === 'span' ? pointing.end : null,
-        pointedText: pointing.kind === 'span' ? pointing.text : null,
-        pointedAt: new Date(),
-      })
-      .where(eq(studyTestAnswers.id, existing.id));
-  }
-
+  const now = new Date();
+  await db
+    .insert(studyTestAnswers)
+    .values({
+      participantId: participant.id,
+      cloneAssignmentId,
+      bankItemId,
+      expectation,
+      guess,
+      pointedKind: pointing.kind,
+      pointedIntentId: pointing.kind === 'intent' ? pointing.intentId : null,
+      pointedSpanStart: pointing.kind === 'span' ? pointing.start : null,
+      pointedSpanEnd: pointing.kind === 'span' ? pointing.end : null,
+      pointedText: pointing.kind === 'span' ? pointing.text : null,
+      guessedAt: now,
+      pointedAt: now,
+    })
+    // A re-submitted prediction keeps the FIRST one.
+    .onConflictDoNothing({
+      target: [studyTestAnswers.cloneAssignmentId, studyTestAnswers.bankItemId],
+    });
   return { ok: true };
 }
 
 /**
- * Record the 1-5 fit rating. Only reachable once the answer has been released,
- * which now means the WHOLE block has been predicted — a rating is a judgement
- * of something seen, and nothing in this block is seen before then. The caller
- * checks the block-wide half (it holds the clone); the per-item `pointedAt`
- * rides in the WHERE rather than in a prior read, so neither can slip past on
- * a client's say-so.
+ * Record the 1-5 fit rating, and "what's off" when the rating opens it.
+ *
+ * Only reachable once the answers have been released, which now means the
+ * WHOLE block has been predicted — a rating is a judgement of something seen,
+ * and nothing in this block is seen before then. The caller checks the
+ * block-wide half (it holds the clone); the per-item `pointedAt` rides in the
+ * WHERE rather than in a prior read, so neither can slip past on a client's
+ * say-so.
  */
 export async function recordRating(args: {
   cloneAssignmentId: string;
   bankItemId: number;
   rating: number;
+  whatsOff?: string | null;
 }): Promise<{ ok: boolean }> {
   const updated = await db
     .update(studyTestAnswers)
-    .set({ rating: args.rating, ratedAt: new Date() })
+    .set({
+      rating: args.rating,
+      // Above the fold there is no "what's off" to keep; clearing it stops a
+      // stale answer surviving a corrected rating.
+      whatsOff: args.rating <= 3 ? args.whatsOff?.trim() || null : null,
+      ratedAt: new Date(),
+    })
     .where(
       and(
         eq(studyTestAnswers.cloneAssignmentId, args.cloneAssignmentId),
         eq(studyTestAnswers.bankItemId, args.bankItemId),
         isNotNull(studyTestAnswers.pointedAt)
+      )
+    )
+    .returning({ id: studyTestAnswers.id });
+  return { ok: updated.length > 0 };
+}
+
+/**
+ * Record the probe (§3 ④) — optional by design, so a blank one is a real
+ * answer and saved as null rather than refused. Only accepted after a rating,
+ * because that is when the box opens.
+ */
+export async function recordProbe(args: {
+  cloneAssignmentId: string;
+  bankItemId: number;
+  probe: string;
+}): Promise<{ ok: boolean }> {
+  const updated = await db
+    .update(studyTestAnswers)
+    .set({ probe: args.probe.trim() || null })
+    .where(
+      and(
+        eq(studyTestAnswers.cloneAssignmentId, args.cloneAssignmentId),
+        eq(studyTestAnswers.bankItemId, args.bankItemId),
+        isNotNull(studyTestAnswers.ratedAt)
       )
     )
     .returning({ id: studyTestAnswers.id });

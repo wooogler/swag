@@ -94,6 +94,8 @@ export interface RulesSelection {
 export default function SnapshotConfigView({
   config,
   onRulesSelection,
+  onIntentPick,
+  pickedIntentId = null,
 }: {
   config: SnapshotConfig;
   /**
@@ -102,6 +104,15 @@ export default function SnapshotConfigView({
    * test is the only screen that asks the document to be pointed at.
    */
   onRulesSelection?: (selection: RulesSelection | null) => void;
+  /**
+   * SCORE pointing: fires when an intent in the tree is clicked. Optional for
+   * the same reason as the drag — this view is read-only everywhere else, and
+   * the block test is the only screen that asks the tree to be pointed at.
+   * 문항지 §3 Pass 1 asks for the pick to happen HERE, in the tree the
+   * participant is reading, rather than in a copy of the list beside it.
+   */
+  onIntentPick?: (intentId: number) => void;
+  pickedIntentId?: number | null;
 }) {
   if (config.condition === 'baseline') {
     return (
@@ -144,7 +155,13 @@ export default function SnapshotConfigView({
                 {/* Children before parents, mirroring the order the chatbot
                     checks them in — the tree IS the order of evaluation. */}
                 {orderChain(mine).map((intent) => (
-                  <IntentCard key={intent.id} intent={intent} depth={depthOf(intent, mine)} />
+                  <IntentCard
+                    key={intent.id}
+                    intent={intent}
+                    depth={depthOf(intent, mine)}
+                    onPick={onIntentPick}
+                    picked={pickedIntentId === intent.id}
+                  />
                 ))}
                 {root && (
                   <div className="rounded-lg border border-dashed border-[hsl(var(--border))] px-3 py-2">
@@ -230,18 +247,48 @@ function Header({ label, version }: { label: string; version: string }) {
   );
 }
 
-function IntentCard({ intent, depth }: { intent: SnapshotIntentView; depth: number }) {
-  return (
-    <div
-      className="rounded-lg border border-[hsl(var(--border))] px-3 py-2 bg-[hsl(var(--card))]"
-      style={{ marginLeft: depth * 14 }}
-    >
+function IntentCard({
+  intent,
+  depth,
+  onPick,
+  picked = false,
+}: {
+  intent: SnapshotIntentView;
+  depth: number;
+  onPick?: (intentId: number) => void;
+  picked?: boolean;
+}) {
+  const body = (
+    <>
       <p className="text-xs font-semibold mb-1">{intent.title}</p>
       <p className="text-[11.5px] text-[hsl(var(--muted-foreground))] leading-snug mb-1.5">
         <span className="font-semibold">When </span>
         {intent.definition}
       </p>
       <RuleText rule={intent.rule} />
+    </>
+  );
+  const frame = picked
+    ? 'border-[hsl(var(--primary))] ring-1 ring-[hsl(var(--primary))]/30 bg-[hsl(var(--primary))]/5'
+    : 'border-[hsl(var(--border))] bg-[hsl(var(--card))]';
+
+  // A button only while the step that asks for a pick is open, so the tree is
+  // not quietly clickable during the reading it also has to support.
+  if (onPick) {
+    return (
+      <button
+        type="button"
+        onClick={() => onPick(intent.id)}
+        style={{ marginLeft: depth * 14 }}
+        className={`w-full text-left rounded-lg border px-3 py-2 hover:border-[hsl(var(--primary))]/60 ${frame}`}
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${frame}`} style={{ marginLeft: depth * 14 }}>
+      {body}
     </div>
   );
 }

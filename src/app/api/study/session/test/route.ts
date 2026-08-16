@@ -2,13 +2,15 @@
  * Block-test answers: record every prediction, and only then release the
  * frozen responses.
  *
- * The block runs in two passes. Pass one predicts all eight questions — the
- * yes/no, then the point at the part of the configuration expected to act
- * (design v2 §5) — and shows no answers at all. Pass two walks the same eight
- * again, revealing and rating. Nothing here decides which pass the client is
- * in; the release rule lives in measure-store and is re-derived from the rows
- * on every request. All of it sits behind the participant's own session and
- * refuses unless the current phase is that block's test.
+ * The block runs in two passes. Pass one predicts all eight — a written
+ * description, the yes/no, and the point at the part of the configuration
+ * expected to act (문항지 §3, 08-15: every answer is a UI input, none spoken)
+ * — and shows no answers at all. Pass two walks the same eight again,
+ * revealing, rating, and asking why where the prediction missed. Nothing here
+ * decides which pass the client is in; the release rule lives in measure-store
+ * and is re-derived from the rows on every request. All of it sits behind the
+ * participant's own session and refuses unless the current phase is that
+ * block's test.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -18,44 +20,50 @@ import {
   deployedConfigFor,
   getTestItems,
   predictionsComplete,
-  recordGuess,
-  recordPointing,
+  recordPrediction,
+  recordProbe,
   recordRating,
 } from '@/lib/study/measure-store';
 import { isStudyPhase, phaseAccess } from '@/lib/study/phases';
 
 export const dynamic = 'force-dynamic';
 
-const guessSchema = z.object({
-  action: z.literal('guess'),
+const pointingSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('intent'), intentId: z.number().int().positive() }),
+  z.object({ kind: z.literal('none') }),
+  z.object({ kind: z.literal('not_sure') }),
+  z.object({
+    kind: z.literal('span'),
+    start: z.number().int().min(0),
+    end: z.number().int().positive(),
+    text: z.string().min(1).max(4000),
+  }),
+  z.object({ kind: z.literal('nothing') }),
+]);
+
+// One prediction, all three parts. The description is required — §3 Pass 1
+// will not let Next through without it — while "not sure" is a real answer for
+// the other two and arrives as its own pointing kind.
+const predictSchema = z.object({
+  action: z.literal('predict'),
   bankItemId: z.number().int().positive(),
+  expectation: z.string().trim().min(1).max(2000),
   guess: z.boolean(),
-});
-// The two conditions point at different things, so the shapes differ — but a
-// participant only ever sees their own condition's control, and the route
-// checks an 'intent' pointing against the deployed snapshot below.
-const pointingSchema = z.object({
-  action: z.literal('pointing'),
-  bankItemId: z.number().int().positive(),
-  pointing: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('intent'), intentId: z.number().int().positive() }),
-    z.object({ kind: z.literal('none') }),
-    z.object({ kind: z.literal('not_sure') }),
-    z.object({
-      kind: z.literal('span'),
-      start: z.number().int().min(0),
-      end: z.number().int().positive(),
-      text: z.string().min(1).max(4000),
-    }),
-    z.object({ kind: z.literal('nothing') }),
-  ]),
+  pointing: pointingSchema,
 });
 const ratingSchema = z.object({
   action: z.literal('rating'),
   bankItemId: z.number().int().positive(),
   rating: z.number().int().min(1).max(5),
+  whatsOff: z.string().max(2000).optional(),
 });
-const bodySchema = z.union([guessSchema, pointingSchema, ratingSchema]);
+// Optional by design: a blank probe is a real answer (§3 ④).
+const probeSchema = z.object({
+  action: z.literal('probe'),
+  bankItemId: z.number().int().positive(),
+  probe: z.string().max(4000),
+});
+const bodySchema = z.union([predictSchema, ratingSchema, probeSchema]);
 
 export async function POST(req: Request) {
   const participant = await getCurrentStudyParticipant();
@@ -75,20 +83,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid_body' }, { status: 400 });
   }
 
-  if (parsed.action === 'guess') {
-    const result = await recordGuess({
-      participant,
-      cloneAssignmentId: clone.assignmentId,
-      bankItemId: parsed.bankItemId,
-      guess: parsed.guess,
-    });
-    if ('error' in result) {
-      return NextResponse.json({ error: 'no_response' }, { status: 409 });
-    }
-    return NextResponse.json({ success: true });
-  }
-
-  if (parsed.action === 'pointing') {
+  if (parsed.action === 'predict') {
     // An intent id has to be one of the intents this participant deployed —
     // otherwise the pointing/routing comparison would score against a number
     // that means nothing on their board.
@@ -98,14 +93,16 @@ export async function POST(req: Request) {
       const known = (config?.intents ?? []).some((i) => i.id === pointing.intentId);
       if (!known) return NextResponse.json({ error: 'unknown_intent' }, { status: 400 });
     }
-    const result = await recordPointing({
+    const result = await recordPrediction({
+      participant,
       cloneAssignmentId: clone.assignmentId,
       bankItemId: parsed.bankItemId,
+      expectation: parsed.expectation,
+      guess: parsed.guess,
       pointing,
     });
-    if ('error' in result) {
-      return NextResponse.json({ error: result.error }, { status: 409 });
-    }
+    if ('error' in result) return NextResponse.json({ error: result.error }, { status: 409 });
+
     // If that was the last prediction the block owed, the answers unlock — so
     // send the refreshed list rather than making the client reload to find out.
     // It comes from getTestItems, the same gate the page renders through, so
@@ -120,16 +117,34 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true, revealed: false });
   }
 
-  // Refused rather than ignored when the answers have not been released: a
-  // rating given before the reveal is not the measurement.
+  // Both of the remaining actions belong to pass two, which does not exist
+  // until every prediction is in.
   if (!(await predictionsComplete(clone))) {
     return NextResponse.json({ error: 'not_revealed' }, { status: 409 });
   }
-  const rated = await recordRating({
+
+  if (parsed.action === 'rating') {
+    const rated = await recordRating({
+      cloneAssignmentId: clone.assignmentId,
+      bankItemId: parsed.bankItemId,
+      rating: parsed.rating,
+      whatsOff: parsed.whatsOff,
+    });
+    if (!rated.ok) return NextResponse.json({ error: 'not_revealed' }, { status: 409 });
+    // The probe opens on whether the prediction missed, and half of that is
+    // the routing record — which the participant never sees, and which only
+    // becomes safe to act on once the rating is in. So the verdict is computed
+    // here and returned as a bare boolean, not as the intent that fired.
+    const items = await getTestItems(participant, clone);
+    const item = items.find((i) => i.bankItemId === parsed.bankItemId);
+    return NextResponse.json({ success: true, missed: item?.missed ?? false });
+  }
+
+  const probed = await recordProbe({
     cloneAssignmentId: clone.assignmentId,
     bankItemId: parsed.bankItemId,
-    rating: parsed.rating,
+    probe: parsed.probe,
   });
-  if (!rated.ok) return NextResponse.json({ error: 'not_revealed' }, { status: 409 });
+  if (!probed.ok) return NextResponse.json({ error: 'not_rated' }, { status: 409 });
   return NextResponse.json({ success: true });
 }
