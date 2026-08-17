@@ -35,10 +35,16 @@ interface ChatMessagesProps {
    * imported logs (e.g. NIRVANA) whose raw single-newline breaks CommonMark
    * would collapse. */
   rawAssistantText?: boolean;
-  /** Scroll the highlighted message to center on mount/select instead of
+  /** Scroll to the highlighted message on mount/select instead of
    * auto-following the bottom — for read-only thread views (SCORE) where the
    * point of interest is mid-conversation, not the latest message. */
   autoScrollToHighlight?: boolean;
+  /** Where the highlighted message lands. Centering suits a thread being
+   * browsed, where the turns around the question are the context you came for.
+   * A view that exists to READ that one message wants 'start': a long pasted
+   * essay centered puts the reader in the middle of it, with the beginning
+   * already scrolled past. */
+  highlightAlign?: ScrollLogicalPosition;
   /** Override the body of a USER bubble (e.g. SCORE's Material tags — pasted
    * content collapsed into clickable per-kind chips). Return null to fall back
    * to the default plain-text rendering for that message. */
@@ -64,6 +70,7 @@ export default function ChatMessages({
   onReplayPasteClick,
   rawAssistantText = false,
   autoScrollToHighlight = false,
+  highlightAlign = 'center',
   renderUserContent,
   onEditAssistant,
   showQueryNav = false,
@@ -128,8 +135,8 @@ export default function ChatMessages({
     if (!autoScrollToHighlight || highlightedMessageId == null) return;
     scrollContainerRef.current
       ?.querySelector(`[data-message-id="${highlightedMessageId}"]`)
-      ?.scrollIntoView({ block: 'center' });
-  }, [autoScrollToHighlight, highlightedMessageId, messages]);
+      ?.scrollIntoView({ block: highlightAlign });
+  }, [autoScrollToHighlight, highlightAlign, highlightedMessageId, messages]);
 
   // Highlighted-message visibility: when the reader scrolls it off-screen, a
   // floating "back to the question" button appears (thread views only). The

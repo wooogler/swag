@@ -392,6 +392,10 @@ export default function BlockTest({
                 messages={messages}
                 highlightedMessageId={revealed ? item.context.length + 1 : item.context.length}
                 autoScrollToHighlight
+                // Top, not centre: the question IS the thing to read here, and
+                // a pasted essay centered opens halfway down itself with its
+                // first line already scrolled off.
+                highlightAlign="start"
                 enableCopy={false}
                 renderUserContent={renderUserContent}
               />
