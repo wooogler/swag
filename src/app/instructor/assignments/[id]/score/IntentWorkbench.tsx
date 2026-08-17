@@ -1106,12 +1106,25 @@ export default function IntentWorkbench({
       if (!mountedRef.current) return;
       const mine = applies.find((a) => a.intentId === intentId);
       if (mine) {
+        // The fold is the largest edit the definition ever takes, so it is the
+        // one most worth being able to walk back from — and it has to record
+        // the step ITSELF: the re-rate below runs from a savedRef this function
+        // has already moved forward, so by the time apply() looks for a change
+        // there is none to see. Without this the undo button sat there empty
+        // after the very edit it exists for. (The text comes back; the
+        // decisions the fold consumed stay consumed — undo walks definitions,
+        // not the teaching ledger.)
+        const beforeFold = { ...savedRef.current };
         setDefinition(mine.definition);
         // The definition IS saved — mirror it into savedRef so the workbench
         // does not read the fold as an unapplied edit and demand a re-Apply of
         // text it just wrote.
         savedRef.current = { ...savedRef.current, definition: mine.definition };
         if (mine.title) setTitle(mine.title);
+        if (beforeFold.definition.trim() && beforeFold.definition !== mine.definition) {
+          setPast((p) => [...p, beforeFold]);
+          setFuture([]);
+        }
       }
       setFoldProposals(null);
       setFoldOpen(false);
