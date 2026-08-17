@@ -458,7 +458,15 @@ export async function buildParticipantTrail(
       at: iso(e.createdAt)!,
       source: 'event',
       kind: RENAMED[e.eventType] ?? e.eventType,
-      intentId: typeof p.intentId === 'number' ? p.intentId : null,
+      // rating_run scopes itself with `intentIds` (plural) — without this the
+      // classifier runs an Apply kicks off have no intent beside them, and the
+      // reader cannot see what caused three of them in a row.
+      intentId:
+        typeof p.intentId === 'number'
+          ? p.intentId
+          : Array.isArray(p.intentIds) && p.intentIds.length === 1 && typeof p.intentIds[0] === 'number'
+            ? (p.intentIds[0] as number)
+            : null,
       messageId: typeof p.messageId === 'number' ? p.messageId : null,
       detail: describeEvent(e.eventType, p),
       payload: p,
