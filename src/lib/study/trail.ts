@@ -425,20 +425,21 @@ export async function buildParticipantTrail(
   // double, and the table is the one that carries the detail, so the event
   // loses. This is the module's rule applied literally: events add only what
   // the tables cannot see.
-  const DUPLICATES_A_TABLE = new Set([
-    'intent_create',
-    'rule_save',
-    'deploy',
-    'prompt_save',
-    'prompt_deploy',
-  ]);
+  const DUPLICATES_A_TABLE = new Set(['rule_save', 'deploy', 'prompt_save', 'prompt_deploy']);
+  // `intent_create` is not a duplicate, it is a DIFFERENT act. The board's New
+  // Intent button posts a draft — that is when this event fires — and the
+  // workbench's Save is what puts the intent on the board, which is what the
+  // snapshot records as create_intent. Dropping the event would make a draft
+  // the participant opened and abandoned leave no trace at all, so it is
+  // renamed instead and the two sit next to each other in the trail.
+  const RENAMED: Record<string, string> = { intent_create: 'intent_draft' };
   for (const e of assignmentEvents) {
     if (DUPLICATES_A_TABLE.has(e.eventType)) continue;
     const p = (e.payload as Record<string, unknown>) ?? {};
     raw.push({
       at: iso(e.createdAt)!,
       source: 'event',
-      kind: e.eventType,
+      kind: RENAMED[e.eventType] ?? e.eventType,
       intentId: typeof p.intentId === 'number' ? p.intentId : null,
       messageId: typeof p.messageId === 'number' ? p.messageId : null,
       detail: describeEvent(e.eventType, p),

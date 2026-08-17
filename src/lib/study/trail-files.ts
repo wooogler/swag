@@ -45,7 +45,9 @@ timeline.csv columns
   detail        one human-readable line
 
 kinds
-  configuration  intent_create · intent_update_definition · intent_update_rule
+  configuration  intent_draft (New Intent pressed — a draft, which may be
+                 abandoned) · intent_create (Save — it is on the board now)
+                 intent_update_definition · intent_update_rule
                  intent_update_title · intent_archive · intent_restore
                  intent_move · intent_reorder · intent_fold · intent_apply
                  intent_update · intent_revert · pins_changed
