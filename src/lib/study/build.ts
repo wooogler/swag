@@ -437,8 +437,13 @@ async function currentTypeByMessage(candidates: Candidate[]): Promise<Map<number
 /** The question text plus the turns before it, taken from the source master. */
 async function freezeQuestions(
   candidates: Candidate[]
-): Promise<Map<number, { context: { role: string; content: string }[]; question: string }>> {
-  const out = new Map<number, { context: { role: string; content: string }[]; question: string }>();
+): Promise<
+  Map<number, { context: { messageId: number; role: string; content: string }[]; question: string }>
+> {
+  const out = new Map<
+    number,
+    { context: { messageId: number; role: string; content: string }[]; question: string }
+  >();
   if (candidates.length === 0) return out;
 
   const anchors = await db
@@ -458,14 +463,18 @@ async function freezeQuestions(
 
   for (const anchor of anchors) {
     const priors = await db
-      .select({ role: chatMessages.role, content: chatMessages.content })
+      .select({ id: chatMessages.id, role: chatMessages.role, content: chatMessages.content })
       .from(chatMessages)
       .where(
         sql`${chatMessages.conversationId} = ${anchor.conversationId} AND ${chatMessages.sequenceNumber} < ${anchor.sequenceNumber}`
       )
       .orderBy(chatMessages.sequenceNumber);
     out.set(anchor.id, {
-      context: priors.map((p) => ({ role: p.role, content: p.content })),
+      // The id rides along so the block test can show the same Material tags
+      // the board did — score_dissections is keyed by message id, and without
+      // this an earlier turn that pasted the assignment prompt reads here as
+      // plain text. The text itself stays frozen; only the tagging is looked up.
+      context: priors.map((p) => ({ messageId: p.id, role: p.role, content: p.content })),
       question: anchor.content,
     });
   }

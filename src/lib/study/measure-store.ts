@@ -16,6 +16,7 @@ import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   baselinePromptVersions,
+  scoreDissections,
   studyClones,
   studyGeneratedResponses,
   studyQuestionBank,
@@ -26,11 +27,25 @@ import { getLatestChatDeploy } from '@/lib/score/deploy-store';
 import type { SnapshotConfig } from '@/components/study/SnapshotConfigView';
 import { blockPlan } from './phases';
 
+/**
+ * How a pasted run of Material reads: the kind, and how much of its source the
+ * student pasted. Mirrors the board's own tags so a participant meets a
+ * question here looking the way it looked while they were configuring.
+ */
+export interface QuestionMaterials {
+  materialKinds: string[];
+  requests: string[];
+  materials?: { text: string; kind: string; chars: number; sourceChars?: number }[];
+}
+
 export interface MeasureQuestion {
   bankItemId: number;
   position: number;
-  context: { role: 'user' | 'assistant'; content: string }[];
+  /** `materials` is present only on student turns the bank froze WITH an id. */
+  context: { role: 'user' | 'assistant'; content: string; materials?: QuestionMaterials | null }[];
   question: string;
+  /** The question's own Material tags, from the master's dissection. */
+  questionMaterials: QuestionMaterials | null;
 }
 
 /** Where the participant expects the answer to come from, before seeing it. */
@@ -92,14 +107,52 @@ function readPointing(row: {
   }
 }
 
-function readContext(raw: unknown): MeasureQuestion['context'] {
+interface FrozenTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  /** Present only on banks built after Material tags were carried through. */
+  messageId?: number;
+}
+
+function readContext(raw: unknown): FrozenTurn[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
-    (t): t is { role: 'user' | 'assistant'; content: string } =>
+    (t): t is FrozenTurn =>
       !!t &&
       typeof t === 'object' &&
       ((t as { role?: unknown }).role === 'user' || (t as { role?: unknown }).role === 'assistant') &&
       typeof (t as { content?: unknown }).content === 'string'
+  );
+}
+
+/**
+ * The Material tags for a set of master messages.
+ *
+ * Read straight from score_dissections, which is keyed by message id alone —
+ * the bank keeps the master's id per question, so the tags a participant saw
+ * while configuring are the tags they see here. Missing rows are normal (a
+ * question with no pasted Material has nothing to dissect) and read as null.
+ */
+async function materialsByMessage(ids: number[]): Promise<Map<number, QuestionMaterials>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({
+      messageId: scoreDissections.messageId,
+      materialKinds: scoreDissections.materialKinds,
+      requests: scoreDissections.requests,
+      materials: scoreDissections.materials,
+    })
+    .from(scoreDissections)
+    .where(inArray(scoreDissections.messageId, ids));
+  return new Map(
+    rows.map((r) => [
+      r.messageId,
+      {
+        materialKinds: (r.materialKinds as string[]) ?? [],
+        requests: (r.requests as string[]) ?? [],
+        materials: (r.materials as QuestionMaterials['materials']) ?? undefined,
+      },
+    ])
   );
 }
 
@@ -268,6 +321,21 @@ export async function getTestItems(
   // made under the same information, which means all of them before any reveal.
   // Checked on `pointedAt` rather than on the reconstructed pointing so an
   // unreadable row fails closed.
+  // Material tags for the questions, and for the earlier student turns where
+  // the bank kept an id. Older banks froze context without ids, so those turns
+  // simply render plain — the question, which is what routes, always has one.
+  const contextIds = bank.flatMap((item) =>
+    readContext(item.context)
+      .map((t) => t.messageId)
+      .filter((id): id is number => typeof id === 'number')
+  );
+  const materials = await materialsByMessage([
+    ...new Set([
+      ...bank.map((b) => b.sourceMessageId).filter((id): id is number => typeof id === 'number'),
+      ...contextIds,
+    ]),
+  ]);
+
   const predictionsDone = bank.every((item) => {
     const answer = answerByItem.get(item.id);
     return answer?.guess != null && answer?.pointedAt != null;
@@ -280,8 +348,15 @@ export async function getTestItems(
     return {
       bankItemId: item.id,
       position: item.position,
-      context: readContext(item.context),
+      context: readContext(item.context).map((t) => ({
+        role: t.role,
+        content: t.content,
+        materials: t.messageId ? materials.get(t.messageId) ?? null : null,
+      })),
       question: item.question,
+      questionMaterials: item.sourceMessageId
+        ? materials.get(item.sourceMessageId) ?? null
+        : null,
       expectation: answer?.expectation ?? null,
       guess: guessed,
       pointing,

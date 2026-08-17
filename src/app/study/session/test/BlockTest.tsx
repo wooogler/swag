@@ -35,12 +35,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import ChatMessages, { type Message } from '@/components/chat/ChatMessages';
+import { MaterialSegments, materialStyle } from '@/app/instructor/assignments/[id]/score/materials';
 import PhaseAdvance from '@/components/study/PhaseAdvance';
 import SnapshotConfigView, {
   type RulesSelection,
   type SnapshotConfig,
 } from '@/components/study/SnapshotConfigView';
-import type { Pointing, TestItem } from '@/lib/study/measure-store';
+import { MATERIAL_LABELS, type MaterialKind, type MaterialSpan } from '@/lib/score/intents';
+import type { Pointing, QuestionMaterials, TestItem } from '@/lib/study/measure-store';
 
 type Pass = 'predict' | 'rate';
 
@@ -132,6 +134,14 @@ export default function BlockTest({
       setProbe('');
     }
   }, [item]);
+
+  /**
+   * Patch, not replace. Handing the card a whole new Draft made every control
+   * read the draft from its own render, so two answers given inside one frame
+   * — a fast Yes then Not sure — had the second overwrite the first and Next
+   * stayed shut with no sign of why.
+   */
+  const patchDraft = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
 
   const post = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -244,6 +254,71 @@ export default function BlockTest({
     return turns;
   }, [item, legacyLineBreaks, revealed]);
 
+  /**
+   * The Material tags, as the board draws them.
+   *
+   * A participant spends the configuration block reading questions whose pasted
+   * parts are tagged — assignment prompt, the student's own draft, a previous
+   * reply. Showing the same question here as undifferentiated text asks them to
+   * predict against something that does not look like what they configured
+   * against, and hides the distinction their intents are most often written on:
+   * whether the student supplied the substance or pasted the prompt in.
+   *
+   * Revealed rather than collapsed. A question has to be READ to be predicted
+   * about, so the tags tint and label the text instead of standing in for it;
+   * the show/hide control is there for the compact form.
+   */
+  const materialsById = useMemo(() => {
+    const map = new Map<number, QuestionMaterials>();
+    if (!item) return map;
+    item.context.forEach((t, i) => {
+      if (t.materials) map.set(i, t.materials);
+    });
+    if (item.questionMaterials) map.set(item.context.length, item.questionMaterials);
+    return map;
+  }, [item]);
+
+  const renderUserContent = (m: Message) => {
+    const found = typeof m.id === 'number' ? materialsById.get(m.id) : undefined;
+    if (!found || found.materialKinds.length === 0) return null;
+    const kinds = [
+      ...new Set(
+        (found.materials?.length
+          ? found.materials.map((r) => r.kind)
+          : found.materialKinds) as MaterialKind[]
+      ),
+    ];
+    return (
+      <>
+        <MaterialSegments
+          text={m.content}
+          dissection={{
+            materialKinds: found.materialKinds as MaterialKind[],
+            requests: found.requests,
+            materials: found.materials as MaterialSpan[] | undefined,
+          }}
+          defaultOpen
+          toggleAll
+        />
+        {/* Revealed, the tint is the only thing marking a pasted run, and the
+            kind is otherwise a tooltip — which nobody hovers with 50 seconds
+            per question. This says the colours out loud, and only for the kinds
+            actually in this message. */}
+        {kinds.length > 0 && (
+          <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+            <span className="font-semibold uppercase tracking-wide">Pasted in</span>
+            {kinds.map((k) => (
+              <span key={k} className="inline-flex items-center gap-1">
+                <span className={`inline-block w-2.5 h-2.5 rounded-[2px] ${materialStyle(k).hl}`} />
+                {MATERIAL_LABELS[k] ?? k}
+              </span>
+            ))}
+          </span>
+        )}
+      </>
+    );
+  };
+
   // Named, not described: §3 ② puts the intent's own title back on screen.
   const intentTitles = useMemo(
     () => new Map((config.intents ?? []).map((i) => [i.id, i.title])),
@@ -318,6 +393,7 @@ export default function BlockTest({
                 highlightedMessageId={revealed ? item.context.length + 1 : item.context.length}
                 autoScrollToHighlight
                 enableCopy={false}
+                renderUserContent={renderUserContent}
               />
             )}
           </div>
@@ -341,7 +417,7 @@ export default function BlockTest({
                   draft={draft}
                   selection={selection}
                   busy={busy}
-                  onChange={setDraft}
+                  onChange={patchDraft}
                   onNext={submitPrediction}
                 />
               ) : (
@@ -452,7 +528,7 @@ function PredictCard({
   draft: Draft;
   selection: RulesSelection | null;
   busy: boolean;
-  onChange: (next: Draft) => void;
+  onChange: (patch: Partial<Draft>) => void;
   onNext: () => void;
 }) {
   const pointing = draft.pointing;
@@ -474,7 +550,7 @@ function PredictCard({
           id="expectation"
           rows={3}
           value={draft.expectation}
-          onChange={(e) => onChange({ ...draft, expectation: e.target.value })}
+          onChange={(e) => onChange({ expectation: e.target.value })}
           placeholder={'e.g., "won’t write it for them; asks what they’ve tried"'}
           className="w-full rounded-lg border border-[hsl(var(--border))] px-2.5 py-2 text-[12px] leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
         />
@@ -488,7 +564,7 @@ function PredictCard({
           {[true, false].map((yes) => (
             <button
               key={String(yes)}
-              onClick={() => onChange({ ...draft, guess: yes })}
+              onClick={() => onChange({ guess: yes })}
               disabled={busy}
               className={choice(draft.guess === yes)}
             >
@@ -523,7 +599,7 @@ function PredictCard({
             </p>
             {pointing?.kind !== 'span' && selection && (
               <button
-                onClick={() => onChange({ ...draft, pointing: { kind: 'span', ...selection } })}
+                onClick={() => onChange({ pointing: { kind: 'span', ...selection } })}
                 disabled={busy}
                 className="mt-1.5 w-full rounded bg-[hsl(var(--primary))] py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
               >
@@ -536,10 +612,7 @@ function PredictCard({
         <div className="flex gap-2">
           <button
             onClick={() =>
-              onChange({
-                ...draft,
-                pointing: { kind: condition === 'baseline' ? 'nothing' : 'none' },
-              })
+              onChange({ pointing: { kind: condition === 'baseline' ? 'nothing' : 'none' } })
             }
             disabled={busy}
             className={choice(pointing?.kind === 'nothing' || pointing?.kind === 'none')}
@@ -547,7 +620,7 @@ function PredictCard({
             {condition === 'baseline' ? 'Nothing specific' : 'None of them'}
           </button>
           <button
-            onClick={() => onChange({ ...draft, pointing: { kind: 'not_sure' } })}
+            onClick={() => onChange({ pointing: { kind: 'not_sure' } })}
             disabled={busy}
             className={choice(pointing?.kind === 'not_sure')}
           >
