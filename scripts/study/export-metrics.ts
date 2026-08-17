@@ -17,6 +17,8 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { toCsv } from '../../src/lib/study/csv';
+import { buildTrailFiles } from '../../src/lib/study/trail-files';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import {
@@ -37,20 +39,9 @@ function argValue(flag: string): string | null {
 
 const OUT = argValue('--out') ?? './export';
 
-function csv(rows: Record<string, unknown>[]): string {
-  if (rows.length === 0) return '';
-  const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
-  const cell = (v: unknown) => {
-    if (v === null || v === undefined) return '';
-    const s = String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  return [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\n');
-}
-
 function write(name: string, rows: Record<string, unknown>[]) {
   const file = path.join(OUT, name);
-  writeFileSync(file, csv(rows));
+  writeFileSync(file, toCsv(rows));
   console.log(`  ${name.padEnd(28)} ${rows.length} row(s)`);
 }
 
@@ -353,6 +344,23 @@ async function main() {
     });
   }
   write('baseline_coverage_coding.csv', codingRows);
+
+  // ── per-participant trails ──────────────────────────────────────────
+  // The same files the console hands out one at a time, unzipped. RQ1 is read
+  // by walking one session in order, so the folder is per person rather than
+  // another all-participant table.
+  for (const p of participants) {
+    const built = await buildTrailFiles(p.id);
+    if (!built) continue;
+    let n = 0;
+    for (const [name, text] of Object.entries(built.files)) {
+      const file = path.join(OUT, 'trails', built.number, name);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, text);
+      n++;
+    }
+    console.log(`  trails/${built.number.padEnd(20)} ${n} file(s)`);
+  }
 
   console.log(`\nwrote to ${path.resolve(OUT)}`);
   console.log(

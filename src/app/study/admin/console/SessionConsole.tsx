@@ -26,6 +26,7 @@ import {
   Check,
   Copy,
   Plus,
+  Download,
 } from 'lucide-react';
 import AdminNav from '@/components/study/AdminNav';
 import type { ParticipantStatus, CloneStatus, PredictionRow } from '@/lib/study/console-store';
@@ -305,6 +306,17 @@ export default function SessionConsole({
                   }
                 />
                 <LinkButton token={p.accessToken} expired={p.phase === 'done'} />
+                {/* Built on demand from tables that already hold everything —
+                    a plain link, so the browser downloads it and the console
+                    does not sit waiting on a fetch. */}
+                <a
+                  href={`/api/study/admin/participants/trail?participantId=${p.id}`}
+                  download
+                  title="Download this participant's session trail (zip)"
+                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+                >
+                  <Download className="w-3 h-3" /> trail
+                </a>
                 <Chip tone="ok">
                   {PHASE_LABELS[p.phase as StudyPhase] ?? p.phase}
                   {p.phaseMinutes !== null && (
