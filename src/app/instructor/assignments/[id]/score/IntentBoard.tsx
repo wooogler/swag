@@ -30,9 +30,7 @@ import {
   ChevronRight,
   GripVertical,
   Loader2,
-  Maximize2,
   MessageSquare,
-  Minimize2,
   Pencil,
   Plus,
   RefreshCw,
@@ -1290,14 +1288,6 @@ export default function IntentBoard({
   // BASELINE: Revise targets the whole monolithic prompt (no owning intent) —
   // opens RuleWorkbench (variant='prompt') on the prompt-holder from the anchor question.
   const [promptReviseTarget, setPromptReviseTarget] = useState<ScoreQueryRow | null>(null);
-
-  // Full conversation is a per-question opt-in expansion of the viewer; the
-  // default is the single Q/A. Reset it whenever the selection changes so a new
-  // question never inherits the previous one's expanded state.
-  const [convoOpen, setConvoOpen] = useState(false);
-  useEffect(() => {
-    setConvoOpen(false);
-  }, [selectedMessageId]);
 
   // ---- Direct delete (no archive step) ------------------------------------
   // The row's trash button queues the intent here; the confirm modal shows
@@ -2925,29 +2915,30 @@ export default function IntentBoard({
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {/* The thread view interleaves DELIVERED replies, so opening
-                      it drops any version regeneration back to the original. */}
-                  <button
-                    onClick={() => {
-                      const next = !convoOpen;
-                      setConvoOpen(next);
-                      if (next) setViewedVersionNo(null);
-                    }}
-                    className={`inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] ${
-                      convoOpen ? 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground))]' : 'text-[hsl(var(--foreground))]'
-                    }`}
-                    title={convoOpen ? 'Back to this turn' : 'Expand the full conversation in place'}
-                  >
-                    {convoOpen ? (
-                      <>
-                        <Minimize2 className="w-3.5 h-3.5" /> Exit
-                      </>
-                    ) : (
-                      <>
-                        <Maximize2 className="w-3.5 h-3.5" /> Full conversation
-                      </>
-                    )}
-                  </button>
+                  {/* Build from what is on screen. Revise changes the rule that
+                      already answers this question; this is the other move —
+                      the question deserves a set of its own — and it was only
+                      reachable from the sidebar, four columns away from the
+                      thread that prompts it. Lands in the question's own type,
+                      seeded by it. */}
+                  {selectedRow.queryType && (
+                    <button
+                      onClick={() =>
+                        isBaseline
+                          ? setNewFilterRequest(selectedRow.queryType!)
+                          : openIntentChooser(
+                              { type: selectedRow.queryType!, parentIntentId: null },
+                              selectedRow
+                            )
+                      }
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+                      title={`Create ${isBaseline ? 'a filter' : 'an intent'} in ${
+                        QUERY_TYPE_LABELS[selectedRow.queryType]
+                      } from this question`}
+                    >
+                      <Plus className="w-3.5 h-3.5" /> New {isBaseline ? 'filter' : 'intent'}
+                    </button>
+                  )}
                   {isBaseline ? (
                     // BASELINE: Revise the one shared rules document from this
                     // question — no owning intent, always available.
@@ -3007,11 +2998,10 @@ export default function IntentBoard({
                   <select
                     value={viewedVersionNo ?? ''}
                     onChange={(e) => {
-                      const next = e.target.value === '' ? null : Number(e.target.value);
-                      setViewedVersionNo(next);
-                      // Thread view shows delivered replies — leave it when
-                      // switching to a version regeneration.
-                      if (next !== null) setConvoOpen(false);
+                      // The thread stays; overrideResponse swaps just THIS
+                      // turn's reply for the version's, leaving the delivered
+                      // replies around it as the context they are.
+                      setViewedVersionNo(e.target.value === '' ? null : Number(e.target.value));
                     }}
                     className="text-[11px] border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
                     title="View this question's response under a saved rule version"
@@ -3034,9 +3024,13 @@ export default function IntentBoard({
                   conversation toggle stays reachable and the thread's own
                   "Back to the question" button anchors correctly. */}
               <div className="flex-1 min-h-0 flex flex-col">
-              {convoOpen ? (
-                // Full thread — the selected version's response overrides the
-                // current turn's reply, so the styling matches the single view.
+              {responseResolved ? (
+                // The whole conversation, always — a question only means what
+                // it means in the turns around it, and the block test shows it
+                // that way, so a participant who configured against one turn
+                // and predicts against a thread is reading two different things.
+                // The selected version's response overrides the current turn's
+                // reply, so a version being viewed still shows here.
                 <ConversationThread
                   rows={rows}
                   current={selectedRow}
@@ -3048,7 +3042,7 @@ export default function IntentBoard({
                       : null
                   }
                 />
-              ) : !responseResolved ? (
+              ) : (
                 // Owner has a rule → an applied-version response may exist; hold
                 // (show only the question) until the fetch lands, so the reply
                 // never flashes delivered → version.
@@ -3062,41 +3056,6 @@ export default function IntentBoard({
                     },
                   ]}
                   isLoading
-                  showTimestamp
-                  autoScrollToHighlight
-                  renderUserContent={renderSelectedUser}
-                />
-              ) : (
-                // Same chat component as Full conversation — one Q/A turn, the
-                // reply being either the applied version's response or the
-                // delivered original (raw for NIRVANA when delivered).
-                <ChatMessages
-                  messages={[
-                    {
-                      id: selectedRow.messageId,
-                      role: 'user' as const,
-                      content: selectedRow.queryText,
-                      timestamp: Date.parse(selectedRow.queryTimestamp),
-                    },
-                    ...(viewedVersion?.response
-                      ? [
-                          {
-                            id: `resp-v-${selectedRow.messageId}`,
-                            role: 'assistant' as const,
-                            content: viewedVersion.response,
-                          },
-                        ]
-                      : selectedRow.responseText && selectedRow.responseText.trim()
-                        ? [
-                            {
-                              id: `resp-${selectedRow.messageId}`,
-                              role: 'assistant' as const,
-                              content: selectedRow.responseText,
-                              metadata: { rawText: isNirvana },
-                            },
-                          ]
-                        : []),
-                  ]}
                   showTimestamp
                   autoScrollToHighlight
                   renderUserContent={renderSelectedUser}
