@@ -23,6 +23,7 @@ import {
   baselinePromptVersions,
   scoreChatDeploys,
   scoreConfigVersions,
+  scoreIntents,
   scoreRuleVersions,
   studyClones,
   studyEvents,
@@ -382,6 +383,23 @@ export async function buildParticipantTrail(
       db.select().from(studyQuestionBank),
     ]);
 
+  // Live names, as a last resort. A participant who only edits type-root rules
+  // writes no config version at all, so there is no snapshot to read a name
+  // out of and every rule row would say which version but not which rule.
+  const liveTitles = new Map<number, string>(
+    assignmentIds.length
+      ? (
+          await db
+            .select({ id: scoreIntents.id, title: scoreIntents.title, kind: scoreIntents.kind })
+            .from(scoreIntents)
+            .where(inArray(scoreIntents.assignmentId, assignmentIds))
+          // Baseline keeps its whole RULES document on one `prompt_holder`
+          // row, whose title is the internal sentinel __system_prompt__. Every
+          // Baseline rule edit would otherwise be filed under that.
+        ).map((r) => [r.id, r.kind === 'prompt_holder' ? 'Rules document' : r.title])
+      : []
+  );
+
   // Assignment-scoped events are keyed by assignment, participant-scoped ones
   // (phases) by participant — both land in the same list.
   const assignmentEvents = assignmentIds.length
@@ -491,16 +509,24 @@ export async function buildParticipantTrail(
   }
 
   for (const p of promptRows) {
-    raw.push({
-      at: iso(p.createdAt)!,
-      source: 'prompt',
-      kind: 'prompt_save',
-      intentId: null,
-      messageId: null,
-      detail: `v${p.versionNo} · ${p.prompt.length} chars`,
-      payload: { versionNo: p.versionNo, chars: p.prompt.length },
-      assignmentId: p.assignmentId,
-    });
+    // A Baseline row is usually written BY the deploy, so its created_at and
+    // deployed_at are the same instant — emitting a save there invents an act
+    // that never happened. The real saves are score_rule_versions rows against
+    // the prompt_holder, which come through as rule_save above.
+    const writtenByDeploy =
+      !!p.deployedAt && Math.abs(p.deployedAt.getTime() - p.createdAt.getTime()) < 2000;
+    if (!writtenByDeploy) {
+      raw.push({
+        at: iso(p.createdAt)!,
+        source: 'prompt',
+        kind: 'prompt_save',
+        intentId: null,
+        messageId: null,
+        detail: `v${p.versionNo} · ${p.prompt.length} chars`,
+        payload: { versionNo: p.versionNo, chars: p.prompt.length },
+        assignmentId: p.assignmentId,
+      });
+    }
     if (p.deployedAt) {
       raw.push({
         at: iso(p.deployedAt)!,
@@ -630,7 +656,8 @@ export async function buildParticipantTrail(
       title = t.titles.get(intentId) ?? title;
     }
     // Fall back to the earliest name we ever saw — better than nothing for an
-    // event that precedes the first snapshot.
+    // event that precedes the first snapshot — and then to the name it holds
+    // now, which is all there is when no snapshot was ever written.
     if (!title) {
       for (const t of titleAt) {
         if (t.assignmentId === assignmentId && t.titles.has(intentId)) {
@@ -639,7 +666,7 @@ export async function buildParticipantTrail(
         }
       }
     }
-    return title;
+    return title ?? liveTitles.get(intentId) ?? null;
   };
 
   /* -- assemble ----------------------------------------------------- */

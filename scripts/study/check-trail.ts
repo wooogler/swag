@@ -27,6 +27,79 @@ function check(label: string, ok: boolean, extra = '') {
   console.log(`${ok ? '✓' : '✗'} ${label}${extra ? ` — ${extra}` : ''}`);
 }
 
+/**
+ * The Baseline arm writes its rules somewhere else than the name suggests.
+ *
+ * "Save rules" versions the whole document as a score_rule_versions row
+ * against a prompt_holder intent; baseline_prompt_versions only gets a row at
+ * DEPLOY. So the trail has to show the saves as rule_save (named for the
+ * document, not for the internal __system_prompt__ holder) and must not invent
+ * a prompt_save at the moment of a deploy.
+ */
+async function checkBaseline(ctx: {
+  participant: { id: string };
+  clone: { assignmentId: string };
+  call: (path: string, init?: RequestInit) => Promise<{ status: number; body: Record<string, unknown> }>;
+  buildParticipantTrail: (id: string) => Promise<{ events: TrailEventish[] } | null>;
+}) {
+  const { participant, clone, call, buildParticipantTrail } = ctx;
+  const { db: database } = await import('../../src/db/db');
+  const { scoreIntents: intents } = await import('../../src/db/schema');
+  const { and, eq: equals } = await import('drizzle-orm');
+  const [holder] = await database
+    .select()
+    .from(intents)
+    .where(and(equals(intents.assignmentId, clone.assignmentId), equals(intents.kind, 'prompt_holder')));
+  check('found the rules holder', !!holder, `id=${holder?.id}`);
+  if (!holder) return;
+
+  await call(`/intents/${holder.id}/rule-versions`, {
+    method: 'POST',
+    body: JSON.stringify({
+      rule: 'Define a word in one sentence with one example. Never write their essay.',
+      source: 'direct',
+    }),
+  });
+  await call('/baseline/deploy', { method: 'POST', body: JSON.stringify({}) });
+
+  const trail = await buildParticipantTrail(participant.id);
+  const events = trail?.events ?? [];
+  console.log(`\n${events.length} event(s):`);
+  for (const e of events) {
+    console.log(
+      `  ${String(e.seq).padStart(3)} ${e.source.padEnd(8)} ${e.kind.padEnd(16)} ` +
+        `${e.intentTitle ?? '—'} ${e.detail ?? ''}`.slice(0, 120)
+    );
+  }
+  const kinds = events.map((e) => e.kind);
+  check('rule_save recorded for the rules document', kinds.includes('rule_save'));
+  check('prompt_deploy recorded', kinds.includes('prompt_deploy'));
+  check(
+    'the rules document is named, not __system_prompt__',
+    events.some((e) => e.kind === 'rule_save' && e.intentTitle === 'Rules document'),
+    events.find((e) => e.kind === 'rule_save')?.intentTitle ?? '—'
+  );
+  check(
+    'no phantom prompt_save at the deploy',
+    !events.some(
+      (e) =>
+        e.kind === 'prompt_save' &&
+        events.some((d) => d.kind === 'prompt_deploy' && d.at === e.at)
+    )
+  );
+  check('every event carries a phase', events.every((e) => !!e.phase));
+}
+
+interface TrailEventish {
+  seq: number;
+  at: string;
+  source: string;
+  kind: string;
+  intentTitle: string | null;
+  detail: string | null;
+  phase: string;
+}
+
 async function main() {
   const number = (argValue('--participant') ?? 'TRL1').toUpperCase();
   const { cloneForBlock } = await import('../../src/lib/study/measure-store');
@@ -41,7 +114,6 @@ async function main() {
   if (!participant) throw new Error(`No participant ${number}`);
   const clone = (await cloneForBlock(participant, 1))!;
   console.log(`participant ${number} · block1 ${clone.datasetKey}/${clone.condition}\n`);
-  if (clone.condition !== 'score') throw new Error('block 1 must be SCORE for this check');
 
   // The board is the participant's own instructor account.
   const [account] = await db
@@ -63,6 +135,12 @@ async function main() {
   // t=0 for the block clock.
   await setParticipantPhase(participant, 'block1_work', 'researcher');
   await ensureTypeRoots(clone.assignmentId);
+
+  if (clone.condition === 'baseline') {
+    await checkBaseline({ participant, clone, call, buildParticipantTrail });
+    console.log(`\n${pass} passed, ${fail} failed`);
+    process.exit(fail === 0 ? 0 : 1);
+  }
 
   // ── the session, in order ───────────────────────────────────────────
   const created = await call('/intents', {
