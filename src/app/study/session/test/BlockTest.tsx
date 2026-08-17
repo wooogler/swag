@@ -299,6 +299,7 @@ export default function BlockTest({
           }}
           defaultOpen
           toggleAll
+          labelWhenOpen
         />
         {/* Revealed, the tint is the only thing marking a pasted run, and the
             kind is otherwise a tooltip — which nobody hovers with 50 seconds

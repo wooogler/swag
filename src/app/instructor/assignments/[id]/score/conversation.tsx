@@ -107,6 +107,7 @@ export function ConversationThread({
         dissection={row.dissection}
         defaultOpen={expandMaterials}
         toggleAll
+        labelWhenOpen
       />
     );
   };

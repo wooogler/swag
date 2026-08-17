@@ -1785,6 +1785,7 @@ export default function IntentBoard({
         dissection={selectedRow.dissection}
         defaultOpen
         toggleAll
+        labelWhenOpen
       />
     ) : null;
 

@@ -64,6 +64,7 @@ export function MaterialSegments({
   dissection,
   defaultOpen = false,
   toggleAll = false,
+  labelWhenOpen = false,
 }: {
   text: string;
   dissection: Dissection | null;
@@ -76,6 +77,19 @@ export function MaterialSegments({
    * (the rule workbench, which reads tags as the thing the rule sees) is still
    * one click from the verbatim text. */
   toggleAll?: boolean;
+  /** Keep the [TAG] above each revealed run, small.
+   *
+   * Revealed, the only thing marking a pasted run is its tint, and a colour
+   * does not say whether it is the assignment prompt or the student's own
+   * draft — which is the distinction most intents turn on. So the panes where
+   * a message is READ carry the label: the board's selected question, the
+   * conversation thread, and the block test.
+   *
+   * Off where the tag is already the subject rather than an annotation — the
+   * rule workbench and the choosers open collapsed, showing tags as the thing
+   * the rule sees, and a second copy above each expanded run would just repeat
+   * what was clicked. */
+  labelWhenOpen?: boolean;
 }) {
   const segs = useMemo(
     () =>
@@ -117,15 +131,30 @@ export function MaterialSegments({
         // line breaks and the highlight hugs each line — an inline-block
         // element would render the whole run as one boxy rectangle.
         return open.has(i) ? (
-          <span
-            key={i}
-            role="button"
-            tabIndex={0}
-            onClick={onClick}
-            title={tagTitle(label, s.text, s.span, 'open')}
-            className={`cursor-pointer rounded-[2px] box-decoration-clone ${style.hl}`}
-          >
-            {s.text}
+          <span key={i}>
+            {labelWhenOpen && (
+              // `flex` makes this a block-level box while staying phrasing
+              // content — the parents here are <p>, where a <div> is invalid.
+              // Same trick as the show/hide control below.
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={onClick}
+                title={tagTitle(label, s.text, s.span, 'open')}
+                className={`mt-1.5 mb-0.5 flex w-fit cursor-pointer rounded-[2px] px-1 text-[9.5px] font-semibold tracking-wide ${style.tag}`}
+              >
+                {tagText(s.mk, dissection?.materialKinds ?? [], s.text, s.span)}
+              </span>
+            )}
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={onClick}
+              title={tagTitle(label, s.text, s.span, 'open')}
+              className={`cursor-pointer rounded-[2px] box-decoration-clone ${style.hl}`}
+            >
+              {s.text}
+            </span>
           </span>
         ) : (
           <span
