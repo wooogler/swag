@@ -1,6 +1,6 @@
 # Decision Ledger — 핀을 소비하지 않는 워크벤치 (v3 §G 개정)
 
-작성: 2026-08-18 · 상태: **구현 중** (D1·D2 확정 — §4) · 대상 브랜치: study-tools
+작성: 2026-08-18 · 상태: **구현 완료** (D1~D3 확정 — §4·§4c) · 대상 브랜치: study-tools
 선행 문서: `docs/INTENT_WORKBENCH_V3_PLAN.md` §G(2026-08-11 확정: 3층 구조 — Layer 1 held override · Layer 2 fold 시 실측 검증+재시도 · Layer 3 marker 은퇴), `reports/JELSON/analysis.md` §3.2, `docs/STUDY_TRAIL_SPEC.md` §2.6.
 
 ## 0. 왜 다시 여나 — 파일럿이 §G의 어느 층을 깼는지
@@ -123,7 +123,7 @@ you: in ✗ · definition says out · held by your call    Future-oriented labor
 4. ~~**D 모달**~~ **완료** — rail = 결정 전체 ✓/✕ + NEW 배지 + `taught N×` · "Also moves +N −M of 20 questions you didn't rule on"(펼치면 질문 목록) · footer는 은퇴 약속 삭제.
 5. ~~**보드**~~ **완료** — `page.tsx`의 heldPins를 저장된 상태가 아니라 **계산값**(taught && fresh rating과 불일치)으로. `effectiveRatings`는 그대로.
 6. ~~**F 로깅·트레일 + 문서**~~ **완료** — `rating_run.decisions{hold,dont}` · `suggest_fold.delta*` · `fold_apply.taught` · `pin_set.reteach`, describeEvent 갱신, export README.
-7. **검증** — §5. *(0.5일)*
+7. ~~**검증**~~ **완료 (§5)** — 연구자 NIRVANA 보드에 임시 intent로 전 경로 확인 후 purge + 이벤트 정리.
 
 합계 약 4일. 1→2→(3,4 병행)→5→6→7.
 
@@ -149,6 +149,15 @@ you: in ✗ · definition says out · held by your call    Future-oriented labor
 - **+4는 실제 후퇴이고, 그래서 델타 패널이 계획에 있다.** 그중 2개는 핀된 out이라 override가 잡지만, 나머지 2개("Hi! I have an essay…")는 핀이 없어 잘못 들어온다. 참가자는 apply 전에 "Also moves +4 −2"로 보고 결정할 수 있어야 한다.
 - **판정 잡음 주의**: 같은 live 정의를 두 번 재판정했더니 20/44와 22/44가 나왔다(≈9%, 파일럿에서 관찰한 수치와 같다). 표의 한 자리 차이를 해석하지 말 것.
 - `--seq`(결정 하나씩 12회 fold)는 프롬프트 효과와 배치 효과를 분리하지만 강한 모델 12회라 이번엔 돌리지 않았다.
+
+## 4c. 구현 중 확정된 것 (2026-08-18)
+
+- **`taught_count`는 fold가 아니라 *가르친 횟수*를 센다.** 처음엔 fold가 실을 때마다 +1로 짰는데, 이제 모든 fold가 원장 전체를 실으므로 그러면 "결정이 얼마나 오래 장부에 있었나"를 재게 된다. 그래서 **pending 상태였던 결정만** 증가한다(새로 만들었거나 다시 가르친 것). 2 = 같은 말을 두 번 했다 = 그 질문은 이 intent를 넓히는 것보다 **자기 intent**를 원할 수 있다는 신호. 실측으로 확인: 재교육한 하나만 2가 되고 나머지는 1로 남았다.
+- **`MAX_ATTEMPTS` 3 → 2.** 재시도는 이제 새 결정에만 걸리므로 압력이 낮고, replay도 2로 측정했다.
+- **D3 결정**: 일반 보드의 델타 모집단 = 현재 clearly_in + probably_in, 상한 20(`MAX_DELTA_SCOPE`). 스터디 클론은 검토 세트 ∩ type. 결정된 질문은 제외(검증이 이미 다룸).
+- **`isMember`/보드 override는 계산값**(taught && fresh rating과 불일치)이라 저장된 `held` 플래그가 사라졌다. D1은 유지되지만 그 구현이 상태가 아니라 비교가 됐다.
+- **삭제된 것**: `retireCaughtUp`(은퇴 개념 자체), pins의 `PATCH /retire` 라우트, fold의 `holdIds`, ratings 행의 `pinStatus`/`correctionId`/`marker`.
+- 스냅샷(`IntentConfigSnapshot.pins`)은 이제 **결정 전체**(status·taughtCount 포함)를 담는다 — 이전엔 pending만 담아서 checkout/diff/trail이 "무엇을 결정했나"를 되읽을 수 없었다.
 
 ## 5. 검증
 

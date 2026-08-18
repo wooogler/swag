@@ -116,16 +116,21 @@ export async function POST(req: Request, { params }: RouteParams) {
     // off the current rating (`holds` in the ratings route), because an answer
     // stored now would be wrong the moment the next re-rating disagrees.
     //
-    // `taught_count` counts how many folds have had to take the same decision
-    // in: more than one means the definition keeps losing it, which is the
-    // signal that the question may want an intent of its own.
+    // `taught_count` counts how many times a decision has had to be TAUGHT —
+    // which is not how many folds have carried it. Every fold now takes the
+    // whole ledger, so counting folds would just measure how long a decision
+    // has been on the books. It goes up only for one that was pending: newly
+    // made, or made again because the definition had lost it. Two means the
+    // instructor has now said the same thing twice, and that is the signal
+    // that the question may want an intent of its own rather than a wider
+    // version of this one. (The CASE reads the row's value BEFORE this update.)
     const taught = await tx
       .update(scoreIntentPins)
       .set({
         status: 'taught',
         consumedAt: now,
         consumedAtVersion: null,
-        taughtCount: sql`${scoreIntentPins.taughtCount} + 1`,
+        taughtCount: sql`${scoreIntentPins.taughtCount} + CASE WHEN ${scoreIntentPins.status} = 'pending' THEN 1 ELSE 0 END`,
       })
       .where(
         and(
