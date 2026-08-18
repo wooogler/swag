@@ -18,6 +18,7 @@ import {
   materialTag as tagText,
   segmentForMaterials,
   tagTitle,
+  type MsgSeg,
 } from '@/lib/score/material-render';
 
 export { coveragePct, segmentForMaterials };
@@ -225,27 +226,78 @@ export function StudentMessage({
   );
 }
 
-/** Whether QuerySnippet would actually truncate this message at `max` — the
- * SAME budget rules (material segments collapse to tags and cost nothing), so
- * an expand affordance can be offered exactly when there is hidden text. */
-export function snippetOverflows(text: string, dissection: Dissection | null, max: number): boolean {
+/** An ellipsis standing in for text the preview could not afford. */
+type SnippetPart = MsgSeg | { kind: 'cut' };
+
+/**
+ * A list row's preview, planned before anything is rendered: the plain-text
+ * budget is spent head-first, and every gap the budget could not afford becomes
+ * a single ellipsis.
+ *
+ * Material tags are exempt from the budget — they are not part of the sentence
+ * being previewed, they are the answer to "is the assignment prompt in here",
+ * which is what these lists are skimmed for. Budgeted, a tag sitting past a long
+ * lead-in was dropped along with the text around it, and the row read as if the
+ * student had pasted nothing. So the tags always survive, and the text between
+ * them collapses to "…" instead: "…[ASSIGNMENT PROMPT · 91%]".
+ *
+ * Shared by QuerySnippet (which renders the parts) and snippetOverflows (which
+ * asks only whether anything was dropped), so an expand affordance is offered
+ * exactly when there is hidden text behind it.
+ */
+function planSnippet(
+  text: string,
+  dissection: Dissection | null,
+  max: number
+): { parts: SnippetPart[]; truncated: boolean } {
   const segs = segmentForMaterials(
     text,
     dissection?.requests ?? [],
     dissection?.materialKinds ?? [],
     dissection?.materials
   );
+  const parts: SnippetPart[] = [];
   let used = 0;
+  let truncated = false;
+  // Whether the ellipsis already standing at the tail covers this drop too —
+  // consecutive dropped runs are one gap, not one "…" each.
+  let cut = false;
   for (const s of segs) {
-    if (used >= max) return true;
-    if (s.kind === 'material') continue;
+    if (s.kind === 'material') {
+      parts.push(s);
+      cut = false; // text dropped after this tag is a new gap
+      continue;
+    }
     let clean = s.text.replace(/\s+/g, ' ');
     if (used === 0) clean = clean.trimStart();
     if (!clean) continue;
-    if (clean.length > max - used) return true;
-    used += clean.length;
+    const room = max - used;
+    if (clean.length <= room) {
+      used += clean.length;
+      parts.push({ kind: 'text', text: clean });
+      continue;
+    }
+    // Whitespace, e.g. the line break between two pasted blocks, is not content
+    // whose absence is worth an ellipsis.
+    if (!clean.trim()) continue;
+    if (room > 0) {
+      parts.push({ kind: 'text', text: clean.slice(0, room) });
+      used = max;
+    }
+    truncated = true;
+    if (!cut) {
+      parts.push({ kind: 'cut' });
+      cut = true;
+    }
   }
-  return false;
+  return { parts, truncated };
+}
+
+/** Whether QuerySnippet actually drops any text at `max` — the same plan the
+ * preview renders, so the expand affordance appears exactly when it has
+ * something to reveal (a row cut to its tags alone still counts). */
+export function snippetOverflows(text: string, dissection: Dissection | null, max: number): boolean {
+  return planSnippet(text, dissection, max).truncated;
 }
 
 /** Compact one-line preview for question lists: plain text is collapsed to
@@ -258,53 +310,33 @@ export function QuerySnippet({
 }: {
   text: string;
   dissection: Dissection | null;
-  /** Plain-text budget (chars) before the preview truncates with an ellipsis. */
+  /** Plain-text budget (chars) before the preview truncates with an ellipsis.
+   * Material tags are not counted against it — see planSnippet. */
   max?: number;
 }) {
-  const MAX = max;
-  const nodes = useMemo(() => {
-    const segs = segmentForMaterials(
-      text,
-      dissection?.requests ?? [],
-      dissection?.materialKinds ?? [],
-      dissection?.materials
-    );
-    const out: React.ReactNode[] = [];
-    let used = 0;
-    let key = 0;
-    for (const s of segs) {
-      if (used >= MAX) {
-        out.push('…');
-        break;
-      }
-      if (s.kind === 'material') {
-        const style = materialStyle(s.mk);
-        out.push(
+  const parts = useMemo(() => planSnippet(text, dissection, max).parts, [text, dissection, max]);
+
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (p.kind === 'cut') return <span key={i}>…</span>;
+        if (p.kind === 'text') return <span key={i}>{p.text}</span>;
+        const style = materialStyle(p.mk);
+        return (
           <span
-            key={key++}
+            key={i}
             title={tagTitle(
-              s.mk ? MATERIAL_LABELS[s.mk] : 'Pasted material',
-              s.text,
-              s.span,
+              p.mk ? MATERIAL_LABELS[p.mk] : 'Pasted material',
+              p.text,
+              p.span,
               'static'
             )}
             className={`mx-0.5 whitespace-nowrap rounded-[2px] px-0.5 font-medium ${style.tag}`}
           >
-            {tagText(s.mk, dissection?.materialKinds ?? [], s.text, s.span)}
+            {tagText(p.mk, dissection?.materialKinds ?? [], p.text, p.span)}
           </span>
         );
-        continue;
-      }
-      let clean = s.text.replace(/\s+/g, ' ');
-      if (used === 0) clean = clean.trimStart();
-      if (!clean) continue;
-      const room = MAX - used;
-      if (clean.length > room) clean = `${clean.slice(0, room)}…`;
-      used += clean.length;
-      out.push(<span key={key++}>{clean}</span>);
-    }
-    return out;
-  }, [text, dissection, MAX]);
-
-  return <>{nodes}</>;
+      })}
+    </>
+  );
 }

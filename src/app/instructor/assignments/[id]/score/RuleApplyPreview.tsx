@@ -23,7 +23,7 @@ import type { RuleTarget } from './RuleWorkbench';
 import { MaterialSegments, QuerySnippet } from './materials';
 import { PaneSearch, WorkbenchTopBar } from './workbench-shared';
 import { ResponseBody } from './conversation';
-import { sortQueryRows, type QuerySortMode } from './query-list';
+import { sortByAnchorDistance, sortQueryRows, type QuerySortMode } from './query-list';
 import { getJSON } from './http';
 
 /** Batch cap of the preview endpoint (MAX_PREVIEW_MESSAGES mirror). */
@@ -52,6 +52,12 @@ interface RuleApplyPreviewProps {
   variant?: RuleTarget;
   /** The type's display name, for the 'type-root' variant. */
   scopeLabel?: string | null;
+  /** WHERE this set sits in its type's first-match chain — the v7 shape of an
+   * intent. Shown under the When, in place of the v6 boundary-pin counts that
+   * used to sit there: pins were the old membership model, so on a v7 board
+   * they read "included 0 · excluded 0" on every set that was never pinned,
+   * which says nothing about the set and is wrong about how it is scoped. */
+  placement?: { typeLabel: string | null; parentTitle: string | null } | null;
   rows: ScoreQueryRow[];
   /** The questions in scope, anchor first. */
   queryIds: number[];
@@ -66,11 +72,15 @@ interface RuleApplyPreviewProps {
   /** Already-generated responses under `afterRule` (anchor simulation etc.). */
   seed: Map<number, string | null>;
   onClose: () => void;
-  /** Bring checked questions into the workbench as example tabs, carrying the
-   * responses generated here so the tabs open instantly. Absent (baseline) →
+  /** Hand the workbench the FULL example set the boxes now describe (anchor
+   * excluded — it is never optional), carrying the responses generated here so
+   * new tabs open instantly. The checkboxes start on `existingIds`, so this
+   * call adds what was ticked AND drops what was unticked. Absent (baseline) →
    * review-only, no checkboxes. */
   onAddExamples?: (ids: number[], responses: Map<number, string | null>) => void;
-  /** Questions already open as tabs — not offered again. */
+  /** Questions already open as tabs — their boxes start CHECKED. They used to
+   * get no box at all, which made the list disagree with the workbench behind
+   * it: three tabs were open and the list showed no sign of them. */
   existingIds?: Set<number>;
 }
 
@@ -79,6 +89,7 @@ export default function RuleApplyPreview({
   intent,
   variant = 'intent',
   scopeLabel = null,
+  placement = null,
   rows,
   queryIds,
   anchorId,
@@ -110,13 +121,18 @@ export default function RuleApplyPreview({
   const genRef = useRef(gen);
   genRef.current = gen;
   const [error, setError] = useState<string | null>(null);
-  // Questions checked to become example tabs (SCORE only).
-  const [picked, setPicked] = useState<Set<number>>(new Set());
+  // The example set as the boxes describe it — SEEDED with the tabs already
+  // open, so the list opens showing what the workbench is showing. Ticking adds
+  // a tab, unticking removes one; the anchor is not in here (it cannot leave).
+  const [picked, setPicked] = useState<Set<number>>(
+    () => new Set([...(existingIds ?? [])].filter((id) => id !== anchorId))
+  );
+  const startingPicked = useRef(picked);
+  const added = useMemo(() => [...picked].filter((id) => !startingPicked.current.has(id)), [picked]);
+  const dropped = useMemo(() => [...startingPicked.current].filter((id) => !picked.has(id)), [picked]);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
   const selectedRow = rowById.get(selectedId) ?? null;
-  const includedCount = useMemo(() => rows.filter((r) => r.pinnedIntents[intent.id] === 'in').length, [rows, intent.id]);
-  const excludedCount = useMemo(() => rows.filter((r) => r.pinnedIntents[intent.id] === 'out').length, [rows, intent.id]);
 
   // Sorting — the anchor stays pinned first (it is the question under
   // revision); the rest reorder. "Most different" ranks by anchor distance so
@@ -161,15 +177,9 @@ export default function RuleApplyPreview({
       .filter((r) => !q || r.queryText.toLowerCase().includes(q));
     let ordered: number[];
     if (sortMode === 'different') {
-      if (!distances) {
-        ordered = rest; // hold the given order until scores land
-      } else {
-        // Farthest first = ascending cosine; unscored sink to the bottom.
-        const scored = restRows.filter((r) => typeof distances[r.messageId] === 'number');
-        const unscored = restRows.filter((r) => typeof distances[r.messageId] !== 'number');
-        scored.sort((a, b) => distances[a.messageId] - distances[b.messageId]);
-        ordered = [...scored, ...unscored].map((r) => r.messageId);
-      }
+      // Same helper the workbench seeds its example tabs with, so the tabs are
+      // literally the first three rows of this list.
+      ordered = distances ? sortByAnchorDistance(restRows, distances).map((r) => r.messageId) : rest;
     } else {
       ordered = sortQueryRows(restRows, sortMode).map((r) => r.messageId);
     }
@@ -310,11 +320,21 @@ export default function RuleApplyPreview({
                 <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed text-[hsl(var(--foreground))]">
                   {intent.definition}
                 </p>
-                <p className="mt-1 text-[10px] text-[hsl(var(--muted-foreground))]">
-                  <span className="text-emerald-700">included {includedCount}</span>
+                {/* WHERE the set sits, not how it was once pinned: under v7 a
+                    set is a node in one type's first-match chain, and that
+                    placement is what decides which questions reach it — which
+                    is exactly the list underneath. */}
+                <p
+                  className="mt-1 text-[10px] text-[hsl(var(--muted-foreground))]"
+                  title="A set only ever sees its own type, and only the questions no earlier set in that chain already answered."
+                >
+                  {placement?.typeLabel ? (
+                    <span className="font-medium text-[hsl(var(--foreground))]">{placement.typeLabel}</span>
+                  ) : (
+                    <span className="italic">Not typed yet</span>
+                  )}
                   {' · '}
-                  <span className="text-rose-700">excluded {excludedCount}</span>
-                  <span className="font-normal"> — your boundary labels</span>
+                  {placement?.parentTitle ? `inside “${placement.parentTitle}”` : 'top-level set'}
                 </p>
               </div>
               <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))]">
@@ -350,18 +370,22 @@ export default function RuleApplyPreview({
               if (!r) return null;
               const state = gen.has(id) ? (gen.get(id) ? 'done' : 'failed') : 'pending';
               const active = id === selectedId;
-              // Checkable as a new example tab: not the anchor, not open already.
-              const canPick = !!onAddExamples && id !== anchorId && !existingIds?.has(id);
+              // Every question in scope carries a box, and the box IS the
+              // example set: ticked = open as a tab. The anchor's is ticked and
+              // locked — it is the question under revision.
+              const boxed = !!onAddExamples;
+              const isAnchor = id === anchorId;
               return (
                 <li key={id}>
                   <div
                     className={`flex items-start gap-0 ${active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'}`}
                   >
-                    {canPick && (
+                    {boxed && (
                       <input
                         type="checkbox"
-                        className="ml-3 mt-2.5 shrink-0"
-                        checked={picked.has(id)}
+                        className="ml-3 mt-2.5 shrink-0 disabled:opacity-60"
+                        checked={isAnchor || picked.has(id)}
+                        disabled={isAnchor}
                         onChange={() =>
                           setPicked((prev) => {
                             const next = new Set(prev);
@@ -370,13 +394,19 @@ export default function RuleApplyPreview({
                             return next;
                           })
                         }
-                        aria-label="Add this question as an example tab"
-                        title="Add this question as an example tab"
+                        aria-label={isAnchor ? 'The question you are revising' : 'Keep this question as an example'}
+                        title={
+                          isAnchor
+                            ? 'The question you are revising — always open'
+                            : picked.has(id)
+                              ? 'Open as an example tab — untick to drop it'
+                              : 'Tick to open this question as an example tab'
+                        }
                       />
                     )}
                     <button
                       onClick={() => setSelectedId(id)}
-                      className={`min-w-0 flex-1 py-2 text-left ${canPick ? 'pl-2 pr-3' : 'px-3'}`}
+                      className={`min-w-0 flex-1 py-2 text-left ${boxed ? 'pl-2 pr-3' : 'px-3'}`}
                     >
                       <span className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
                         <span className="font-mono">
@@ -413,12 +443,16 @@ export default function RuleApplyPreview({
               </li>
             )}
           </ul>
-          {/* The merge's second half: checked questions become example tabs,
-              carrying the responses generated here (no second generation). */}
+          {/* The merge's second half: the ticked questions ARE the workbench's
+              example tabs, carrying the responses generated here (no second
+              generation). Says what the click will change, so a stray untick on
+              a tab you already had open is visible before it happens. */}
           {onAddExamples && (
             <div className="shrink-0 border-t border-[hsl(var(--border))] px-3 py-2 flex items-center justify-between gap-2">
               <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
-                {picked.size} checked
+                {picked.size + 1} example{picked.size === 0 ? '' : 's'}
+                {added.length > 0 && <span className="text-emerald-700"> · {added.length} new</span>}
+                {dropped.length > 0 && <span className="text-rose-700"> · {dropped.length} dropped</span>}
               </span>
               <button
                 onClick={() =>
@@ -427,11 +461,15 @@ export default function RuleApplyPreview({
                     new Map([...picked].map((id) => [id, gen.get(id) ?? null]))
                   )
                 }
-                disabled={picked.size === 0}
+                disabled={added.length === 0 && dropped.length === 0}
                 className="inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2 py-1 text-[11px] font-medium text-[hsl(var(--primary-foreground))] disabled:opacity-50"
-                title="Open these as example tabs and revise the rule against them"
+                title={
+                  dropped.length > 0
+                    ? 'Open the ticked questions as example tabs and close the unticked ones'
+                    : 'Open these as example tabs and revise the rule against them'
+                }
               >
-                <Plus className="w-3 h-3" /> Add as examples
+                <Plus className="w-3 h-3" /> {dropped.length > 0 ? 'Update examples' : 'Add as examples'}
               </button>
             </div>
           )}

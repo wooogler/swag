@@ -393,10 +393,6 @@ export default function BlockTest({
                 messages={messages}
                 highlightedMessageId={revealed ? item.context.length + 1 : item.context.length}
                 autoScrollToHighlight
-                // Top, not centre: the question IS the thing to read here, and
-                // a pasted essay centered opens halfway down itself with its
-                // first line already scrolled off.
-                highlightAlign="start"
                 enableCopy={false}
                 renderUserContent={renderUserContent}
               />
@@ -547,39 +543,6 @@ function PredictCard({
   return (
     <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 space-y-4">
       <div>
-        <label className="block text-[12.5px] font-semibold mb-1.5" htmlFor="expectation">
-          In a phrase or a sentence — a few words are fine — how do you expect your chatbot to
-          respond to this?
-        </label>
-        <textarea
-          id="expectation"
-          rows={3}
-          value={draft.expectation}
-          onChange={(e) => onChange({ expectation: e.target.value })}
-          placeholder={'e.g., "won’t write it for them; asks what they’ve tried"'}
-          className="w-full rounded-lg border border-[hsl(var(--border))] px-2.5 py-2 text-[12px] leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
-        />
-      </div>
-
-      <div className="border-t border-[hsl(var(--border))] pt-3">
-        <p className="text-[12.5px] font-semibold mb-2">
-          Will your chatbot answer this the way you intend?
-        </p>
-        <div className="flex gap-2">
-          {[true, false].map((yes) => (
-            <button
-              key={String(yes)}
-              onClick={() => onChange({ guess: yes })}
-              disabled={busy}
-              className={choice(draft.guess === yes)}
-            >
-              {yes ? 'Yes' : 'No'}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="border-t border-[hsl(var(--border))] pt-3">
         <p className="text-[12.5px] font-semibold mb-1">
           {condition === 'baseline'
             ? 'Which part of your Rules document do you expect to shape the response — if any? Select it in the document.'
@@ -631,6 +594,39 @@ function PredictCard({
           >
             Not sure
           </button>
+        </div>
+      </div>
+
+      <div className="border-t border-[hsl(var(--border))] pt-3">
+        <label className="block text-[12.5px] font-semibold mb-1.5" htmlFor="expectation">
+          In a phrase or a sentence — a few words are fine — how do you expect your chatbot to
+          respond to this?
+        </label>
+        <textarea
+          id="expectation"
+          rows={3}
+          value={draft.expectation}
+          onChange={(e) => onChange({ expectation: e.target.value })}
+          placeholder={'e.g., "won’t write it for them; asks what they’ve tried"'}
+          className="w-full rounded-lg border border-[hsl(var(--border))] px-2.5 py-2 text-[12px] leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
+        />
+      </div>
+
+      <div className="border-t border-[hsl(var(--border))] pt-3">
+        <p className="text-[12.5px] font-semibold mb-2">
+          Will your chatbot answer this the way you intend?
+        </p>
+        <div className="flex gap-2">
+          {[true, false].map((yes) => (
+            <button
+              key={String(yes)}
+              onClick={() => onChange({ guess: yes })}
+              disabled={busy}
+              className={choice(draft.guess === yes)}
+            >
+              {yes ? 'Yes' : 'No'}
+            </button>
+          ))}
         </div>
       </div>
 

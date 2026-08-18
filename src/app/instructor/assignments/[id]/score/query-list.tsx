@@ -36,6 +36,27 @@ export function sortQueryRows<
   return arr;
 }
 
+/**
+ * "Most different" — farthest from the anchor first, by cosine distance
+ * (`similar?anchor=`). Unscored questions sink to the bottom in their given
+ * order; with no scores at all it degrades to newest-first, the same fallback
+ * the preview's sort dropdown flips to.
+ *
+ * SHARED so the cross-query preview and the rule workbench's example tabs open
+ * on the SAME questions: the workbench seeds its tabs with the first three of
+ * this order, which is exactly what the preview lists at the top. Two lists
+ * that disagree about which three examples matter is what this prevents.
+ */
+export function sortByAnchorDistance<
+  T extends { queryTimestamp: string; participantToken: string; messageId: number }
+>(rows: T[], distances: Record<number, number>): T[] {
+  const scored = rows.filter((r) => typeof distances[r.messageId] === 'number');
+  if (scored.length === 0) return sortQueryRows(rows, 'recent');
+  const unscored = rows.filter((r) => typeof distances[r.messageId] !== 'number');
+  scored.sort((a, b) => distances[a.messageId] - distances[b.messageId]);
+  return [...scored, ...unscored];
+}
+
 export function SortSelect({
   value,
   onChange,

@@ -604,6 +604,43 @@ export async function ensureTypeRoots(assignmentId: string): Promise<ScoreIntent
   return roots;
 }
 
+/**
+ * The rule version every scope in this assignment currently serves: its latest
+ * MAJOR, numbered exactly as the workbench history numbers it (v1, v2, … —
+ * minors are simulations and do not advance the count). Majors are the ones
+ * that reflect onto the live rule, so the latest is the revision a question is
+ * answered by right now.
+ *
+ * Keyed by scope id, which covers type roots too: a root owns a rule and a rule
+ * history like any intent, and its default is what answers whatever its chain
+ * leaves unclaimed. A scope with no rows yet (never revised) is simply absent.
+ *
+ * One query for the whole assignment, so the board can tag every question row
+ * with the rule that answers it without a fetch per scope.
+ */
+export async function listCurrentRuleVersions(
+  assignmentId: string
+): Promise<Map<number, { major: number; name: string | null }>> {
+  await ensureIntentTables();
+  const rows = await db
+    .select({
+      intentId: scoreRuleVersions.intentId,
+      name: scoreRuleVersions.name,
+      minor: scoreRuleVersions.minor,
+    })
+    .from(scoreRuleVersions)
+    .where(eq(scoreRuleVersions.assignmentId, assignmentId))
+    .orderBy(asc(scoreRuleVersions.intentId), asc(scoreRuleVersions.versionNo));
+  const current = new Map<number, { major: number; name: string | null }>();
+  // Ascending walk per scope: each major bumps the count, and the last one to
+  // land is the one in force.
+  for (const r of rows) {
+    if (r.minor) continue;
+    current.set(r.intentId, { major: (current.get(r.intentId)?.major ?? 0) + 1, name: r.name });
+  }
+  return current;
+}
+
 export async function listIntentRatings(assignmentId: string) {
   await ensureIntentTables();
   return db

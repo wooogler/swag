@@ -8,6 +8,23 @@ import { Button } from '@/components/ui/button';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Copy, Check, Globe, Loader2, Pencil } from 'lucide-react';
 import { renderHighlightedChildren, type ReplayPasteHighlight } from './replayPasteHighlight';
 
+/**
+ * Where a message scrolled to (on open, or via the query nav) lands: its own top
+ * edge, never the middle of the window.
+ *
+ * Centering was the earlier choice, on the reasoning that the turns around a
+ * question are the context you came for. In practice it spends the screen on the
+ * wrong thing: the reply to the PREVIOUS question takes the top half, and the
+ * pair actually being judged — this question and what the chatbot answered — is
+ * pushed below the fold. Worse for a long question, which centered opens halfway
+ * down itself with the student's first line already scrolled off.
+ *
+ * Top-aligned, the first screen is exactly the unit of work. The turns before it
+ * are one scroll up, and the floating "back to the question" button brings the
+ * reader back.
+ */
+const HIGHLIGHT_ALIGN: ScrollLogicalPosition = 'start';
+
 export interface Message {
   id: string | number;
   role: 'user' | 'assistant';
@@ -37,14 +54,9 @@ interface ChatMessagesProps {
   rawAssistantText?: boolean;
   /** Scroll to the highlighted message on mount/select instead of
    * auto-following the bottom — for read-only thread views (SCORE) where the
-   * point of interest is mid-conversation, not the latest message. */
+   * point of interest is mid-conversation, not the latest message. It lands at
+   * the top of the window; see HIGHLIGHT_ALIGN. */
   autoScrollToHighlight?: boolean;
-  /** Where the highlighted message lands. Centering suits a thread being
-   * browsed, where the turns around the question are the context you came for.
-   * A view that exists to READ that one message wants 'start': a long pasted
-   * essay centered puts the reader in the middle of it, with the beginning
-   * already scrolled past. */
-  highlightAlign?: ScrollLogicalPosition;
   /** Override the body of a USER bubble (e.g. SCORE's Material tags — pasted
    * content collapsed into clickable per-kind chips). Return null to fall back
    * to the default plain-text rendering for that message. */
@@ -56,6 +68,12 @@ interface ChatMessagesProps {
    * question without scrolling through the replies in between. For read-only
    * thread views; a live chat has no earlier question worth jumping back to. */
   showQueryNav?: boolean;
+  /** Mark ONE message out from the thread around it: `above` is rendered
+   * directly on top of its bubble and `className` frames the message as a whole
+   * (bubble + its controls). Return null for every other message. The board's
+   * viewer uses it to hang the rule-version picker on the reply that version
+   * rewrites, and to tint that one reply while it is being viewed. */
+  decorateMessage?: (message: Message) => { above?: React.ReactNode; className?: string } | null;
 }
 
 export default function ChatMessages({
@@ -70,10 +88,10 @@ export default function ChatMessages({
   onReplayPasteClick,
   rawAssistantText = false,
   autoScrollToHighlight = false,
-  highlightAlign = 'center',
   renderUserContent,
   onEditAssistant,
   showQueryNav = false,
+  decorateMessage,
 }: ChatMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -114,7 +132,7 @@ export default function ChatMessages({
   const scrollToMessage = (id: string | number) => {
     scrollContainerRef.current
       ?.querySelector(`[data-message-id="${id}"]`)
-      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      ?.scrollIntoView({ block: HIGHLIGHT_ALIGN, behavior: 'smooth' });
   };
 
   // Register all messages with validator (both user and assistant)
@@ -135,8 +153,8 @@ export default function ChatMessages({
     if (!autoScrollToHighlight || highlightedMessageId == null) return;
     scrollContainerRef.current
       ?.querySelector(`[data-message-id="${highlightedMessageId}"]`)
-      ?.scrollIntoView({ block: highlightAlign });
-  }, [autoScrollToHighlight, highlightAlign, highlightedMessageId, messages]);
+      ?.scrollIntoView({ block: HIGHLIGHT_ALIGN });
+  }, [autoScrollToHighlight, highlightedMessageId, messages]);
 
   // Highlighted-message visibility: when the reader scrolls it off-screen, a
   // floating "back to the question" button appears (thread views only). The
@@ -272,14 +290,25 @@ export default function ChatMessages({
         // Per-message raw override (metadata.rawText) beats the global flag —
         // a regenerated (markdown) reply can sit inside a raw-text thread.
         const rawMessage = (message.metadata?.rawText as boolean | undefined) ?? rawAssistantText;
+        const decoration = decorateMessage?.(message) ?? null;
 
         return (
           <div
             key={message.id}
             data-message-id={message.id}
-            className={`group/msg flex ${isUser ? 'justify-end' : 'justify-start'}`}
+            // scroll-mt matches this list's own p-4 top inset: aligning a message
+            // to the top of the scrollport otherwise scrolls that padding away and
+            // clips the highlight ring, which paints 4px OUTSIDE the bubble
+            // (ring-2 + ring-offset-2) and so reads as a cut-off border. With it,
+            // a message scrolled to lands exactly where the first message sits.
+            className={`group/msg flex scroll-mt-4 ${isUser ? 'justify-end' : 'justify-start'}`}
           >
-            <div className={`${isUser ? 'max-w-[85%]' : 'w-full'} ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
+            <div
+              className={`${isUser ? 'max-w-[85%]' : 'w-full'} ${isUser ? 'items-end' : 'items-start'} flex flex-col ${
+                decoration?.className ?? ''
+              }`}
+            >
+              {decoration?.above}
               {showConversationBadge && message.conversationTitle && (
                 <div className="mb-1 px-2 py-0.5 bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded text-xs font-medium self-start">
                   {message.conversationTitle}
