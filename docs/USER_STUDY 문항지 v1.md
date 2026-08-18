@@ -28,9 +28,9 @@ RQ 정의와 측정 지위는 `USER_STUDY 설계 v2.md` §2·§6이 SoT이며, �
 
 | 위치 | 문항 | RQ | 지위 |
 |---|---|---|---|
-| §3 Pass 1 · 서술 | *"…how do you expect your chatbot to respond to this?"* (텍스트 박스) | **RQ2** | 주 (행동) — 서술 부합 코딩 (V3) |
+| §3 Pass 1 · 포인팅 (첫 입력) | *"Which intent…"* / *"Which part of your Rules document…"* | **RQ2** | 주 (행동·객관) — 귀속 정확도 (V2); SCORE는 `appliedIntentId` 대조. 판정과 독립인 유일한 comprehension 앵커 |
+| §3 Pass 1 · 서술 | *"…how do you expect your chatbot to respond to this?"* (텍스트 박스) | **RQ2** | 주 (행동) — 서술 부합 코딩 (V3); **포인팅 뒤에 받으므로 cued**(설계 v2 §2) |
 | §3 Pass 1 · 짐작 | *"Will your chatbot answer this the way you intend?"* | **RQ2** | 주 (행동) — Pass 2 판정과 접어 예측 정확도 (V1); 집계는 확신 보정(파생·보조) |
-| §3 Pass 1 · 포인팅 | *"Which intent…"* / *"Which part of your Rules document…"* | **RQ2** | 주 (행동·객관) — 귀속 정확도 (V2); SCORE는 `appliedIntentId` 대조. 판정과 독립인 유일한 comprehension 앵커 |
 | §3 Pass 2 · ② 공개 | "Your prediction" 패널 재표시 → *Show the actual response* 버튼 | — | 절차 |
 | §3 Pass 2 · ③ 판정 5점 | *"How well does this response match what you intended?"* | **RQ3** 주 · RQ2 V1의 정답지 | 주 (지각) — 이중 역할 (설계 v2 §2 'RQ2 construct'의 독립성 주의) |
 | §3 Pass 2 · ③ 후속 | *"What's off about it?"* (≤3점, 텍스트 박스) | **RQ3** | 주 (질적) — misalignment 유형 코딩 |
@@ -370,18 +370,18 @@ Virginia Tech - IRB 24-325 - sangwooklee@vt.edu
 
 ### Pass 1 — 예측 (8문항 연속, 응답은 열지 않는다)
 
-문항마다 아래 세 입력을 순서대로 받고 **Next**로 넘어간다(셋 다 입력해야 활성화 — 서술은 빈칸 불가, 짐작·포인팅은 "Not sure" 등이 유효 응답). 진행자는 개입하지 않으며 응답에 대한 어떤 신호도 주지 않는다(표정·"good"·"hmm" 금지).
+문항마다 아래 세 입력을 **포인팅 → 서술 → 짐작** 순으로 받고 **Next**로 넘어간다(셋 다 입력해야 활성화 — 서술은 빈칸 불가, 짐작·포인팅은 "Not sure" 등이 유효 응답). **순서는 화면 배치일 뿐 잠그지 않는다** — 먼저 쓰고 싶은 참가자는 그렇게 할 수 있다. 진행자는 개입하지 않으며 응답에 대한 어떤 신호도 주지 않는다(표정·"good"·"hmm" 금지).
 
 **① 예측**
-- 서술 (UI, 텍스트 박스 한 줄): **"In a phrase or a sentence — a few words are fine — how do you expect your chatbot to respond to this?"** (placeholder: *e.g., "won't write it for them; asks what they've tried"*)
-  - 국문: "한 구절이나 한 문장으로 — 몇 단어여도 됩니다 — 선생님의 챗봇이 이 질문에 어떻게 답할 것 같으세요?"
-- 짐작 (UI, 예/아니오): **"Will your chatbot answer this the way you intend?"** — Yes / No
-  - 국문: "내 챗봇이 이 질문에 내가 의도한 대로 답할까?" — 예 / 아니오
 - 포인팅 (UI):
   - SCORE (intent 트리에서 클릭): **"Which intent do you expect this question to fall under — if any?"** — 트리에서 intent 하나 클릭, 또는 버튼 **None of them** / **Not sure**
     - 국문: "이 질문이 어느 intent에 걸릴 것 같으세요 — 걸리는 게 있다면요?" ("어디에도 안 걸림" / "잘 모르겠음" 버튼)
   - Baseline (Rules 문서에서 구간 선택): **"Which part of your Rules document do you expect to shape the response — if any? Select it in the document."** — 문서에서 드래그로 구간 선택, 또는 버튼 **Nothing specific** / **Not sure**
     - 국문: "Rules 문서의 어느 부분이 이 응답에 작용할 것 같으세요 — 있다면요? 문서에서 그 부분을 선택해 주세요." ("특별히 없음" / "잘 모르겠음" 버튼)
+- 서술 (UI, 텍스트 박스 한 줄): **"In a phrase or a sentence — a few words are fine — how do you expect your chatbot to respond to this?"** (placeholder: *e.g., "won't write it for them; asks what they've tried"*)
+  - 국문: "한 구절이나 한 문장으로 — 몇 단어여도 됩니다 — 선생님의 챗봇이 이 질문에 어떻게 답할 것 같으세요?"
+- 짐작 (UI, 예/아니오): **"Will your chatbot answer this the way you intend?"** — Yes / No
+  - 국문: "내 챗봇이 이 질문에 내가 의도한 대로 답할까?" — 예 / 아니오
 - **Next** → 다음 문항. 8문항이 끝나면 Pass 2 시작 화면.
 
 ### Pass 2 — 공개·판정 (8문항 연속, 같은 순서)
@@ -397,7 +397,7 @@ Virginia Tech - IRB 24-325 - sangwooklee@vt.edu
 **④ 프로브** (UI, 조건부 텍스트 박스 — 예측이 빗나간 문항에만 자동으로 열린다: 짐작≠접힌 판정, 또는 SCORE에서 포인팅≠실제 라우팅): **"This turned out differently from what you expected — why do you think that is? (a sentence is fine)"** — 선택 입력(빈칸 허용). [파일럿: 상한 필요 여부 — 시간이 밀리면 진행자가 *"leave it blank if nothing comes to mind"* 한 마디]
   - 국문: "예상하신 것과 다르게 나왔네요 — 왜 그랬을 것 같으세요? (한 문장이면 충분합니다)"
 
-주석 (RQ 대응은 §0.5의 표가 SoT): Pass 1의 서술·짐작·포인팅 = **RQ2**(comprehension: V3 서술 부합 · V1 예측 정확도 · V2 귀속 정확도; SCORE 포인팅은 응답 메타데이터의 `appliedIntentId`와 대조 = 객관 채점, 판정과 독립인 유일한 앵커). ③ 5점 = **RQ3**(동시에 V1의 정답지), "What's off" 텍스트 = misalignment 유형 코딩 재료. **④ = RQ2 주 · RQ3 보조**(구 "RQ2·RQ1"은 RQ 번호 개정 때의 오기 — 결정 로그 §9-3과 일치시킴). 접기 규칙: 5점 3 이하 = '아니오'. 단계 순서(서술→짐작→포인팅)는 설계 v2 §5를 따른다.
+주석 (RQ 대응은 §0.5의 표가 SoT): Pass 1의 서술·짐작·포인팅 = **RQ2**(comprehension: V3 서술 부합 · V1 예측 정확도 · V2 귀속 정확도; SCORE 포인팅은 응답 메타데이터의 `appliedIntentId`와 대조 = 객관 채점, 판정과 독립인 유일한 앵커). ③ 5점 = **RQ3**(동시에 V1의 정답지), "What's off" 텍스트 = misalignment 유형 코딩 재료. **④ = RQ2 주 · RQ3 보조**(구 "RQ2·RQ1"은 RQ 번호 개정 때의 오기 — 결정 로그 §9-3과 일치시킴). 접기 규칙: 5점 3 이하 = '아니오'. 단계 순서(**포인팅→서술→짐작**, 2026-08-18 개정)는 설계 v2 §5를 따른다 — 구 순서는 서술→짐작→포인팅이었다.
 
 **서술을 텍스트 박스로 받는 이유 (08-15).** verbatim이 문항 ID·타임스탬프에 묶여 DB에 남아 전사·정렬이 필요 없고, Pass 2에 **본인 문장을 그대로** 재표시할 수 있으며(진행자 요약이 아니라), Pass 1에서 진행자 개입이 사라져 응답 힌트가 샐 통로가 없다 — 짐작 8개가 전부 무정보 상태여야 확신 보정이 성립한다. 선례도 서면이다(Chromik 2021의 verbalization 과제; Hoffman 2018의 "free response elaboration"). 비용은 타이핑 시간(문항당 +20~30초 → Pass 1 ~4.5분)이라 문구를 "몇 단어여도 된다"로 열어 둔다. Baseline 포인팅을 **구간 선택**으로 받는 이유도 같다 — 지목의 곤란·분산 자체가 좌표 데이터로 남아 "예측 가능성" 기제(설계 v2 §3)를 직접 관찰할 수 있다.
 

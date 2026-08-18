@@ -3,8 +3,8 @@
 /**
  * The block test, in two passes over the same eight questions (문항지 §3).
  *
- * PASS 1 predicts all eight — a written description, a yes/no, and a point at
- * the part of the configuration expected to act — and shows no answers at all.
+ * PASS 1 predicts all eight — a point at the part of the configuration expected
+ * to act, a written description, and a yes/no — and shows no answers at all.
  * PASS 2 walks the same eight again, revealing each answer, taking the 1-5
  * rating, and asking why wherever the prediction missed.
  *
@@ -510,7 +510,24 @@ function PassBridge({ count, onClose }: { count: number; onClose: () => void }) 
 }
 
 /**
- * 문항지 §3 Pass 1 — describe, guess, point, Next.
+ * 문항지 §3 Pass 1 — point, describe, guess, Next.
+ *
+ * POINTING COMES FIRST (08-18). It used to be last, and the pilot showed
+ * participants reaching for it first anyway: they scrolled past the description
+ * box, found the governing part of the configuration, and only then wrote what
+ * they expected. That is the order the design's own mechanism runs in — the
+ * claim under test is that an intent tree lets an instructor settle "which
+ * intent does this fall under" locally instead of running the whole document in
+ * their head (설계 v2 §3), so asking for the description first made them
+ * predict with the mechanism switched off. Asking last also left the order to
+ * the participant, and all three answers land in one write, so the trail could
+ * not even say who had pointed first. The cost is that the description is now
+ * cued by the pointing rather than free — written into 설계 v2 §2, where V3 is
+ * defined.
+ *
+ * The order is the layout only; nothing is disabled. A participant who wants to
+ * write first still can, and the point of the change is served by the order the
+ * card reads in.
  *
  * Nothing is sent until Next, and Next needs all three. Holding them locally
  * means a participant can still change their mind while they think, which
