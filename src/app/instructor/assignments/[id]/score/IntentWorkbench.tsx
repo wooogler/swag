@@ -1116,10 +1116,13 @@ export default function IntentWorkbench({
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          // EVERY decision this fold was given, not just the ones the new text
+          // reproduces. Nothing is consumed any more, so there is no "kept
+          // back" list: a decision the definition cannot say yet is still a
+          // decision the fold took in, and it stays in the ledger either way.
           body: JSON.stringify({
             applies,
-            correctionIds: split.consume,
-            holdIds: split.hold,
+            correctionIds: [...split.consume, ...split.hold],
           }),
         }
       );

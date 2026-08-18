@@ -120,9 +120,13 @@ export async function POST(req: Request, { params }: RouteParams) {
     reason: body.reason?.trim() || null,
     source: body.source ?? 'manual',
     createdAt: now,
-    // Recording a correction always makes it PENDING — including over a
-    // consumed marker, which is the "teach it again" case: the definition that
-    // absorbed the last correction evidently did not hold.
+    // Ruling on a question always makes the decision PENDING again — including
+    // over one a fold has already taken in, which is the "teach it again" case:
+    // the definition that absorbed the last ruling evidently did not hold it.
+    // `taught_count` is deliberately NOT reset (see the update below): how many
+    // times a definition has lost the same decision is the signal that the
+    // question may belong to a different intent rather than a wider version of
+    // this one.
     status: 'pending' as const,
     consumedAtVersion: null,
     consumedAt: null,
@@ -187,9 +191,16 @@ export async function POST(req: Request, { params }: RouteParams) {
   // configuration changes from, and a correction never reaches it, so without
   // this the act of teaching has no timestamp anywhere (STUDY_TRAIL_SPEC §2.1).
   const [priorPin] = await db
-    .select({ verdict: scoreIntentPins.verdict })
+    .select({
+      verdict: scoreIntentPins.verdict,
+      status: scoreIntentPins.status,
+      taughtCount: scoreIntentPins.taughtCount,
+    })
     .from(scoreIntentPins)
     .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, body.messageId)));
+  // Teaching the same question again — the decision had been folded in, and the
+  // definition has drifted back off it.
+  const reteach = priorPin?.status === 'taught';
   // The judgement being overruled — newest row wins, which is the reading the
   // board shows when no row carries the current definition's hash.
   const [latestRating] = await db
@@ -244,6 +255,10 @@ export async function POST(req: Request, { params }: RouteParams) {
     source: set.source,
     hasReason: !!set.reason,
     replaced: !!priorPin,
+    // A decision the definition had already been taught and lost. The count of
+    // these, per intent, is the whack-a-mole the pilot could not see.
+    reteach,
+    taughtCount: priorPin?.taughtCount ?? 0,
     redirected: redirected.length,
     // The reason VERBATIM. score_intent_pins holds only the current one — a
     // question corrected twice overwrites the first reason and it is gone —

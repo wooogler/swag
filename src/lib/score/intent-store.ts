@@ -302,6 +302,21 @@ async function createIntentTables(): Promise<void> {
   if (!havePinCols.has('consumed_at')) {
     await db.execute(sql`ALTER TABLE "score_intent_pins" ADD COLUMN "consumed_at" timestamp`);
   }
+  // A decision is no longer CONSUMED by the fold that carries it: it stays a
+  // live claim the definition is checked against, and every later fold takes it
+  // along (docs/DECISION_LEDGER_PLAN.md). So the third state disappears —
+  // 'consumed' and 'held' were both "a fold has taken this in", which is what
+  // 'taught' now means, and whether the definition still reproduces it is
+  // computed from the current rating rather than stored. `taught_count` is how
+  // often a fold has had to take the same decision in: more than once means the
+  // definition keeps losing it.
+  await db.execute(
+    sql`ALTER TABLE "score_intent_pins" ADD COLUMN IF NOT EXISTS "taught_count" integer DEFAULT 0 NOT NULL`
+  );
+  await db.execute(
+    sql`UPDATE "score_intent_pins" SET "status" = 'taught', "taught_count" = GREATEST("taught_count", 1)
+        WHERE "status" IN ('consumed', 'held')`
+  );
 
   // score_dissections.materials — the per-run kind/coverage added in
   // DISSECTION_VERSION 4. Nullable: rows written before it stay readable and
@@ -730,6 +745,17 @@ export interface IntentConfigSnapshot {
     parentIntentId?: number | null;
     position?: number | null;
   }[];
+  /**
+   * The instructor's decisions as they stood at this version — ALL of them,
+   * pending and taught alike.
+   *
+   * Taught rows used to be left out, on the reasoning that the snapshot's own
+   * `intents[].definition` already carries them. It carries what the fold
+   * managed to say; it does not carry the ruling, and the ruling is the thing
+   * a checkout, a diff, or a study trail wants to read back. Omitting them
+   * also meant the record of what an instructor decided lived only in a
+   * mutable table that the next ruling overwrites.
+   */
   pins: {
     intentId: number;
     messageId: number;
@@ -737,6 +763,9 @@ export interface IntentConfigSnapshot {
     queryText: string;
     reason?: string | null;
     source: string;
+    /** 'pending' | 'taught' — absent on snapshots written before the ledger. */
+    status?: string;
+    taughtCount?: number;
   }[];
   /** v6 exception links. No longer written (v7 routes by chain order), but
    * kept optional so snapshots recorded before the cutover still parse. */
@@ -834,20 +863,19 @@ export async function recordConfigVersion(
       parentIntentId: i.parentIntentId,
       position: i.position,
     })),
-    // PENDING corrections only. A consumed row is a marker of teaching already
-    // folded into the definition — the snapshot's own `intents[].definition`
-    // already carries it — so recording it here too made History count the same
-    // teaching twice and a checkout render it as still waiting.
-    pins: pins
-      .filter((p) => p.status !== 'consumed')
-      .map((p) => ({
-        intentId: p.intentId,
-        messageId: p.messageId,
-        verdict: p.verdict,
-        queryText: p.queryText,
-        reason: p.reason,
-        source: p.source,
-      })),
+    // Every decision, with its standing. A reader that wants only the ones
+    // still waiting can filter on `status`; a reader that wants to know what
+    // this instructor had ruled by this version needs them all.
+    pins: pins.map((p) => ({
+      intentId: p.intentId,
+      messageId: p.messageId,
+      verdict: p.verdict,
+      queryText: p.queryText,
+      reason: p.reason,
+      source: p.source,
+      status: p.status,
+      taughtCount: p.taughtCount,
+    })),
     ratingPromptVersion: INTENT_RATING_VERSION,
     dissectionVersion: DISSECTION_VERSION,
     typeClassifierVersion: TYPE_CLASSIFIER_VERSION,

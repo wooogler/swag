@@ -2,7 +2,7 @@
  * SCORE — APPLY a reviewed fold: write the new definition(s), consume the
  * corrections they carry, and hold the ones they do not, in one transaction.
  *
- * POST {applies: [{intentId, definition, title?}], correctionIds, holdIds?}
+ * POST {applies: [{intentId, definition, title?}], correctionIds}
  *
  * Which is which was MEASURED by the refine route (it rated each corrected
  * question against the candidate with the real classifier), so this split is a
@@ -47,18 +47,10 @@ const bodySchema = z.object({
     )
     .min(1)
     .max(10),
-  /** The corrections these definitions absorbed — verified to survive in the
-   * text, so they can stop being corrections. Ids are re-checked server-side
-   * against the intents being written, so a stale client cannot consume
-   * somebody else's pending work. May be EMPTY: a fold where the classifier
-   * reproduced none of the decisions still writes the definition, and holds all
-   * of them. */
+  /** The decisions this fold was given. All of them are marked taught; which
+   * ones the new text can actually say is read off the next rating, not
+   * declared here. */
   correctionIds: z.array(z.number().int().positive()).max(500),
-  /** The corrections the definitions did NOT absorb. They stay, as HELD: the
-   * instructor decided, the definition measurably cannot reproduce it, so the
-   * decision keeps overriding the judgment until it can. Passing none is fine —
-   * a fold where everything held has nothing to hold back. */
-  holdIds: z.array(z.number().int().positive()).max(500).optional(),
 });
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
@@ -114,45 +106,42 @@ export async function POST(req: Request, { params }: RouteParams) {
         .where(and(eq(scoreIntents.id, a.intentId), eq(scoreIntents.assignmentId, id)));
     }
 
-    // Consume ONLY live corrections that belong to the intents just rewritten.
-    // Anything else in the id list is ignored rather than trusted. HELD rows are
-    // consumable too: a held decision that the new definition finally reproduces
-    // is one the definition has caught up with, which is the whole point of
-    // holding it.
-    const consumed = await tx
+    // Mark the decisions this fold TOOK IN — every one it was given, whether or
+    // not the new text reproduces it.
+    //
+    // Nothing is consumed. A decision does not stop being the instructor's
+    // ruling because a definition has been written from it; it stays a claim
+    // about that question, and every later fold takes it along. Which of them
+    // the definition can say by itself is not recorded here at all — it is read
+    // off the current rating (`holds` in the ratings route), because an answer
+    // stored now would be wrong the moment the next re-rating disagrees.
+    //
+    // `taught_count` counts how many folds have had to take the same decision
+    // in: more than one means the definition keeps losing it, which is the
+    // signal that the question may want an intent of its own.
+    const taught = await tx
       .update(scoreIntentPins)
-      .set({ status: 'consumed', consumedAt: now, consumedAtVersion: null })
+      .set({
+        status: 'taught',
+        consumedAt: now,
+        consumedAtVersion: null,
+        taughtCount: sql`${scoreIntentPins.taughtCount} + 1`,
+      })
       .where(
         and(
           eq(scoreIntentPins.assignmentId, id),
-          inArray(scoreIntentPins.status, ['pending', 'held']),
           inArray(scoreIntentPins.intentId, targetIds),
           inArray(scoreIntentPins.id, body.correctionIds)
         )
       )
       .returning({ id: scoreIntentPins.id });
 
-    // …and the ones it could not carry become (or stay) held.
-    if (body.holdIds?.length) {
-      await tx
-        .update(scoreIntentPins)
-        .set({ status: 'held' })
-        .where(
-          and(
-            eq(scoreIntentPins.assignmentId, id),
-            inArray(scoreIntentPins.status, ['pending', 'held']),
-            inArray(scoreIntentPins.intentId, targetIds),
-            inArray(scoreIntentPins.id, body.holdIds)
-          )
-        );
-    }
-
     const titleOf = new Map(owned.map((o) => [o.id, o.title]));
     const summary: VersionSummary = {
       action: 'update_intent',
       intentIds: targetIds,
       detail:
-        `definition from ${consumed.length} correction${consumed.length === 1 ? '' : 's'}` +
+        `definition from ${taught.length} decision${taught.length === 1 ? '' : 's'}` +
         (targetIds.length > 1
           ? ` · also narrowed ${targetIds
               .filter((t) => t !== intentId)
@@ -163,8 +152,8 @@ export async function POST(req: Request, { params }: RouteParams) {
     };
     const versionNo = await recordConfigVersion(tx, id, auth.instructor.id, summary);
 
-    // The marker cites the version the fold produced — known only now.
-    if (consumed.length > 0 && versionNo !== null) {
+    // Each decision cites the version the fold produced — known only now.
+    if (taught.length > 0 && versionNo !== null) {
       await tx
         .update(scoreIntentPins)
         .set({ consumedAtVersion: versionNo })
@@ -173,17 +162,17 @@ export async function POST(req: Request, { params }: RouteParams) {
             eq(scoreIntentPins.assignmentId, id),
             inArray(
               scoreIntentPins.id,
-              consumed.map((c) => c.id)
+              taught.map((c) => c.id)
             )
           )
         );
     }
-    return { consumed: consumed.length, versionNo, applies: body.applies };
+    return { consumed: taught.length, versionNo, applies: body.applies };
   });
 
   // Anything still pending on these intents was NOT part of this fold (the
-  // instructor may have labelled more while the modal was open). Report it so
-  // the client can keep showing the waiting card instead of silently clearing.
+  // instructor may have ruled on more questions while the modal was open).
+  // Report it so the client can keep showing the waiting state.
   const stillPending = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(scoreIntentPins)
@@ -207,7 +196,6 @@ export async function POST(req: Request, { params }: RouteParams) {
     intentId,
     versionNo: result.versionNo,
     consumed: result.consumed,
-    held: body.holdIds?.length ?? 0,
     stillPending: stillPending[0]?.n ?? 0,
     applied: body.applies.map((a) => ({
       intentId: a.intentId,

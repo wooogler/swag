@@ -98,6 +98,7 @@ export async function GET(req: Request, { params }: RouteParams) {
     reason?: string | null;
     status?: string;
     consumedAtVersion?: number | null;
+    taughtCount?: number;
   }[] = state.pins.filter((p) => p.intentId === intentId);
   if (checkoutNo !== null) {
     if (!Number.isFinite(checkoutNo)) {
@@ -171,29 +172,37 @@ export async function GET(req: Request, { params }: RouteParams) {
   wantedHash.set(intentId, specHash);
   const byMessage = pickDisplayRatings(ratingRows, wantedHash);
 
-  // Corrections split by state. A PENDING one is live instructor teaching the
-  // definition has not absorbed yet; a HELD one is teaching the fold measurably
-  // could not absorb, which the system honours in place of the definition until
-  // it catches up; a CONSUMED one is only a marker of teaching already folded in
-  // — it must never read as an active label, or the instructor would think a
-  // correction is still waiting when it is done.
-  const pendingByMessage = new Map<
+  // Every decision this instructor has made about this intent, in one map.
+  //
+  // There is no split any more. A decision used to leave the ledger the moment
+  // a fold carried it ('consumed'), which made it a receipt rather than a
+  // claim: the definition was free to drift back off it, and the drift showed
+  // up only as one line inside a row that nobody was counting. Now a decision
+  // is either PENDING (made, not folded yet — changes nothing on its own) or
+  // TAUGHT (a fold has taken it in at least once), and both stay checkable
+  // forever. Whether the definition actually reproduces it is `holds`, computed
+  // below from the rating rather than stored, because a stored answer goes
+  // stale the moment the next re-rating disagrees with it.
+  const decisionByMessage = new Map<
     number,
-    { id: number | null; verdict: 'in' | 'out'; reason: string | null; status: 'pending' | 'held' }
-  >();
-  const markerByMessage = new Map<number, { verdict: 'in' | 'out'; versionNo: number | null }>();
-  for (const p of pinRows) {
-    const verdict = p.verdict as 'in' | 'out';
-    if (p.status === 'consumed') {
-      markerByMessage.set(p.messageId, { verdict, versionNo: p.consumedAtVersion ?? null });
-    } else {
-      pendingByMessage.set(p.messageId, {
-        id: p.id ?? null,
-        verdict,
-        reason: p.reason ?? null,
-        status: p.status === 'held' ? 'held' : 'pending',
-      });
+    {
+      id: number | null;
+      verdict: 'in' | 'out';
+      reason: string | null;
+      status: 'pending' | 'taught';
+      taughtAtVersion: number | null;
+      taughtCount: number;
     }
+  >();
+  for (const p of pinRows) {
+    decisionByMessage.set(p.messageId, {
+      id: p.id ?? null,
+      verdict: p.verdict as 'in' | 'out',
+      reason: p.reason ?? null,
+      status: p.status === 'pending' ? 'pending' : 'taught',
+      taughtAtVersion: p.consumedAtVersion ?? null,
+      taughtCount: p.taughtCount ?? 0,
+    });
   }
 
   /**
@@ -270,6 +279,25 @@ export async function GET(req: Request, { params }: RouteParams) {
       shadowCounts.set(shadowedBy, (shadowCounts.get(shadowedBy) ?? 0) + 1);
     }
 
+    const found = decisionByMessage.get(rec.messageId) ?? null;
+    const decision = found
+      ? {
+          ...found,
+          /**
+           * Does the definition reproduce this ruling on its own?
+           *
+           * true — the text says it. false — the text has drifted off it, and
+           * (until it catches up) this decision is what routes the question.
+           * null — nothing fresh to check against: unrated, or rated under a
+           * definition that has since changed, so the last answer is about
+           * text that no longer exists.
+           */
+          holds:
+            mineRating === null || (!!mineRow && !mineFresh)
+              ? null
+              : (found.verdict === 'in') === isIncludedRating(mineRating),
+        }
+      : null;
     return {
       messageId: rec.messageId,
       queryText: rec.queryText,
@@ -284,18 +312,39 @@ export async function GET(req: Request, { params }: RouteParams) {
       stale: !!mineRow && !mineFresh,
       /** A correction still in force on this question — the instructor overruled
        * the judge and the definition does not carry it yet. Null otherwise. */
-      pinned: pendingByMessage.get(rec.messageId)?.verdict ?? null,
-      /** 'pending' = taught, not folded yet (changes nothing on its own).
-       * 'held' = the fold was measured against it and failed, so this decision
-       * overrides the judgment until the definition catches up. */
-      pinStatus: pendingByMessage.get(rec.messageId)?.status ?? null,
-      /** The correction's row id — what the fold consumes. */
-      correctionId: pendingByMessage.get(rec.messageId)?.id ?? null,
-      /** Why they overruled it (asked only when the correction disagreed). */
-      reason: pendingByMessage.get(rec.messageId)?.reason ?? null,
-      /** A correction already folded in, kept as a display marker. Its verdict
-       * vs the CURRENT rating is what surfaces a fold that did not hold. */
-      marker: markerByMessage.get(rec.messageId) ?? null,
+      // LEGACY VIEW of the same decision, derived rather than stored — the
+      // workbench still reads these three, and switches to `decision` next.
+      // 'held' has always meant "taught and not reproduced", which is now a
+      // computation instead of a state, so the mapping is exact and the
+      // override behaviour is unchanged.
+      pinned: decision && (decision.status === 'pending' || decision.holds === false)
+        ? decision.verdict
+        : null,
+      pinStatus: decision
+        ? decision.status === 'pending'
+          ? ('pending' as const)
+          : decision.holds === false
+            ? ('held' as const)
+            : null
+        : null,
+      correctionId: decision?.id ?? null,
+      marker:
+        decision && decision.status === 'taught' && decision.holds !== false
+          ? { verdict: decision.verdict, versionNo: decision.taughtAtVersion }
+          : null,
+      /** Why they ruled that way (asked only when it disagreed with the judge). */
+      reason: decision?.reason ?? null,
+      /**
+       * The instructor's standing ruling on this question, or null.
+       *
+       * `holds` is the whole point: true when the definition reproduces the
+       * decision on its own, false when it has drifted off it, null when there
+       * is nothing fresh to check against (unrated, or rated under a definition
+       * that has since changed). A false is what the workbench counts, what
+       * routes the question the instructor's way meanwhile, and what makes
+       * "this question may belong somewhere else" a visible thought.
+       */
+      decision,
       /** The earlier chain node that takes this question first, if any — the
        * successor of v6's "prior owner". Null = nothing shadows it here. */
       shadowedBy,

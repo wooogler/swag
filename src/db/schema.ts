@@ -272,24 +272,42 @@ export const scoreIntentPins = pgTable('score_intent_pins', {
   // bare verdict can only become another example.
   reason: text('reason'),
   source: text('source').notNull().default('manual'), // 'manual' | 'ownership' | …
-  // 'pending'  — waiting to be folded into the definition (the live correction)
-  // 'consumed' — already folded; kept ONLY as a display marker ("you marked
-  //              this in at v2"). A consumed row must never reach a prompt or
-  //              a hash: the definition it produced is the whole truth now.
+  /**
+   * A DECISION'S STANDING, not its lifetime. Two values:
+   *
+   * 'pending' — made, and not yet folded into the definition.
+   * 'taught'  — folded in at least once. NOT retired: the decision stays a
+   *             live claim about this question, and every later fold takes it
+   *             along.
+   *
+   * It used to be three, and the third ('consumed') is why this comment is
+   * long. A consumed decision was a receipt — "you marked this in at v2" — and
+   * nothing more: it left the fold's input, so the definition was free to drift
+   * off it, and the drift showed up only as one quiet line inside a row. The
+   * pilot's participant re-taught the same three questions three times each
+   * without ever being told a decision had been reversed, and paid for it in
+   * definition length. Keeping the decision means the definition can be checked
+   * against it forever, which is the whole point of having written it down.
+   *
+   * 'held' is the historical spelling of "taught but not reproduced". That is
+   * now computed, not stored (see `holds` in the ratings route): a stored flag
+   * went stale the moment the next re-rating disagreed with it.
+   */
   status: text('status').notNull().default('pending'),
-  // The intent version this correction was folded into — what the marker cites.
-  // Null while pending. Clones start their own version timeline, so this is
-  // display-only and never a join key.
+  /** The intent version a fold last carried this decision into. Display only —
+   * clones start their own version timeline, so it is never a join key. */
   consumedAtVersion: integer('consumed_at_version'),
   consumedAt: timestamp('consumed_at'),
+  /** How many folds have taken this decision in. >1 means it was re-taught —
+   * the signal that a definition keeps losing it, and the question may belong
+   * to a different intent rather than to a wider version of this one. */
+  taughtCount: integer('taught_count').notNull().default(0),
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({
   assignmentIdx: index('score_intent_pins_assignment_idx').on(table.assignmentId),
-  // One correction per (intent, question). Re-labelling a question whose
-  // earlier correction was already consumed OVERWRITES the marker and returns
-  // the row to 'pending' — which is exactly right: you are teaching the same
-  // question again, and the marker should cite the live teaching, not a
-  // superseded one.
+  // One decision per (intent, question). Ruling on a question that already has
+  // a decision REPLACES it and returns the row to 'pending' — you are teaching
+  // the same question again, and `taught_count` keeps the count of how often.
   intentMessageUnique: uniqueIndex('score_intent_pins_intent_message_unique').on(
     table.intentId,
     table.messageId
