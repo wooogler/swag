@@ -64,37 +64,40 @@ export async function generateIntentTitle(definition: string): Promise<string | 
 
 const REFINE_SYSTEM = `You maintain the intent definitions of SCORE, an instructor tool that classifies student requests sent to a writing-assignment chatbot. An INTENT DEFINITION describes a category of student requests ("asks to ...").
 
-The classifier sees the DEFINITION AND NOTHING ELSE — no examples are passed alongside it. The instructor's corrections below exist only until you fold them in; once your rewrite lands they are discarded. So every boundary a correction teaches must survive inside the definition text itself, or it is lost.
+The classifier sees the DEFINITION AND NOTHING ELSE — no examples are passed alongside it. So every boundary the instructor has decided must survive inside the definition text itself.
 
-Each CORRECTION is the instructor overruling the classifier on one real student question:
-- KEEP: belongs to this intent (the classifier said otherwise or hesitated).
+Each DECISION is the instructor ruling on one real student question:
+- KEEP: belongs to this intent.
 - DROP: does NOT belong, even though it looks similar.
-Many carry the instructor's own reason. A reason is the general principle behind the verdict — prefer folding in the PRINCIPLE, which covers questions you will never see, over a clause that only recognizes this one question.
+Many carry the instructor's own reason. A reason is the general principle behind the verdict — fold in the PRINCIPLE, which covers questions you will never see, not a clause that recognizes this one question.
+
+Each decision is marked NEW (the instructor has just made it) or STANDING (already folded in before). STANDING decisions are shown so you keep them true — they are NOT a to-do list. Do not add wording for a decision the current definition already handles: if the text you write would judge it the instructor's way, it is done.
 
 Reason through these steps IN ORDER in the "reasoning" field BEFORE writing anything else:
 1. For each KEEP, name the essential action and object of the request (what is asked, of what).
 2. For each DROP, name the one property that separates it from the kept ones.
-3. State the common thread of the kept corrections, and the boundary conditions the dropped ones imply.
-4. Audit the current definition against steps 1–3: what does it wrongly exclude, wrongly include, or leave vague?
+3. State the common thread of the kept decisions, and the boundary conditions the dropped ones imply.
+4. Audit the current definition against steps 1-3: what does it wrongly exclude, wrongly include, or leave vague?
 
 Then write the new definition:
-- One or two sentences, starting with "asks" (keep the current definition's style).
-- Generalize; make exclusions explicit as boundary clauses (e.g. "— but not when the student only ...").
-- Self-contained and concrete: no "etc.", no reference to "the corrections", never quote a student question verbatim.
-- Preserve the current definition's scope except where the corrections contradict it.
-- Do not accumulate one clause per correction. Merge principles that overlap; a definition that reads like a list of special cases has failed.
-- If the corrections require no change, return the current definition unchanged and say so.
+- Start with "asks", one or two sentences, AT MOST 80 WORDS. If it runs longer, you have listed cases instead of stating a rule — go back to step 3 and generalize.
+- Define by the KIND of request: the action and the class of thing asked for. Name the assignment's subject matter only where the boundary itself is about subject matter; a definition that would stop working on next term's topic is too narrow.
+- Prefer one superordinate term to a list of its members. Use "such as" or "including" AT MOST ONCE, and never to enumerate the decisions one by one.
+- Make exclusions explicit as boundary clauses (e.g. "— but not when the student only ...").
+- Self-contained and concrete: no "etc.", no reference to "the decisions", never quote a student question verbatim or paraphrase one closely enough to identify it.
+- Preserve the current definition's scope except where the decisions contradict it.
+- If the decisions require no change, return the current definition unchanged and say so.
 
-Also write a SUMMARY for the instructor — one or two plain sentences naming what the definition now covers or excludes that it did not before, in their words. No step numbers, no correction ids, no meta-talk about the rewrite process. If nothing changed, say so.
+Also write a SUMMARY for the instructor — one or two plain sentences naming what the definition now covers or excludes that it did not before, in their words. No step numbers, no decision ids, no meta-talk about the rewrite process. If nothing changed, say so.
 
-Finally, report the OUTCOME of each correction by its id, honestly:
+Finally, report the OUTCOME of each decision by its id, honestly:
 - "reflected" + the exact substring of YOUR NEW definition that carries it (quote it verbatim from the new text).
 - "already" if the current definition already handled it and needed no change.
-- "not_reflected" if you could not fold it in without breaking the definition — say why in note. Never claim a correction is reflected when it is not.
+- "not_reflected" if you could not fold it in without breaking the definition — say why in note. Never claim a decision is reflected when it is not.
 
-Also return a short TITLE: an imperative noun phrase of at most 5 words, like a git commit subject.
+Also return a short TITLE: an imperative noun phrase of at most 5 words, like a git commit subject. If the definition has grown beyond what the current title names, say so in the title.
 
-A PREVIOUS ATTEMPT block, when present, is your own earlier rewrite MEASURED: the classifier read that text alone and still judged the listed questions the way the instructor says is wrong. It is evidence, not advice — the wording that failed is what has to change. Read each classifier reading, name what in the text let it reach that conclusion, and write a definition that closes it. Do not simply restate the same principle in new words, and do not fix the listed questions by abandoning corrections the previous attempt already carried.`;
+A PREVIOUS ATTEMPT block, when present, is your own earlier rewrite MEASURED: the classifier read that text alone and still judged the listed questions the way the instructor says is wrong. It is evidence, not advice — the wording that failed is what has to change. Read each classifier reading, name what in the text let it reach that conclusion, and write a definition that closes it AT THE LEVEL OF THE RULE. Do not bolt on a phrase that effectively names the failing question: a definition that passes by describing its test cases has learned nothing, and the instructor will meet the same failure on the next question you have not seen. Do not simply restate the same principle in new words, and do not fix the listed questions by abandoning decisions the previous attempt already carried.`;
 
 const REFINE_SCHEMA = {
   type: 'object',
@@ -110,7 +113,14 @@ const REFINE_SCHEMA = {
       type: 'string',
       description: 'one or two plain sentences for the instructor: what the definition now covers or excludes',
     },
-    definition: { type: 'string', description: 'the rewritten self-contained definition' },
+    definition: {
+      type: 'string',
+      // A HARD stop under the prompt's 80-word budget. Left to the prose rule
+      // alone the model drifts a little longer with every fold, and the drift
+      // is one-way: each pass appends a clause and none removes one.
+      maxLength: 700,
+      description: 'the rewritten self-contained definition — at most 80 words',
+    },
     title: { type: 'string', description: 'at most 5 words, no trailing period' },
     outcomes: {
       type: 'array',
@@ -166,6 +176,16 @@ export interface FoldCorrection {
   queryText: string;
   /** The instructor's own reason, when they gave one. */
   reason?: string | null;
+  /**
+   * Has this decision been through a fold already?
+   *
+   * Every fold now sees the intent's WHOLE ledger, not just what is new since
+   * the last one — that is what gives the model a set of cases to find the
+   * common rule in, instead of one case to append a clause for. But a ledger
+   * read as a to-do list is worse than no ledger: the model would write a
+   * phrase per entry. The mark separates "decide this" from "keep this true".
+   */
+  standing?: boolean;
 }
 
 /** One correction the previous candidate failed to teach, with the classifier's
@@ -192,15 +212,17 @@ export async function foldCorrections(args: {
     return rows
       .map((c) => {
         const why = c.reason?.trim();
-        return `- [id ${c.id}] "${pinPromptText(c.queryText)}"${why ? `\n    instructor's reason: ${why}` : ''}`;
+        return `- [id ${c.id}] (${c.standing ? 'STANDING' : 'NEW'}) "${pinPromptText(c.queryText)}"${
+          why ? `\n    instructor's reason: ${why}` : ''
+        }`;
       })
       .join('\n');
   };
   const previous = args.previousAttempt;
   const user = [
     `CURRENT DEFINITION:\n${args.definition.trim()}`,
-    `KEEP corrections (instructor says these DO belong):\n${render('in')}`,
-    `DROP corrections (instructor says these do NOT belong):\n${render('out')}`,
+    `KEEP decisions (instructor says these DO belong):\n${render('in')}`,
+    `DROP decisions (instructor says these do NOT belong):\n${render('out')}`,
     ...(previous && previous.failures.length > 0
       ? [
           [
