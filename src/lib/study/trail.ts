@@ -892,6 +892,10 @@ function describeEvent(kind: string, p: Record<string, unknown>): string | null 
   const n = (k: string) => (typeof p[k] === 'number' ? (p[k] as number) : null);
   switch (kind) {
     case 'pin_set': {
+      // Ruling again on a question the definition had already been taught: the
+      // re-teaching the pilot did three times without being told it was a
+      // repeat.
+      const again = p.reteach ? ' · again' : '';
       // The rating being overruled turns a bare verdict into the act it was:
       // clearly_out → in is a correction, probably_in → in settles a boundary
       // the classifier had already flagged as uncertain.
@@ -901,7 +905,7 @@ function describeEvent(kind: string, p: Record<string, unknown>): string | null 
           ? ` · ${(p.reasonSource as { kind?: string }).kind ?? '?'}`
           : '';
       const reason = typeof p.reason === 'string' && p.reason ? ` · “${clip(p.reason, 60)}”` : '';
-      return `${p.verdict}${p.replaced ? ' (replaced)' : ''}${over}${reason}${src}`;
+      return `${p.verdict}${again}${over}${reason}${src}`;
     }
     case 'pin_remove':
       return `withdrew ${p.verdictWas ?? '?'}`;
@@ -934,15 +938,22 @@ function describeEvent(kind: string, p: Record<string, unknown>): string | null 
     case 'fold_apply': {
       const applied = (p.applied as { chars?: number }[] | undefined) ?? [];
       const chars = applied[0]?.chars;
-      return `consumed ${n('consumed') ?? 0}${n('held') ? ` · held ${n('held')}` : ''}${
+      return `${n('taught') ?? 0} decision(s) taken in${
         typeof chars === 'number' ? ` · ${chars} chars` : ''
       }`;
     }
     case 'rating_run': {
       // The re-judgement's collateral: what moved in or out of an intent that
-      // nobody was correcting.
+      // nobody was correcting — and how the instructor's own rulings fared.
       const flips = n('flips');
-      return `${n('processed') ?? 0} question(s)${flips ? ` · ${flips} membership change(s)` : ''}`;
+      const standing = (p.decisions as { hold?: number; dont?: number }[] | undefined) ?? [];
+      const dont = standing.reduce((t, d) => t + (d.dont ?? 0), 0);
+      const hold = standing.reduce((t, d) => t + (d.hold ?? 0), 0);
+      return (
+        `${n('processed') ?? 0} question(s)` +
+        (flips ? ` · ${flips} membership change(s)` : '') +
+        (hold + dont > 0 ? ` · decisions ${hold} hold / ${dont} don't` : '')
+      );
     }
     case 'search_run':
       return typeof p.description === 'string' ? clip(p.description, 80) : null;

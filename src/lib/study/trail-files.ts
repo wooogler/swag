@@ -88,7 +88,13 @@ notes
     (reason_source: suggested/edited/custom, with the index of the suggestion),
     and rating_overruled — what the classifier said at the moment it was
     overruled. clearly_out → in is a correction; probably_in → in settles a
-    boundary the classifier had already flagged as uncertain.
+    boundary the classifier had already flagged as uncertain. reteach marks a
+    question that already had a decision the definition had been taught and
+    lost; taught_count is how many folds have had to take it in.
+  - a DECISION is never discarded. It is 'pending' until an update folds it in
+    and 'taught' after, and stays checkable either way — rating_run reports
+    "decisions N hold / M don't" per intent, which is the re-judgement undoing
+    teaching that nobody was told about before.
   - rating_run payloads carry membership: which questions moved into or out
     of each intent because of that re-judgement. A definition rewritten for one
     question re-judges every question, so this is where a decision already
@@ -97,7 +103,11 @@ notes
     which the rule text is a model's rendering of. Proposals they rejected
     leave no rule version, so this is the only record of what was asked.
   - suggest_fold carries the offered definition, how many attempts the fold
-    loop needed, and whether the classifier reproduced each correction.
+    loop needed, whether the classifier reproduced each decision, and
+    delta_gain/delta_lose — what the candidate would move among questions
+    NOBODY ruled on. fold_apply is what was applied; pair them to see whether
+    the proposal was edited, and pair either with fold_open/fold_close to see
+    whether it was read.
   - the browsing rows come from the client and are batched; each event's time
     is reconstructed from how long before the flush it happened, not from the
     flush. They cover the shared surfaces only — scroll, hover and keystrokes

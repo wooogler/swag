@@ -195,7 +195,8 @@ export async function POST(req: Request, { params }: RouteParams) {
   await logStudyEvent(id, 'fold_apply', {
     intentId,
     versionNo: result.versionNo,
-    consumed: result.consumed,
+    /** Decisions this fold took in — all of them, none retired. */
+    taught: result.consumed,
     stillPending: stillPending[0]?.n ?? 0,
     applied: body.applies.map((a) => ({
       intentId: a.intentId,

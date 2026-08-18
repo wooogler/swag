@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import {
   scoreDissections,
+  scoreIntentPins,
   scoreIntentRatings,
   scoreQueryEmbeddings,
   scoreQueryTypes,
@@ -321,6 +322,63 @@ function membershipDelta(
     out.push({ intentId, before: was.size, after: now.size, gained, lost });
   }
   return out;
+}
+
+/**
+ * Per intent: how many of the instructor's decisions the definition now
+ * reproduces, and how many it does not.
+ *
+ * The pair is the loop's temperature. A definition rewritten to teach one
+ * decision re-judges every question, so decisions already settled come back the
+ * other way — in the pilot that happened four times and cost three re-teachings
+ * each, with nothing anywhere counting it. Read off rows the run has just
+ * written, so it costs one query and no model calls.
+ */
+async function decisionStanding(
+  assignmentId: string,
+  promptReady: PromptReadyIntent[],
+  scopedIntentIds: number[] | null
+): Promise<{ intentId: number; hold: number; dont: number }[]> {
+  const wanted = scopedIntentIds
+    ? promptReady.filter((p) => scopedIntentIds.includes(p.intent.id))
+    : promptReady;
+  if (wanted.length === 0) return [];
+  const ids = wanted.map((p) => p.intent.id);
+  const [pins, ratings] = await Promise.all([
+    db
+      .select({
+        intentId: scoreIntentPins.intentId,
+        messageId: scoreIntentPins.messageId,
+        verdict: scoreIntentPins.verdict,
+        status: scoreIntentPins.status,
+      })
+      .from(scoreIntentPins)
+      .where(
+        and(eq(scoreIntentPins.assignmentId, assignmentId), inArray(scoreIntentPins.intentId, ids))
+      ),
+    db
+      .select({
+        messageId: scoreIntentRatings.messageId,
+        intentId: scoreIntentRatings.intentId,
+        defHash: scoreIntentRatings.defHash,
+        rating: scoreIntentRatings.rating,
+        ratedAt: scoreIntentRatings.ratedAt,
+      })
+      .from(scoreIntentRatings)
+      .where(eq(scoreIntentRatings.assignmentId, assignmentId)),
+  ]);
+  const display = pickDisplayRatings(ratings, new Map(wanted.map((p) => [p.intent.id, p.defHash])));
+  const out = new Map(ids.map((id) => [id, { intentId: id, hold: 0, dont: 0 }]));
+  for (const p of pins) {
+    if (p.status === 'pending') continue; // not folded in — nothing to check yet
+    const pick = display.get(p.messageId)?.get(p.intentId);
+    if (!pick || !pick.fresh || !isRatingLevel(pick.row.rating)) continue;
+    const row = out.get(p.intentId);
+    if (!row) continue;
+    if ((p.verdict === 'in') === isIncludedRating(pick.row.rating)) row.hold += 1;
+    else row.dont += 1;
+  }
+  return [...out.values()].filter((r) => r.hold > 0 || r.dont > 0);
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -665,6 +723,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       body.messageIds ?? null
     );
     const delta = membershipDelta(membershipBefore, membershipAfter);
+    // How the instructor's own rulings stand after this re-judgement. The
+    // membership delta above says what moved; this says whether what moved was
+    // something they had decided — the whack-a-mole, counted.
+    const decisions = await decisionStanding(id, state.promptReady, scoped);
     await logStudyEvent(id, 'rating_run', {
       condition: 'score',
       processed: batch.length,
@@ -677,6 +739,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       // the instructor is actually fighting when a definition will not settle.
       membership: delta.filter((d) => d.gained.length > 0 || d.lost.length > 0),
       flips: delta.reduce((n, d) => n + d.gained.length + d.lost.length, 0),
+      decisions,
     });
   }
   return NextResponse.json({

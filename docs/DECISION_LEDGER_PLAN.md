@@ -118,11 +118,11 @@ you: in ✗ · definition says out · held by your call    Future-oriented labor
 ## 3. 구현 순서 (커밋 단위)
 
 1. ~~**E-replay** — `fold-replay.ts` + 새 fold 프롬프트. 7059로 옛/새 비교.~~ **완료 (§4b)**
-2. **A+B 서버** — pins 상태 재해석 + `taught_count` DDL + 마이그레이션 UPDATE · ratings 행 `decision` · refine(전체 로드·전체 검증·새 것만 재시도·델타) · fold(consume 제거) · pins POST reteach. *(1일)*
-3. **C 워크벤치** — Your decisions 카드 · 행 칩 · rationale 규칙 · diff 토글 · isMember(D1). *(1일)*
-4. **D 모달** — rail 전체 ✓/✗ · Also moves · footer 문구. *(0.5일)*
-5. **보드** — `page.tsx heldPins`를 계산값(taught && !holds)으로(D1-유지) 또는 제거(D1-폐지); `effectiveRatings` 그대로/제거. *(0.25일)*
-6. **F 로깅·트레일 + 문서** — payload 3종, describeEvent, `STUDY_TRAIL_SPEC.md` §2.6 추가, `INTENT_WORKBENCH_V3_PLAN.md` §G에 개정 링크. *(0.25일)*
+2. ~~**A+B 서버**~~ **완료** — pins 상태 재해석 + `taught_count` DDL + 마이그레이션 UPDATE · ratings 행 `decision`(계산값 `holds`) · refine(전체 로드·전체 검증·**새 것만 재시도**·델타) · fold(consume 제거, `holdIds` 폐기) · pins POST `reteach`. `MAX_ATTEMPTS` 3→2.
+3. ~~**C 워크벤치**~~ **완료** — Your decisions 카드(`N hold · M don't`) · 행 칩 `you: out ✓|✕` · rationale은 미결정 행과 ✕ 행에만(나머지는 `▸ why`) · isMember는 `holds === false`로 override(D1). 은퇴(retireCaughtUp)와 PATCH 라우트 삭제.
+4. ~~**D 모달**~~ **완료** — rail = 결정 전체 ✓/✕ + NEW 배지 + `taught N×` · "Also moves +N −M of 20 questions you didn't rule on"(펼치면 질문 목록) · footer는 은퇴 약속 삭제.
+5. ~~**보드**~~ **완료** — `page.tsx`의 heldPins를 저장된 상태가 아니라 **계산값**(taught && fresh rating과 불일치)으로. `effectiveRatings`는 그대로.
+6. ~~**F 로깅·트레일 + 문서**~~ **완료** — `rating_run.decisions{hold,dont}` · `suggest_fold.delta*` · `fold_apply.taught` · `pin_set.reteach`, describeEvent 갱신, export README.
 7. **검증** — §5. *(0.5일)*
 
 합계 약 4일. 1→2→(3,4 병행)→5→6→7.
