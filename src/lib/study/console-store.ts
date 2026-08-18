@@ -30,7 +30,7 @@ import {
   type StudyPhase,
 } from './phases';
 import { logParticipantEvent } from './events';
-import { getSurveyItems } from './survey-store';
+import { getSurveyConfig, getSurveyItems } from './survey-store';
 
 /**
  * What a participant has actually BUILT in one workspace, read out of the
@@ -457,6 +457,59 @@ export interface PredictionRow {
   appliedLabel: string | null;
   /** SCORE only; null for baseline, and for "not sure", which has no verdict. */
   pointingMissed: boolean | null;
+  /** 'intent' = one of their sets claimed it; 'type_default' = none did. */
+  outcome: 'intent' | 'type_default' | null;
+  /**
+   * Length of the rule that answered, so zero is visible.
+   *
+   * A question that reaches an empty rule is answered with NO instruction of
+   * theirs at all — the bare model. It is not a configuration that performed
+   * badly, it is a configuration that was not there, and the two are read
+   * completely differently.
+   */
+  ruleChars: number | null;
+}
+
+/**
+ * One block's results, as a facilitator or an analyst wants them at a glance.
+ *
+ * Everything here is already in the export; the point is that reading it
+ * currently means opening a CSV per participant and joining two more. The
+ * numbers chosen are the ones the first pilot turned on: the fit ratings split
+ * by whether a rule was even reached, whether the prediction and the pointing
+ * held, and the workload answers beside them.
+ */
+export interface BlockResults {
+  block: 1 | 2 | null;
+  datasetKey: string;
+  condition: 'score' | 'baseline';
+  rows: PredictionRow[];
+  /** Rated items and the mean over them. */
+  rated: number;
+  total: number;
+  mean: number | null;
+  /**
+   * The same ratings split by whether a non-empty rule answered.
+   *
+   * SCORE only, and the split the pilot made necessary: one participant's
+   * block looked like a middling 3.5 average, and it was four 5s where a rule
+   * existed and three 1-2s where none did. A mean over both is a number about
+   * nothing.
+   */
+  covered: { n: number; mean: number | null } | null;
+  uncovered: { n: number; mean: number | null } | null;
+  /** Predicted yes/no vs the rating folded at 4 (design v2 §6). */
+  predictionHits: number;
+  predictionScored: number;
+  /** SCORE only — pointing against the intent that actually fired. */
+  pointingHits: number | null;
+  pointingScored: number | null;
+  /** Confidence calibration: how many they said yes to, how many actually fit. */
+  saidYes: number;
+  fits: number;
+  /** The block's questionnaire answers, in the instrument's own order. */
+  survey: { key: string; label: string; value: number | null }[];
+  surveyScaleMax: number;
 }
 
 export async function getBlockPredictions(
@@ -523,6 +576,7 @@ export async function getBlockPredictions(
             : applied.outcome ?? null;
     }
 
+    const appliedFull = applied as { rule?: string } | null;
     return {
       number: i + 1,
       question: item.question.length > 90 ? `${item.question.slice(0, 90)}…` : item.question,
@@ -533,6 +587,96 @@ export async function getBlockPredictions(
       pointedLabel,
       appliedLabel,
       pointingMissed: clone.condition === 'score' ? pointingMissed : null,
+      outcome:
+        applied?.outcome === 'intent' || applied?.outcome === 'type_default'
+          ? applied.outcome
+          : null,
+      ruleChars:
+        clone.condition === 'score' ? (appliedFull?.rule ?? '').trim().length : null,
     };
   });
+}
+
+/**
+ * One block's results — the per-item rows plus the summary and the survey.
+ *
+ * Built on getBlockPredictions rather than beside it, so the console's numbers
+ * and the export's verdicts can never drift apart: there is one definition of
+ * "the prediction missed" and both read it.
+ */
+export async function getBlockResults(
+  participant: StudyParticipant,
+  cloneAssignmentId: string
+): Promise<BlockResults | null> {
+  const [clone] = await db
+    .select()
+    .from(studyClones)
+    .where(eq(studyClones.assignmentId, cloneAssignmentId));
+  if (!clone) return null;
+  const condition = conditionOf(clone);
+  const block = blockPlan(participant).find((p) => p.datasetKey === clone.datasetKey)?.block ?? null;
+
+  const [rows, config] = await Promise.all([
+    getBlockPredictions(participant, cloneAssignmentId),
+    getSurveyConfig(),
+  ]);
+
+  const rated = rows.filter((r) => r.rating !== null);
+  const mean = (list: PredictionRow[]) =>
+    list.length === 0
+      ? null
+      : list.reduce((sum, r) => sum + (r.rating ?? 0), 0) / list.length;
+
+  // "Covered" is about the RULE, not the routing: an intent matching a question
+  // and then contributing an empty rule leaves the chatbot uninstructed just as
+  // a type default does.
+  const covered = rated.filter((r) => (r.ruleChars ?? 0) > 0);
+  const uncovered = rated.filter((r) => (r.ruleChars ?? 0) === 0);
+
+  const scoredPredictions = rows.filter((r) => r.guessMissed !== null);
+  const scoredPointing = rows.filter((r) => r.pointingMissed !== null);
+
+  const surveyRows = await db
+    .select({ itemKey: studySurveyAnswers.itemKey, value: studySurveyAnswers.value })
+    .from(studySurveyAnswers)
+    .where(
+      and(
+        eq(studySurveyAnswers.participantId, participant.id),
+        eq(studySurveyAnswers.block, block ?? 0)
+      )
+    );
+  const valueByKey = new Map(surveyRows.map((r) => [r.itemKey, r.value]));
+
+  return {
+    block,
+    datasetKey: clone.datasetKey,
+    condition,
+    rows,
+    rated: rated.length,
+    total: rows.length,
+    mean: mean(rated),
+    covered: condition === 'score' ? { n: covered.length, mean: mean(covered) } : null,
+    uncovered: condition === 'score' ? { n: uncovered.length, mean: mean(uncovered) } : null,
+    predictionHits: scoredPredictions.filter((r) => !r.guessMissed).length,
+    predictionScored: scoredPredictions.length,
+    pointingHits: condition === 'score' ? scoredPointing.filter((r) => !r.pointingMissed).length : null,
+    pointingScored: condition === 'score' ? scoredPointing.length : null,
+    saidYes: rows.filter((r) => r.guess === true).length,
+    fits: rated.filter((r) => (r.rating ?? 0) >= 4).length,
+    // The instrument's own order first — then anything answered under a key
+    // the instrument no longer has. A questionnaire reworded between the pilot
+    // and the study would otherwise make the pilot's answers disappear from
+    // this screen while sitting untouched in the table.
+    survey: [
+      ...config.items.map((i) => ({
+        key: i.key,
+        label: i.label ?? i.key,
+        value: valueByKey.get(i.key) ?? null,
+      })),
+      ...surveyRows
+        .filter((r) => !config.items.some((i) => i.key === r.itemKey))
+        .map((r) => ({ key: r.itemKey, label: `${r.itemKey} (retired)`, value: r.value })),
+    ],
+    surveyScaleMax: config.scaleMax,
+  };
 }

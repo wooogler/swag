@@ -29,7 +29,12 @@ import {
   Download,
 } from 'lucide-react';
 import AdminNav from '@/components/study/AdminNav';
-import type { ParticipantStatus, CloneStatus, PredictionRow } from '@/lib/study/console-store';
+import type {
+  ParticipantStatus,
+  CloneStatus,
+  PredictionRow,
+  BlockResults,
+} from '@/lib/study/console-store';
 import {
   cellLabel,
   PHASE_LABELS,
@@ -591,21 +596,29 @@ function CloneCard({
         </button>
       </div>
 
-      <ProbeList participantId={participantId} assignmentId={clone.assignmentId} />
+      <BlockResultsPanel participantId={participantId} assignmentId={clone.assignmentId} />
     </div>
   );
 }
 
 /**
- * Which questions to probe (문항지 §3 ④).
+ * One block's results — what happened, in the order it is asked about.
  *
- * The facilitator can watch the yes/no miss happen on the shared screen, but
- * not the pointing one — whether the intent they picked is the intent that
- * fired is a comparison the participant never sees and, before this, no screen
- * showed. Collapsed by default and loaded on open: it is read between
+ * Everything here is in the export already. It is on screen because reading a
+ * block otherwise means downloading a zip, opening three CSVs and joining
+ * them, and the questions it answers are the ones asked immediately: did the
+ * configuration do what they intended, could they predict it, and did they
+ * know which part of their setup was acting.
+ *
+ * The coverage split is the part the first pilot made non-negotiable. One
+ * block averaged 3.5, which reads as mediocre; it was four 5s on the questions
+ * that reached a rule and three 1-2s on the questions that reached an empty
+ * one. Those are not the same finding, and a single mean hides which one it is.
+ *
+ * Collapsed and loaded on open — during a session this is read between
  * questions, not while the participant is answering one.
  */
-function ProbeList({
+function BlockResultsPanel({
   participantId,
   assignmentId,
 }: {
@@ -613,7 +626,7 @@ function ProbeList({
   assignmentId: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState<PredictionRow[] | null>(null);
+  const [results, setResults] = useState<BlockResults | null>(null);
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
@@ -623,7 +636,7 @@ function ProbeList({
         `/api/study/admin/participants/predictions?participantId=${participantId}&assignmentId=${assignmentId}`
       );
       const data = await res.json().catch(() => ({}));
-      setRows(res.ok && Array.isArray(data.rows) ? (data.rows as PredictionRow[]) : []);
+      setResults(res.ok && data.results ? (data.results as BlockResults) : null);
     } finally {
       setLoading(false);
     }
@@ -635,7 +648,8 @@ function ProbeList({
     if (next) void load();
   };
 
-  const missed = (rows ?? []).filter((r) => r.guessMissed || r.pointingMissed);
+  const rows = results?.rows ?? [];
+  const missed = rows.filter((r) => r.guessMissed || r.pointingMissed);
 
   return (
     <div className="pt-1">
@@ -643,8 +657,8 @@ function ProbeList({
         onClick={toggle}
         className="text-[10.5px] font-semibold text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] underline"
       >
-        {open ? 'Hide' : 'Probe list'}
-        {open && rows !== null && ` · ${missed.length} missed of ${rows.length}`}
+        {open ? 'Hide results' : 'Results'}
+        {open && results && ` · ${missed.length} missed of ${rows.length}`}
       </button>
 
       {open && (
@@ -654,48 +668,236 @@ function ProbeList({
               Reading…
             </p>
           )}
-          {!loading && rows !== null && rows.length === 0 && (
+          {!loading && results === null && (
             <p className="px-2.5 py-2 text-[10.5px] text-[hsl(var(--muted-foreground))]">
               Nothing recorded for this block yet.
             </p>
           )}
-          {!loading &&
-            (rows ?? []).map((r) => {
-              const miss = r.guessMissed || r.pointingMissed;
-              return (
-                <div
-                  key={r.number}
-                  className={`px-2.5 py-1.5 border-b last:border-b-0 border-[hsl(var(--border))] ${
-                    miss ? 'bg-amber-50' : ''
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 flex-wrap text-[10.5px]">
-                    <span className="font-bold tabular-nums w-4">{r.number}</span>
-                    {r.guess !== null && (
-                      <Chip tone={r.guessMissed ? 'warn' : 'plain'}>
-                        said {r.guess ? 'yes' : 'no'}
-                        {r.rating !== null && ` · rated ${r.rating}`}
-                      </Chip>
-                    )}
-                    {r.pointedLabel && (
-                      <Chip tone={r.pointingMissed ? 'warn' : 'plain'}>
-                        → {r.pointedLabel}
-                      </Chip>
-                    )}
-                    {r.pointingMissed && r.appliedLabel && (
-                      <span className="text-[10px] text-amber-800">
-                        actually {r.appliedLabel}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[10px] text-[hsl(var(--muted-foreground))] leading-snug mt-0.5">
-                    {r.question}
-                  </p>
-                </div>
-              );
-            })}
+          {!loading && results && (
+            <>
+              <ResultsSummary results={results} />
+              <ItemStrip rows={rows} />
+              <div className="border-t border-[hsl(var(--border))]">
+                {rows.map((r) => (
+                  <ItemRow key={r.number} row={r} />
+                ))}
+              </div>
+              <SurveyStrip results={results} />
+            </>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Mean fit, split by whether a rule was reached, then the three accuracies. */
+function ResultsSummary({ results }: { results: BlockResults }) {
+  const fmt = (v: number | null) => (v === null ? '—' : v.toFixed(1));
+  const cov = results.covered;
+  const unc = results.uncovered;
+  return (
+    <div className="px-2.5 py-2 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex flex-wrap items-center gap-x-4 gap-y-1.5">
+      <Stat
+        label="Mean fit"
+        value={fmt(results.mean)}
+        sub={`of 5 · ${results.rated}/${results.total} rated`}
+      />
+      {cov && unc && (
+        <Stat
+          label="Rule reached"
+          value={`${fmt(cov.mean)} vs ${fmt(unc.mean)}`}
+          sub={`${cov.n} with a rule · ${unc.n} without`}
+          // The whole point of the split: an uncovered question was answered
+          // with no instruction of theirs, so a low score there is a gap in
+          // the configuration, not a rule that behaved badly.
+          tone={unc.n > 0 ? 'warn' : 'plain'}
+          title="Mean fit where a non-empty rule answered, versus where none did. A question with no rule is answered by the bare model."
+        />
+      )}
+      <Stat
+        label="Predicted"
+        value={`${results.predictionHits}/${results.predictionScored}`}
+        sub="yes/no vs rating"
+        title="Their yes/no against the rating they then gave, folded at 4."
+      />
+      {results.pointingScored !== null && (
+        <Stat
+          label="Pointed"
+          value={`${results.pointingHits}/${results.pointingScored}`}
+          sub="vs what fired"
+          title="Did the intent they pointed at turn out to be the one that answered?"
+        />
+      )}
+      <Stat
+        label="Calibration"
+        value={`${results.saidYes} → ${results.fits}`}
+        sub="said yes → actually fit"
+        title="How many they expected to be right, against how many were (rated 4 or 5). Pass 1 gets no feedback, so every guess is uninformed."
+      />
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+  tone = 'plain',
+  title,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: 'plain' | 'warn';
+  title?: string;
+}) {
+  return (
+    <div title={title} className="leading-tight">
+      <p className="text-[9px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+        {label}
+      </p>
+      <p
+        className={`text-[13px] font-bold tabular-nums ${
+          tone === 'warn' ? 'text-amber-700' : 'text-[hsl(var(--foreground))]'
+        }`}
+      >
+        {value}
+      </p>
+      {sub && <p className="text-[9px] text-[hsl(var(--muted-foreground))]">{sub}</p>}
+    </div>
+  );
+}
+
+/**
+ * Rating colours: one scale, used by the strip and the rows alike.
+ *
+ * Both variants are spelled out rather than composed with an opacity suffix at
+ * render time — Tailwind generates classes it can SEE in the source, so a class
+ * built from a template literal produces markup with no styling behind it.
+ */
+const RATING_TONE: Record<number, string> = {
+  1: 'bg-rose-500',
+  2: 'bg-orange-400',
+  3: 'bg-amber-300',
+  4: 'bg-emerald-300',
+  5: 'bg-emerald-500',
+};
+
+/** The same scale for a question no rule answered — present, but not claimed. */
+const RATING_TONE_FADED: Record<number, string> = {
+  1: 'bg-rose-100',
+  2: 'bg-orange-100',
+  3: 'bg-amber-100',
+  4: 'bg-emerald-100',
+  5: 'bg-emerald-100',
+};
+
+/**
+ * The eight items as one row of blocks — the block's shape before its detail.
+ *
+ * Fill is the rating, the ring marks a prediction that missed, and a hollow
+ * block is a question that reached no rule at all. Reading left to right
+ * usually answers "was this a bad configuration or an absent one" on its own.
+ */
+function ItemStrip({ rows }: { rows: PredictionRow[] }) {
+  return (
+    <div className="px-2.5 py-2 flex items-end gap-1 border-b border-[hsl(var(--border))]">
+      {rows.map((r) => {
+        const noRule = r.ruleChars === 0;
+        return (
+          <div key={r.number} className="flex flex-col items-center gap-0.5">
+            <span
+              title={`Q${r.number} · rated ${r.rating ?? '—'}/5 · ${
+                noRule ? 'no rule reached' : r.appliedLabel ?? 'answered'
+              }${r.guessMissed ? ' · prediction missed' : ''}`}
+              className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold ${
+                r.rating === null
+                  ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
+                  : noRule
+                    ? `${RATING_TONE_FADED[r.rating]} text-[hsl(var(--foreground))] border border-dashed border-[hsl(var(--muted-foreground))]`
+                    : `${RATING_TONE[r.rating]} text-white`
+              } ${r.guessMissed ? 'ring-2 ring-offset-1 ring-amber-500' : ''}`}
+            >
+              {r.rating ?? '·'}
+            </span>
+            <span className="text-[8px] text-[hsl(var(--muted-foreground))] tabular-nums">
+              {r.number}
+            </span>
+          </div>
+        );
+      })}
+      <span className="ml-2 text-[9px] leading-snug text-[hsl(var(--muted-foreground))]">
+        fill = fit rating · ring = prediction missed
+        <br />
+        dashed = no rule reached
+      </span>
+    </div>
+  );
+}
+
+/** One question: what they said, what fired, and whether either missed. */
+function ItemRow({ row: r }: { row: PredictionRow }) {
+  const miss = r.guessMissed || r.pointingMissed;
+  return (
+    <div
+      className={`px-2.5 py-1.5 border-b last:border-b-0 border-[hsl(var(--border))] ${
+        miss ? 'bg-amber-50' : ''
+      }`}
+    >
+      <div className="flex items-center gap-1.5 flex-wrap text-[10.5px]">
+        <span className="font-bold tabular-nums w-4">{r.number}</span>
+        {r.rating !== null && (
+          <span
+            className={`w-4 h-4 rounded-sm text-white text-[9px] font-bold flex items-center justify-center ${RATING_TONE[r.rating]}`}
+          >
+            {r.rating}
+          </span>
+        )}
+        {r.guess !== null && (
+          <Chip tone={r.guessMissed ? 'warn' : 'plain'}>said {r.guess ? 'yes' : 'no'}</Chip>
+        )}
+        {r.pointedLabel && (
+          <Chip tone={r.pointingMissed ? 'warn' : 'plain'}>→ {r.pointedLabel}</Chip>
+        )}
+        {r.pointingMissed && r.appliedLabel && (
+          <span className="text-[10px] text-amber-800">actually {r.appliedLabel}</span>
+        )}
+        {r.ruleChars === 0 && (
+          <Chip tone="bad" title="No rule answered this — the chatbot replied with no instruction of theirs.">
+            no rule
+          </Chip>
+        )}
+      </div>
+      <p className="text-[10px] text-[hsl(var(--muted-foreground))] leading-snug mt-0.5">
+        {r.question}
+      </p>
+    </div>
+  );
+}
+
+/** The block's questionnaire answers, as bars against the scale's top. */
+function SurveyStrip({ results }: { results: BlockResults }) {
+  const answered = results.survey.filter((s) => s.value !== null);
+  if (answered.length === 0) return null;
+  return (
+    <div className="px-2.5 py-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 flex flex-wrap gap-x-4 gap-y-1.5">
+      {answered.map((s) => (
+        <div key={s.key} className="leading-tight" title={`${s.label}: ${s.value} of ${results.surveyScaleMax}`}>
+          <p className="text-[9px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            {s.label}
+          </p>
+          <div className="flex items-center gap-1">
+            <span className="text-[12px] font-bold tabular-nums">{s.value}</span>
+            <span className="inline-block w-10 h-1.5 rounded-full bg-[hsl(var(--border))] overflow-hidden">
+              <span
+                className="block h-full bg-[hsl(var(--primary))]"
+                style={{ width: `${((s.value ?? 0) / results.surveyScaleMax) * 100}%` }}
+              />
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
