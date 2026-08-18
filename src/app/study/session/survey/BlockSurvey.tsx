@@ -1,12 +1,19 @@
 'use client';
 
 /**
- * The per-block questionnaire — every item on one page.
+ * The per-block workload questionnaire — five TLX subscales on one page.
  *
- * One page rather than one-at-a-time: these are short reflective scales, and
- * paging them would add clicks to a session already budgeted to the minute.
- * Nothing here names the two conditions; a participant is answering about "the
- * chatbot you just set up", the same phrasing in either block.
+ * One page rather than one-at-a-time: this is a minute of the session, and
+ * paging five questions would spend it on clicks. Nothing here names the two
+ * conditions; a participant is answering about "setting up the chatbot", the
+ * same phrasing in either block.
+ *
+ * THE ANCHOR LABELS ARE NOT DECORATION. Performance runs Perfect → Failure
+ * while the other four run Very low → Very high, which is what leaves all five
+ * pointing the same way and spares the analysis a reverse-scored item. A
+ * participant who cannot see the ends of that scale has no way to know it
+ * turned around, so the labels sit under every row and the facilitator says
+ * "note the labels" on the way in (design §6.1).
  */
 
 import { useState } from 'react';
@@ -57,12 +64,19 @@ export default function BlockSurvey({
   return (
     <div className="min-h-screen bg-[hsl(var(--background))] py-10 px-6">
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-lg font-semibold mb-1">A few questions</h1>
-        {/* The questionnaire's own instruction (문항지 §4), which names WHICH
-            version is being rated — the participant uses two today. */}
-        <p className="text-sm text-[hsl(var(--muted-foreground))] mb-8">
-          Thinking about the version you just used, please rate your agreement with each
-          statement.
+        <h1 className="text-lg font-semibold mb-1">A few quick questions</h1>
+        {/* Design §6.4, which does the job the bare TLX stem cannot: it names
+            the task and fixes its boundaries. "The task" has no referent in
+            this session — a participant asked how demanding "the task" was
+            would pick their own, and five people would rate five different
+            things on the same scale. */}
+        <p className="text-sm text-[hsl(var(--muted-foreground))] mb-8 leading-relaxed">
+          Before we check it — five quick questions about{' '}
+          <span className="font-semibold text-[hsl(var(--foreground))]">
+            setting up the chatbot
+          </span>{' '}
+          in the round you just finished: from when you started looking through the student
+          conversations to when you deployed.
         </p>
 
         <div className="space-y-5">
@@ -71,10 +85,22 @@ export default function BlockSurvey({
               key={item.key}
               className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
             >
-              <p className="text-sm mb-4">
+              {item.label && (
+                <p className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
+                  {item.label}
+                </p>
+              )}
+              <p className={`text-sm ${item.note ? 'mb-1.5' : 'mb-4'}`}>
                 <span className="text-[hsl(var(--muted-foreground))] mr-2">{index + 1}.</span>
                 {item.text}
               </p>
+              {/* Above the buttons, not below them: it is a condition on how to
+                  answer, and one read after answering is one read too late. */}
+              {item.note && (
+                <p className="mb-4 text-[11.5px] leading-snug text-[hsl(var(--muted-foreground))]">
+                  {item.note}
+                </p>
+              )}
               <div className="flex gap-1.5">
                 {scale.map((n) => (
                   <button
@@ -130,7 +156,10 @@ export default function BlockSurvey({
               from={phase}
               label="Continue"
               waits
-              waitLabel="Getting the last part ready — your chatbot is answering a few more questions."
+              // True now in a way it was not before: this hand-off is where the
+              // frozen answers are awaited, and the minute just spent here is
+              // the minute the batch had to run in.
+              waitLabel="Getting the check questions ready — your chatbot is answering them now."
             />
           </div>
         )}

@@ -43,6 +43,7 @@ import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib
 import { TYPE_DEFINITIONS } from '@/lib/score/type-prompts';
 import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
 import {
+  SURVEY_CONSTRUCTS,
   SURVEY_SCALE_CHOICES,
   SURVEY_SCALE_MIN,
   type SurveyItem,
@@ -1882,10 +1883,10 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
       ...(prev ?? []),
       {
         key: `item_${(prev?.length ?? 0) + 1}`,
-        construct: 'control',
+        construct: 'mental',
         text: '',
-        low: 'Strongly disagree',
-        high: 'Strongly agree',
+        low: 'Very low',
+        high: 'Very high',
       },
     ]);
 
@@ -2000,9 +2001,11 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
                     }
                     className="text-[11px] border border-[hsl(var(--border))] rounded px-1.5 py-1 bg-[hsl(var(--card))]"
                   >
-                    <option value="control">control</option>
-                    <option value="trust">trust</option>
-                    <option value="load">load</option>
+                    {SURVEY_CONSTRUCTS.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
                   </select>
                   <label className="flex items-center gap-1 text-[10.5px] text-[hsl(var(--muted-foreground))]">
                     <input
@@ -2022,12 +2025,27 @@ function SurveyModal({ onClose }: { onClose: () => void }) {
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
+                <input
+                  value={item.label ?? ''}
+                  placeholder="Subscale name, e.g. Mental Demand (optional)"
+                  onChange={(e) => patch(index, { label: e.target.value || undefined })}
+                  className="w-full border border-[hsl(var(--border))] rounded px-2 py-1 text-[11px] font-semibold bg-[hsl(var(--card))]"
+                />
                 <textarea
                   value={item.text}
                   rows={2}
                   placeholder="Question as the participant reads it"
                   onChange={(e) => patch(index, { text: e.target.value })}
                   className="w-full border border-[hsl(var(--border))] rounded px-2 py-1.5 text-xs bg-[hsl(var(--card))]"
+                />
+                {/* Performance needs one (design §6.4): without it, a
+                    participant judges "how successful were you" against a bar
+                    this study never set. */}
+                <input
+                  value={item.note ?? ''}
+                  placeholder="Note under the question (optional)"
+                  onChange={(e) => patch(index, { note: e.target.value || undefined })}
+                  className="w-full border border-[hsl(var(--border))] rounded px-2 py-1 text-[11px] bg-[hsl(var(--card))]"
                 />
                 <div className="flex items-center gap-2">
                   <input

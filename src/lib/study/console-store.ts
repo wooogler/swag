@@ -359,6 +359,17 @@ export function advanceBlockers(phase: StudyPhase, clones: CloneStatus[]): strin
   const blockers: string[] = [];
   const forBlock = (block: 1 | 2) => clones.find((c) => c.block === block);
 
+  // Split to match advance.ts, which is what this is reporting. Leaving the
+  // work needs a deploy and nothing else; the answer batch is awaited one
+  // hand-off later, out of the questionnaire. Left as one check, the console
+  // would announce "test answers 8 missing" during the work — when it blocks
+  // nothing and the batch has not been asked to run yet — and then say
+  // nothing at all in the phase where those answers really are required.
+  const checkDeployed = (block: 1 | 2) => {
+    const clone = forBlock(block);
+    if (clone && !clone.deployed) blockers.push(`block ${block}: not deployed yet`);
+  };
+
   const checkTest = (block: 1 | 2) => {
     const clone = forBlock(block);
     if (!clone) return;
@@ -370,8 +381,10 @@ export function advanceBlockers(phase: StudyPhase, clones: CloneStatus[]): strin
     }
   };
 
-  if (phase === 'block1_work') checkTest(1);
-  if (phase === 'block2_work') checkTest(2);
+  if (phase === 'block1_work') checkDeployed(1);
+  if (phase === 'block2_work') checkDeployed(2);
+  if (phase === 'block1_survey') checkTest(1);
+  if (phase === 'block2_survey') checkTest(2);
   return blockers;
 }
 

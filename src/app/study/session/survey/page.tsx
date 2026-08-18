@@ -11,7 +11,7 @@ import BlockSurvey from './BlockSurvey';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata = { title: 'A few questions' };
+export const metadata = { title: 'A few quick questions' };
 
 export default async function SurveyPage() {
   await ensureStudyTables();

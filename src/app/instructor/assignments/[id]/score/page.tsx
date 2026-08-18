@@ -516,9 +516,12 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                 compact
                 from={studyBlockDone.phase}
                 label="I'm done"
+                // False out of the work phase since 08-18: the answers are
+                // awaited one hand-off later, behind the questionnaire, so
+                // this click no longer stops to generate anything.
                 waits={studyBlockDone.waits}
                 waitLabel="Your chatbot is answering the check questions now."
-                confirm="This ends the setup for this chatbot and moves you on to checking it. You will not be able to come back and change it."
+                confirm="This ends the setup for this chatbot. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it."
               />
             )}
             <InstructorHeaderActions email={instructor.email} />

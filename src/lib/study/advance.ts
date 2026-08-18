@@ -22,13 +22,34 @@ import { warmInFlight } from './warm';
 import type { StudyParticipant } from '@/db/schema';
 
 /**
+ * Which block's clone a hand-off is ABOUT. Both hand-offs out of a block need
+ * it deployed: the questionnaire asks about the round "up to when you
+ * deployed", and the test reads answers that only a deployed configuration
+ * can produce.
+ */
+const BLOCK_ON_LEAVING: Partial<Record<StudyPhase, 1 | 2>> = {
+  block1_work: 1,
+  block1_survey: 1,
+  block2_work: 2,
+  block2_survey: 2,
+};
+
+/**
  * What has to be frozen on the way OUT of a phase: each block's configuration
  * is final once the work is done, so its answers are made on the way into the
  * test that reads them.
+ *
+ * This is the questionnaire's exit, not the work's, and the split is the whole
+ * point of putting the questionnaire there (design §5.3 ②). Deploy starts the
+ * batch in the background (warm.ts); the participant then spends a minute on
+ * five questions while it runs, and the wait this hand-off would otherwise
+ * impose has already been spent. Keyed on `block*_work` — as it was when the
+ * test came straight after — the wait would land BEFORE the questionnaire
+ * instead, which is the arrangement the move was meant to undo.
  */
 const PREP_ON_LEAVING: Partial<Record<StudyPhase, { kind: BankKind; block: 1 | 2 }>> = {
-  block1_work: { kind: 'test', block: 1 },
-  block2_work: { kind: 'test', block: 2 },
+  block1_survey: { kind: 'test', block: 1 },
+  block2_survey: { kind: 'test', block: 2 },
 };
 
 export type AdvanceRefusal =
@@ -75,19 +96,23 @@ export async function advanceParticipant(
     return { ok: false, reason: 'no_next', phase, message: 'The session is already finished.' };
   }
 
+  const block = BLOCK_ON_LEAVING[phase];
   const prep = PREP_ON_LEAVING[phase];
-  if (prep) {
-    const clone = await cloneForBlock(participant, prep.block);
+  if (block) {
+    const clone = await cloneForBlock(participant, block);
     if (!clone) {
       return refuse(participant, phase, 'no_clone', {
         message: 'Your workspace could not be found — tell your facilitator.',
-        detail: { block: prep.block },
+        detail: { block },
       });
     }
 
     // Checked before the batch rather than caught from it: generateForClone
     // throws not_deployed after doing work, and this is the one refusal a
-    // participant can act on themselves.
+    // participant can act on themselves. Checked leaving the questionnaire
+    // too, not only the work — the console can force a phase, and a jump past
+    // the work would otherwise reach generation with nothing deployed and
+    // report it as something going wrong on our side.
     const { deployed } = await deployStateFor(clone);
     if (!deployed) {
       return refuse(participant, phase, 'not_deployed', {
@@ -96,13 +121,17 @@ export async function advanceParticipant(
       });
     }
 
-    // The deploy already started this batch (warm.ts). Let it finish rather
-    // than racing it: both runs would call the model for every item and write
-    // over each other, and waiting is what usually makes this hand-off instant.
-    await warmInFlight(clone.assignmentId);
+    // Nested rather than a branch of its own: every phase that preps is also
+    // one that needed the clone, so this reuses the row and the check above.
+    if (prep) {
+      // The deploy already started this batch (warm.ts). Let it finish rather
+      // than racing it: both runs would call the model for every item and
+      // write over each other, and waiting is what usually makes this hand-off
+      // instant — more so now that a questionnaire ran while it worked.
+      await warmInFlight(clone.assignmentId);
 
-    // A block test is always over this clone's OWN dataset.
-    for (const datasetKey of [clone.datasetKey]) {
+      // A block test is always over this clone's OWN dataset.
+      const datasetKey = clone.datasetKey;
       let failed = 0;
       let thrown: string | null = null;
       try {

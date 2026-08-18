@@ -90,7 +90,29 @@ async function main() {
         console.log(`   deployed chat v${v}`);
       }
 
-      // gate: the test phase is refused until answers are frozen
+      // The workload questionnaire, where the session now puts it: straight
+      // after deploy and BEFORE the test, so it is taken right after the task
+      // and the answer batch generates while it is being filled in.
+      await advanceTo(block === 1 ? 'block1_survey' : 'block2_survey');
+      const now = new Date();
+      for (const [i, item] of SURVEY_ITEMS.entries()) {
+        await db
+          .insert(studySurveyAnswers)
+          .values({
+            participantId: participant.id,
+            block,
+            cloneAssignmentId: clone.assignmentId,
+            itemKey: item.key,
+            value: (i % 7) + 1,
+            answeredAt: now,
+          })
+          .onConflictDoNothing();
+      }
+      console.log(`   survey: ${SURVEY_ITEMS.length} item(s) recorded`);
+
+      // gate: the test phase is refused until answers are frozen. In the app
+      // this batch runs on the way OUT of the questionnaire, which is why it
+      // sits here rather than before it.
       const blocked = await getParticipantStatus(await reload(participant.id));
       console.log(`   blockers before generating: ${blocked.blockers.join(' · ') || 'none'}`);
 
@@ -156,23 +178,6 @@ async function main() {
       );
       console.log(`   answered ${items.length}, responses released ${released}`);
 
-      // survey phase
-      await advanceTo(block === 1 ? 'block1_survey' : 'block2_survey');
-      const now = new Date();
-      for (const [i, item] of SURVEY_ITEMS.entries()) {
-        await db
-          .insert(studySurveyAnswers)
-          .values({
-            participantId: participant.id,
-            block,
-            cloneAssignmentId: clone.assignmentId,
-            itemKey: item.key,
-            value: (i % 7) + 1,
-            answeredAt: now,
-          })
-          .onConflictDoNothing();
-      }
-      console.log(`   survey: ${SURVEY_ITEMS.length} item(s) recorded`);
 
       if (block === 1) await advanceTo('break');
     }

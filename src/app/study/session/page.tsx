@@ -151,9 +151,10 @@ export default async function StudySessionPage() {
               </>
             ) : access.showSurvey ? (
               <>
-                <h1 className="text-lg font-semibold mb-2">A few questions</h1>
+                <h1 className="text-lg font-semibold mb-2">A few quick questions</h1>
                 <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                  A short questionnaire about the setup you just did.
+                  Five short questions about setting up the chatbot, before we check what it
+                  answers.
                 </p>
                 <a
                   href="/study/session/survey"

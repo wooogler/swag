@@ -16,15 +16,31 @@ import { STUDY_DATASETS, type StudioView } from './config';
 /* Phases                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The order a block runs in: configure, then the workload questionnaire, then
+ * the block test.
+ *
+ * The questionnaire used to come last. It moved in front of the test on 08-18
+ * (design §5.3) for three reasons: NASA-TLX is by definition a measure taken
+ * straight after the task, and after the test it was being taken after eight
+ * revealed answers instead; the batch of frozen answers is generating in the
+ * background right then, so the minute it takes is a minute nobody waits; and
+ * it reaches the participant before any feedback has, so Pass 1's
+ * no-information condition survives intact.
+ *
+ * The phase STRING still says `survey`. Renaming it would orphan every row
+ * already stamped with it — participant.phase, and every phase_advance event
+ * the pilot left behind — for a word. The labels below carry the meaning.
+ */
 export const STUDY_PHASES = [
   'not_started',
   'block1_work',
-  'block1_test',
   'block1_survey',
+  'block1_test',
   'break',
   'block2_work',
-  'block2_test',
   'block2_survey',
+  'block2_test',
   'done',
 ] as const;
 
@@ -37,12 +53,12 @@ export function isStudyPhase(v: unknown): v is StudyPhase {
 export const PHASE_LABELS: Record<StudyPhase, string> = {
   not_started: 'Not started',
   block1_work: 'Block 1 · configure',
+  block1_survey: 'Block 1 · workload',
   block1_test: 'Block 1 · test',
-  block1_survey: 'Block 1 · survey',
   break: 'Break',
   block2_work: 'Block 2 · configure',
+  block2_survey: 'Block 2 · workload',
   block2_test: 'Block 2 · test',
-  block2_survey: 'Block 2 · survey',
   done: 'Done',
 };
 
