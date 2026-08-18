@@ -59,7 +59,7 @@ import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
 import { ensureStudyTables } from '@/lib/study/store';
 import { getBaselineState, PROMPT_HOLDER_TITLE } from '@/lib/study/baseline-store';
-import { STUDY_PROMPT_CHAR_LIMIT, STUDY_WORK_MINUTES } from '@/lib/study/config';
+import { STUDY_PROMPT_CHAR_LIMIT, STUDY_WORK_MINUTES, conditionName } from '@/lib/study/config';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -436,15 +436,31 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                 <ChevronLeft className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />
               </Button>
             </Link>
+            {/* The version's name, and under it the course. Design §3.1 puts
+                the name here and only here on the board — it is what the final
+                survey's two columns are labelled with, and a participant who
+                never saw it cannot tell those columns apart forty minutes
+                later.
+
+                The two descriptive straplines that used to sit under this
+                ("Organize · Revise · Evaluate — instructor intents own the
+                log" / "Customize the chatbot from real student questions")
+                are gone. They differed by condition in a header that is
+                supposed to be the same shell either way, and the SCORE one
+                said "intents" — a word §13 invariant 2 keeps off the Clay
+                surface, which meant the header was also teaching each arm a
+                different vocabulary for what it was doing. The course title
+                takes the line instead: same shape in both arms, and it is the
+                thing a participant actually needs, since the two blocks are
+                two different courses. */}
             <div className="flex-1">
               <h1 className="text-xl font-bold font-heading text-[hsl(var(--foreground))]">
-                Chatbot Studio · <span className="font-normal">{assignment.title}</span>
+                Chatbot Studio ·{' '}
+                <span className="font-normal">
+                  {conditionName(isBaselineView ? 'baseline' : 'score')}
+                </span>
               </h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                {isBaselineView
-                  ? 'Customize the chatbot from real student questions'
-                  : 'Organize · Revise · Evaluate — instructor intents own the log'}
-              </p>
+              <p className="text-sm text-[hsl(var(--muted-foreground))]">{assignment.title}</p>
             </div>
             {/* The task the log is OF. Opens by itself on a first visit and
                 sits here after that — both conditions, since neither the

@@ -150,3 +150,29 @@ export const STUDY_WORK_MINUTES = 25;
 /** When the facilitator gives the verbal warning (design v2 §5). */
 export const STUDY_WORK_WARNING_MINUTES = 20;
 
+
+/**
+ * What the two versions are CALLED in front of a participant (design §3.1).
+ *
+ * Slate = intent–rule, Clay = the single Rules document, and the mapping is
+ * fixed rather than counterbalanced. Opaque code names, not descriptions: an
+ * order label ("the first version") points at a different thing for every
+ * participant, so it cannot go in a demo video or a survey template, and it
+ * invites reading the second one as the improved one. The metaphor is for the
+ * research team — nobody explains it to a participant, because explaining it
+ * primes the hypothesis (§13 invariant 7).
+ *
+ * Configurable because the same screens get re-rendered for paper figures and
+ * talk recordings, where the names have to read SCORE / Baseline (§10.2).
+ * NEXT_PUBLIC_ on purpose: the console and the curation board are client
+ * components that import this module, and a server-only variable would leave
+ * them rendering the default while the server rendered the override.
+ */
+export const CONDITION_NAMES: Record<StudioView, string> = {
+  score: process.env.NEXT_PUBLIC_STUDY_NAME_SCORE ?? 'Slate',
+  baseline: process.env.NEXT_PUBLIC_STUDY_NAME_BASELINE ?? 'Clay',
+};
+
+export function conditionName(view: StudioView): string {
+  return CONDITION_NAMES[view];
+}
