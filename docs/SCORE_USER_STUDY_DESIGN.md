@@ -10,6 +10,8 @@
 >
 > **표기.** **[파일럿]** = 파일럿에서 확정 · **[운영]** = 연구팀 운영 결정 필요 · **[구현]** = 시스템에 만들어야 함(§10에 모아 둠).
 
+> **08-18 개정 (설문 이관).** **동의서 이후의 모든 설문을 시스템 안에서 받는다** — 최종 설문(§6.5)의 Qualtrics 구현을 철회하고 앱에 만들었다. 세션 전 폼 2종(스크리너 · 동의서+배경)은 그대로 외부에 남는다. 근거는 §6.5의 '왜 Qualtrics가 아닌가'.
+
 ---
 
 ## 1. 한눈에
@@ -240,7 +242,7 @@ Clay는 Slate의 **ablation**이다. 두 조건은 거의 모든 것을 공유�
 
 > **왜 블록 안이 아니라 말미인가.** ① within-subjects에서 첫 블록의 절대 평정은 **비교 앵커가 없다**. ② 블록 테스트 직후의 평정은 도구 경험이 아니라 **방금 본 8개 응답의 성적**에 끌린다 — 말미면 두 버전이 같은 거리에서 회고된다. ③ 설문 → 인터뷰 순서라 진행자가 **극단·불일치 응답을 프로브**할 수 있고, 자유서술로 **진행자 영향 없는 개인 회고**를 먼저 확보한다. ④ 블록이 행동 측정만으로 깨끗해진다.
 >
-> **회상 보조.** 참가자의 두 보드는 다른 탭에 그대로 열려 있고, 도입문과 진행자 발화에서 **"돌아가 보셔도 된다"고 명시**한다. 40분 전 경험을 평정하는 이 설계의 가장 약한 고리를 가장 싸게 메운다. **세션 중 어느 탭도 닫지 않는다.**
+> **회상 보조.** 설문이 시스템 안에 있으므로 **각 열 머리에서 그 버전의 보드를 새 탭으로 바로 연다**(`open ↗`). 도입문과 진행자 발화에서도 "돌아가 보셔도 된다"고 명시한다. 40분 전 경험을 평정하는 이 설계의 가장 약한 고리를 가장 싸게 메운다. **세션 중 어느 탭도 닫지 않는다.**
 
 ### 5.6 인터뷰 (1:24, ~8분)
 
@@ -298,8 +300,9 @@ think-aloud 부재를 메우는 **유일한 "왜" 채널**이므로 시간을 �
 - 국문: "이제 다른 버전인 {Slate/Clay}로, 다른 수업의 대화를 가지고 같은 과정을 진행하겠습니다."
 
 **최종 설문 전환**
-- EN: *"That's both rounds done — thank you. Before we talk, there's one last questionnaire, about five minutes. It asks you to rate Slate and Clay side by side. Your two setups are still open in the other tabs, so feel free to look back at either one. I'll be quiet while you fill it in."*
-- 국문: "두 라운드 모두 끝났습니다 — 감사합니다. 이야기 나누기 전에 마지막 설문이 하나 있습니다, 5분 정도요. Slate와 Clay를 나란히 놓고 평가하시게 됩니다. 두 설정 모두 다른 탭에 그대로 열려 있으니 언제든 돌아가서 보셔도 됩니다. 작성하시는 동안 저는 조용히 있겠습니다."
+- EN: *"That's both rounds done — thank you. Before we talk, there's one last questionnaire on screen, about five minutes. It asks you to rate Slate and Clay side by side. You can open either setup again from the column headings if you want to look, and you can go back and change an answer. I'll be quiet while you fill it in."*
+- 국문: "두 라운드 모두 끝났습니다 — 감사합니다. 이야기 나누기 전에 화면에 마지막 설문이 하나 있습니다, 5분 정도요. Slate와 Clay를 나란히 놓고 평가하시게 됩니다. 보고 싶으시면 열 머리의 링크로 각 설정을 다시 여실 수 있고, 뒤로 가서 답을 고치셔도 됩니다. 작성하시는 동안 저는 조용히 있겠습니다."
+- 행동: 링크를 따로 보내지 않는다 — 설문은 참가자 화면에 이미 떠 있다(08-18 이관).
 
 **종료·디브리핑**
 - EN: *"Both versions were built by our team to compare two ways of configuring a chatbot — thank you for helping us compare them."*
@@ -391,13 +394,15 @@ change, is entirely up to you.
 >
 > **보고.** 하위척도별로 보고하고 **합성 점수(가중 TLX)를 만들지 않는다.** 이름은 *"five unweighted NASA-TLX subscales (excluding Physical Demand), on 7-point scales"*로 쓴다.
 
-### 6.5 최종 설문 [구현 / Qualtrics]
+### 6.5 최종 설문 [구현 — 시스템 안]
 
-**형태:** 두 버전 **side-by-side** — 행 = 진술, 열 = **Slate / Clay**(그 참가자가 **쓴 순서대로**, 먼저 쓴 것이 왼쪽). 각 열 머리에 그 버전의 **화면 썸네일**.
+**형태:** 두 버전 **side-by-side** — 행 = 진술, 열 = **Slate / Clay**(그 참가자가 **쓴 순서대로**, 먼저 쓴 것이 왼쪽). 각 열 머리에 이름과 **그 버전의 보드를 새 탭으로 여는 링크**.
+
+> **왜 Qualtrics가 아닌가 (08-18).** 원안은 Qualtrics였다 — side-by-side와 양극 문항 타입이 기성품이라는 이유였다. 시스템 안에 만들면 그 편의가 치르던 값 세 가지를 되찾는다. ① **참가자 키를 손으로 받지 않는다** — 앱은 이미 누구인지 알고, 동의서가 약속한 것도 이름이 아니라 참가자 번호다. ② **열 순서가 배정된 셀에서 자동으로 나온다** — Qualtrics였다면 `SC`/`CS` 두 벌을 만들어 셀에 맞는 링크를 사람이 골라 보내야 했고, 그 한 번의 실수가 그 참가자의 양극 문항 5개를 통째로 뒤집는다(불변식 8). ③ **응답이 나머지 전부와 같은 export에 들어온다** — 참가자 번호로 나중에 조인할 일이 없다. 회상 보조도 더 낫다: "아직 열려 있는 탭"이 아니라 열 머리의 링크가 그 보드를 연다. 대가는 문구 수정이 배포를 거친다는 것이고, 그건 블록 테스트·TLX가 이미 지고 있는 대가와 같다.
 
 **도입 화면**
 - EN: *"Almost done — thank you. You used two versions of the tool today, Slate and Clay. In this last questionnaire we ask you to rate them separately, side by side. There are no right answers, and critical ratings are just as useful to us as positive ones.*
-  *Your two setups are still open in your browser — feel free to switch back and look at either one while you answer."*
+  *Both of your setups are still here — you can open either one from the column headings and look around while you answer."*
 - 국문: "거의 끝났습니다 — 감사합니다. 오늘 도구의 두 버전 Slate와 Clay를 사용하셨습니다. 이 마지막 설문에서는 두 버전을 나란히 놓고 따로따로 평가해 주시면 됩니다. 정답은 없고, 비판적인 평가도 긍정적인 평가만큼 저희에게 유용합니다. 두 설정 모두 브라우저에 그대로 열려 있으니, 답하시는 동안 언제든 돌아가서 보셔도 됩니다."
 
 #### B-1. 저작 경험 — 8문항 (7점 동의, 1 = Strongly disagree … 7 = Strongly agree)
@@ -651,12 +656,18 @@ change, is entirely up to you.
 
 ### 10.6 신규 — 최종 설문 (§6.5)
 
-- [ ] **Qualtrics 권장** (파일럿 중 가장 많이 바뀔 부분). 2벌 제작 — `SC`(왼쪽 Slate) / `CS`(왼쪽 Clay), 셀에 맞춰 링크 발송.
-- [ ] **문항 타입: Side by Side** — Matrix Table > Likert는 행마다 척도가 하나라 **두 버전을 나란히 놓을 수 없다.** B-3만 Matrix Table > Bipolar.
-- [ ] 참가자 키는 **참가자 번호**(이메일·이름 금지 — 동의서가 "participant number rather than your name"을 약속).
-- [ ] 열 머리에 **화면 썸네일 2장**(Slate · Clay).
-- [ ] 진행률 표시줄 켜기 · 뒤로 가기 허용 · 강제 응답(자유서술 제외) · **행 순서 고정**.
-- [ ] `DataExportTag` = 이 문서의 문항 번호(E2·C1·L1·O1·L2·P1·L3·T2·U2·U3·R1·I1~I5·FT1·FT2). **삭제된 태그(E1·C2·V1·M1·T1)는 재사용하지 않는다.**
+**시스템 안에 만든다** (08-18 — Qualtrics 철회, 근거는 §6.5).
+
+- [ ] 블록 2 테스트 뒤 **`final_survey` 페이즈**, 그다음이 `done`.
+- [ ] **열 = 두 버전, 그 참가자가 쓴 순서대로**(먼저 쓴 것이 왼쪽) — 배정된 셀에서 자동으로 나온다. 조건을 한쪽 열에 고정하지 않는다(불변식 8).
+- [ ] 열 머리에 이름 + **그 버전의 보드를 새 탭으로 여는 링크**(회상 보조).
+- [ ] 페이지 4장(저작 경험 8 → 맥락 3 → 직접 비교 5 → 자유서술 2) + 도입·마감 화면. **뒤로 가기 허용**(되돌아가면 저장된 응답이 그대로 보여야 한다) · 진행률 표시 · **행 순서 고정**(랜덤화 금지).
+- [ ] 강제 응답: 평정 전부, 자유서술은 제외.
+- [ ] **양극 문항은 매 행 양 끝에 이름을 반복 표시** — 방향 혼동이 이 문항의 유일한 실패 모드다.
+- [ ] 저장: `참가자 · 문항 코드 · 조건(비교 문항은 없음) · 값/텍스트 · 타임스탬프`. 문항 코드는 이 문서의 번호(E2·C1·L1·O1·L2·P1·L3·T2·U2·U3·R1·I1~I5·FT). **삭제된 코드(E1·C2·V1·M1·T1)는 재사용하지 않는다.**
+- [ ] export에 `final_survey.csv` — 비교 문항에는 그 참가자의 **열 순서**를 함께 실어 1↔7의 방향을 복원할 수 있게 한다.
+
+> **FT1·FT2 대신 `FT` + 조건.** Qualtrics 태그는 위치(첫 칸/둘째 칸)로 자유서술을 갈랐는데, 위치는 참가자마다 다른 버전을 가리킨다. 시스템에서는 조건을 그대로 저장하므로 순서에 의존하지 않는다.
 
 ### 10.7 세션 운영이 시스템에 요구하는 것
 
@@ -672,7 +683,7 @@ change, is entirely up to you.
 
 - **데모 영상 3편** — ⓐ 공통(~1분) · ⓑ Slate(~2.5분) · ⓒ Clay(~2.5분), 두 세그먼트 길이 차 ≤15초. 자막 권장, 배경음악 없음. 나레이션 원고는 연구 폴더 런북 §3.1의 문장 단위 고정 대본 2벌.
 - **세트 큐레이션** — subtype 독립 라벨링 → 자연 비율 산출 → 세트 추출 스크립트(검토 세트 + 테스트 세트).
-- **최종 설문 Qualtrics 2벌** + 화면 썸네일 2장.
+- ~~최종 설문 Qualtrics 2벌~~ — 시스템 안에 구현(§10.6). 준비물 없음.
 - **시스템**: §10 전체.
 - **IRB amendment**.
 
@@ -717,6 +728,7 @@ change, is entirely up to you.
 | **08-18** | **튜토리얼 = 데모 영상 3편** (08-10 번복) | 파일럿에서 라이브의 변인 통제가 실제로 어려움을 확인 |
 | **08-18** | **과제를 화면에 명시** | 시스템이 과제를 말하지 않아 초반 헤맴 발생. TLX가 지칭할 대상도 없었다. **경계는 주되 기준은 주지 않는다** |
 | **08-18** | **블록 테스트 Pass 1 순서 = 포인팅 → 서술 → 짐작** | 파일럿에서 참가자가 서술 칸을 지나쳐 포인팅부터 했다. 그 순서가 예측 가능성 기제의 순서다 — 서술을 먼저 요구하면 재려는 기제를 끄고 예측하게 만든다. 대가는 V3이 cued가 되는 것(V2·V3을 독립 지표로 쓰지 않는다) |
+| **08-18** | **동의서 이후의 모든 설문을 시스템에서 받는다** | 최종 설문의 Qualtrics 구현 철회. 참가자 키를 손으로 받지 않고, 열 순서가 배정 셀에서 자동으로 나오며(사람이 SC/CS를 잘못 보낼 일이 없다), 응답이 나머지와 같은 export에 들어온다 |
 | **08-18** | **최종 설문 저작 경험 13 → 8문항** | 분석 계획이 비확증인데 문항만 늘면 검정하지 않을 막대만 늘어난다. 남긴 기준 = "다른 측정이 못 잡는 것을 잡는가" |
 
 ---

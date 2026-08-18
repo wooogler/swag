@@ -46,6 +46,12 @@ async function main() {
   const { STUDY_DATASETS } = await import('../../src/lib/study/config');
   const { blockPlan, nextPhase } = await import('../../src/lib/study/phases');
   const { getSurveyItems } = await import('../../src/lib/study/survey-store');
+  const { COMPARE_ITEMS, CONTEXT_ITEMS, EXPERIENCE_ITEMS, OPEN_ITEM_KEY } = await import(
+    '../../src/lib/study/final-survey'
+  );
+  const { finalColumns, getFinalAnswers, missingFinalAnswers, saveFinalAnswers } = await import(
+    '../../src/lib/study/final-survey-store'
+  );
   const SURVEY_ITEMS = await getSurveyItems();
   const { studySurveyAnswers } = await import('../../src/db/schema');
 
@@ -180,6 +186,37 @@ async function main() {
 
 
       if (block === 1) await advanceTo('break');
+    }
+
+    // The end-of-session comparison: both versions on one screen, so it can
+    // only be answered here and it is the one place the column order matters.
+    await advanceTo('final_survey');
+    {
+      const row = await reload(participant.id);
+      const columns = await finalColumns(row);
+      console.log(`── final survey ──\n   columns: ${columns.map((c) => `${c.name}(block ${c.block})`).join(' | ')}`);
+      const rated = [...EXPERIENCE_ITEMS, ...CONTEXT_ITEMS].flatMap((item, i) =>
+        columns.map((c) => ({ itemKey: item.key, condition: c.condition, value: (i % 7) + 1 }))
+      );
+      const compared = COMPARE_ITEMS.map((item, i) => ({ itemKey: item.key, value: (i % 7) + 1 }));
+      const written = await saveFinalAnswers(row.id, [
+        ...rated,
+        ...compared,
+        ...columns.map((c) => ({
+          itemKey: OPEN_ITEM_KEY,
+          condition: c.condition,
+          text: `walkthrough note for ${c.name}`,
+        })),
+      ]);
+      // Saved twice on purpose: going back and changing an answer has to
+      // overwrite, and the one thing that would silently break it is a
+      // duplicate row for the items that carry no condition.
+      await saveFinalAnswers(row.id, compared);
+      const stored = await getFinalAnswers(row.id);
+      const missing = await missingFinalAnswers(row);
+      console.log(
+        `   wrote ${written}, stored ${stored.length} row(s) after a re-save, ${missing} required answer(s) missing`
+      );
     }
 
     await advanceTo('done');

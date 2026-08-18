@@ -19,7 +19,9 @@ snapshots/      SCORE only. The whole intent tree as it stood at each save.
 rules/          every rule / RULES-document version, as written.
 final/          what was deployed at the end of each block.
 block-test.csv  this participant's block-test answers.
-survey.csv      this participant's mini-survey answers.
+survey.csv      this participant's in-block workload (TLX) answers.
+final-survey.csv the end-of-session comparison: one row per rating, with the
+                version it is about (blank for the direct comparisons).
 
 timeline.csv columns
   seq           1..N in time order
@@ -78,7 +80,11 @@ function pad(n: number): string {
 
 export function trailToFiles(
   trail: ParticipantTrail,
-  extra: { blockTest: Record<string, unknown>[]; survey: Record<string, unknown>[] }
+  extra: {
+    blockTest: Record<string, unknown>[];
+    survey: Record<string, unknown>[];
+    finalSurvey: Record<string, unknown>[];
+  }
 ): TrailFiles {
   const files: TrailFiles = {};
   files['README.txt'] = README;
@@ -129,6 +135,7 @@ export function trailToFiles(
 
   files['block-test.csv'] = toCsv(extra.blockTest);
   files['survey.csv'] = toCsv(extra.survey);
+  files['final-survey.csv'] = toCsv(extra.finalSurvey);
   return files;
 }
 
@@ -147,9 +154,8 @@ export async function buildTrailFiles(participantId: string): Promise<{
   if (!trail) return null;
 
   const { db } = await import('@/db/db');
-  const { studyTestAnswers, studySurveyAnswers, studyQuestionBank, studyClones } = await import(
-    '@/db/schema'
-  );
+  const { studyTestAnswers, studySurveyAnswers, studyFinalSurveyAnswers, studyQuestionBank, studyClones } =
+    await import('@/db/schema');
   const { eq, inArray } = await import('drizzle-orm');
 
   const clones = await db
@@ -205,5 +211,24 @@ export async function buildTrailFiles(participantId: string): Promise<{
     answered_at: s.answeredAt?.toISOString() ?? '',
   }));
 
-  return { number: trail.participant.number, files: trailToFiles(trail, { blockTest, survey }) };
+  // The comparison belongs to no block, so it carries the CONDITION rather
+  // than a block number — and the direct-comparison items carry neither,
+  // because they are one judgement about the pair.
+  const finalRows = await db
+    .select()
+    .from(studyFinalSurveyAnswers)
+    .where(eq(studyFinalSurveyAnswers.participantId, trail.participant.id));
+  const finalSurvey = finalRows.map((f) => ({
+    participant: trail.participant.number,
+    item: f.itemKey,
+    condition: f.condition ?? '',
+    value: f.value ?? '',
+    text: f.text ?? '',
+    answered_at: f.answeredAt?.toISOString() ?? '',
+  }));
+
+  return {
+    number: trail.participant.number,
+    files: trailToFiles(trail, { blockTest, survey, finalSurvey }),
+  };
 }

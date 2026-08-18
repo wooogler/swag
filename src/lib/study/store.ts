@@ -328,6 +328,22 @@ export async function ensureStudyTables(): Promise<void> {
         )`);
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_survey_answers_unique" ON "study_survey_answers" ("participant_id","block","item_key")`);
 
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_final_survey_answers" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "participant_id" text NOT NULL,
+          "item_key" text NOT NULL,
+          "condition" text,
+          "value" integer,
+          "text" text,
+          "answered_at" timestamp NOT NULL
+        )`);
+      // COALESCE, not the bare column: a unique index over a nullable column
+      // treats every NULL as distinct, so the comparison items — which have no
+      // condition — could each be inserted twice and the upsert would never
+      // find the row it meant to update.
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_final_survey_answers_unique" ON "study_final_survey_answers" ("participant_id","item_key",COALESCE("condition",''))`);
+
       // FK-column indexes on core tables that Postgres does NOT auto-create.
       // Without them, deleting a clone's sessions/conversations/messages forces
       // a full seq-scan of the referencing table per row to validate the FK —

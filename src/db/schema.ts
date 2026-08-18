@@ -830,6 +830,28 @@ export const studySurveyAnswers = pgTable('study_survey_answers', {
   ),
 }));
 
+/**
+ * The end-of-session comparison (design §6.5), which rates BOTH versions at
+ * once and so cannot live in study_survey_answers — that table is keyed by
+ * block, and half of these questions are not about a block at all.
+ *
+ * Three shapes in one table, told apart by which columns are filled:
+ *   • a statement rated per version  → item_key + condition + value
+ *   • a direct comparison (bipolar)  → item_key + value, condition null
+ *   • a free-text answer per version → item_key + condition + text
+ */
+export const studyFinalSurveyAnswers = pgTable('study_final_survey_answers', {
+  id: serial('id').primaryKey(),
+  participantId: text('participant_id').notNull(),
+  /** The design's own item code: E2, C1, … I1 … FT. */
+  itemKey: text('item_key').notNull(),
+  /** Which version this rating is OF; null for the comparison items. */
+  condition: text('condition'),
+  value: integer('value'),
+  text: text('text'),
+  answeredAt: timestamp('answered_at').notNull(),
+});
+
 // TypeScript types
 export type Assignment = typeof assignments.$inferSelect;
 export type NewAssignment = typeof assignments.$inferInsert;

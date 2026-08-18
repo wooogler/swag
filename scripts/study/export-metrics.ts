@@ -29,6 +29,7 @@ import {
   studyParticipants,
   studyQuestionBank,
   studySurveyAnswers,
+  studyFinalSurveyAnswers,
   studyTestAnswers,
 } from '../../src/db/schema';
 
@@ -261,6 +262,29 @@ async function main() {
     };
   });
   write('survey.csv', surveyRows);
+
+  // ── final survey (end-of-session comparison) ────────────────────────
+  // One row per rating, carrying the CONDITION it is about rather than a
+  // block — the comparison is not a block's measurement. The direct-comparison
+  // items (I1–I5) carry no condition at all: they are one judgement about the
+  // pair, and `direction` says which way the scale ran for that participant,
+  // because the left column follows the order they used the versions in.
+  const finalAnswers = await db.select().from(studyFinalSurveyAnswers);
+  const finalRows = finalAnswers.map((f) => {
+    const participant = participants.find((p) => p.id === f.participantId);
+    const plan = participant ? blockPlan(participant) : [];
+    return {
+      participant: participant?.participantNumber ?? '',
+      item_key: f.itemKey,
+      condition: f.condition ?? '',
+      block: plan.find((b) => b.condition === f.condition)?.block ?? '',
+      value: f.value ?? '',
+      text: f.text ?? '',
+      direction: f.condition ? '' : plan.map((b) => b.condition).join('→'),
+      answered_at: f.answeredAt.toISOString(),
+    };
+  });
+  write('final_survey.csv', finalRows);
 
   // ── configuration work, from the DB state the session left behind ───
   const configRows: Record<string, unknown>[] = [];
