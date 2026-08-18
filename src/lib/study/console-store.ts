@@ -210,7 +210,12 @@ async function lastPhaseChange(participantId: string): Promise<Date | null> {
     .where(
       and(
         eq(studyEvents.participantId, participantId),
-        eq(studyEvents.eventType, 'phase_advance')
+        // `work_started` too, and for the reason the chip exists: the
+        // facilitator's five-minutes-left call has to come five minutes before
+        // the participant's own readout runs out, and that readout starts at
+        // the task screen's [Start], not at the advance into the phase
+        // (session.ts, same two types).
+        inArray(studyEvents.eventType, ['phase_advance', 'work_started'])
       )
     )
     .orderBy(desc(studyEvents.createdAt))

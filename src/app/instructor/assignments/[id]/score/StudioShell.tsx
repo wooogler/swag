@@ -31,9 +31,20 @@ export function useHeaderSlot(): HeaderSlot | null {
 
 export default function StudioShell({
   header,
+  banner,
   children,
 }: {
   header: ReactNode;
+  /**
+   * A strip above the header that a workbench CANNOT claim.
+   *
+   * The study's task banner lives here rather than in `header` because a
+   * participant spends most of the block inside a workbench, and a workbench
+   * takes the header over — so a banner in there would vanish exactly when it
+   * is doing its job (design §6.2: it is what keeps the task from having to be
+   * remembered).
+   */
+  banner?: ReactNode;
   children: ReactNode;
 }) {
   const [el, setEl] = useState<HTMLElement | null>(null);
@@ -42,6 +53,7 @@ export default function StudioShell({
 
   return (
     <HeaderSlotContext.Provider value={slot}>
+      {banner}
       <header className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
           {/* Always mounted so the portal target exists before any workbench

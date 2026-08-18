@@ -31,6 +31,7 @@ import {
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import AssignmentBriefing from './AssignmentBriefing';
 import WorkElapsed from '@/components/study/WorkElapsed';
+import TaskBanner from '@/components/study/TaskBanner';
 import { isLegacySnapshot, listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
 import StudioShell from './StudioShell';
@@ -424,6 +425,9 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   return (
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
       <StudioShell
+        // Participants only: a researcher opening the board is not doing the
+        // task, and the banner would sit in every screenshot.
+        banner={participant ? <TaskBanner /> : null}
         header={
           <div className="flex items-center gap-4">
             {/* Back out of a demo is back to the tool that started it, not up

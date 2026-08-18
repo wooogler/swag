@@ -6,8 +6,8 @@ import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
 import { cloneForBlock, getTestItems } from '@/lib/study/measure-store';
 import { isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
-import { STUDY_WORK_MINUTES } from '@/lib/study/config';
 import TutorialStep from '@/components/study/TutorialStep';
+import WorkStart from '@/components/study/WorkStart';
 
 export const dynamic = 'force-dynamic';
 
@@ -95,32 +95,42 @@ export default async function StudySessionPage() {
           <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 text-center">
             {workAssignmentId ? (
               <>
-                <h1 className="text-lg font-semibold mb-2">Set up your chatbot</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-3 leading-relaxed">
-                  Read through the conversations students had with the chatbot. Wherever a
-                  reply is not what you would want, change the setup so it answers the way
-                  you intend. Deploy when you are satisfied.
-                </p>
-                {/* The budget, said BEFORE it starts being spent. How much of
-                    the log someone chooses to cover is the block's primary
-                    measure, and a choice made without knowing there is a clock
-                    is not the free choice the design means to record. Phrased
-                    as a plan, not a limit: nothing cuts them off, and how far
-                    they get is up to them. */}
-                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                  This part takes about{' '}
-                  <span className="font-semibold text-[hsl(var(--foreground))]">
-                    {STUDY_WORK_MINUTES} minutes
-                  </span>
-                  . You will see the time so far in the top bar — how much of the log you
-                  look at is up to you.
-                </p>
-                <a
-                  href={`/instructor/assignments/${workAssignmentId}/score`}
-                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
-                >
-                  Open Chatbot Studio
-                </a>
+                {/* Design §6.2, verbatim, and verbatim for a reason: the
+                    facilitator says these same sentences out loud (§6.1), and
+                    a task that arrives in two wordings is two tasks. Both
+                    conditions get the identical string — this is shell parity,
+                    so no example or hint may be added for either arm.
+
+                    What it may say is the BOUNDARY (what the activity is,
+                    where it ends, that there is no set amount) and never the
+                    CRITERION (how many to read, how many to change, what a
+                    good rule looks like). How much of the log someone covers
+                    is RQ1's primary measure; a screen that suggests a number
+                    deletes that measurement.
+
+                    Left-aligned below the heading: three sentences of task
+                    definition centred are harder to read, and this is the one
+                    screen whose whole purpose is that they are read. */}
+                <h1 className="text-lg font-semibold mb-3">Your task in this round</h1>
+                <div className="text-left mx-auto max-w-md">
+                  <p className="text-sm text-[hsl(var(--muted-foreground))] mb-3 leading-relaxed">
+                    Look through the conversations students in this course had with the
+                    chatbot. Whenever a chatbot response is not what you would want, adjust
+                    the setup so that it responds the way you want. When you feel it&apos;s
+                    ready, deploy it.
+                  </p>
+                  <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                    There is no set amount to cover — how much you look at, and how much you
+                    change, is entirely up to you.
+                  </p>
+                </div>
+                {/* Not a link: pressing this is when the 25 minutes start, so
+                    it stamps the clock before opening the board (§6.2 — the
+                    task screen sits BEFORE the timer). The budget itself is no
+                    longer stated here; the facilitator gives it out loud and
+                    the board's elapsed readout carries the "/ 25", so it is
+                    still known before it is spent — which was the point. */}
+                <WorkStart href={`/instructor/assignments/${workAssignmentId}/score`} />
               </>
             ) : access.testBlock ? (
               <>
