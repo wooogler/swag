@@ -312,26 +312,8 @@ export async function GET(req: Request, { params }: RouteParams) {
       stale: !!mineRow && !mineFresh,
       /** A correction still in force on this question — the instructor overruled
        * the judge and the definition does not carry it yet. Null otherwise. */
-      // LEGACY VIEW of the same decision, derived rather than stored — the
-      // workbench still reads these three, and switches to `decision` next.
-      // 'held' has always meant "taught and not reproduced", which is now a
-      // computation instead of a state, so the mapping is exact and the
-      // override behaviour is unchanged.
-      pinned: decision && (decision.status === 'pending' || decision.holds === false)
-        ? decision.verdict
-        : null,
-      pinStatus: decision
-        ? decision.status === 'pending'
-          ? ('pending' as const)
-          : decision.holds === false
-            ? ('held' as const)
-            : null
-        : null,
-      correctionId: decision?.id ?? null,
-      marker:
-        decision && decision.status === 'taught' && decision.holds !== false
-          ? { verdict: decision.verdict, versionNo: decision.taughtAtVersion }
-          : null,
+      /** The verdict of any standing decision — a shorthand for `decision`. */
+      pinned: decision?.verdict ?? null,
       /** Why they ruled that way (asked only when it disagreed with the judge). */
       reason: decision?.reason ?? null,
       /**

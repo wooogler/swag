@@ -67,19 +67,31 @@ interface RatingRow {
   rating: RatingLevel | null;
   rationale: string | null;
   stale: boolean;
-  /** A correction still in force — the instructor overruled the judge here and
-   * the definition does not carry it yet. Null when there is none. */
+  /** The verdict of any standing decision on this question — null when none. */
   pinned: 'in' | 'out' | null;
-  /** 'pending' = taught, waiting for a fold; nothing has changed for students.
-   * 'held' = the fold was measured against it and could not reproduce it, so
-   * this decision stands in for the judgment until a definition can. */
-  pinStatus: 'pending' | 'held' | null;
-  /** The pending correction's row id (what the fold consumes). */
-  correctionId: number | null;
-  /** A correction already folded in, kept as a display-only marker. */
-  marker: { verdict: 'in' | 'out'; versionNo: number | null } | null;
-  /** Why the instructor overruled the judge — asked only when the correction
-   * disagreed with the rating. The fold's main fuel. Null otherwise. */
+  /**
+   * The instructor's standing ruling on this question, or null.
+   *
+   * One object where there used to be three fields in three states, because
+   * there is one thing to know and one bit that matters: `holds`. True — the
+   * definition says this by itself. False — it has drifted off, and until it
+   * catches up this decision is what routes the question. Null — nothing fresh
+   * to check against yet.
+   */
+  decision: {
+    id: number | null;
+    verdict: 'in' | 'out';
+    reason: string | null;
+    /** 'pending' — no fold has taken it in. 'taught' — at least one has. */
+    status: 'pending' | 'taught';
+    taughtAtVersion: number | null;
+    /** >1 means the definition keeps losing it: a question that may want an
+     * intent of its own rather than a wider version of this one. */
+    taughtCount: number;
+    holds: boolean | null;
+  } | null;
+  /** Why the instructor ruled that way — asked only when it disagreed with the
+   * rating. The fold's main fuel. Null otherwise. */
   reason: string | null;
   /** An EARLIER node in this intent's chain that takes the question first
    * (v7 first-match routing) — null when nothing shadows it. Not displayed:
@@ -108,18 +120,19 @@ const reaches = (r: { shadowedBy: number | null }) => r.shadowedBy === null;
  * Membership, in one place — so the lists and the diff's +N/−N can never
  * disagree about what counts as being in this intent.
  *
- * A HELD decision wins over the rating, because that is what actually happens:
- * held means the fold was measured and could not make the definition reproduce
- * the instructor's call, so the system routes by the call. Showing the rating
- * here would tell them the opposite of what a student gets.
+ * A decision the definition does NOT hold wins over the rating, because that is
+ * what actually happens: the system routes by the instructor's call until the
+ * text can say it. Showing the rating there would tell them the opposite of
+ * what a student gets.
  */
 const isMember = (r: {
   rating: RatingLevel | null;
   shadowedBy: number | null;
-  pinned?: 'in' | 'out' | null;
-  pinStatus?: 'pending' | 'held' | null;
+  decision?: { verdict: 'in' | 'out'; holds: boolean | null } | null;
 }) =>
-  (r.pinStatus === 'held' ? r.pinned === 'in' : r.rating === 'clearly_in') && reaches(r);
+  (r.decision && r.decision.holds === false
+    ? r.decision.verdict === 'in'
+    : r.rating === 'clearly_in') && reaches(r);
 
 // The two pin-driven orders both rank by the same embedding score (max cosine
 // to the IN pins − max cosine to the OUT pins), just in opposite directions.
@@ -765,11 +778,10 @@ export default function IntentWorkbench({
         ratingDone = true;
       }
       await livePoll;
-      const rated = await fetchRatings(id, signal);
+      await fetchRatings(id, signal);
       if (live(signal)) {
         setCheckout(null); // a rollback-apply lands back on the (new) live spec
         setBaselineNonce((n) => n + 1); // the base's own rows may have landed too
-        await retireCaughtUp(id, rated, signal);
         // Visible scope is done — the rest of the log rates quietly behind it.
         if (scopeSet) sweepRestInBackground(id);
       }
@@ -784,52 +796,6 @@ export default function IntentWorkbench({
     }
   }
 
-  /**
-   * Let go of the held decisions the definition has caught up with.
-   *
-   * A held correction is scaffolding: it routes a question because the fold was
-   * measured and could not make the definition do it. This pass — run on the
-   * FRESH ratings an Apply just produced, the only ones that can test the
-   * definition it just wrote — retires the ones the definition now reproduces
-   * on its own. The test is `isMember`'s, so a decision is only let go when the
-   * routing would not move.
-   *
-   * Best-effort and quiet: a failure leaves the decisions held, which is the
-   * safe direction, and the instructor is told what was absorbed rather than
-   * asked about it — there is nothing to decide, the definition simply grew.
-   */
-  async function retireCaughtUp(id: number, payload: RatingsPayload, signal: AbortSignal) {
-    const caughtUp = payload.rows.filter(
-      (r) =>
-        r.pinStatus === 'held' &&
-        r.rating !== null &&
-        !r.stale &&
-        (r.pinned === 'in') === (r.rating === 'clearly_in')
-    );
-    if (caughtUp.length === 0) return;
-    try {
-      const res = await fetch(
-        `/api/instructor/assignments/${assignmentId}/score/intents/${id}/pins`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ retireMessageIds: caughtUp.map((r) => r.messageId) }),
-          signal,
-        }
-      );
-      if (!res.ok || !live(signal)) return;
-      const d = await res.json().catch(() => ({}));
-      const n = typeof d?.retired === 'number' ? d.retired : caughtUp.length;
-      if (n > 0) {
-        setAbsorbedNote(n);
-        await fetchRatings(id, signal);
-      }
-    } catch {
-      /* they stay held — the next Apply tries again */
-    }
-  }
-  /** "N decisions absorbed" — shown once after the Apply that earned it. */
-  const [absorbedNote, setAbsorbedNote] = useState<number | null>(null);
 
   /**
    * Undo/redo over the APPLIED definitions of this session.
@@ -1494,7 +1460,7 @@ export default function IntentWorkbench({
     () =>
       data
         ? scopeSet
-          ? data.rows.filter((r) => scopeSet.has(r.messageId) || r.pinned !== null || r.marker !== null)
+          ? data.rows.filter((r) => scopeSet.has(r.messageId) || r.decision !== null)
           : data.rows
         : [],
     [data, scopeSet]
@@ -1517,58 +1483,42 @@ export default function IntentWorkbench({
     () => scopedRows.filter((r) => r.rating === 'probably_in' && reaches(r)),
     [scopedRows]
   );
-  /** Decisions waiting for a fold — what "Update definition" will fold in. A
-   * held one is not waiting: it has already been through a fold that failed, so
-   * it belongs to the held list below (the next fold takes it along regardless). */
-  const pinnedIn = useMemo(
-    () => (data ? data.rows.filter((r) => r.pinned === 'in' && r.pinStatus !== 'held') : []),
-    [data]
-  );
-  const pinnedOut = useMemo(
-    () => (data ? data.rows.filter((r) => r.pinned === 'out' && r.pinStatus !== 'held') : []),
-    [data]
-  );
-  const pinCount = pinnedIn.length + pinnedOut.length;
-  /** Decisions the definition could not learn — kept, and honoured meanwhile. */
-  const heldRows = useMemo(
-    () => (data ? data.rows.filter((r) => r.pinStatus === 'held') : []),
-    [data]
-  );
-  /** Every question ruled OUT of this intent and not yet absorbed — waiting or
-   * held alike. What the spin-off is offered on: they have left this intent but
-   * not the scope around it, so they still need an intent to answer them. */
-  const outDecisions = useMemo(
-    () => [...pinnedOut, ...heldRows.filter((r) => r.pinned === 'out')],
-    [pinnedOut, heldRows]
-  );
-  /** Decisions the definition carries by itself now. */
-  const absorbedCount = useMemo(
-    () => (data ? data.rows.filter((r) => r.marker !== null && r.pinned === null).length : 0),
-    [data]
-  );
   /**
-   * A folded correction the re-rating did NOT reproduce — the fold did not
-   * hold. Surfaced as a count so a failed teaching cannot pass unnoticed.
+   * THE LEDGER — every question this instructor has ruled on, in one list.
    *
-   * STALE ratings are excluded, and that exclusion is the whole point: right
-   * after a fold the stored ratings still belong to the definition the fold
-   * replaced, so judging a marker against them would flag every correction as
-   * failed at the exact moment it succeeded. A marker is only testable once the
-   * re-Apply has rated the question against the definition it produced.
+   * It used to be three lists (waiting · held · absorbed), which is three names
+   * for one thing plus the answer to one question. The question is `holds`, and
+   * it is the only thing the instructor has to read: a decision the definition
+   * cannot say is one to re-explain, move somewhere else, or withdraw, and a
+   * decision it can say needs nothing.
    */
-  const conflictRows = useMemo(
-    () =>
-      scopedRows.filter(
-        (r) =>
-          r.marker !== null &&
-          r.pinned === null &&
-          r.rating !== null &&
-          !r.stale &&
-          (r.marker.verdict === 'in') !== (r.rating === 'clearly_in')
-      ),
-    [scopedRows]
+  const decisions = useMemo(
+    () => (data ? data.rows.filter((r) => r.decision !== null) : []),
+    [data]
   );
-
+  /** Ruled on, and the definition has drifted off it — the list that acts. */
+  const brokenDecisions = useMemo(
+    () => decisions.filter((r) => r.decision?.holds === false),
+    [decisions]
+  );
+  /** Ruled on since the last fold. What "Update definition" is here to teach. */
+  const newDecisions = useMemo(
+    () => decisions.filter((r) => r.decision?.status === 'pending'),
+    [decisions]
+  );
+  /** Reading order for the ledger: what needs something, first. */
+  const rank = (r: RatingRow) =>
+    r.decision?.holds === false ? 0 : r.decision?.holds === null ? 1 : 2;
+  const holdingCount = useMemo(
+    () => decisions.filter((r) => r.decision?.holds === true).length,
+    [decisions]
+  );
+  const pinnedIn = useMemo(() => decisions.filter((r) => r.pinned === 'in'), [decisions]);
+  const pinnedOut = useMemo(() => decisions.filter((r) => r.pinned === 'out'), [decisions]);
+  /** Every question ruled OUT of this intent. What the spin-off is offered on:
+   * they have left this intent but not the scope around it, so they still need
+   * an intent to answer them. */
+  const outDecisions = pinnedOut;
   // ---- Membership diff vs the baseline version --------------------------
   // Membership is the JUDGMENT — what the deployed chatbot would do. A pending
   // correction is not membership: it is a request for the definition to change,
@@ -1889,55 +1839,81 @@ export default function IntentWorkbench({
                 {r.reason}
               </p>
             )}
-            {/* Where this correction stands. A PENDING one has changed nothing
-                yet — the row has not moved, and this says why. A HELD one has:
-                it is what the routing follows, and the line says what is still
-                missing rather than letting the row look simply wrong. */}
-            {r.pinned && r.pinStatus === 'held' && (
-              <p className="mt-1 text-xs font-medium text-amber-700">
-                📌 held {r.pinned} by your decision — the definition can’t say this yet, so this
-                decision is what routes it
-              </p>
-            )}
-            {r.pinned && r.pinStatus !== 'held' && (
-              <p className="mt-1 text-xs font-medium text-[hsl(var(--primary))]">
-                marked {r.pinned} — waiting for the definition update
-              </p>
-            )}
-            {/* MARKER — a correction already folded in. Quiet when the rating
-                agrees (it is just "I reviewed this"); loud when it does not,
-                because that is a teaching that did not hold. */}
-            {!r.pinned && r.marker && (() => {
-              const at = r.marker.versionNo ? ` · v${r.marker.versionNo}` : '';
-              // Only a FRESH rating can test a marker — see conflictRows.
-              const testable = r.rating !== null && !r.stale;
-              const held = (r.marker.verdict === 'in') === (r.rating === 'clearly_in');
-              return testable && !held ? (
-                <p className="mt-1 text-xs font-medium text-amber-700">
-                  ⚠ you marked this {r.marker.verdict}
-                  {at} — the updated definition does not agree
-                </p>
-              ) : (
-                <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-                  ✓ you marked this {r.marker.verdict}
-                  {at}
-                  {!testable ? ' — re-apply to check it held' : ''}
-                </p>
-              );
-            })()}
-            {(r.rationale || drift) && (
-              <p className="mt-1 flex flex-wrap items-baseline gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
-                {drift && (
+            {/* WHERE THE DECISION STANDS — one line, one bit.
+                There were three sentences here, in three vocabularies
+                (waiting · held · you marked this), for what is really a single
+                question: does the definition say this by itself? */}
+            {r.decision && (
+              <p
+                className={`mt-1 text-xs font-medium ${
+                  r.decision.holds === false
+                    ? 'text-amber-700'
+                    : r.decision.holds === true
+                      ? 'text-[hsl(var(--muted-foreground))]'
+                      : 'text-[hsl(var(--primary))]'
+                }`}
+              >
+                you: {r.decision.verdict}{' '}
+                {r.decision.holds === false ? (
+                  <>
+                    ✕ · the definition says {r.decision.verdict === 'in' ? 'out' : 'in'} — yours
+                    routes it meanwhile
+                  </>
+                ) : r.decision.holds === true ? (
+                  <>✓</>
+                ) : r.decision.status === 'pending' ? (
+                  <>· not folded in yet</>
+                ) : (
+                  <>· re-apply to check it held</>
+                )}
+                {r.decision.taughtCount > 1 && (
                   <span
-                    className={`shrink-0 rounded border px-1 py-0.5 text-xs font-medium ${drift.cls}`}
-                    title={drift.title}
+                    className="ml-1 font-normal text-[hsl(var(--muted-foreground))]"
+                    title="How many folds have had to take this decision in. More than one means the definition keeps losing it — this question may want an intent of its own."
                   >
-                    {drift.label}
+                    · taught {r.decision.taughtCount}×
                   </span>
                 )}
-                {r.rationale && <span className="italic">{r.rationale}</span>}
               </p>
             )}
+            {/* The classifier's own reading — SHOWN WHERE IT IS ACTIONABLE.
+                On an undecided question it is the evidence for ruling either
+                way; on a decision the definition has drifted off it is the
+                evidence for how to re-explain, and the reason the amber line
+                above is not simply "wrong". Everywhere else it is the machine
+                agreeing with a settled question, so it waits behind a toggle
+                rather than adding a line to every row. */}
+            {(r.rationale || drift) &&
+              (!r.decision || r.decision.holds === false ? (
+                <p className="mt-1 flex flex-wrap items-baseline gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
+                  {drift && (
+                    <span
+                      className={`shrink-0 rounded border px-1 py-0.5 text-xs font-medium ${drift.cls}`}
+                      title={drift.title}
+                    >
+                      {drift.label}
+                    </span>
+                  )}
+                  {r.rationale && <span className="italic">{r.rationale}</span>}
+                </p>
+              ) : (
+                <details className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+                  <summary className="cursor-pointer list-none hover:text-[hsl(var(--foreground))]">
+                    ▸ why
+                  </summary>
+                  <p className="mt-0.5 flex flex-wrap items-baseline gap-1.5">
+                    {drift && (
+                      <span
+                        className={`shrink-0 rounded border px-1 py-0.5 text-xs font-medium ${drift.cls}`}
+                        title={drift.title}
+                      >
+                        {drift.label}
+                      </span>
+                    )}
+                    {r.rationale && <span className="italic">{r.rationale}</span>}
+                  </p>
+                </details>
+              ))}
             {r.stale && (
               <span className="mt-0.5 block text-xs text-[hsl(var(--muted-foreground))]">
                 stale rating
@@ -2214,112 +2190,86 @@ export default function IntentWorkbench({
               }
             />
 
-            {/* DECISIONS — every question this instructor has ruled on, in the
-                three states one can be in: waiting for a fold, held because the
-                fold could not learn it, or absorbed into the definition. The
-                rows themselves stay in the panes; this is the ledger, so "what
-                have I decided, and has the definition got it?" is one place. */}
-            {(pinCount > 0 || heldRows.length > 0 || absorbedCount > 0) && checkout === null && (
+            {/* THE LEDGER — every question this instructor has ruled on, and
+                the one thing worth reading about each: does the definition say
+                it by itself?
+
+                This was three blocks (waiting · held · absorbed), which named
+                one thing three ways and put the answer nowhere. The counter is
+                the point: a definition rewritten for one question re-judges
+                every question, so decisions already settled come back the other
+                way, and until now nothing counted them. */}
+            {decisions.length > 0 && checkout === null && (
               <div className="rounded border border-[hsl(var(--primary))]/40 bg-[hsl(var(--primary))]/5 px-2.5 py-2">
-                {absorbedNote !== null && (
-                  <p className="mb-1.5 rounded bg-emerald-50 px-1.5 py-1 text-xs text-emerald-800">
-                    ✓ {absorbedNote} decision{absorbedNote === 1 ? '' : 's'} absorbed — the
-                    definition now says {absorbedNote === 1 ? 'it' : 'them'} without help
-                  </p>
-                )}
-                {pinCount > 0 && (
-                <p className="text-xs font-semibold text-[hsl(var(--foreground))]">
-                  Decisions waiting · {pinCount}
-                  <span className="ml-1 font-normal text-[hsl(var(--muted-foreground))]">
-                    — folded into the definition on update, then cleared
+                <p className="flex items-baseline justify-between gap-2 text-xs font-semibold text-[hsl(var(--foreground))]">
+                  <span>Your decisions · {decisions.length}</span>
+                  <span className="font-normal">
+                    <span className="text-[hsl(var(--muted-foreground))]">{holdingCount} hold</span>
+                    {brokenDecisions.length > 0 && (
+                      <span className="ml-1.5 font-semibold text-amber-700">
+                        {brokenDecisions.length} don’t
+                      </span>
+                    )}
                   </span>
                 </p>
-                )}
-                {pinCount > 0 && (
                 <ul className="mt-1.5 space-y-1">
-                  {[...pinnedIn, ...pinnedOut].slice(0, 6).map((r) => (
-                    <li key={r.messageId} className="text-xs leading-snug">
-                      <span
-                        className={`font-semibold ${
-                          r.pinned === 'in' ? 'text-emerald-700' : 'text-rose-700'
-                        }`}
-                      >
-                        {r.pinned}
-                      </span>{' '}
-                      <span className="text-[hsl(var(--foreground))]">
-                        {r.queryText.replace(/\s+/g, ' ').trim().slice(0, 70)}
-                        {r.queryText.length > 70 ? '…' : ''}
-                      </span>
-                      {r.reason && (
+                  {/* The ones that need something first. */}
+                  {[...decisions]
+                    .sort((a, b) => rank(a) - rank(b))
+                    .slice(0, 6)
+                    .map((r) => (
+                      <li key={r.messageId} className="text-xs leading-snug">
                         <span
-                          className={`block italic ${
+                          className={`font-semibold ${
                             r.pinned === 'in' ? 'text-emerald-700' : 'text-rose-700'
                           }`}
                         >
-                          {r.pinned === 'in' ? 'why: ' : 'why not: '}
-                          {r.reason}
+                          {r.pinned}
+                        </span>{' '}
+                        <span className="text-[hsl(var(--foreground))]">
+                          {r.queryText.replace(/\s+/g, ' ').trim().slice(0, 60)}
+                          {r.queryText.length > 60 ? '…' : ''}
+                        </span>{' '}
+                        <span
+                          className={
+                            r.decision?.holds === false
+                              ? 'font-semibold text-amber-700'
+                              : 'text-[hsl(var(--muted-foreground))]'
+                          }
+                          title={
+                            r.decision?.holds === false
+                              ? 'The definition does not reproduce this. Yours routes the question meanwhile.'
+                              : r.decision?.holds === true
+                                ? 'The definition says this by itself.'
+                                : 'Not checked yet — apply the definition.'
+                          }
+                        >
+                          {r.decision?.holds === false
+                            ? '✕'
+                            : r.decision?.holds === true
+                              ? '✓'
+                              : '…'}
                         </span>
-                      )}
-                    </li>
-                  ))}
-                  {pinCount > 6 && (
+                        {(r.decision?.taughtCount ?? 0) > 1 && (
+                          <span className="ml-1 text-[hsl(var(--muted-foreground))]">
+                            taught {r.decision?.taughtCount}×
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  {decisions.length > 6 && (
                     <li className="text-xs text-[hsl(var(--muted-foreground))]">
-                      + {pinCount - 6} more
+                      + {decisions.length - 6} more
                     </li>
                   )}
                 </ul>
-                )}
-                {/* HELD — decided, measured, and not learnable yet. Named, not
-                    hidden: these are the ones the definition still owes, and
-                    the next update takes them along automatically. */}
-                {heldRows.length > 0 && (
-                  <div className={pinCount > 0 ? 'mt-2 border-t border-[hsl(var(--border))] pt-2' : ''}>
-                    <p className="text-xs font-semibold text-amber-800">
-                      📌 Held · {heldRows.length}
-                      <span className="ml-1 font-normal text-[hsl(var(--muted-foreground))]">
-                        — kept because the definition can’t say them yet; routing follows these
-                      </span>
-                    </p>
-                    <ul className="mt-1 space-y-1">
-                      {heldRows.slice(0, 4).map((r) => (
-                        <li key={r.messageId} className="text-xs leading-snug">
-                          <span
-                            className={`font-semibold ${
-                              r.pinned === 'in' ? 'text-emerald-700' : 'text-rose-700'
-                            }`}
-                          >
-                            {r.pinned}
-                          </span>{' '}
-                          <span className="text-[hsl(var(--foreground))]">
-                            {r.queryText.replace(/\s+/g, ' ').trim().slice(0, 70)}
-                            {r.queryText.length > 70 ? '…' : ''}
-                          </span>
-                        </li>
-                      ))}
-                      {heldRows.length > 4 && (
-                        <li className="text-xs text-[hsl(var(--muted-foreground))]">
-                          + {heldRows.length - 4} more
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                )}
-                {absorbedCount > 0 && (
-                  <p
-                    className="mt-2 text-xs text-[hsl(var(--muted-foreground))]"
-                    title="Decisions the definition reproduces on its own — nothing is holding them up any more."
-                  >
-                    ✓ {absorbedCount} absorbed into the definition
-                  </p>
-                )}
-                {(pinCount > 0 || heldRows.length > 0) && (
                 <button
                   onClick={openFoldReview}
                   disabled={refining || busy || saving || !openaiConfigured}
                   title={
                     !openaiConfigured
                       ? 'OPENAI_API_KEY is not configured'
-                      : 'Rewrite the definition so it carries these decisions by itself — the result is checked against the classifier, and you review it before anything changes'
+                      : 'Rewrite the definition from ALL of these decisions — the result is checked against the classifier, and you review it before anything changes'
                   }
                   className="mt-2 inline-flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-2 py-1 text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
                 >
@@ -2328,10 +2278,9 @@ export default function IntentWorkbench({
                   ) : (
                     <Wand2 className="h-3 w-3" />
                   )}
-                  Update definition · {pinCount + heldRows.length} decision
-                  {pinCount + heldRows.length === 1 ? '' : 's'}
+                  Update definition
+                  {newDecisions.length > 0 && ` · ${newDecisions.length} to teach`}
                 </button>
-                )}
                 {/* Ruling questions out is also finding a pile with no home.
                     The button is HERE, on that pile, because that is what
                     decides where the new intent lands: these questions left
@@ -2533,15 +2482,14 @@ export default function IntentWorkbench({
                   <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/60 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <span>In this intent · {inThisIntent.length}</span>
-                      {conflictRows.length > 0 && (
+                      {brokenDecisions.length > 0 && (
                         <span
                           className="rounded border border-amber-300 bg-amber-50 px-1 py-0.5 font-normal normal-case text-amber-800"
                           title={
-                            'Questions you corrected whose folded definition no longer agrees. ' +
-                            'The teaching did not hold — correct them again, or edit the definition directly.'
+                            'Decisions the definition does not reproduce. Yours route those questions meanwhile — re-explain, move them to their own intent, or withdraw.'
                           }
                         >
-                          ⚠ {conflictRows.length} disagree{conflictRows.length === 1 ? 's' : ''} with your marks
+                          ⚠ {brokenDecisions.length} not in the definition
                         </span>
                       )}
                       {scopeLabel && (
@@ -2803,11 +2751,11 @@ export default function IntentWorkbench({
           pending={{
             title: title.trim() || 'this intent',
             before: definition.trim(),
-            // Held decisions are in the fold too (the server takes them along),
-            // so the waiting view must list them or the modal would show fewer
-            // than it is about to work on.
-            corrections: [...pinnedIn, ...pinnedOut, ...heldRows].map((r) => ({
-              id: r.correctionId ?? r.messageId,
+            // EVERY decision — the fold reads the whole ledger, so the waiting
+            // view must list the whole ledger or it would show fewer than the
+            // fold is about to work on.
+            corrections: decisions.map((r) => ({
+              id: r.decision?.id ?? r.messageId,
               messageId: r.messageId,
               verdict: (r.pinned ?? 'in') as 'in' | 'out',
               queryText: r.queryText,
