@@ -37,6 +37,7 @@ import {
   type StudyCell,
   type StudyPhase,
 } from '@/lib/study/phases';
+import { STUDY_WORK_MINUTES, STUDY_WORK_WARNING_MINUTES } from '@/lib/study/config';
 
 function Chip({
   children,
@@ -320,7 +321,7 @@ export default function SessionConsole({
                 <Chip tone="ok">
                   {PHASE_LABELS[p.phase as StudyPhase] ?? p.phase}
                   {p.phaseMinutes !== null && (
-                    <span className={p.phaseMinutes >= 30 ? 'text-rose-700 font-bold' : 'opacity-70'}>
+                    <span className={phaseClockTone(p.phase, p.phaseMinutes)}>
                       {' '}
                       {p.phaseMinutes}m
                     </span>
@@ -832,7 +833,7 @@ function NewParticipant({
 
 /** The full link, visible — a facilitator often reads it out or pastes it. */
 function LinkRow({ token }: { token: string }) {
-  const url = studyLink(token);
+  const url = useStudyLink(token);
   return (
     <div className="flex items-center gap-2">
       <code className="flex-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1.5 text-[11px] break-all">
@@ -853,6 +854,9 @@ function LinkRow({ token }: { token: string }) {
  * button that does not exist.
  */
 function LinkButton({ token, expired }: { token: string | null; expired: boolean }) {
+  // Before the early returns: hooks may not sit behind a condition, and both of
+  // those returns are conditions.
+  const link = useStudyLink(token ?? '');
   if (!token) return null;
   if (expired) {
     return (
@@ -861,7 +865,30 @@ function LinkButton({ token, expired }: { token: string | null; expired: boolean
       </Chip>
     );
   }
-  return <CopyButton value={studyLink(token)} label="link" compact />;
+  return <CopyButton value={link} label="link" compact />;
+}
+
+/**
+ * How the facilitator's elapsed chip reads — amber at the warning, rose at the
+ * cap, plain everywhere else.
+ *
+ * It used to go rose at a hard-coded 30, the cap from BEFORE design v2 cut the
+ * configure block to 25. So the one visual cue the person running the clock
+ * gets was arriving five minutes after the block was already over. Both numbers
+ * now come from config, and there are two of them because the protocol has two
+ * moments: a verbal warning at 20, the cap at 25.
+ *
+ * Only the configure blocks are on that clock. The chip shows minutes-in-phase
+ * for every phase, and a 21-minute break or a slow interview is not late — it
+ * is just a different phase, and colouring it would train the facilitator to
+ * ignore the colour.
+ */
+function phaseClockTone(phase: string, minutes: number): string {
+  const isWorkBlock = phase === 'block1_work' || phase === 'block2_work';
+  if (!isWorkBlock) return 'opacity-70';
+  if (minutes >= STUDY_WORK_MINUTES) return 'text-rose-700 font-bold';
+  if (minutes >= STUDY_WORK_WARNING_MINUTES) return 'text-amber-700 font-semibold';
+  return 'opacity-70';
 }
 
 function CopyButton({
@@ -897,9 +924,23 @@ function CopyButton({
   );
 }
 
-/** Absolute, because it is pasted into a chat window on another machine. */
-function studyLink(token: string): string {
-  const origin = typeof window === 'undefined' ? '' : window.location.origin;
+/**
+ * The participant's start link, absolute — because it is pasted into a chat
+ * window on another machine, where a relative path means nothing.
+ *
+ * The origin arrives AFTER mount rather than during render. Reading
+ * `window.location.origin` while rendering is a server/client branch: the
+ * server has no window and produced `/study/s/<token>`, the browser produced
+ * `http://…/study/s/<token>`, and React found the two `title` attributes
+ * disagreeing and warned that it would not patch the difference up. Which is
+ * the real cost — "won't be patched up" means whichever string won could be the
+ * server's relative one, and a facilitator would have pasted THAT into the chat
+ * window. The first paint still shows the path, and it is a working link on
+ * this machine; a moment later it is the full URL.
+ */
+function useStudyLink(token: string): string {
+  const [origin, setOrigin] = useState('');
+  useEffect(() => setOrigin(window.location.origin), []);
   return `${origin}/study/s/${token}`;
 }
 

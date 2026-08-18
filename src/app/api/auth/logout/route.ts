@@ -1,6 +1,6 @@
-import { NextResponse } from 'next/server';
-import { cookies, headers } from 'next/headers';
+import { cookies } from 'next/headers';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
+import { redirectTo } from '@/lib/redirect';
 
 export async function POST() {
   // Where logging out LANDS depends on where the session came from. A study
@@ -19,20 +19,8 @@ export async function POST() {
   const cookieStore = await cookies();
   cookieStore.delete('user_session');
 
-  // Get the proper base URL from headers or environment
-  const requestHeaders = await headers();
-  const forwardedProto = requestHeaders.get('x-forwarded-proto') ?? 'https';
-  const forwardedHost = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
-
-  let baseUrl: string;
-  if (forwardedHost) {
-    baseUrl = `${forwardedProto}://${forwardedHost}`;
-  } else {
-    baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3030';
-  }
-
-  // 303, not the helper's default 307: this is a POST, and 307 preserves the
-  // method — the browser would re-POST to a page route that only serves GET.
-  // 303 is the status that means "now go GET this instead".
-  return NextResponse.redirect(new URL(exit, baseUrl), 303);
+  // 303, not the usual 307: this is a POST, and 307 preserves the method — the
+  // browser would re-POST to a page route that only serves GET. 303 is the
+  // status that means "now go GET this instead".
+  return redirectTo(exit, 303);
 }

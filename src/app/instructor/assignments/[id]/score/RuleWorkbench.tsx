@@ -22,16 +22,16 @@
  *  - Checkout an older step → "Revert to vX" makes it live and deletes the
  *    later steps (git-reset, confirmed) — clicking the newest returns to it.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowUp,
-  Eye,
   HelpCircle,
   Loader2,
   Maximize2,
   Minimize2,
   Pencil,
+  Plus,
   Quote,
   RotateCcw,
   Save as SaveIcon,
@@ -42,6 +42,9 @@ import {
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
+import { sortByAnchorDistance } from './query-list';
+import EditorModal from './EditorModal';
+import { getJSON } from './http';
 import { WorkbenchTopBar } from './workbench-shared';
 import ChatMessages from '@/components/chat/ChatMessages';
 import { seedRuleVersionName } from '@/lib/score/intents';
@@ -370,6 +373,14 @@ interface RuleWorkbenchProps {
   viewVersion?: { versionNo: number; name: string | null; rule: string | null; response: string | null } | null;
   onClose: (changed: boolean) => void;
   /**
+   * Apply just recorded a MAJOR version, and these questions in scope have no
+   * response under it yet (the anchor and the open tabs already do). The BOARD
+   * generates them, so the viewer's version dropdown reaches every question the
+   * rule answers rather than only the ones this session opened — and so leaving
+   * for the board, the natural next move, does not cancel the run.
+   */
+  onApplied?: (opts: { versionNo: number; label: string; messageIds: number[] }) => void;
+  /**
    * WHICH of the three rules this workbench is editing. This used to be one
    * `promptMode` boolean, which collapsed the last two together — and since the
    * baseline half of that pair carries the ABLATION's affordances, a SCORE type
@@ -400,6 +411,10 @@ interface RuleWorkbenchProps {
   scopeMessageIds?: number[] | null;
   /** Header/copy name for a scoped rule (e.g. "Planning"). */
   scopeLabel?: string | null;
+  /** Where an intent sits in its type's first-match chain — resolved by the
+   * board, which owns the tree. Shown in the cross-query preview under the
+   * When; see RuleApplyPreview's `placement`. */
+  placement?: { typeLabel: string | null; parentTitle: string | null } | null;
   /** A WHEN nobody authored, shown READ-ONLY. A type root's rule fires on
    * whatever its type leaves unclaimed: half of that condition is the type
    * classifier's own definition, half is the chain's shape — neither is a
@@ -420,9 +435,11 @@ export default function RuleWorkbench({
   deployedRule = null,
   viewVersion = null,
   onClose,
+  onApplied,
   variant = 'intent',
   scopeMessageIds = null,
   scopeLabel = null,
+  placement = null,
   fixedWhen = null,
 }: RuleWorkbenchProps) {
   // The three axes the variants actually differ on. Every branch below asks one
@@ -446,13 +463,16 @@ export default function RuleWorkbench({
   // simulated minor via Preview.
   const [ruleText, setRuleText] = useState(intent.rule ?? '');
 
-  // TABS — the anchor plus any opened intent questions (edge cases / apply-all).
+  // TABS — the anchor plus the examples: three seeded on open, plus whatever
+  // was pulled in from the preview since.
   const [caseIds, setCaseIds] = useState<number[] | null>(null);
+  // Which of those tabs the instructor pulled in by hand — marked in the strip,
+  // so "the three the rule opened on" stays tellable from "the ones I added".
+  const [addedIds, setAddedIds] = useState<Set<number>>(new Set());
   const [activeId, setActiveId] = useState(row.messageId);
   // Lazily generated previews under the VIEWED rule for tabs the viewed
   // version's own stored response doesn't cover. Cleared on version switch.
   const [updated, setUpdated] = useState<Record<number, { text: string | null; loading: boolean }>>({});
-  const [checking, setChecking] = useState(false);
   // Cross-query preview workbench (review the saved rule across questions).
   const [previewOpen, setPreviewOpen] = useState(false);
   // "Make this a new intent" suggestion modal.
@@ -484,8 +504,9 @@ export default function RuleWorkbench({
   // Span-quote target: the feedback box a quoted span lands in (the button and
   // its selection state live in QuoteSelectionLayer, deliberately isolated).
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
-  // The rule box grows to fit its text (see the textarea below).
-  const ruleBoxRef = useRef<HTMLTextAreaElement>(null);
+  // Is the full-size rule editor open? The draft lives in the dialog until it
+  // saves back into `ruleText`, so nothing else here has to know about it.
+  const [editingRule, setEditingRule] = useState(false);
   // A simulation (preview + minor record) is in flight.
   const [simulating, setSimulating] = useState(false);
 
@@ -531,12 +552,13 @@ export default function RuleWorkbench({
         setChat(entries.map((e) => ({ ...e, id: ++chatIdRef.current })));
       }
     })();
-    // Seed the tab strip with the intent's top edge cases. Only an intent has
-    // them: the sweep asks which questions the CHAIN resolves to this intent,
-    // and a type root is not a chain member (it is what the chain falls through
-    // to), so the call would come back empty. The type root's other questions
-    // are reached through the cross-query preview instead.
-    if (authoredWhen) void checkEdgeCases();
+    // Seed the tab strip with the first three questions of the rule's own
+    // question set (see seedExampleTabs). Both SCORE targets have such a set —
+    // an intent's questions, a type root's unclaimed residue — and both get it;
+    // the baseline, whose set is the whole log, still starts at the anchor and
+    // builds its review set by hand. That is the one ablation difference in
+    // this flow (spec §4.1/4.2).
+    if (scopeMessageIds) void seedExampleTabs();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -551,15 +573,6 @@ export default function RuleWorkbench({
     if (!rewriteOpen) setRewriteStep(null);
   }, [rewriteOpen]);
 
-  // Keep the rule box exactly as tall as its text. Runs before paint so a
-  // version checkout never flashes the wrong height; min-height (CSS) is the
-  // floor, so short rules still get a usable box.
-  useLayoutEffect(() => {
-    const el = ruleBoxRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
-  }, [ruleText]);
 
   /** Insert the selected span into the feedback box as a quote (editable like
    * any typed text — propose reads it as part of the feedback). */
@@ -1068,8 +1081,9 @@ export default function RuleWorkbench({
       // anchor ever showed the rule's effect. Best-effort: a failure loses
       // nothing but board evidence.
       if (saved) {
+        const anchorId = latest.anchorMessageId ?? row.messageId;
         const responses = Object.entries(updated)
-          .filter(([id, e]) => e.text && Number(id) !== (latest.anchorMessageId ?? row.messageId))
+          .filter(([id, e]) => e.text && Number(id) !== anchorId)
           .map(([id, e]) => ({ messageId: Number(id), response: e.text as string }))
           .slice(0, 50);
         if (responses.length > 0) {
@@ -1083,6 +1097,21 @@ export default function RuleWorkbench({
           } catch {
             /* the anchor row (stored by the save itself) still lands */
           }
+        }
+        // Everything else in scope has no response under this version yet. Hand
+        // the remainder to the board to generate — the session's tabs are the
+        // questions the instructor chose to look at, not the questions the rule
+        // answers, and the dropdown should cover the second set.
+        const covered = new Set([anchorId, ...responses.map((r) => r.messageId)]);
+        const pending = scopeRows.map((r) => r.messageId).filter((id) => !covered.has(id));
+        if (pending.length > 0) {
+          // A major bumps the display number; the raw versionNo runs ahead of
+          // it (the seed and every simulated minor occupy the same sequence).
+          onApplied?.({
+            versionNo: saved.versionNo,
+            label: `v${(versions?.[0]?.major ?? 0) + 1}`,
+            messageIds: pending,
+          });
         }
       }
       if (live()) {
@@ -1141,39 +1170,57 @@ export default function RuleWorkbench({
   }
 
 
-  /** Apply the viewed rule to the intent's 3 most-different questions and open
-   * them as tabs. One-shot: once tabs exist the footer button disappears. */
-  /** SCORE: seed the tab strip with the intent's 3 most-different questions
-   * (auto, on open). Responses generate lazily when a tab is opened, so opening
-   * stays fast; from any tab you refine with feedback / rewrite, or Add example. */
-  async function checkEdgeCases() {
-    if (checking || caseIds) return;
-    setChecking(true);
-    setError(null);
-    const gen = genRef.current;
-    try {
-      const res = await fetch(`${base}/intents/${intent.id}/edgecases?anchor=${row.messageId}&farthest=3`, {
-        signal: signal(),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error('Edge-case lookup failed.');
-      const ids = ((data.cases ?? []) as { messageId: number }[]).map((c) => c.messageId);
-      if (!live() || gen !== genRef.current) return;
-      setCaseIds([row.messageId, ...ids]);
-    } catch (e) {
-      if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
-    } finally {
-      if (live()) setChecking(false);
+  /**
+   * SCORE: open on THREE examples from the rule's own question set (`scopeRows`
+   * — the questions it actually answers), not on the one question that got you
+   * here. A rule written against a single response is the failure mode this
+   * whole screen exists to prevent, and one tab was an invitation to it.
+   *
+   * The three are the anchor plus the two most different from it — which is
+   * exactly what the cross-query preview lists at the top, because both call
+   * `sortByAnchorDistance` over the same scope with the same scores. Opening
+   * the preview therefore shows the tabs you already have, ticked, with the
+   * next candidates underneath.
+   *
+   * Responses generate lazily when a tab is selected, so opening stays fast.
+   * Distances are best-effort: no embeddings → newest-first, same as the
+   * preview's own fallback.
+   */
+  async function seedExampleTabs() {
+    if (caseIds) return;
+    const candidates = scopeRows.filter((r) => r.messageId !== row.messageId);
+    if (candidates.length === 0) {
+      setCaseIds([row.messageId]);
+      return;
     }
+    let scores: Record<number, number> = {};
+    try {
+      const data = await getJSON<{ scores?: Record<number, number> }>(
+        `${base}/intents/${intent.id}/similar?anchor=${row.messageId}`,
+        { signal: signal() }
+      );
+      scores = data.scores ?? {};
+    } catch {
+      /* ordering is a nicety — without it the seed falls back to newest-first */
+    }
+    // NOT gated on genRef: this picks WHICH QUESTIONS to open, which no rule
+    // version can invalidate. The old sweep did gate on it and so good as never
+    // landed — the versions arrive mid-flight and bump the counter, so its
+    // answer was discarded and the strip was left showing the anchor alone.
+    if (!live()) return;
+    const ids = sortByAnchorDistance(candidates, scores)
+      .slice(0, 2)
+      .map((r) => r.messageId);
+    setCaseIds([row.messageId, ...ids]);
   }
 
-  /** From the cross-query preview (every condition's one way to add) — open
-   * checked questions as example tabs, seeding the responses generated THERE so
-   * the tabs open instantly (the preview runs under the same working rule,
-   * viewingLatest-gated). */
-  function addExamplesFromPreview(ids: number[], responses: Map<number, string | null>) {
+  /** From the cross-query preview (every condition's one way to add) — the
+   * ticked questions become THE example set: `ids` is the whole set, so a box
+   * unticked there closes its tab here. New tabs carry the responses generated
+   * over there, so they open instantly (the preview runs under the same working
+   * rule, viewingLatest-gated). */
+  function setExamplesFromPreview(ids: number[], responses: Map<number, string | null>) {
     setPreviewOpen(false);
-    if (ids.length === 0) return;
     setUpdated((prev) => {
       const next = { ...prev };
       for (const id of ids) {
@@ -1183,9 +1230,17 @@ export default function RuleWorkbench({
       return next;
     });
     const existing = caseIds ?? [row.messageId];
-    const fresh = ids.filter((id) => !existing.includes(id));
-    if (fresh.length > 0) setCaseIds([...existing, ...fresh]);
-    selectTab(ids[0]);
+    // The anchor is never optional, and the tabs already open keep their order
+    // — only the newly ticked ones land at the end.
+    const kept = existing.filter((id) => id === row.messageId || ids.includes(id));
+    const fresh = ids.filter((id) => !kept.includes(id));
+    const next = [...kept, ...fresh];
+    setCaseIds(next);
+    setAddedIds((prev) => new Set([...prev, ...fresh].filter((id) => next.includes(id))));
+    // Land on the first thing pulled in; if this only dropped tabs, stay put —
+    // unless the tab being read is one of the dropped ones.
+    if (fresh.length > 0) selectTab(fresh[0]);
+    else if (!next.includes(activeId)) selectTab(row.messageId);
   }
 
   /* ---- timeline checkout --------------------------------------------------- */
@@ -1226,6 +1281,7 @@ export default function RuleWorkbench({
         intent={intent}
         variant={variant}
         scopeLabel={scopeLabel}
+        placement={placement}
         rows={rows}
         queryIds={previewIds}
         anchorId={row.messageId}
@@ -1241,8 +1297,8 @@ export default function RuleWorkbench({
         // The preview doubles as the example picker in every condition — a bad
         // response here is one checkbox away from being a tab to fix. The only
         // review-set difference the ablation calls for is the AUTO-SEED
-        // (checkEdgeCases), which the baseline still does not get.
-        onAddExamples={addExamplesFromPreview}
+        // (seedExampleTabs), which the baseline still does not get.
+        onAddExamples={setExamplesFromPreview}
         existingIds={new Set(caseIds ?? [row.messageId])}
       />
     );
@@ -1355,26 +1411,71 @@ export default function RuleWorkbench({
                   </button>
                 </div>
               )}
-              {/* Grows with the rule instead of scrolling inside a fixed box:
-                  a rule is the whole system prompt, and judging one you can
-                  only see nine lines of is the wrong constraint. The column
-                  scrolls; min-height keeps a short rule from collapsing. */}
-              <textarea
-                ref={ruleBoxRef}
-                value={ruleText}
-                onChange={(e) => !readOnly && setRuleText(e.target.value)}
-                readOnly={readOnly}
-                placeholder={
-                  variant === 'type-root'
-                    ? 'Empty — the questions above get no system prompt at all.'
-                    : monolith
-                      ? 'Empty — the chatbot answers with no rules at all.'
-                      : 'Empty — this intent has no rule of its own yet.'
+              {/* Shows the whole rule, and opens a full-size editor to change
+                  it. Still grows with its text rather than scrolling in a fixed
+                  box — a rule is the entire system prompt, and judging one you
+                  can only see nine lines of is the wrong constraint — but the
+                  WRITING happens in the dialog, because this column is 380px
+                  wide and a rules document runs to thousands of characters.
+
+                  Read-only here also removes a hazard the textarea had: this
+                  box sits in a scrolling column, and a stray keystroke with the
+                  caret in it silently edited the live rule. */}
+              <button
+                type="button"
+                onClick={() => !readOnly && setEditingRule(true)}
+                disabled={readOnly}
+                title={
+                  readOnly
+                    ? 'Viewing an old step — Revert to make it live, or Latest to edit'
+                    : 'Click to edit in a full-size editor'
                 }
-                title={readOnly ? 'Viewing an old step — Revert to make it live, or Latest to edit' : undefined}
-                className={`mt-1 w-full min-h-[200px] resize-none overflow-hidden text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
-                  readOnly ? 'bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--background))]'
+                className={`group mt-1 w-full min-h-[200px] text-left text-sm leading-relaxed border border-[hsl(var(--border))] rounded px-2 py-1.5 ${
+                  readOnly
+                    ? 'cursor-default bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]'
+                    : 'bg-[hsl(var(--background))] hover:border-[hsl(var(--primary))]'
                 }`}
+              >
+                <span className="block whitespace-pre-wrap">
+                  {ruleText.trim() ? (
+                    ruleText
+                  ) : (
+                    <span className="italic text-[hsl(var(--muted-foreground))]">
+                      {variant === 'type-root'
+                        ? 'Empty — the questions above get no system prompt at all.'
+                        : monolith
+                          ? 'Empty — the chatbot answers with no rules at all.'
+                          : 'Empty — this intent has no rule of its own yet.'}
+                    </span>
+                  )}
+                </span>
+                {!readOnly && (
+                  <span className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-[hsl(var(--primary))] opacity-70 group-hover:opacity-100">
+                    <Pencil className="h-3 w-3" />
+                    Edit
+                  </span>
+                )}
+              </button>
+              <EditorModal
+                open={editingRule}
+                title={monolith ? 'Edit rules' : 'Edit rule'}
+                subtitle={monolith ? null : intent.title}
+                label={monolith ? 'Rules' : 'Then…'}
+                value={ruleText}
+                hint={
+                  monolith
+                    ? 'This is the whole system prompt — it answers every request.'
+                    : 'This is the whole system prompt for the questions above. Saving here only fills the box; Apply edit runs it.'
+                }
+                onCancel={() => setEditingRule(false)}
+                onSave={(next) => {
+                  // Straight back into `ruleText`, which is what `boxEdited`
+                  // and the leave-guard already watch — so Apply edit lights up
+                  // and an unsaved edit is still protected on the way out,
+                  // without either of them learning about this dialog.
+                  setRuleText(next);
+                  setEditingRule(false);
+                }}
               />
               <div className="mt-1.5 flex items-center justify-end gap-2">
                 {/* Apply the rule you edited directly — regenerates the active
@@ -1447,27 +1548,38 @@ export default function RuleWorkbench({
 
         {/* MIDDLE — the viewed version's Q → response for the active question */}
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
-          {/* QUESTION TABS — always shown: the anchor ★, any examples pulled
-              in, and the door to the rest. SCORE seeds the intent's top edge
-              cases and reviews the others through the cross-query preview;
-              baseline starts at the anchor and adds from the blind picker. */}
+          {/* QUESTION TABS — the examples this rule is being written against:
+              the anchor ★, the two SCORE seeds it opened on, and any pulled in
+              since (+). "Add example" sits at the END OF THE ROW rather than
+              floated right, because that is where a new tab would appear — the
+              button is one more example, not a separate destination. Floating
+              it away read as a second door out of the screen, which is what the
+              old "Other questions" label made of it. */}
           <div className="shrink-0 flex items-center gap-1 overflow-x-auto border-b border-[hsl(var(--border))] px-3 py-1.5">
             {(caseIds ?? [row.messageId]).map((id) => {
                 const r0 = rows.find((r) => r.messageId === id);
                 const isActive = id === activeId;
+                // Pulled in by hand, so it says so: the seeded three are what
+                // the rule's own question set offered, and telling that from
+                // "the one I went and found" is the point of marking it.
+                const isAdded = addedIds.has(id);
                 const label = `${r0?.participantToken || '—'}${r0 && r0.turnNumber > 0 ? ` · T${r0.turnNumber}` : ''}`;
+                const question = r0 ? r0.queryText.replace(/\s+/g, ' ').trim().slice(0, 140) : '';
                 return (
                   <button
                     key={id}
                     onClick={() => selectTab(id)}
-                    title={r0 ? r0.queryText.replace(/\s+/g, ' ').trim().slice(0, 140) : undefined}
+                    title={isAdded ? `Example you added — ${question}` : question || undefined}
                     className={`shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium border ${
                       isActive
                         ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
-                        : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+                        : isAdded
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
                     }`}
                   >
                     {id === row.messageId ? '★ ' : ''}
+                    {isAdded && <Plus className="w-3 h-3 shrink-0" aria-label="added by you" />}
                     {label}
                   </button>
                 );
@@ -1475,14 +1587,15 @@ export default function RuleWorkbench({
             <button
               // The main affordance here, in EVERY condition: the rule is doing
               // something to every OTHER question it answers, and this is the
-              // door to that. Named for what you go there to do (look at the
-              // others) rather than the mechanism (adding a tab), and styled to
-              // be seen — in the study nobody found the quiet "Add example".
+              // door to that. Named for what it GIVES you — one more example to
+              // revise against — rather than for the screen it opens, and
+              // styled to be seen: in the study nobody found the quiet "Add
+              // example", and nobody read "Other questions" as a way to add one.
               //
               // The baseline used to get a blind picker instead, on the theory
               // that hand-building the review set was part of the ablation. It
               // is not: spec §4.1/4.2 put exactly ONE difference in this flow —
-              // SCORE auto-seeds the tabs on open (checkEdgeCases) and the
+              // SCORE auto-seeds the tabs on open (seedExampleTabs) and the
               // baseline starts at the anchor. Every MANUAL path is shared, so
               // choosing from responses you can see is a preview capability
               // (§0 principle 1 lists previews as parity), not a structuring
@@ -1492,16 +1605,19 @@ export default function RuleWorkbench({
               disabled={
                 boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving
               }
-              className="shrink-0 ml-auto inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs disabled:opacity-50 border border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 font-semibold text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20"
+              // Same box as a tab (px-2 py-0.5, w-3 icon) — it sits in their row
+              // and is one more example, so a taller button reads as a
+              // different kind of thing. Only the dashed border sets it apart.
+              className="shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs disabled:opacity-50 border border-dashed border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 font-semibold text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20"
               title={
                 monolith
-                  ? 'See what these rules do to the other logged questions — and pull any in to fix'
+                  ? 'See what these rules do to the other logged questions, and pull any in as an example'
                   : variant === 'type-root'
-                    ? `See what this rule does to the other ${scopeLabel ?? 'type'} questions no set claims — and pull any in to fix`
-                    : "See what this rule does to the intent's other questions — and pull any in to fix"
+                    ? `See what this rule does to the other ${scopeLabel ?? 'type'} questions no set claims, and pull any in as an example`
+                    : "See what this rule does to the intent's other questions, and pull any in as an example"
               }
             >
-              <Eye className="w-3.5 h-3.5" /> Other questions
+              <Plus className="w-3 h-3" /> Add example
             </button>
           </div>
 

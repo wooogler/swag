@@ -4,10 +4,10 @@
  * Baseline "filter" workbench — the SCORE IntentWorkbench with the intent-only
  * parts ablated. The GRID IS THE INTENTWORKBENCH'S: same three tracks, the
  * spec on the left, the same results card in the middle, and the third track
- * deliberately EMPTY where "Needs decision" would sit — so the two workbenches
+ * deliberately EMPTY where "Potential questions" would sit — so the two workbenches
  * put the same things in the same places at the same widths, and what the
  * baseline lacks reads as absence, not as a different tool. Ablated: pins, the
- * probably-in/out "Needs decision" column, boundary/drift chips, versioning.
+ * probably-in "Potential questions" column, boundary/drift chips, versioning.
  *
  * A filter belongs to the query type it was created under. The probe still
  * rates the WHOLE log (that keeps its cache aligned with the prepared
@@ -214,6 +214,10 @@ export default function FilterWorkbench({
               onChange={setDefinition}
               label="When a question…"
               placeholder="e.g. asks the chatbot to write a thesis statement or conclusion for them"
+              // "Edit definition" would be the first time this arm heard the
+              // word — a filter has a description, and the vocabularies are
+              // kept apart on purpose (docs/SCORE_BASELINE_DESIGN.md §S-6d).
+              editTitle="Edit filter"
             />
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={run} disabled={running || !definition.trim()}>
@@ -340,7 +344,7 @@ export default function FilterWorkbench({
         </div>
 
         {/* RIGHT — deliberately empty. This is where the IntentWorkbench puts
-            "Needs decision"; keeping the track (rather than letting the middle
+            "Potential questions"; keeping the track (rather than letting the middle
             card swallow it) keeps the two workbenches the same shape, so the
             ablated column reads as absence instead of a different layout. */}
         <div aria-hidden className="hidden lg:block" />

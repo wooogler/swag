@@ -7,7 +7,7 @@
  * 3-column grid is swapped for this one, keeping the same shape —
  *   LEFT   the spec: title · definition · labeled examples · actions · history
  *   MIDDLE "In this intent" — what the definition captures, labeled OUT
- *   RIGHT  "Needs decision" — the probably-in questions, labeled IN
+ *   RIGHT  "Potential questions in this intent" — the probably-in ones, labeled IN
  * The two panes push the boundary from opposite sides, one verdict each: this
  * workbench is where an intent's border is settled, and a pane that offered
  * both verdicts asked a two-way question on every row when only one way moves
@@ -94,7 +94,7 @@ interface RatingRow {
  *
  * Both panes filter on this, because neither can act on a question that never
  * arrives: listing one in "In this intent" overstates what the intent answers,
- * and labelling one in "Needs decision" teaches a definition about a question it
+ * and labelling one in "Potential questions" teaches a definition about a question it
  * will never judge — the label lands, the fold absorbs it, and the row still
  * goes to the intent that comes first. (That is what "send here" existed to work
  * around; it left this workbench with it.) Interception belongs to the board,
@@ -573,8 +573,9 @@ export default function IntentWorkbench({
   // "In this intent" holds captures that all lean in, so its useful default is
   // out-like first — the members that look like they don't belong.
   const [inSort, setInSort] = useState<NdSort>('out-like');
-  // Needs decision holds the probably-in questions only, so its useful default
-  // is the surprising side: the ones that look OUT-like next to the pins.
+  // The potential-questions pane holds the probably-in questions only, so its
+  // useful default is the surprising side: the ones that look OUT-like next to
+  // the pins.
   const [ndSort, setNdSort] = useState<NdSort>('out-like');
   const [similarScores, setSimilarScores] = useState<Record<number, number> | null>(null);
   const [similarBusy, setSimilarBusy] = useState(false);
@@ -714,7 +715,7 @@ export default function IntentWorkbench({
         setFuture([]);
       }
       // LIVE FILL — refresh the panes while the shards rate, so "In this
-      // intent" / "Needs decision" accumulate in place instead of landing all
+      // intent" / "Potential questions" accumulate in place instead of landing all
       // at once when the bar completes. Each shard batch commits its rows
       // immediately, so a periodic refetch simply picks them up; a failed tick
       // is dropped (the next one, or the final fetch below, catches up).
@@ -1423,7 +1424,7 @@ export default function IntentWorkbench({
   //  · IN THIS INTENT = the EFFECTIVE membership: pinned in, or clearly_in with
   //    no pin (pin overrides rating, §1.6). Pinning a row therefore never makes
   //    it vanish from here — its button just reads active (toggle to undo).
-  //  · NEEDS DECISION = the model-uncertain, still-undecided (unpinned) questions.
+  //  · POTENTIAL QUESTIONS = the model-uncertain, still-undecided (unpinned) ones.
   // Pinned-out and confident-out questions fall away (hidden as "not this
   // intent") — unless the diff base had them in, in which case the Left strip
   // keeps them visible. The instructor's pins ALSO appear on the LEFT with the
@@ -1450,7 +1451,7 @@ export default function IntentWorkbench({
   // its pill lit — "taught, not yet learned" — and moves for real after the
   // update re-rates it. That is the loop made visible.
   const inThisIntent = useMemo(() => scopedRows.filter(isMember), [scopedRows]);
-  // Needs decision is the probably-IN side alone. Making an intent is settling
+  // The potential list is the probably-IN side alone. Making an intent is settling
   // where its boundary runs, and the questions that test a boundary are the ones
   // just inside it; probably-out (and the legacy unsure/unrated rows) are a
   // longer list that mostly restates what the definition already excludes. They
@@ -1759,7 +1760,7 @@ export default function IntentWorkbench({
     // Buttons stay visible on PINNED rows too (active state, click to undo) —
     // a label never strips a row of its controls, only membership moves it.
     const showButtons = checkout === null;
-    // Needs-decision drift chip: only rows whose standing CHANGED since the
+    // Potential-questions drift chip: only rows whose standing CHANGED since the
     // diff base get one, stating the base-version verdict outright ("clearly
     // in/out · v1"). Colors follow the verdict (in = emerald, out = rose), same
     // as the pin buttons; the drop/rise direction is implied by the row sitting
@@ -1910,7 +1911,7 @@ export default function IntentWorkbench({
   // component type each render and remount the buttons.
   //
   // ONE verdict per row, in the direction that settles the boundary there: "In
-  // this intent" is the list you carve members OUT of, "Needs decision" the one
+  // this intent" is the list you carve members OUT of, "Potential questions" the one
   // you pull members IN from. Offering both everywhere made every row a two-way
   // question when only one way moves the boundary. The opposite verdict still
   // renders when it is already pinned — that pill is the only way to withdraw
@@ -2569,7 +2570,7 @@ export default function IntentWorkbench({
                           ? 'No matching question.'
                           : busy
                             ? 'Rating the log — captured questions appear here as they land…'
-                            : 'Nothing captured yet — decide the questions on the right.'}
+                            : 'Nothing captured yet — pull in the potential questions on the right.'}
                       </p>
                     );
                   })()}
@@ -2579,7 +2580,7 @@ export default function IntentWorkbench({
           )}
         </div>
 
-        {/* RIGHT — Needs decision (model-uncertain; label in/out) */}
+        {/* RIGHT — Potential questions (model-uncertain; pulled IN one at a time) */}
         <div className="relative rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
           {!data ? (
             <div className="flex-1 flex items-center justify-center p-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
@@ -2595,7 +2596,7 @@ export default function IntentWorkbench({
                 <div className="shrink-0 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
                   <div className="px-3 py-1.5 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                      Needs decision · {needsDecision.length}
+                      Potential questions in this intent · {needsDecision.length}
                       {scopeLabel && (
                         <span
                           className="font-normal normal-case"
@@ -2646,7 +2647,7 @@ export default function IntentWorkbench({
                           ? 'No matching question.'
                           : busy
                             ? 'Rating the log — uncertain questions appear here as they land…'
-                            : 'Nothing to decide — every question is settled.'}
+                            : 'No potential questions — every question is settled.'}
                       </p>
                     );
                   })()}

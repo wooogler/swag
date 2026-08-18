@@ -21,6 +21,7 @@ import {
   ensureIntentTables,
   ensureTypeRoots,
   isMinorVersion,
+  listCurrentRuleVersions,
   listDissections,
   listIntentRatings,
   loadIntentState,
@@ -28,6 +29,8 @@ import {
   type VersionSummary,
 } from '@/lib/score/intent-store';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
+import AssignmentBriefing from './AssignmentBriefing';
+import WorkElapsed from '@/components/study/WorkElapsed';
 import { isLegacySnapshot, listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
 import StudioShell from './StudioShell';
@@ -47,7 +50,7 @@ import IntentBoard, {
   type ScoreQueryRow,
   type TypeRootSummary,
 } from './IntentBoard';
-import { getCurrentStudyParticipant } from '@/lib/study/session';
+import { currentPhaseStartedAt, getCurrentStudyParticipant } from '@/lib/study/session';
 import { allowedAssignmentIds } from '@/lib/study/console-store';
 import { advanceWaits, currentPhase } from '@/lib/study/advance';
 import PhaseAdvance from '@/components/study/PhaseAdvance';
@@ -56,7 +59,7 @@ import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
 import { ensureStudyTables } from '@/lib/study/store';
 import { getBaselineState, PROMPT_HOLDER_TITLE } from '@/lib/study/baseline-store';
-import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
+import { STUDY_PROMPT_CHAR_LIMIT, STUDY_WORK_MINUTES } from '@/lib/study/config';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -128,6 +131,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     dissectionRows,
     configVersionRows,
     queryTypeRows,
+    currentRuleVersions,
   ] = await Promise.all([
       getScoreConfig(),
       getQueryRecords(id),
@@ -150,6 +154,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         })
         .from(scoreQueryTypes)
         .where(eq(scoreQueryTypes.assignmentId, id)),
+      listCurrentRuleVersions(id),
     ]);
 
   // STUDY assignments carry a curated review set: the questions that ARE the
@@ -401,6 +406,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   // deployed something to measure. Read the same deploy state the study's own
   // gate reads (console-store.deployStateFor): a baseline is live when a
   // version carries a deployedAt, SCORE when a chat deploy exists at all.
+  // The participant's own elapsed readout — only while they are IN a configure
+  // block. A researcher opening the same board is not on anyone's clock, and a
+  // test/survey phase has its own pacing that this number would misdescribe.
+  const workPhase = participant ? currentPhase(participant) : null;
+  const onWorkClock = workPhase === 'block1_work' || workPhase === 'block2_work';
+  const phaseStartedAt = onWorkClock && participant ? await currentPhaseStartedAt(participant.id) : null;
+
   const studyDeployed = isBaselineView
     ? baselineState?.deployedVersionNo != null
     : chatDeploys.length > 0;
@@ -434,6 +446,23 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                   : 'Organize · Revise · Evaluate — instructor intents own the log'}
               </p>
             </div>
+            {/* The task the log is OF. Opens by itself on a first visit and
+                sits here after that — both conditions, since neither the
+                assignment nor the prompt the chatbot started from is part of
+                the mechanism under test. */}
+            <AssignmentBriefing
+              assignmentId={id}
+              assignmentTitle={assignment.title}
+              instructions={assignment.instructions ?? ''}
+              basePrompt={assignmentBasePrompt(assignment)}
+              includesInstructions={assignment.includeInstructionInPrompt ?? false}
+            />
+            {phaseStartedAt && (
+              <WorkElapsed
+                startedAt={phaseStartedAt.toISOString()}
+                budgetMinutes={STUDY_WORK_MINUTES}
+              />
+            )}
             {/* Participants get the same one-click control in both arms; the
                 version dropdown and the review modal are researcher tools, and
                 giving them to only one arm would let SCORE inspect and name
@@ -495,6 +524,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               : undefined
           }
           deployedRules={deployedRules}
+          // Serialized as an array: a Map crosses the RSC boundary, but every
+          // other list the board takes is one, and it rebuilds its own index.
+          currentRuleVersions={[...currentRuleVersions].map(([intentId, v]) => ({
+            intentId,
+            major: v.major,
+            name: v.name,
+          }))}
         reviewSet={reviewSet}
           openaiConfigured={isOpenAIConfigured()}
           jelsonSuggestions={jelsonSuggestions}

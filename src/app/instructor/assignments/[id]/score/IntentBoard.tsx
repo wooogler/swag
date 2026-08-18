@@ -1,14 +1,22 @@
 'use client';
 
 /**
- * SCORE v6 — the intents-mode main page (S1): BASE PROMPT card + INTENTS
- * panel + NEEDS DECISION box + UNASSIGNED row on the left, the selected
- * Question Group in the middle, and the read-only Conversation viewer on the
- * right (pasted Material collapsed into per-kind tags — materials.tsx).
+ * SCORE v7 — the studio board (S1): the four query-type sections, each over its
+ * own intent tree, on the LEFT; the selected question group in the MIDDLE; the
+ * read-only conversation viewer on the RIGHT (pasted Material collapsed into
+ * per-kind tags — materials.tsx). The baseline renders the same three columns
+ * with a pinned Rules panel over a flat tree of saved filters in place of the
+ * intent trees.
  *
- * Assignment resolution is derived here with the shared deterministic
- * resolver (intents.ts) — nothing is stored; link/pin edits re-derive
- * instantly after router.refresh().
+ * (The v6 layout this file used to describe — a BASE PROMPT card, one INTENTS
+ * panel, a NEEDS DECISION box and an UNASSIGNED row — is gone: v7 replaced the
+ * global buckets with per-type sections, because first-match makes a query
+ * belong to exactly one chain and there is no longer anything global to leave
+ * over.)
+ *
+ * Routing is derived HERE with the shared deterministic resolver (intents.ts) —
+ * nothing is stored, so an edit re-derives the whole board instantly after
+ * router.refresh().
  */
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
@@ -27,6 +35,7 @@ import { SCORE_RATING_MODEL } from '@/lib/score/models';
 import { runShardedRate } from './rate-runner';
 import {
   AlertTriangle,
+  Check,
   ChevronRight,
   GripVertical,
   Loader2,
@@ -237,6 +246,11 @@ interface IntentBoardProps {
   /** The rule each intent currently deploys to students (latest chat deploy) —
    * the Revise Preview compares the working rule against this. */
   deployedRules?: { id: number; rule: string | null }[];
+  /** The rule version each scope (intent OR type root) currently serves — its
+   * latest major, shown on a question row as "v3 · Softer tone". Loaded server-
+   * side for the whole assignment so the list can name the rule answering every
+   * row without a fetch per scope. Absent entry = never revised. */
+  currentRuleVersions?: { intentId: number; major: number; name: string | null }[];
   /** STUDY only: the curated review set's message ids. When present the board
    * LISTS and COUNTS only these — the surrounding turns of the same threads are
    * context, not material to review — while the conversation viewer still shows
@@ -278,9 +292,15 @@ type IntentSelection =
   // Edit Filter.
   | { kind: 'search'; key: string; ids: number[]; label: string };
 
-function Badge({ n }: { n: number }) {
+/** A row's question count. `warn` is for counts that are a gap rather than a
+ * result — questions no intent claims — so the number reads as work left. */
+function Badge({ n, warn }: { n: number; warn?: boolean }) {
   return (
-    <span className="text-[11px] tabular-nums px-1.5 py-0.5 rounded-full bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
+    <span
+      className={`text-[11px] tabular-nums px-1.5 py-0.5 rounded-full ${
+        warn ? 'bg-rose-100 text-rose-700' : 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
+      }`}
+    >
       {n}
     </span>
   );
@@ -550,6 +570,10 @@ function ClampedText({
 /** What the outermost scope is called when nothing above a rule has one. */
 const DEFAULT_PROMPT_SCOPE = 'the default prompt';
 
+/** Questions per post-Apply backfill call — MAX_APPLY_MESSAGES in the apply
+ * route, which generates them inside one maxDuration=60 invocation. */
+const BACKFILL_BATCH = 6;
+
 /**
  * Whether a rule says anything its enclosing scope did not.
  *
@@ -681,10 +705,17 @@ function SmallChip({ className, children, title }: { className: string; children
   );
 }
 
-/** An intent-title chip that is a SHORTCUT into that intent's editor — hover
- * reveals a pencil, click opens Edit intent. role=button span (+ stopPropagation)
- * so it can live inside the question row, which is itself a button. */
-function IntentChip({
+/**
+ * One half of the owner/rule chip: a label that, where there is an editor
+ * behind it, is a SHORTCUT into it — hover reveals a pencil, click opens it.
+ * role=button span (+ stopPropagation) so it can live inside the question row,
+ * which is itself a button. Without `onEdit` it is plain text: a type root has
+ * no definition to edit, and a pencil there would promise an editor it has not.
+ *
+ * The label truncates. These sit on the row's P#/Turn line, where a long set
+ * title has to give way rather than push the date off.
+ */
+function ChipHalf({
   label,
   colors,
   title,
@@ -693,28 +724,118 @@ function IntentChip({
   label: string;
   colors: string;
   title: string;
-  onEdit: () => void;
+  onEdit?: () => void;
 }) {
   return (
     <span
-      role="button"
-      tabIndex={0}
-      onClick={(e) => {
-        e.stopPropagation();
-        onEdit();
-      }}
-      onKeyDown={(e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        e.preventDefault();
-        e.stopPropagation();
-        onEdit();
-      }}
+      {...(onEdit
+        ? {
+            role: 'button',
+            tabIndex: 0,
+            onClick: (e: React.MouseEvent) => {
+              e.stopPropagation();
+              onEdit();
+            },
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              e.stopPropagation();
+              onEdit();
+            },
+          }
+        : {})}
       title={title}
-      className={`group/chip inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap ${colors}`}
+      className={`group/half inline-flex min-w-0 items-center gap-1 px-1.5 py-0.5 ${colors}`}
     >
-      {label}
-      <Pencil className="w-2.5 h-2.5 opacity-0 group-hover/chip:opacity-100" />
+      <span className="truncate">{label}</span>
+      {onEdit && <Pencil className="w-2.5 h-2.5 shrink-0 opacity-0 group-hover/half:opacity-100" />}
     </span>
+  );
+}
+
+/**
+ * What answers a question: the set that claimed it and the rule version that
+ * replies — ONE chip in two halves, because they are a pair. The set is only
+ * ever the reason a particular rule applies, and as two loose tags on the same
+ * line they read as unrelated facts about the row.
+ *
+ * Each half keeps its own shortcut, so the pair is also the way in: the left
+ * pencil opens Edit intent, the right one opens Revise on this very question.
+ */
+function OwnerRuleChip({ scope, rule }: { scope: React.ReactNode; rule: React.ReactNode }) {
+  return (
+    <span className="inline-flex min-w-0 items-center divide-x divide-[hsl(var(--border))] overflow-hidden rounded border border-[hsl(var(--border))] text-[11px] font-medium">
+      {scope}
+      {rule}
+    </span>
+  );
+}
+
+/**
+ * The rule-version picker, hung on the reply it rewrites.
+ *
+ * It used to sit in the viewer header: an 11px select on its own line above the
+ * whole thread, which read as a setting on the CONVERSATION when all it ever
+ * swaps is ONE turn's reply. Here it is the first line INSIDE the box drawn
+ * around that reply — one frame, not a bar boxed inside a card — and it names
+ * which of the two things is on screen: the response a saved rule version
+ * generated, or the one the student was actually given.
+ */
+function ResponseVersionBar({
+  versions,
+  selected,
+  onSelect,
+  isBaseline,
+}: {
+  versions: ViewerRuleVersion[];
+  selected: number | null;
+  onSelect: (versionNo: number | null) => void;
+  isBaseline: boolean;
+}) {
+  const viewing = selected === null ? null : versions.find((v) => v.versionNo === selected) ?? null;
+  return (
+    <div
+      className={`mb-2 flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs ${
+        viewing ? 'text-blue-800 dark:text-blue-200' : 'text-[hsl(var(--muted-foreground))]'
+      }`}
+    >
+      {viewing ? (
+        <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+      ) : (
+        <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+      )}
+      {/* The select finishes the sentence, so it carries the state instead of
+          a note repeating it: "…under the rule v2 · Cap example count", or
+          plain "…is Original (as delivered)". */}
+      <span className="font-medium">{viewing ? 'This reply is under the rule' : 'This reply is'}</span>
+      <select
+        value={selected ?? ''}
+        onChange={(e) => {
+          // The thread stays; only THIS turn's reply is swapped for the
+          // version's, leaving the delivered replies around it as the context
+          // they are.
+          onSelect(e.target.value === '' ? null : Number(e.target.value));
+        }}
+        className={`rounded border px-1.5 py-0.5 font-medium ${
+          viewing
+            ? 'border-blue-300 bg-[hsl(var(--card))] text-blue-800 dark:border-blue-700 dark:text-blue-100'
+            : 'border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))]'
+        }`}
+        title={
+          isBaseline
+            ? "View this question's response under a saved version of the rules"
+            : "View this question's response under a saved rule version"
+        }
+      >
+        <option value="">Original (as delivered)</option>
+        {versions.map((v) => (
+          <option key={v.versionNo} value={v.versionNo}>
+            v{v.major ?? v.versionNo}
+            {v.name ? ` · ${v.name}` : ''}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 
@@ -1019,6 +1140,7 @@ export default function IntentBoard({
   isNirvana,
   deployView,
   deployedRules,
+  currentRuleVersions,
   reviewSet = null,
 }: IntentBoardProps) {
   const router = useRouter();
@@ -1034,6 +1156,12 @@ export default function IntentBoard({
   const deployedRuleByIntent = useMemo(
     () => new Map((deployedRules ?? []).map((d) => [d.id, d.rule])),
     [deployedRules]
+  );
+  // scopeId → the rule version it serves now (latest major). Type roots are in
+  // here too — they answer with a rule and version it the same way.
+  const ruleVersionByScope = useMemo(
+    () => new Map((currentRuleVersions ?? []).map((v) => [v.intentId, v])),
+    [currentRuleVersions]
   );
   // Active = owns the log. Templates (pre-built starter sets, rated in advance)
   // and archived are excluded from the active set.
@@ -1258,7 +1386,7 @@ export default function IntentBoard({
       const f = fresh.find((x) => `search:${x.id}` === prev.key);
       if (!f) return { kind: 'type', typeKey: SCORE_QUERY_TYPES[0] };
       const inSet = new Set(f.clearlyInIds);
-      const ids = rows
+      const ids = listRows
         .filter((r) => inSet.has(r.messageId) && (f.type === null || r.queryType === f.type))
         .map((r) => r.messageId);
       return { kind: 'search', key: prev.key, ids, label: f.name?.trim() || f.description };
@@ -1287,7 +1415,11 @@ export default function IntentBoard({
   } | null>(null);
   // BASELINE: Revise targets the whole monolithic prompt (no owning intent) —
   // opens RuleWorkbench (variant='prompt') on the prompt-holder from the anchor question.
-  const [promptReviseTarget, setPromptReviseTarget] = useState<ScoreQueryRow | null>(null);
+  const [promptReviseTarget, setPromptReviseTarget] = useState<{
+    row: ScoreQueryRow;
+    /** Set when the viewer had a rule version selected — Revise starts from it. */
+    viewVersion: ViewerRuleVersion | null;
+  } | null>(null);
 
   // ---- Direct delete (no archive step) ------------------------------------
   // The row's trash button queues the intent here; the confirm modal shows
@@ -1478,9 +1610,10 @@ export default function IntentBoard({
       );
     }
     return map;
-    // effectiveRatings is a pure helper over `rows`; recompute when rows/chains move.
+    // effectiveRatings is a pure helper over a row; recompute when the listed
+    // rows or the chains move.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, chains]);
+  }, [listRows, chains]);
 
   /**
    * Two things a set's owner needs to see, both invisible under first-match:
@@ -1491,6 +1624,10 @@ export default function IntentBoard({
    *                widen the parent or move the set out.
    * Both are derived from the same walk the router does, so they can never
    * disagree with what actually happens.
+   *
+   * Over `listRows`, like every other count on the board: a diagnostic that
+   * counted the context turns too would put a number on the chip that the list
+   * it opens cannot show.
    */
   const treeDiagnostics = useMemo(() => {
     // The shadowed questions are kept, not just counted: the number is the
@@ -1498,7 +1635,7 @@ export default function IntentBoard({
     // it — is only decidable by reading the questions themselves.
     const shadowed = new Map<number, { intentId: number; ids: Set<number> }>();
     const outside = new Map<number, number>();
-    for (const r of rows) {
+    for (const r of listRows) {
       if (!r.queryType) continue;
       const chain = chains.get(r.queryType);
       if (!chain) continue;
@@ -1522,7 +1659,7 @@ export default function IntentBoard({
     }
     return { shadowed, outside };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, chains]);
+  }, [listRows, chains]);
   const shadowedBy = treeDiagnostics.shadowed;
 
   const counts = useMemo(() => {
@@ -1579,7 +1716,7 @@ export default function IntentBoard({
     // destination label → count, in first-seen order (chain order).
     const dests = new Map<string, number>();
     let total = 0;
-    for (const r of rows) {
+    for (const r of listRows) {
       const res = resolutions.get(r.messageId);
       if (!res || res.kind !== 'matched' || !subtree.has(res.intentId)) continue;
       total += 1;
@@ -1599,9 +1736,9 @@ export default function IntentBoard({
       nestedCount: subtree.size - 1,
       pinCount: [...subtree].reduce((n, id) => n + (intentById.get(id)?.pinCount ?? 0), 0),
     };
-    // effectiveRatings/titleOf are pure helpers over rows/intents.
+    // effectiveRatings/titleOf are pure helpers over a row/the intents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deleteTarget, subtreeIds, activeIntents, rows, resolutions, intentById]);
+  }, [deleteTarget, subtreeIds, activeIntents, listRows, resolutions, intentById]);
 
   // ---- Middle column ------------------------------------------------------
   // Selection can outlive its target (intent archived, boundary resolved,
@@ -1680,6 +1817,81 @@ export default function IntentBoard({
 
   const sortedRows = useMemo(() => sortQueryRows(searchedRows, sortMode), [searchedRows, sortMode]);
 
+  /**
+   * Which scope answers a question: the set that claimed it, or the type root
+   * whose default rule catches whatever the chain left unclaimed. Read off
+   * `resolutions` — the same walk the runtime does — so a row's tag is what the
+   * question actually gets, not a guess from its ratings.
+   *
+   * null = 'pending': a set before the winner has no rating yet, so who owns
+   * this question is genuinely unknown until the next run.
+   */
+  const ownerOf = (
+    r: ScoreQueryRow
+  ): { intent: IntentSummary; root: null } | { intent: null; root: TypeRootSummary } | null => {
+    const res = resolutions.get(r.messageId);
+    if (!res) return null;
+    if (res.kind === 'matched') {
+      const intent = intentById.get(res.intentId);
+      return intent ? { intent, root: null } : null;
+    }
+    if (res.kind === 'type_default') {
+      // By id (the chain's own root), falling back to the type — a pre-roots
+      // resolution carries null.
+      const root =
+        typeRoots.find((t) => t.id === res.intentId) ??
+        typeRoots.find((t) => t.type === r.queryType);
+      return root ? { intent: null, root } : null;
+    }
+    return null;
+  };
+
+  /**
+   * The rule chip's pencil: open Revise on the scope that answers THIS
+   * question, anchored on it — the same two targets the conversation pane's
+   * "Revise rule" uses, so the shortcut lands in the identical workbench.
+   * Selecting the row too, so leaving the workbench comes back to the question
+   * that prompted the edit rather than whatever was open before.
+   */
+  const openRuleFor = (
+    row: ScoreQueryRow,
+    owner: NonNullable<ReturnType<typeof ownerOf>>
+  ) => {
+    setSelectedMessageId(row.messageId);
+    if (owner.intent) setReviseTarget({ row, intent: owner.intent, viewVersion: null });
+    else setRootReviseTarget({ row, root: owner.root });
+  };
+
+  /**
+   * Does this list hold questions with DIFFERENT answers? Only then is it worth
+   * tagging each row with its owner and rule.
+   *
+   * A type section and a parent set both list their whole subtree, so the
+   * heading names the scope but not what any one question ends up with — that
+   * is exactly where "which of my sets caught this, and under which rule?"
+   * stops being answerable from the screen. A leaf set, or a scope's own
+   * residue, answers everything in it the same way and the tags would just
+   * repeat the heading on every row.
+   *
+   * Baseline never tags: intent membership and a way into a rule's editor are
+   * both mechanism the ablation removes.
+   */
+  const showOwnerTags = (() => {
+    if (isBaseline) return false;
+    switch (selection.kind) {
+      case 'all':
+      case 'type':
+      // These questions are answered by whichever set got there first — naming
+      // it IS the point of the view.
+      case 'shadowed':
+        return true;
+      case 'intent':
+        return (subtreeIds.get(selection.id) ?? [selection.id]).length > 1;
+      default:
+        return false;
+    }
+  })();
+
   const selectedRow = useMemo(
     () => rows.find((r) => r.messageId === selectedMessageId) ?? null,
     [rows, selectedMessageId]
@@ -1710,6 +1922,14 @@ export default function IntentBoard({
   const [viewerVersionsNonce, setViewerVersionsNonce] = useState(0);
   const selectedOwnerId = useMemo(() => {
     if (selectedMessageId === null) return null;
+    // BASELINE: one rules document answers every question, so the holder owns
+    // all of them. It must NOT be looked up through `resolutions` — the holder
+    // is out of every chain by construction (compileChains skips
+    // 'prompt_holder'), so routing reports type_default/null and the dropdown
+    // never mounted, even though Apply stores versions and their responses in
+    // exactly the same tables SCORE reads. Version history is deliberate parity
+    // here, not an ablation (spec B-7, S-6d).
+    if (isBaseline) return baseline?.promptHolderId ?? null;
     const res = resolutions.get(selectedMessageId);
     // v7: every routed question has an owner — a matched intent, or the TYPE
     // ROOT whose default rule answers it. Both keep a rule history, so both
@@ -1719,7 +1939,7 @@ export default function IntentBoard({
       return typeRoots.find((t) => t.type === selectedRow.queryType)?.id ?? null;
     }
     return null;
-  }, [selectedMessageId, resolutions, selectedRow, typeRoots]);
+  }, [isBaseline, baseline, selectedMessageId, resolutions, selectedRow, typeRoots]);
   useEffect(() => {
     setViewerVersions(null);
     setViewedVersionNo(null);
@@ -1730,7 +1950,16 @@ export default function IntentBoard({
     )
       .then((res) => (res.ok ? res.json() : null))
       .then((d) => {
-        if (!alive || !d || !Array.isArray(d.versions)) return;
+        if (!alive) return;
+        // A failed or malformed fetch resolves to "no versions" rather than
+        // leaving `viewerVersions` null: `responseResolved` waits on this
+        // state, so a silent return would hold the pane on the loading
+        // skeleton forever. Baseline asks on EVERY question, which turns that
+        // from a rare stall into a permanent one.
+        if (!d || !Array.isArray(d.versions)) {
+          setViewerVersions([]);
+          return;
+        }
         // Simulated minor steps and the v1 baseline seed stay inside the rule
         // workbench — the viewer dropdown lists APPLIED rule versions only.
         const versions = (d.versions as ViewerRuleVersion[]).filter(
@@ -1743,7 +1972,9 @@ export default function IntentBoard({
         // first one carrying a response for this question is the latest.
         setViewedVersionNo(versions.find((v) => v.response)?.versionNo ?? null);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) setViewerVersions([]);
+      });
     return () => {
       alive = false;
     };
@@ -1755,13 +1986,102 @@ export default function IntentBoard({
         : viewerVersions?.find((v) => v.versionNo === viewedVersionNo) ?? null,
     [viewedVersionNo, viewerVersions]
   );
+
+  // ---- Post-Apply version backfill ----------------------------------------
+  /**
+   * After Apply, generate the new version's response for EVERY question the
+   * rule answers — SCORE: the ones the chain routes to it; baseline: the whole
+   * question list, since the one rules document answers all of them. Without
+   * this the viewer's dropdown only ever appeared on the anchor and the
+   * questions that happened to be pulled into the workbench as tabs, so "what
+   * did my edit do to the rest?" had no answer on the board.
+   *
+   * It runs HERE rather than in the workbench because the move right after
+   * Apply is to go back to the questions: the board outlives the workbench, so
+   * leaving does not cancel the run. Batches mirror the apply route's own cap
+   * (6 generated messages per call) and run sequentially — a 60-question scope
+   * must not fan out 60 chat completions at once.
+   */
+  const [backfill, setBackfill] = useState<{
+    label: string;
+    total: number;
+    done: number;
+    failed: number;
+    finished: boolean;
+  } | null>(null);
+  const backfillAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => backfillAbort.current?.abort(), []);
+  // Read inside the loop without making the selection a dependency of it.
+  const selectedMessageIdRef = useRef(selectedMessageId);
+  selectedMessageIdRef.current = selectedMessageId;
+
+  async function backfillVersionResponses(opts: {
+    intentId: number;
+    versionNo: number;
+    label: string;
+    messageIds: number[];
+  }) {
+    const { intentId, versionNo, label, messageIds } = opts;
+    backfillAbort.current?.abort();
+    const controller = new AbortController();
+    backfillAbort.current = controller;
+    setBackfill({ label, total: messageIds.length, done: 0, failed: 0, finished: false });
+    for (let i = 0; i < messageIds.length; i += BACKFILL_BATCH) {
+      const batch = messageIds.slice(i, i + BACKFILL_BATCH);
+      let failed = batch.length;
+      try {
+        const res = await fetch(
+          `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/rule-versions/${versionNo}/apply`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messageIds: batch }),
+            signal: controller.signal,
+          }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (controller.signal.aborted) return;
+        if (!res.ok) throw new Error('generation failed');
+        const got = (data.responses ?? []) as { messageId: number; response: string | null }[];
+        failed = batch.length - got.filter((r) => r.response).length;
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError' || controller.signal.aborted) return;
+        // Counted, not fatal: one question the model choked on must not stop
+        // the rest of the scope from getting the new rule's response.
+      }
+      setBackfill((prev) =>
+        prev ? { ...prev, done: prev.done + batch.length, failed: prev.failed + failed } : prev
+      );
+      // The question on screen just got its response — refresh its dropdown now
+      // rather than at the end of a run that may still have minutes to go.
+      if (selectedMessageIdRef.current !== null && batch.includes(selectedMessageIdRef.current)) {
+        setViewerVersionsNonce((n) => n + 1);
+      }
+    }
+    if (controller.signal.aborted) return;
+    setViewerVersionsNonce((n) => n + 1);
+    setBackfill((prev) => (prev ? { ...prev, finished: true } : prev));
+  }
+  // The finished strip is a receipt, not a state — it clears itself.
+  useEffect(() => {
+    if (!backfill?.finished) return;
+    const t = setTimeout(() => setBackfill(null), 8000);
+    return () => clearTimeout(t);
+  }, [backfill?.finished]);
   // Which response to render, resolved WITHOUT flicker: a question whose owner
   // has a rule may carry an applied-version response, so we hold the pane until
   // the version fetch lands rather than flashing the delivered original first.
   // Owner-less / rule-less questions can only ever show the delivered reply, so
   // they resolve instantly.
   // Also the scope a new intent created FROM this question is carved out of.
-  const selectedOwner = selectedOwnerId !== null ? intentById.get(selectedOwnerId) ?? null : null;
+  // The prompt-holder is filtered out of every board list (page.tsx), so it is
+  // not in `intentById` — resolve it separately or the baseline would report
+  // "no rule" and flash the delivered reply before its versions land.
+  const selectedOwner =
+    selectedOwnerId === null
+      ? null
+      : intentById.get(selectedOwnerId) ??
+        (promptHolder?.id === selectedOwnerId ? promptHolder : null);
   const responseResolved =
     selectedOwnerId === null || !selectedOwner?.rule || viewerVersions !== null;
   // The selected question's user bubble shows pasted Material as its verbatim
@@ -2034,8 +2354,16 @@ export default function IntentBoard({
                       }`}
                       title={`Questions “${intent.title}” answers itself — the intents nested inside it take the rest.`}
                     >
-                      <span className="truncate italic">Uncategorized</span>
-                      <Badge n={own} />
+                      {/* Red while it holds anything: the aim is subsets that
+                          cover what the set around them answers, so a bucket
+                          with questions in it is the gap left to close, not a
+                          resting state. Empty, it has nothing to say. */}
+                      <span
+                        className={`truncate italic ${own > 0 ? 'font-medium text-rose-600' : ''}`}
+                      >
+                        Uncategorized
+                      </span>
+                      <Badge n={own} warn={own > 0} />
                     </button>
                   ),
                 },
@@ -2176,8 +2504,51 @@ export default function IntentBoard({
       {/* Slim status strip — only mounts while a starter-set rating run is in
           flight (or failed); the old permanent control bar is gone (deploy +
           versions moved to the page header). */}
-      {(runError || (running && runProgress) || boardRefreshing) && (
+      {(runError || (running && runProgress) || boardRefreshing || backfill) && (
         <div className="shrink-0 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 flex items-center gap-3 text-xs">
+          {/* Post-Apply backfill. Sits ABOVE the workbench/board switch on
+              purpose: the run continues after Revise closes, so its progress
+              has to be visible from both. */}
+          {backfill && (
+            <span className="flex items-center gap-2 text-[hsl(var(--muted-foreground))]">
+              {backfill.finished ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              )}
+              <span>
+                {backfill.finished
+                  ? `${backfill.label} ready on ${backfill.total} question${backfill.total === 1 ? '' : 's'}`
+                  : `Applying ${backfill.label} to ${backfill.total} question${backfill.total === 1 ? '' : 's'}…`}
+              </span>
+              {!backfill.finished && (
+                <span className="w-32 h-1.5 rounded bg-[hsl(var(--muted))] overflow-hidden inline-block">
+                  <span
+                    className="block h-full bg-[hsl(var(--primary))] transition-all"
+                    style={{
+                      width: `${backfill.total ? Math.round((backfill.done / backfill.total) * 100) : 0}%`,
+                    }}
+                  />
+                </span>
+              )}
+              <span className="tabular-nums">
+                {backfill.done}/{backfill.total}
+                {backfill.failed > 0 && <span className="text-red-600"> · {backfill.failed} failed</span>}
+              </span>
+              {!backfill.finished && (
+                <button
+                  onClick={() => {
+                    backfillAbort.current?.abort();
+                    setBackfill(null);
+                  }}
+                  className="underline hover:text-[hsl(var(--foreground))]"
+                  title="Stop generating — the questions already done keep their response"
+                >
+                  Stop
+                </button>
+              )}
+            </span>
+          )}
           {boardRefreshing && (
             <span className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))]">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2225,12 +2596,30 @@ export default function IntentBoard({
           // question an earlier sibling or one of its own subsets takes first,
           // and tuning a rule against a response no student receives is exactly
           // the confusion shadowing exists to name.
-          scopeMessageIds={rows
+          scopeMessageIds={listRows
             .filter((r) => {
               const res = resolutions.get(r.messageId);
               return res?.kind === 'matched' && res.intentId === reviseTarget.intent.id;
             })
             .map((r) => r.messageId)}
+          // What SCOPES this set under v7 — its type and, if it is nested, the
+          // set it sits inside. The rule's cross-query preview shows it where
+          // the v6 boundary-pin counts used to be.
+          placement={{
+            typeLabel: reviseTarget.intent.type ? QUERY_TYPE_LABELS[reviseTarget.intent.type] : null,
+            parentTitle:
+              reviseTarget.intent.parentIntentId !== null
+                ? titleOf(reviseTarget.intent.parentIntentId)
+                : null,
+          }}
+          onApplied={({ versionNo, label, messageIds }) =>
+            void backfillVersionResponses({
+              intentId: reviseTarget.intent.id,
+              versionNo,
+              label,
+              messageIds,
+            })
+          }
           onClose={(changed) => {
             const savedIntentId = reviseTarget.intent.id;
             setReviseTarget(null);
@@ -2265,19 +2654,32 @@ export default function IntentBoard({
         // affordances and keeps the hand-built review set), so version history
         // (v1 seed, minors, checkout, revert) is reused verbatim.
         <RuleWorkbench
-          key={`prompt-revise-${promptReviseTarget.messageId}`}
+          key={`prompt-revise-${promptReviseTarget.row.messageId}`}
           assignmentId={assignmentId}
           rows={listRows}
           contextRows={rows}
-          row={promptReviseTarget}
+          row={promptReviseTarget.row}
           intent={promptHolder}
           seedRule={basePrompt}
           isNirvana={isNirvana}
           deployedRule={baseline?.deployedPrompt ?? null}
           variant="prompt"
+          viewVersion={promptReviseTarget.viewVersion}
+          // No scopeMessageIds → the workbench's scope is the whole question
+          // list, which is exactly right here: one rules document answers all
+          // of them, so all of them get the new version's response.
+          onApplied={({ versionNo, label, messageIds }) =>
+            void backfillVersionResponses({
+              intentId: promptHolder.id,
+              versionNo,
+              label,
+              messageIds,
+            })
+          }
           onClose={(changed) => {
             setPromptReviseTarget(null);
             if (changed) {
+              setViewerVersionsNonce((n) => n + 1); // refetch the viewer dropdown
               void syncPromptFromHolder();
               startBoardRefresh(() => router.refresh());
             }
@@ -2316,7 +2718,7 @@ export default function IntentBoard({
             deployedRules?.find((d) => d.id === rootReviseTarget.root.id)?.rule ?? null
           }
           variant="type-root"
-          scopeMessageIds={rows
+          scopeMessageIds={listRows
             .filter(
               (r) =>
                 r.queryType === rootReviseTarget.root.type &&
@@ -2325,6 +2727,14 @@ export default function IntentBoard({
             .map((r) => r.messageId)}
           scopeLabel={QUERY_TYPE_LABELS[rootReviseTarget.root.type]}
           fixedWhen={typeRootWhen(rootReviseTarget.root.type)}
+          onApplied={({ versionNo, label, messageIds }) =>
+            void backfillVersionResponses({
+              intentId: rootReviseTarget.root.id,
+              versionNo,
+              label,
+              messageIds,
+            })
+          }
           onClose={(changed) => {
             setRootReviseTarget(null);
             if (changed) {
@@ -2376,9 +2786,9 @@ export default function IntentBoard({
         />
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 flex-1 min-h-0">
-        {/* LEFT — Intents · Needs decision · Unassigned. In the baseline the
-            Rules panel is pinned at the top and only the Filters tree below
-            it scrolls (flex column); SCORE scrolls as one panel. */}
+        {/* LEFT — SCORE: the four type sections, each over its intent tree.
+            Baseline: the Rules panel pinned at the top with only the Filters
+            tree below it scrolling (flex column); SCORE scrolls as one panel. */}
         <div
           className={`rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] ${
             isBaseline ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'
@@ -2517,10 +2927,26 @@ export default function IntentBoard({
                       onClick={() => setSelection({ kind: 'type', typeKey: root.type })}
                     >
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TYPE_SECTION_DOT[root.type]}`} />
-                      <span className="text-xs font-semibold uppercase tracking-wide truncate flex-1">
+                      <span className="text-xs font-semibold uppercase tracking-wide truncate">
                         {QUERY_TYPE_LABELS[root.type]}
                       </span>
-                      <Badge n={total} />
+                      {/* With no set under it, a type has no Uncategorized row
+                          to carry the warning — and an empty section reads as
+                          "nothing here yet" when what it means is that every
+                          question of the type falls through to the type's own
+                          rule. It qualifies the type, so it rides on the type's
+                          own line; the full sentence is in the tooltip. */}
+                      {entry.topLevel.length === 0 && (
+                        <span
+                          className="shrink-0 text-[10px] text-rose-600"
+                          title={`No intent yet — every ${QUERY_TYPE_LABELS[root.type]} question is uncategorized, answered by the type’s own rule.`}
+                        >
+                          No intent yet
+                        </span>
+                      )}
+                      <div className="ml-auto shrink-0">
+                        <Badge n={total} />
+                      </div>
                     </div>
 
                     <div className="pb-1">
@@ -2548,8 +2974,14 @@ export default function IntentBoard({
                                     }`}
                                     title={`Questions no intent in ${QUERY_TYPE_LABELS[root.type]} claims — answered by the type's own rule.`}
                                   >
-                                    <span className="truncate italic">Uncategorized</span>
-                                    <Badge n={residue} />
+                                    <span
+                                      className={`truncate italic ${
+                                        residue > 0 ? 'font-medium text-rose-600' : ''
+                                      }`}
+                                    >
+                                      Uncategorized
+                                    </span>
+                                    <Badge n={residue} warn={residue > 0} />
                                   </button>
                                 ),
                               },
@@ -2643,7 +3075,7 @@ export default function IntentBoard({
               // could anchor the whole session on a question an earlier sibling
               // or one of this intent's own subsets takes first, i.e. on a
               // response no student ever receives.
-              const anchor = rows.find((r) => {
+              const anchor = listRows.find((r) => {
                 const res = resolutions.get(r.messageId);
                 return res?.kind === 'matched' && res.intentId === intent.id;
               });
@@ -2771,6 +3203,47 @@ export default function IntentBoard({
                 </div>
               );
             }
+            if (isBaseline && selection.kind === 'type') {
+              // The SAME definition the branch above shows, for the arm that
+              // has no type root to hang it on.
+              //
+              // Both conditions group the log by these four types, from the
+              // SAME copied classification — the counts in the two left
+              // columns are equal by construction (spec §S-6c). But the words
+              // that decide the grouping were reachable only through a type
+              // ROOT, and the baseline has none: `ensureTypeRoots` runs for
+              // score only. So the control arm was reading four bare labels
+              // and had to infer what "Translating" meant from the questions
+              // that happened to be under it, while the treatment arm was
+              // handed the classifier's own sentence. That is a difference in
+              // what the two arms KNOW ABOUT THE CORPUS, not in the
+              // structuring mechanism the study isolates (§0 principle 1) —
+              // and it ran the wrong way, since a control that cannot read the
+              // categories it is filtering inside is the strawman §0 principle
+              // 3 forbids.
+              //
+              // What stays ablated is everything the row beside it carries:
+              // there is no Then, no rule, no Edit Rule, no Uncategorized
+              // residue. The type still owns nothing here. A lone When is the
+              // honest shape of that — the absence is meant to read as
+              // absence, the same way FilterWorkbench keeps an empty third
+              // track rather than reflowing to hide the missing column.
+              const label = QUERY_TYPE_LABELS[selection.typeKey];
+              return (
+                <div
+                  className="px-3 py-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20 flex items-start gap-2"
+                  // Read-only, and said the way the type root's is said: by the
+                  // absence of an edit action, with the why on hover. Naming it
+                  // as the classifier's own text is the point — a paraphrase
+                  // could drift from the judgment that actually sorted these
+                  // questions, and this text cannot.
+                  title={`The words the classifier itself was given for ${label}. Every question it judged ${label} is in this section; the four types are fixed.`}
+                >
+                  <DetailLabel>When</DetailLabel>
+                  <ClampedText text={TYPE_DEFINITIONS[selection.typeKey]} muted />
+                </div>
+              );
+            }
             if (selection.kind === 'search' && isBaseline) {
               const saved = savedSearches.find((s) => `search:${s.id}` === selection.key);
               if (!saved) return null;
@@ -2805,7 +3278,7 @@ export default function IntentBoard({
                   an empty result is an empty result, and telling a participant
                   to "create an intent" would hand them the other condition's
                   vocabulary. */}
-              {selection.kind === 'pending' || rows.length === 0
+              {selection.kind === 'pending' || listRows.length === 0
                 ? 'No questions here.'
                 : !isBaseline && activeIntents.length === 0
                   ? 'Create an intent to start organizing the log.'
@@ -2815,7 +3288,6 @@ export default function IntentBoard({
             <ul className="divide-y divide-[hsl(var(--border))]">
               {sortedRows.map((r) => {
                 const active = r.messageId === selectedMessageId;
-                const res = resolutions.get(r.messageId);
                 const rating = contextRating(r);
                 const ratingInfo = selection.kind === 'intent' ? r.intentRatings[selection.id] : undefined;
                 return (
@@ -2824,12 +3296,101 @@ export default function IntentBoard({
                       onClick={() => setSelectedMessageId(r.messageId)}
                       className={`w-full text-left px-3 py-2.5 ${active ? 'bg-[hsl(var(--muted))]' : 'hover:bg-[hsl(var(--muted))]/40'}`}
                     >
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-[11px] font-mono text-[hsl(var(--muted-foreground))]">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="shrink-0 text-[11px] font-mono text-[hsl(var(--muted-foreground))]">
                           {r.participantToken || '—'}
                           {r.turnNumber > 0 && <span className="ml-1 font-sans">· Turn {r.turnNumber}</span>}
                         </span>
-                        <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                        {/* WHO ANSWERS THIS, on the identity line: the set that
+                            claimed the question and the rule version it is
+                            answered by. Both are shortcuts into the thing they
+                            name — the pencil opens Edit intent / Revise on this
+                            very question — so a list read top to bottom is also
+                            the way into fixing what it shows. */}
+                        {showOwnerTags &&
+                          (() => {
+                            const owner = ownerOf(r);
+                            if (!owner) {
+                              return (
+                                <SmallChip
+                                  className="bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-[hsl(var(--border))] italic"
+                                  title="No set has judged this question yet, so which rule answers it is not decided. The next run settles it."
+                                >
+                                  not rated yet
+                                </SmallChip>
+                              );
+                            }
+                            const scope = owner.intent ?? owner.root;
+                            const version = ruleVersionByScope.get(scope.id) ?? null;
+                            const rule = scope.rule?.trim();
+                            return (
+                              <OwnerRuleChip
+                                scope={
+                                  owner.intent ? (
+                                    <ChipHalf
+                                      label={owner.intent.title}
+                                      colors="bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                      title={`Edit “${owner.intent.title}” — the set that claims this question`}
+                                      onEdit={() => setEditIntent(owner.intent)}
+                                    />
+                                  ) : (
+                                    // The type's own name, unqualified: what the
+                                    // left column calls this scope, and the half
+                                    // it sits in already says "this is what
+                                    // answers the question". "Planning default"
+                                    // spent a third of the chip restating the
+                                    // chip. The why stays on hover.
+                                    <ChipHalf
+                                      label={QUERY_TYPE_LABELS[owner.root.type]}
+                                      colors="bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]"
+                                      title={`No set claims this question — the ${QUERY_TYPE_LABELS[owner.root.type]} default rule answers it`}
+                                    />
+                                  )
+                                }
+                                rule={
+                                  <ChipHalf
+                                    // An empty rule is named "No rule", not by
+                                    // its version: a scope can carry a whole
+                                    // history and still answer with nothing (its
+                                    // seed reads "Empty rule"), and on a question
+                                    // row the fact that this one gets no system
+                                    // prompt is the part worth the space. Same
+                                    // wording the section header uses. "Rule"
+                                    // unversioned = written but never revised.
+                                    label={
+                                      !rule
+                                        ? 'No rule'
+                                        : version
+                                          ? `v${version.major}${version.name ? ` · ${version.name}` : ''}`
+                                          : 'Rule'
+                                    }
+                                    // Blue once a REVISED rule answers the
+                                    // question — the same accent the viewer
+                                    // frames that rule's response in, so the
+                                    // rows whose replies have moved on from
+                                    // what was delivered are visible in one
+                                    // pass down the list. A rule that was
+                                    // written but never revised stays quiet:
+                                    // there is no other version to be at.
+                                    colors={
+                                      rule && version
+                                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300'
+                                        : `bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] ${
+                                            rule ? '' : 'italic'
+                                          }`
+                                    }
+                                    title={`${
+                                      rule
+                                        ? rule.replace(/\s+/g, ' ').slice(0, 240)
+                                        : 'No rule yet — this question gets no system prompt.'
+                                    }\n\nRevise this rule from this question.`}
+                                    onEdit={() => openRuleFor(r, owner)}
+                                  />
+                                }
+                              />
+                            );
+                          })()}
+                        <span className="ml-auto shrink-0 text-[11px] text-[hsl(var(--muted-foreground))]">
                           {new Date(r.queryTimestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                         </span>
                       </div>
@@ -2839,8 +3400,8 @@ export default function IntentBoard({
                       <div className="flex flex-wrap gap-1 items-center">
                         {/* Intent view: everything shown is clearly-in, so the
                             rating label is dropped — only the pin status (the
-                            non-obvious signal) gets a chip; the applied-rule
-                            version chip lives next to the participant label. */}
+                            non-obvious signal) gets a chip; who answers the
+                            question is tagged on the participant line above. */}
                         {selection.kind === 'intent' && r.pinnedIntents[selection.id] && (
                           <SmallChip
                             className="bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-[hsl(var(--border))]"
@@ -2849,31 +3410,6 @@ export default function IntentBoard({
                             pinned
                           </SmallChip>
                         )}
-                        {/* Which intent captured this question, and a shortcut
-                            into its editor. ONLY in the All view: there it is
-                            live coverage feedback. Not in the Starter set view —
-                            once that starter is a live intent every row repeats
-                            the heading above the list, which is no information
-                            at all. (Uncategorized/Not-yet-rated can't reach here
-                            anyway: those views filter to fallback/pending rows,
-                            and this needs an assigned one.) Baseline hides it
-                            outright: an intent-membership tag AND a way into
-                            Edit intent are both mechanism the ablation must not
-                            expose. */}
-                        {!isBaseline &&
-                          selection.kind === 'all' &&
-                          res?.kind === 'matched' &&
-                          (() => {
-                            const target = intentById.get(res.intentId);
-                            return (
-                              <IntentChip
-                                label={titleOf(res.intentId)}
-                                colors="border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300"
-                                title={`Edit “${titleOf(res.intentId)}” — this question is captured by it`}
-                                onEdit={() => target && setEditIntent(target)}
-                              />
-                            );
-                          })()}
                       </div>
                       {/* Only "unsure" rows surface the rationale inline (§2.1 skim rule). */}
                       {rating === 'unsure' && ratingInfo?.rationale && (
@@ -2943,9 +3479,17 @@ export default function IntentBoard({
                     // BASELINE: Revise the one shared rules document from this
                     // question — no owning intent, always available.
                     <button
-                      onClick={() => setPromptReviseTarget(selectedRow)}
+                      onClick={() =>
+                        // Viewing a version → revise builds on THAT version
+                        // (its rule + the response shown), as in SCORE.
+                        setPromptReviseTarget({ row: selectedRow, viewVersion: viewedVersion })
+                      }
                       className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-                      title="Revise the rules from this question"
+                      title={
+                        viewedVersion
+                          ? `Revise the rules from v${viewedVersion.major ?? viewedVersion.versionNo}${viewedVersion.name ? ` · ${viewedVersion.name}` : ''}`
+                          : 'Revise the rules from this question'
+                      }
                     >
                       Revise rules <ChevronRight className="w-3.5 h-3.5" />
                     </button>
@@ -2990,34 +3534,8 @@ export default function IntentBoard({
                   })()}
                 </div>
               </div>
-              {/* Rule-version picker — view the response this question got
-                  (or would get) under each saved rule version. On its own line
-                  so the long option labels don't crowd the P76 · Turn row. */}
-              {viewerVersions && viewerVersions.some((v) => v.response) && (
-                <div>
-                  <select
-                    value={viewedVersionNo ?? ''}
-                    onChange={(e) => {
-                      // The thread stays; overrideResponse swaps just THIS
-                      // turn's reply for the version's, leaving the delivered
-                      // replies around it as the context they are.
-                      setViewedVersionNo(e.target.value === '' ? null : Number(e.target.value));
-                    }}
-                    className="text-[11px] border border-[hsl(var(--border))] rounded px-1 py-0.5 bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
-                    title="View this question's response under a saved rule version"
-                  >
-                    <option value="">Original (as delivered)</option>
-                    {viewerVersions
-                      .filter((v) => v.response)
-                      .map((v) => (
-                        <option key={v.versionNo} value={v.versionNo}>
-                          v{v.major ?? v.versionNo}
-                          {v.name ? ` · ${v.name}` : ''}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              )}
+              {/* The rule-version picker is NOT here — it rides on the reply it
+                  rewrites, inside the thread below (ResponseVersionBar). */}
               </div>
 
               {/* Scrolls under the shrink-0 header above, so Exit / Full-
@@ -3040,6 +3558,19 @@ export default function IntentBoard({
                     viewedVersion?.response
                       ? { messageId: selectedRow.messageId, text: viewedVersion.response, raw: false }
                       : null
+                  }
+                  responseSlot={
+                    // Only questions that have a version-generated response to
+                    // show get the picker — with nothing to switch to, it would
+                    // be a control over a single option.
+                    viewerVersions && viewerVersions.some((v) => v.response) ? (
+                      <ResponseVersionBar
+                        versions={viewerVersions.filter((v) => v.response)}
+                        selected={viewedVersionNo}
+                        onSelect={setViewedVersionNo}
+                        isBaseline={isBaseline}
+                      />
+                    ) : null
                   }
                 />
               ) : (

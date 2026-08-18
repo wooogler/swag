@@ -26,19 +26,19 @@
  * A Route Handler rather than a page because only a handler (or a Server
  * Action) may set a cookie.
  */
-import { NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { instructors, studyParticipants } from '@/db/schema';
 import { STUDY_SESSION_MAX_AGE_SECONDS } from '@/lib/study/config';
 import { ensureStudyTables } from '@/lib/study/store';
 import { ensureParticipantSetup } from '@/lib/study/provision';
+import { redirectTo } from '@/lib/redirect';
 
 export const dynamic = 'force-dynamic';
 // The safety-net provision below clones two datasets if they are somehow absent.
 export const maxDuration = 300;
 
-export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
+export async function GET(_req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   await ensureStudyTables();
 
@@ -48,10 +48,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     .where(eq(studyParticipants.accessToken, token));
 
   if (!participant) {
-    return NextResponse.redirect(new URL('/study?link=invalid', req.url));
+    return redirectTo('/study?link=invalid');
   }
   if (participant.phase === 'done') {
-    return NextResponse.redirect(new URL('/study?link=done', req.url));
+    return redirectTo('/study?link=done');
   }
 
   // Normally a no-op: the workspaces were built when the researcher created
@@ -71,7 +71,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
       .where(eq(instructors.id, participant.instructorId)),
   ]);
 
-  const res = NextResponse.redirect(new URL('/study/session', req.url));
+  const res = redirectTo('/study/session');
   res.cookies.set('user_session', participant.instructorId, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',

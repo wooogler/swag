@@ -124,11 +124,15 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 - 중: 선택 인스펙터(When/Then + Edit Intent / Edit Rule — Edit Rule의 anchor는 **체인이 실제 resolve한** 질문), 검색·정렬(PID↑ 기본 — 참가자 간 동일한 시작 화면).
 - 우: 대화 뷰어 + rule-version 드롭다운("Original (as delivered)" / vN) + **Revise rule**(소유 intent 또는 type root로).
 
+**브리핑 모달** (S-6g, **양 조건 공통**): 보드 첫 진입 시 자동으로 한 번 뜨고, 이후 헤더의 `ⓘ Assignment` 버튼으로 언제든 다시 연다. 두 절 — ① 학생들이 받은 과제 프롬프트(`assignments.instructions`; SWAG은 BlockNote JSON이라 `instructionToPlainText` 경유) ② 챗봇의 시작 프롬프트(`assignmentBasePrompt`). **비어 있으면 비어 있다고 말한다** — NIRVANA는 `custom_system_prompt=''`가 의도된 값이라 "No system prompt — the chatbot ran without any default guidance."(과제 페이지 "How the AI helps" 탭과 같은 문장). 1회 노출 기억은 `localStorage['swag:briefing-seen:<assignmentId>']` — 참가자당이 아니라 **과제당**이라 두 블록에서 각각 한 번씩 뜬다.
+
 **생성**: 항상 chooser 경유 (§1.4). Create → IntentWorkbench가 시드로 열리며 **즉시 auto-Try**(빈 폼으로 열리지 않는다); 템플릿 시드는 rating까지 서버 클론되어 질문이 즉시 떠 있다.
 
-**IntentWorkbench (When 편집)**: 좌 spec(Title/definition/corrections/History) | 중 **In this intent**(clearly_in; "Most out-like first" 기본 정렬 — 실수 후보 먼저; 버전 대비 membership diff ±N) | 우 **Needs decision**(probably in/out 탭). 행 컨트롤 in / **send here**(shadowed일 때만) / out; 판정과 어긋나는 교정은 **이유 피커**(LLM 후보 3 + 자유입력). "Update definition · N corrections" → **FoldReviewModal**(교정↔밑줄 스팬 검토 게이트) → fold가 교정을 definition에 흡수하고 전 판정을 stale로. 재-Try 후 마커 검증("✓ / ⚠ disagrees with your marks").
+**IntentWorkbench (When 편집)**: 좌 spec(Title/definition/corrections/History) | 중 **In this intent**(clearly_in; "Most out-like first" 기본 정렬 — 실수 후보 먼저; 버전 대비 membership diff ±N) | 우 **Potential questions in this intent**(probably_in 전용 — V3에서 probably-out 탭 삭제). 행 컨트롤 in / **send here**(shadowed일 때만) / out; 판정과 어긋나는 교정은 **이유 피커**(LLM 후보 3 + 자유입력). "Update definition · N corrections" → **FoldReviewModal**(교정↔밑줄 스팬 검토 게이트) → fold가 교정을 definition에 흡수하고 전 판정을 stale로. 재-Try 후 마커 검증("✓ / ⚠ disagrees with your marks").
 
 **RuleWorkbench (Then 편집)** — 세 타깃을 `variant: 'intent' | 'type-root' | 'prompt'`로 서빙하며, 분기는 variant 이름이 아니라 **세 축**을 묻는다: `authoredWhen`(작성된 When이 있나 — intent만), scoped(답하는 질문 집합이 열거 가능한가 — intent + type-root), `monolith`(복수형 Rules 문서 — baseline). 보드는 각 마운트에 **체인이 resolve한** 질문 집합을 건넨다(raw 멤버십이 아니라 — anti-shadowing).
+**긴 텍스트 편집 = 모달** (S-6h, **양 조건 공통**): definition·rule 상자는 **읽기 전용 표시**이고, 클릭 또는 `✎ Edit`이 전체 화면 에디터(`EditorModal`, max-w-4xl · 85vh)를 연다. **커밋하지 않는다** — Save는 다이얼로그를 닫고 초안(`definition` / `ruleText`)만 갱신하며, 학생에게 가는 경로는 바깥의 Try/Apply/Deploy 그대로다(세 번째 동사를 만들지 않는다). 초안이 바뀐 상태에서는 Esc·백드롭으로 안 닫히고 Cancel이 인라인 확인을 띄운다. `boxEdited`·`specDirty`·leave-guard는 전부 같은 초안 상태를 계속 읽으므로 모달을 몰라도 된다. 조건별 문구만 다르다: SCORE `Edit definition`/`Edit rule`, baseline `Edit filter`/`Edit rules`.
+
 - 좌: 읽기 전용 When(intent = definition; type root = `fixedWhen` "none of the sets inside {Type} capture" + 분류기 원문 접기; prompt = 없음) + Then 에디터 + **Try edit** / **Apply rule(s)**.
 - 중: 질문 탭(앵커 ★ + 끌어온 예시) + **Other questions**(모든 variant의 유일한 문 → merged Preview) + 응답 pane(+ Rewrite instead, View in context, Quote in feedback).
 - 우: **타임라인이 곧 버전 히스토리** — Starting rule/Applied 이벤트, 지시 원문, rule 블록은 전신 diff + 클릭=checkout. 피드백 입력 + 6-요소 Hint. propose → **ProposalPreviewModal**(Minimal edit / Focused rework / Full rewrite, 선택한 것만 minor 기록).
@@ -144,6 +148,7 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 
 - **Rules 패널** (고정, 읽기 전용): 현재 문서 + `v{N} live`/`not deployed` 칩. *"No rules yet — open a question and Revise to write them."* 편집은 Revise에서만, 배포는 헤더 Deploy에서만.
 - **Filters 트리**: SCORE와 같은 4 타입 섹션(같은 분류, 같은 숫자), 그 아래 이 참가자의 저장 필터가 한 단계 중첩(같은 `renderBranch` 엘보 코드). 라벨 = name ‖ description, Badge = 캐시된 clearly-in ∩ 자기 타입. 점선 `+ New filter in {Type}`은 그 스코프가 선택됐을 때. 레거시 무타입 행은 "Ungrouped". **클릭은 리스트 필터링만**(ids가 GET에 실려와 0 호출) — 워크벤치는 생성 또는 Edit Filter로만.
+- **타입 정의 노출** (S-6f): 타입 섹션을 고르면 중간 인스펙터에 `When` 한 줄 — `TYPE_DEFINITIONS[type]` 원문, SCORE의 type-root 카드와 **같은 자리·같은 `ClampedText`·같은 라벨**. 읽기 전용이고 옆에 `Then`도 Edit Rule도 없다 (그 부재가 곧 ablation). 양 조건이 같은 분류로 같은 4섹션을 보는 이상 *무엇이 그 섹션에 들어가는가*는 구조화 산출물이 아니라 코퍼스에 대한 사실이므로 패리티 대상이다.
 - 트리가 미러하지 **않는** 것(= ablation 경계): 순서 의미·↑↓·2단계 중첩·스코프 잔여·rule·진단 — 필터는 겹칠 수 있고 아무것도 소유하지 않으므로.
 
 ### 3.2 Filter의 생명주기
@@ -257,6 +262,10 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 | **S-6c** | Search→Filter 명명(클릭의 실제 동작), 좌측을 타입 트리로, `type` = 트리 자리 + 표시 스코프, FilterWorkbench 셸 통일, probe 템플릿 시딩. |
 | **S-6d** | `promptMode` 불리언이 type root에 대조군 UI를 주고 있었다 → 3-way variant. 공유 컴포넌트의 조건 분기는 조건명이 아니라 **축**으로. propose 이벤트 오귀속 교정. |
 | **S-6e** | 검토-세트 수동 경로 완전 통일(QueryPicker 삭제, merged Preview + 검색). 남은 차이 = auto-seed 하나. |
+| **S-6f** (08-17) | 파일럿에서 발견: 4개 타입 정의를 **baseline이 볼 방법이 전혀 없었다**. 두 노출 경로(type-root 인스펙터 카드, RuleWorkbench의 `fixedWhen` 접기)가 모두 type root를 거치는데 `ensureTypeRoots`는 score에서만 돈다 → 대조군은 라벨 4개만 보고 "Translating이 뭔지"를 밑에 깔린 질문들로 역추론해야 했다. 이건 구조화 메커니즘이 아니라 **코퍼스 지식**의 차이이고 §0 원칙 3(비-strawman)을 어기는 방향으로 기울어 있었다. 인스펙터에 baseline 전용 `When` 행 추가(정의만; rule·Then·Edit Rule 없음). |
+| **S-6g** (08-17) | 보드가 "이 질문들이 **무엇에 대한** 질문인가"를 한 번도 말하지 않은 채 열렸다 — 과제 프롬프트도, 챗봇이 원래 받은 시작 프롬프트도. rule이 과한지, 질문이 과제 이탈인지, 붙여넣기의 `[ASSIGNMENT PROMPT]` 태그가 무엇을 가리키는지가 전부 그 두 가지에 대한 판단인데 근거가 화면에 없었다. 첫 진입 자동 모달 + 헤더 `ⓘ Assignment` 재열람. **양 조건 공통** — 과제는 코퍼스에 대한 사실이고 base prompt는 양쪽이 편집을 시작하는 상태이므로 측정 대상 메커니즘이 아니다. |
+| **S-6h** (08-17) | definition·rule을 폭 320-380px 컬럼의 인라인 textarea에서 쓰고 있었다. definition은 평균 253자·최대 1,127자, baseline rules 문서는 상한 8,000자 — 편지구멍으로 산문을 쓰는 셈. **읽기 전용 + `EditorModal`**(양 조건). 부수 효과 하나: 스크롤되는 컬럼 안의 textarea는 캐럿이 남아 있으면 오타 한 번에 라이브 정의가 바뀌었는데(정의 변경 = 전 로그 재판정) 그 경로가 사라졌다. RuleWorkbench의 `useLayoutEffect` 높이 측정은 textarea와 함께 삭제. |
+| **S-6i** (08-17) | 작업 블록 25분을 **참가자에게 한 번도 알려주지 않고** 있었다 — 첫 통보가 진행자의 20분 구두 경고. 설계 §5가 "무엇을 몇 개나 보고 고칠지 … 그 자체가 측정값"이라 했는데, 예산을 모르고 한 선택은 자유로운 선택이 아니라 정보 없는 선택이고 둘은 데이터에서 구분되지 않는다. **작업 카드에 "about 25 minutes" + 스튜디오 헤더에 경과 표시**(`WorkElapsed`: 경과/분 단위·muted·색 변화 없음·25 넘어도 계속 카운트). 카운트다운을 쓰지 않은 이유 둘: ① 부담(정신적 요구·좌절)이 블록 설문의 측정 변인이라 타이머가 자기 결과를 오염시킨다 ② SCORE의 루프가 앞이 무거워(intent→Apply→판정→다듬기) 조급함이 **처치의 메커니즘인 판정 루프**에서 먼저 깎일 가능성이 커 조건 간 비대칭이 생긴다. 강제 없음(진행자 운영, v2 delta §8 유지). 부수: 콘솔 경과 칩의 임계값이 구 30분 상한에 박혀 있어 진행자 신호가 5분 늦었다 → `STUDY_WORK_MINUTES`/`STUDY_WORK_WARNING_MINUTES`(25/20)에서 유도하고 **configure 블록에만** 적용(break·interview는 그 시계가 아니다). |
 
 ---
 

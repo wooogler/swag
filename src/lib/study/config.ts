@@ -134,3 +134,19 @@ export type StudioView = 'score' | 'baseline';
 // Baseline monolithic prompt editor character ceiling (matches GPT Builder /
 // Claude ~8k). Both conditions write against the same ceiling.
 export const STUDY_PROMPT_CHAR_LIMIT = Number(process.env.STUDY_PROMPT_CHAR_LIMIT ?? 8000);
+
+/**
+ * The configure block's time budget, in minutes (design v2 §5: "0:08 블록 1 —
+ * 설정 작업 (25분 상한)", with a verbal warning five minutes out).
+ *
+ * NOT enforced anywhere — the facilitator runs the clock, and a hard cutoff at
+ * 25:00 would truncate someone mid-edit and damage the final artifact RQ1
+ * analyses. These numbers only drive what is DISPLAYED: the participant's own
+ * elapsed readout and the console chip the facilitator watches. They live here
+ * because the console's threshold had drifted to 30 — the old cap, from before
+ * v2 cut it — so the facilitator's cue was arriving five minutes late.
+ */
+export const STUDY_WORK_MINUTES = 25;
+/** When the facilitator gives the verbal warning (design v2 §5). */
+export const STUDY_WORK_WARNING_MINUTES = 20;
+

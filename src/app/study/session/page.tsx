@@ -6,6 +6,7 @@ import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
 import { cloneForBlock, getTestItems } from '@/lib/study/measure-store';
 import { isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
+import { STUDY_WORK_MINUTES } from '@/lib/study/config';
 import TutorialStep from '@/components/study/TutorialStep';
 
 export const dynamic = 'force-dynamic';
@@ -95,10 +96,24 @@ export default async function StudySessionPage() {
             {workAssignmentId ? (
               <>
                 <h1 className="text-lg font-semibold mb-2">Set up your chatbot</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-3 leading-relaxed">
                   Read through the conversations students had with the chatbot. Wherever a
                   reply is not what you would want, change the setup so it answers the way
                   you intend. Deploy when you are satisfied.
+                </p>
+                {/* The budget, said BEFORE it starts being spent. How much of
+                    the log someone chooses to cover is the block's primary
+                    measure, and a choice made without knowing there is a clock
+                    is not the free choice the design means to record. Phrased
+                    as a plan, not a limit: nothing cuts them off, and how far
+                    they get is up to them. */}
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                  This part takes about{' '}
+                  <span className="font-semibold text-[hsl(var(--foreground))]">
+                    {STUDY_WORK_MINUTES} minutes
+                  </span>
+                  . You will see the time so far in the top bar — how much of the log you
+                  look at is up to you.
                 </p>
                 <a
                   href={`/instructor/assignments/${workAssignmentId}/score`}

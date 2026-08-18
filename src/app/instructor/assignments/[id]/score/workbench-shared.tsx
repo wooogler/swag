@@ -6,11 +6,12 @@
  * (the ablation's shell parity) with a single source of truth. Extracted
  * verbatim from IntentWorkbench — pure UI, no intent/search logic.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, Pencil, Search, X } from 'lucide-react';
 import { MaterialSegments, QuerySnippet, snippetOverflows, type Dissection } from './materials';
 import { useHeaderSlot } from './StudioShell';
+import EditorModal from './EditorModal';
 
 /**
  * A workbench's own bar: Back button + title + optional note + right-aligned
@@ -63,39 +64,85 @@ export function WorkbenchTopBar({
   return slot.el ? createPortal(bar, slot.el) : null;
 }
 
-/** The definition editor: label + textarea, with an optional right-aligned
- * action (e.g. "Prompt preview"). SCORE labels it "When a student…"; baseline
- * search reuses it with its own label. */
+/**
+ * The definition field: label + the text, READ-ONLY, opening into a full-size
+ * editor (EditorModal) on click.
+ *
+ * It used to be a five-row textarea. Definitions turned out to be paragraphs —
+ * 253 characters on average across the 374 written so far, past 1,100 at the
+ * long end — and this panel is 320-380px wide because its job is to leave the
+ * question list the page. So the field shows the text and the writing happens
+ * at the size the text actually is.
+ *
+ * Read-only is not a lock: the whole block is the button, so the gesture is
+ * still "click the text, type". What it buys is that a definition can no longer
+ * be altered by a stray keystroke while someone scrolls the column with the
+ * caret parked in it — a definition change re-rates the entire log, so an
+ * accidental one is expensive rather than merely untidy.
+ *
+ * SCORE labels it "When a student…"; the baseline's filter workbench reuses it
+ * with its own label. `action` is the header's right-aligned controls (undo /
+ * redo / Apply) and stays OUTSIDE the modal: those commit, and this only edits.
+ */
 export function DefinitionEditor({
   value,
   onChange,
   label = 'When a student…',
   placeholder,
-  rows = 5,
   action,
+  editTitle = 'Edit definition',
+  hint,
 }: {
   value: string;
   onChange: (v: string) => void;
   label?: string;
   placeholder?: string;
-  rows?: number;
   action?: React.ReactNode;
+  /** Dialog heading — "Edit definition" reads wrong over a baseline filter. */
+  editTitle?: string;
+  hint?: string | null;
 }) {
+  const [editing, setEditing] = useState(false);
+  const text = value.trim();
   return (
-    <label className="block text-sm cursor-text">
+    <div className="block text-sm">
       <span className="flex items-center justify-between gap-2">
         <span className="font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">{label}</span>
-        {/* Not part of the field's click target — keeps its own cursor. */}
-        {action && <span className="cursor-auto">{action}</span>}
+        {action}
       </span>
-      <textarea
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        title="Click to edit in a full-size editor"
+        className="group mt-1 w-full text-left rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 hover:border-[hsl(var(--primary))]"
+      >
+        {/* Capped, and scrolls past the cap: an unbounded block would push
+            History and the version list off the column on a long definition,
+            and the full text is one click away regardless. */}
+        <span className="block max-h-40 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed">
+          {text || (
+            <span className="italic text-[hsl(var(--muted-foreground))]">{placeholder ?? 'Empty'}</span>
+          )}
+        </span>
+        <span className="mt-1 flex items-center gap-1 text-[11px] font-medium text-[hsl(var(--primary))] opacity-70 group-hover:opacity-100">
+          <Pencil className="h-3 w-3" />
+          Edit
+        </span>
+      </button>
+      <EditorModal
+        open={editing}
+        title={editTitle}
+        label={label}
+        hint={hint}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        rows={rows}
         placeholder={placeholder}
-        className="mt-1 w-full text-sm border border-[hsl(var(--border))] rounded px-2 py-1.5 bg-[hsl(var(--background))]"
+        onCancel={() => setEditing(false)}
+        onSave={(next) => {
+          onChange(next);
+          setEditing(false);
+        }}
       />
-    </label>
+    </div>
   );
 }
 
