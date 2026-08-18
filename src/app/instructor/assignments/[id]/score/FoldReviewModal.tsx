@@ -38,6 +38,10 @@ export interface FoldCorrectionView {
   span: string | null;
   note: string | null;
   verified: FoldVerification | null;
+  /** A decision a previous fold already took in. Measured like any other, but
+   * never a reason to rewrite — see the refine route's retry rule. */
+  standing: boolean;
+  taughtCount: number;
 }
 
 export interface FoldProposalView {
@@ -54,6 +58,19 @@ export interface FoldProposalView {
   verifiedPass: number | null;
   verifiedTotal: number | null;
   attempts: number;
+  /**
+   * What this text would move among questions NOBODY ruled on.
+   *
+   * The verification above answers "does it keep my rulings", which is about a
+   * dozen questions already looked at. This answers the one that bites: a
+   * definition rewritten to admit one question admits a class, and the rest of
+   * that class is sitting in the log. Null when there was nothing to measure.
+   */
+  delta: {
+    gain: { messageId: number; queryText: string }[];
+    lose: { messageId: number; queryText: string }[];
+  } | null;
+  deltaScopeSize: number | null;
   corrections: FoldCorrectionView[];
 }
 
@@ -69,6 +86,9 @@ export interface FoldPendingView {
     verdict: 'in' | 'out';
     queryText: string;
     reason: string | null;
+    /** Already folded in once — the waiting view lists the whole ledger. */
+    standing: boolean;
+    taughtCount: number;
   }[];
 }
 
@@ -257,13 +277,15 @@ export default function FoldReviewModal({
   const headTitle = proposals?.[0]?.title ?? pending.title;
 
   /**
-   * Where each decision lands on Apply. A verified pass is CONSUMED — the
-   * definition demonstrably says it, so the pin has nothing left to do. Anything
-   * else is HELD: the decision stays and keeps overriding the judgment. That is
-   * the default on purpose, so closing this modal without reading it cannot
-   * silently discard something the instructor ruled on.
+   * Every decision this fold took in, and how many the new text cannot say.
    *
-   * Unverified corrections (the check could not run, or a legacy send-here
+   * There is no split any more. Applying does not retire the decisions the
+   * definition reproduces and hold back the ones it does not — all of them stay
+   * on the books either way, checked against the definition from here on. So
+   * the only thing to count is the ones that will keep routing their question
+   * the instructor's way because the text cannot.
+   *
+   * Unverified decisions (the check could not run, or a legacy send-here
    * sibling) fall back to the fold's own report — it is all there is.
    */
   const split = useMemo(() => {
@@ -321,7 +343,7 @@ export default function FoldReviewModal({
                     }
                     title="Checked by rating each question against the proposed definition with the real classifier."
                   >
-                    {measured.pass} of {measured.checked} reproduced
+                    {measured.pass} of {measured.checked} hold in the new text
                   </span>
                 </>
               )}
@@ -350,6 +372,8 @@ export default function FoldReviewModal({
                 verifiedPass: null,
                 verifiedTotal: null,
                 attempts: 0,
+                delta: null,
+                deltaScopeSize: null,
                 corrections: pending.corrections.map((c) => ({
                   ...c,
                   outcome: 'already' as const,
@@ -357,7 +381,7 @@ export default function FoldReviewModal({
                   note: null,
                   verified: null,
                 })),
-              },
+              } satisfies FoldProposalView,
             ]
           ).map((p, pi) => (
             <div
@@ -402,6 +426,26 @@ export default function FoldReviewModal({
                               “{c.queryText.replace(/\s+/g, ' ').trim().slice(0, 90)}
                               {c.queryText.length > 90 ? '…' : ''}”
                             </span>
+                            {/* A decision this fold is being asked to LEARN
+                                reads differently from one it is being asked to
+                                keep true — and only the first can make it try
+                                again, so the rail says which is which. */}
+                            {!c.standing && (
+                              <span
+                                className="ml-1 rounded border border-[hsl(var(--primary))]/40 bg-[hsl(var(--primary))]/10 px-1 text-[10px] font-semibold uppercase text-[hsl(var(--primary))]"
+                                title="Ruled on since the last update — this is what the fold is being asked to learn."
+                              >
+                                new
+                              </span>
+                            )}
+                            {c.taughtCount > 1 && (
+                              <span
+                                className="ml-1 text-[10px] text-[hsl(var(--muted-foreground))]"
+                                title="How many updates have had to take this decision in. More than one means the definition keeps losing it — the question may want an intent of its own."
+                              >
+                                taught {c.taughtCount}×
+                              </span>
+                            )}
                           </span>
                           {c.reason && !gone && (
                             <span
@@ -427,7 +471,7 @@ export default function FoldReviewModal({
                                   </span>
                                 ) : (
                                   <span className="font-medium text-amber-800">
-                                    ✗ the definition can’t say this yet
+                                    ✕ the definition can’t say this yet
                                   </span>
                                 )
                               ) : (
@@ -586,6 +630,52 @@ export default function FoldReviewModal({
                       {p.summary}
                     </p>
                   )}
+
+                  {/* WHAT ELSE MOVES — questions nobody ruled on.
+                      The rail above is about decisions, which are questions the
+                      instructor has already looked at. This is the rest of the
+                      material: a definition widened to admit one question
+                      admits a class, and in the pilot a single fold pulled in
+                      ten unruled questions, with six later folds spent pushing
+                      them back out and no screen ever saying so. Reported, not
+                      acted on — whether a move is welcome is the judgement this
+                      modal exists to ask for. */}
+                  {!loading && p.delta && (p.delta.gain.length > 0 || p.delta.lose.length > 0) && (
+                    <details className="mt-1.5 text-xs text-[hsl(var(--muted-foreground))]">
+                      <summary className="cursor-pointer list-none hover:text-[hsl(var(--foreground))]">
+                        <span className="font-medium text-[hsl(var(--foreground))]">Also moves:</span>{' '}
+                        {p.delta.gain.length > 0 && (
+                          <span className="font-medium text-emerald-700">
+                            +{p.delta.gain.length} in
+                          </span>
+                        )}
+                        {p.delta.gain.length > 0 && p.delta.lose.length > 0 && ' · '}
+                        {p.delta.lose.length > 0 && (
+                          <span className="font-medium text-rose-700">
+                            −{p.delta.lose.length} out
+                          </span>
+                        )}
+                        {p.deltaScopeSize ? ` of ${p.deltaScopeSize} questions you didn’t rule on` : ''}
+                        {' ▸'}
+                      </summary>
+                      <ul className="mt-1 space-y-0.5">
+                        {p.delta.gain.map((q) => (
+                          <li key={`g${q.messageId}`} className="leading-snug">
+                            <span className="font-semibold text-emerald-700">+</span>{' '}
+                            {q.queryText.replace(/\s+/g, ' ').trim().slice(0, 80)}
+                            {q.queryText.length > 80 ? '…' : ''}
+                          </li>
+                        ))}
+                        {p.delta.lose.map((q) => (
+                          <li key={`l${q.messageId}`} className="leading-snug">
+                            <span className="font-semibold text-rose-700">−</span>{' '}
+                            {q.queryText.replace(/\s+/g, ' ').trim().slice(0, 80)}
+                            {q.queryText.length > 80 ? '…' : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </div>
               </div>
             </div>
@@ -596,9 +686,9 @@ export default function FoldReviewModal({
           {!loading && heldCount > 0 && (
             <p className="mb-2 flex items-start gap-1.5 text-xs text-amber-800">
               <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-              {heldCount} decision{heldCount === 1 ? '' : 's'} the definition can’t make on its own
-              {heldCount === 1 ? ' is' : ' are'} kept as pins — {heldCount === 1 ? 'it' : 'they'}{' '}
-              still route your way, and every later update tries again.
+              {heldCount} decision{heldCount === 1 ? '' : 's'} the new text can’t say on its own —
+              {heldCount === 1 ? ' it' : ' they'} still route your way, and every later update
+              takes {heldCount === 1 ? 'it' : 'them'} along.
             </p>
           )}
           {error && (
@@ -608,11 +698,9 @@ export default function FoldReviewModal({
           )}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
-              Applying replaces the definition{also.length > 0 ? 's' : ''}
-              {split.consume.length > 0 &&
-                `, retires the ${split.consume.length} decision${split.consume.length === 1 ? '' : 's'} it carries`}
-              {heldCount > 0 && `, keeps ${heldCount} as pin${heldCount === 1 ? '' : 's'}`}, and
-              re-rates the questions against it right away.
+              Applying replaces the definition{also.length > 0 ? 's' : ''} and re-rates the
+              questions against it right away. Your {total} decision{total === 1 ? '' : 's'} stay
+              on the books either way.
             </span>
             <span className="flex items-center gap-2">
               <button

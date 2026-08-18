@@ -2760,6 +2760,8 @@ export default function IntentWorkbench({
               verdict: (r.pinned ?? 'in') as 'in' | 'out',
               queryText: r.queryText,
               reason: r.reason,
+              standing: r.decision?.status === 'taught',
+              taughtCount: r.decision?.taughtCount ?? 0,
             })),
           }}
           busy={foldBusy}
