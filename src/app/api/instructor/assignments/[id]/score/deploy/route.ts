@@ -261,7 +261,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   const versionNo = await recordChatDeploy(id, auth.instructor.id, snapshot, note);
-  await logStudyEvent(id, 'deploy', { condition: 'score', versionNo });
+  // WHAT WAS ACTUALLY SHIPPED, in the one number that decides how the chatbot
+  // behaves: how much of the configuration carries a rule. An intent with no
+  // rule contributes nothing — its questions reach the model with no system
+  // prompt at all — and a type root with no rule does the same for everything
+  // its chain leaves unclaimed. The snapshot holds this, but only by being
+  // opened and walked; recording it here makes "deployed with three intents
+  // still empty" a fact the trail states rather than one an analysis derives.
+  {
+    const { judged, roots } = splitSnapshot(snapshot);
+    const hasRule = (i: { rule: string | null }) => !!i.rule?.trim();
+    await logStudyEvent(id, 'deploy', {
+      condition: 'score',
+      versionNo,
+      intents: judged.length,
+      intentsWithRule: judged.filter(hasRule).length,
+      typeRootsWithRule: roots.filter(hasRule).length,
+      typeRoots: roots.length,
+      ruleless: judged.filter((i) => !hasRule(i)).map((i) => ({ id: i.id, title: i.title })),
+    });
+  }
   // Start freezing this version's measurement answers now, while the
   // participant is still working. Deliberately not awaited (warm.ts).
   warmClone(id);

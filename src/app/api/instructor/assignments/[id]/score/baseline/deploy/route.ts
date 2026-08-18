@@ -8,7 +8,7 @@
 import { NextResponse } from 'next/server';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
 import { ensureStudyTables } from '@/lib/study/store';
-import { deployBaselinePrompt, logStudyEvent } from '@/lib/study/baseline-store';
+import { deployBaselinePrompt, logStudyEvent, resolveBaselineChatPrompt } from '@/lib/study/baseline-store';
 import { warmClone } from '@/lib/study/warm';
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -21,7 +21,11 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   await ensureStudyTables();
   try {
     const versionNo = await deployBaselinePrompt(id);
-    await logStudyEvent(id, 'prompt_deploy', { versionNo });
+    // The baseline's counterpart to SCORE's coverage summary: there is one
+    // rule and it always applies, so what is worth recording is its SIZE at
+    // the moment it went live — the number the accumulation argument is about.
+    const deployed = await resolveBaselineChatPrompt(id, '');
+    await logStudyEvent(id, 'prompt_deploy', { versionNo, chars: deployed.length });
     // Start freezing this version's measurement answers now, while the
     // participant is still working. Deliberately not awaited (warm.ts).
     warmClone(id);

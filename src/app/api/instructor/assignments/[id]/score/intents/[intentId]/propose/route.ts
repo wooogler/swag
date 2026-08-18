@@ -192,6 +192,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       mode: body.mode,
       intentId,
       anchorMessageId: body.messageId,
+      // WHAT THEY ASKED FOR, verbatim. This is the instructor's own sentence —
+      // the closest the record comes to their intent in their words, and the
+      // input the rule text is a model's rendering of. score_rule_versions
+      // keeps it too, but only for the versions that were SAVED: a proposal
+      // seen and rejected leaves nothing behind, and that is exactly the case
+      // where knowing what was asked explains what happened next.
+      ...(body.mode === 'feedback'
+        ? { feedback: body.feedback }
+        : {
+            // A rewrite's ask is the confirmed change intents, not the pasted
+            // text — the edited response is the evidence, these are the claim.
+            changeIntents: body.changeIntents ?? [],
+            editedChars: body.editedResponse.length,
+          }),
     });
     return NextResponse.json({ variants, mode: body.mode, raw });
   } catch (error) {

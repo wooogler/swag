@@ -259,13 +259,42 @@ export async function POST(req: Request, { params }: RouteParams) {
         };
       })
     );
-    // Counts only. A fold the participant accepts writes its definition into
-    // the next snapshot anyway, and one they reject is adequately described by
-    // "N corrections went in, M candidates came back".
+    // The proposal as it was OFFERED — before the instructor edits, accepts or
+    // walks away from it.
+    //
+    // This used to be counts only, on the reasoning that an accepted fold
+    // lands in the next snapshot anyway. It does; what does not land is the
+    // rest of the story. A rejected proposal leaves nothing at all, an edited
+    // one leaves the edit with no trace of what was edited, and neither leaves
+    // the retry count or the verification — which are how the definition
+    // ACQUIRES its shape: the loop rewrites until the classifier reproduces
+    // the corrections, so a proposal that took three attempts is one that was
+    // pushed toward the judge's literal reading, which is where over-specific
+    // definitions come from.
     await logStudyEvent(id, 'suggest_fold', {
       intentId,
       correctionCount: mine.length,
       proposalCount: proposals.length,
+      proposals: proposals.map((p) => ({
+        intentId: p.intentId,
+        beforeChars: p.before.length,
+        afterChars: p.after.length,
+        /** Retries inside one press — 1 means it held the first time. */
+        attempts: p.attempts,
+        verifiedPass: p.verifiedPass,
+        verifiedTotal: p.verifiedTotal,
+        suggestedTitle: p.suggestedTitle,
+        summary: p.summary,
+        /** The offered text, so an edit is a diff rather than a mystery. */
+        definition: p.after,
+        outcomes: p.corrections.map((c) => ({
+          id: c.id,
+          messageId: c.messageId,
+          verdict: c.verdict,
+          outcome: c.outcome,
+          verified: c.verified?.pass ?? null,
+        })),
+      })),
     });
     return NextResponse.json({ proposals });
   } catch (error) {

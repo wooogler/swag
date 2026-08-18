@@ -35,6 +35,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         defHash: result.defHash,
         resultCount: result.clearlyIn.length,
         remaining: result.remaining,
+        // The search text itself. In the baseline arm this is not browsing —
+        // it is the instructor stating, in natural language, a category of
+        // student request they consider a thing; the same act SCORE records as
+        // an intent definition. A hash cannot be read back, and RQ1 compares
+        // exactly these two ways of saying what the material contains.
+        description: description.trim(),
       }),
     ]);
     return NextResponse.json(result);

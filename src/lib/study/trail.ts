@@ -21,6 +21,7 @@ import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   baselinePromptVersions,
+  chatMessages,
   scoreChatDeploys,
   scoreConfigVersions,
   scoreIntents,
@@ -63,6 +64,15 @@ export interface TrailEvent {
   intentId: number | null;
   intentTitle: string | null;
   messageId: number | null;
+  /**
+   * The student question that message id refers to, trimmed to a line.
+   *
+   * Denormalized on purpose: the ids are clone-local, so a reader with only
+   * the export cannot resolve them, and almost every question the trail
+   * prompts ("which question were they correcting here?") needed a database to
+   * answer.
+   */
+  messageText: string | null;
   /** One human-readable line — what the CSV shows. */
   detail: string | null;
   /** Everything else, JSONL only. */
@@ -413,7 +423,10 @@ export async function buildParticipantTrail(
   const bankPos = new Map(bank.map((b) => [b.id, b.position]));
 
   /* -- raw rows → events ------------------------------------------- */
-  type Raw = Omit<TrailEvent, 'seq' | 'tBlock' | 'block' | 'condition' | 'phase' | 'intentTitle'> & {
+  type Raw = Omit<
+    TrailEvent,
+    'seq' | 'tBlock' | 'block' | 'condition' | 'phase' | 'intentTitle' | 'messageText'
+  > & {
     assignmentId: string | null;
   };
   const raw: Raw[] = [];
@@ -550,14 +563,42 @@ export async function buildParticipantTrail(
   }
 
   for (const d of deployRows) {
+    // COVERAGE, computed from the snapshot rather than read off the event.
+    //
+    // What a deploy ships is not the intent count; it is how much of the
+    // configuration carries a rule. An intent with an empty rule answers its
+    // questions with no system prompt at all, so a board of seven intents with
+    // three rules is mostly the bare model — and that fact decides how the
+    // block test reads. Derived here so it also holds for sessions recorded
+    // before the deploy event carried it.
+    const snap = (d.snapshot ?? null) as {
+      intents?: { id: number; title?: string; kind?: string; rule?: string | null }[];
+    } | null;
+    const all = snap?.intents ?? [];
+    const judged = all.filter((i) => (i.kind ?? 'intent') === 'intent');
+    const roots = all.filter((i) => i.kind === 'type_root');
+    const has = (i: { rule?: string | null }) => !!i.rule?.trim();
+    const withRule = judged.filter(has).length;
+    const rootsWithRule = roots.filter(has).length;
     raw.push({
       at: iso(d.createdAt)!,
       source: 'deploy',
       kind: 'deploy',
       intentId: null,
       messageId: null,
-      detail: `chat v${d.versionNo}${d.note ? ` · ${d.note}` : ''}`,
-      payload: { versionNo: d.versionNo },
+      detail:
+        `chat v${d.versionNo}${d.note ? ` · ${d.note}` : ''}` +
+        (all.length > 0
+          ? ` · ${withRule}/${judged.length} intent rule(s) · ${rootsWithRule}/${roots.length} type rule(s)`
+          : ''),
+      payload: {
+        versionNo: d.versionNo,
+        intents: judged.length,
+        intentsWithRule: withRule,
+        typeRoots: roots.length,
+        typeRootsWithRule: rootsWithRule,
+        ruleless: judged.filter((i) => !has(i)).map((i) => ({ id: i.id, title: i.title ?? null })),
+      },
       assignmentId: d.assignmentId,
     });
   }
@@ -565,6 +606,17 @@ export async function buildParticipantTrail(
   // Block test — the prediction and the judgement are separate moments.
   for (const a of testRows) {
     const q = bankPos.get(a.bankItemId);
+    const t = (a.timing ?? null) as {
+      point?: number;
+      pointFirst?: number;
+      pointChanges?: number;
+      expectStart?: number;
+      expectEnd?: number;
+      guess?: number;
+      submit?: number;
+      reveal?: number;
+      rate?: number;
+    } | null;
     if (a.guessedAt) {
       raw.push({
         at: iso(a.guessedAt)!,
@@ -572,8 +624,18 @@ export async function buildParticipantTrail(
         kind: 'test_predict',
         intentId: a.pointedIntentId ?? null,
         messageId: null,
-        detail: `q${q ?? a.bankItemId} · ${a.guess ? 'yes' : 'no'} · pointed ${a.pointedKind ?? '—'}`,
-        payload: { bankItemId: a.bankItemId, guess: a.guess, pointedKind: a.pointedKind },
+        detail:
+          `q${q ?? a.bankItemId} · ${a.guess ? 'yes' : 'no'} · pointed ${a.pointedKind ?? '—'}` +
+          // How long the pointing took, which is the step that asks them to
+          // READ the configuration rather than to judge it.
+          (typeof t?.point === 'number' ? ` · pointed in ${(t.point / 1000).toFixed(1)}s` : '') +
+          (t?.pointChanges ? ` · changed ${t.pointChanges}×` : ''),
+        payload: {
+          bankItemId: a.bankItemId,
+          guess: a.guess,
+          pointedKind: a.pointedKind,
+          timing: t,
+        },
         assignmentId: a.cloneAssignmentId,
       });
     }
@@ -584,8 +646,12 @@ export async function buildParticipantTrail(
         kind: 'test_rate',
         intentId: null,
         messageId: null,
-        detail: `q${q ?? a.bankItemId} · ${a.rating}/5${a.whatsOff ? ' · what’s off' : ''}${a.probe ? ' · probed' : ''}`,
-        payload: { bankItemId: a.bankItemId, rating: a.rating },
+        detail:
+          `q${q ?? a.bankItemId} · ${a.rating}/5${a.whatsOff ? ' · what’s off' : ''}${a.probe ? ' · probed' : ''}` +
+          (typeof t?.rate === 'number' && typeof t?.reveal === 'number'
+            ? ` · read for ${((t.rate - t.reveal) / 1000).toFixed(1)}s`
+            : ''),
+        payload: { bankItemId: a.bankItemId, rating: a.rating, timing: t },
         assignmentId: a.cloneAssignmentId,
       });
     }
@@ -677,6 +743,21 @@ export async function buildParticipantTrail(
     return title ?? liveTitles.get(intentId) ?? null;
   };
 
+  // The questions every message id in the trail points at, resolved once. A
+  // reader should not need the database to know which question a correction
+  // was about.
+  const referencedMessageIds = [
+    ...new Set(raw.map((r) => r.messageId).filter((m): m is number => typeof m === 'number')),
+  ];
+  const messageTextById = new Map<number, string>();
+  if (referencedMessageIds.length > 0) {
+    const rows = await db
+      .select({ id: chatMessages.id, content: chatMessages.content })
+      .from(chatMessages)
+      .where(inArray(chatMessages.id, referencedMessageIds));
+    for (const m of rows) messageTextById.set(m.id, m.content);
+  }
+
   /* -- assemble ----------------------------------------------------- */
   const trailEvents: TrailEvent[] = raw.map((r, i) => {
     const where = r.assignmentId ? blockOf.get(r.assignmentId) ?? null : null;
@@ -696,6 +777,7 @@ export async function buildParticipantTrail(
       intentId: r.intentId,
       intentTitle: titleFor(r.assignmentId, r.at, r.intentId),
       messageId: r.messageId,
+      messageText: r.messageId ? messageTextById.get(r.messageId) ?? null : null,
       detail: r.detail,
       payload: r.payload,
     };
@@ -799,12 +881,28 @@ function markAdoptedSuggestions(events: TrailEvent[]): void {
   }
 }
 
+/** Cut long verbatim text down to a CSV-readable line. */
+function clip(text: string, max: number): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
 /** One line per event kind, for the CSV column a human reads first. */
 function describeEvent(kind: string, p: Record<string, unknown>): string | null {
   const n = (k: string) => (typeof p[k] === 'number' ? (p[k] as number) : null);
   switch (kind) {
-    case 'pin_set':
-      return `${p.verdict}${p.replaced ? ' (replaced)' : ''}${p.hasReason ? ' · with reason' : ''}`;
+    case 'pin_set': {
+      // The rating being overruled turns a bare verdict into the act it was:
+      // clearly_out → in is a correction, probably_in → in settles a boundary
+      // the classifier had already flagged as uncertain.
+      const over = typeof p.ratingOverruled === 'string' ? ` · was ${p.ratingOverruled}` : '';
+      const src =
+        typeof p.reasonSource === 'object' && p.reasonSource !== null
+          ? ` · ${(p.reasonSource as { kind?: string }).kind ?? '?'}`
+          : '';
+      const reason = typeof p.reason === 'string' && p.reason ? ` · “${clip(p.reason, 60)}”` : '';
+      return `${p.verdict}${p.replaced ? ' (replaced)' : ''}${over}${reason}${src}`;
+    }
     case 'pin_remove':
       return `withdrew ${p.verdictWas ?? '?'}`;
     case 'pin_remove_all':
@@ -821,13 +919,73 @@ function describeEvent(kind: string, p: Record<string, unknown>): string | null 
     case 'suggest_rewrite_intents':
     case 'suggest_reasons':
       return `${n('count') ?? 0} offered`;
-    case 'suggest_fold':
-      return `${n('correctionCount') ?? 0} correction(s) → ${n('proposalCount') ?? 0} candidate(s)`;
-    case 'rating_run':
-      return `${n('processed') ?? 0} question(s)`;
+    case 'suggest_fold': {
+      // Attempts and verification say how hard the loop had to push to make
+      // the classifier reproduce the corrections — the pressure that drives a
+      // definition toward the judge's literal reading.
+      const first = (p.proposals as { attempts?: number; verifiedPass?: number; verifiedTotal?: number; afterChars?: number }[] | undefined)?.[0];
+      const tries = first?.attempts && first.attempts > 1 ? ` · ${first.attempts} attempts` : '';
+      const verified =
+        first && typeof first.verifiedTotal === 'number' && first.verifiedTotal > 0
+          ? ` · verified ${first.verifiedPass ?? 0}/${first.verifiedTotal}`
+          : '';
+      return `${n('correctionCount') ?? 0} correction(s) → ${n('proposalCount') ?? 0} candidate(s)${tries}${verified}`;
+    }
+    case 'fold_apply': {
+      const applied = (p.applied as { chars?: number }[] | undefined) ?? [];
+      const chars = applied[0]?.chars;
+      return `consumed ${n('consumed') ?? 0}${n('held') ? ` · held ${n('held')}` : ''}${
+        typeof chars === 'number' ? ` · ${chars} chars` : ''
+      }`;
+    }
+    case 'rating_run': {
+      // The re-judgement's collateral: what moved in or out of an intent that
+      // nobody was correcting.
+      const flips = n('flips');
+      return `${n('processed') ?? 0} question(s)${flips ? ` · ${flips} membership change(s)` : ''}`;
+    }
     case 'search_run':
+      return typeof p.description === 'string' ? clip(p.description, 80) : null;
     case 'search_save':
       return typeof p.name === 'string' ? p.name : null;
+    case 'revise_submit':
+      return typeof p.feedback === 'string'
+        ? `${p.mode} · “${clip(p.feedback, 70)}”`
+        : Array.isArray(p.changeIntents) && p.changeIntents.length > 0
+          ? `${p.mode} · ${(p.changeIntents as string[]).length} change(s)`
+          : typeof p.mode === 'string'
+            ? String(p.mode)
+            : null;
+    case 'test_reveal':
+      return typeof p.atMs === 'number' ? `after ${Math.round(p.atMs / 1000)}s` : null;
+    // ---- Browsing (ui-log.ts). Reads, so they carry no configuration change.
+    case 'scope_view':
+      return typeof p.type === 'string'
+        ? String(p.type)
+        : p.intentId != null
+          ? `intent ${p.intentId}`
+          : typeof p.kind === 'string'
+            ? String(p.kind)
+            : null;
+    case 'query_open':
+      return typeof p.queryType === 'string' ? `${p.queryType}` : null;
+    case 'scope_leave':
+    case 'query_close':
+    case 'intent_close':
+    case 'rule_close':
+    case 'fold_close':
+    case 'deploy_close':
+      return typeof p.dwellMs === 'number' ? `${(p.dwellMs / 1000).toFixed(1)}s` : null;
+    case 'intent_open':
+      return typeof p.mode === 'string' ? String(p.mode) : null;
+    case 'rule_open':
+      return typeof p.target === 'string' ? String(p.target) : null;
+    case 'deploy':
+      return typeof p.intents === 'number'
+        ? `v${p.versionNo} · ${p.intentsWithRule}/${p.intents} intent rule(s) · ${p.typeRootsWithRule}/${p.typeRoots} type rule(s)`
+        : typeof p.versionNo === 'number'
+          ? `v${p.versionNo}`
+          : null;
     case 'set_add':
       return `${n('count') ?? 0} added`;
     default:

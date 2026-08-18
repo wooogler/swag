@@ -25,6 +25,7 @@ import {
   recordRating,
 } from '@/lib/study/measure-store';
 import { isStudyPhase, phaseAccess } from '@/lib/study/phases';
+import { logStudyEvent } from '@/lib/study/events';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +42,32 @@ const pointingSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('nothing') }),
 ]);
 
+/**
+ * Per-step durations for the item, in ms from when it appeared on screen.
+ *
+ * Client-measured, and deliberately so: the steps of one prediction are
+ * answered between two server round trips (there is exactly one write, at
+ * Next), so the server cannot see them. Every field is optional — a step not
+ * reached simply has no number — and all are clamped, because this is
+ * client-supplied data whose only job is analysis.
+ */
+const MAX_MS = 6 * 60 * 60 * 1000;
+const ms = () => z.number().int().min(0).max(MAX_MS).optional();
+const timingSchema = z
+  .object({
+    pointFirst: ms(),
+    point: ms(),
+    pointChanges: z.number().int().min(0).max(1000).optional(),
+    expectStart: ms(),
+    expectEnd: ms(),
+    guess: ms(),
+    submit: ms(),
+    reveal: ms(),
+    rate: ms(),
+    probe: ms(),
+  })
+  .optional();
+
 // One prediction, all three parts. The description is required — §3 Pass 1
 // will not let Next through without it — while "not sure" is a real answer for
 // the other two and arrives as its own pointing kind.
@@ -50,20 +77,31 @@ const predictSchema = z.object({
   expectation: z.string().trim().min(1).max(2000),
   guess: z.boolean(),
   pointing: pointingSchema,
+  timing: timingSchema,
 });
 const ratingSchema = z.object({
   action: z.literal('rating'),
   bankItemId: z.number().int().positive(),
   rating: z.number().int().min(1).max(5),
   whatsOff: z.string().max(2000).optional(),
+  timing: timingSchema,
 });
 // Optional by design: a blank probe is a real answer (§3 ④).
 const probeSchema = z.object({
   action: z.literal('probe'),
   bankItemId: z.number().int().positive(),
   probe: z.string().max(4000),
+  timing: timingSchema,
 });
-const bodySchema = z.union([predictSchema, ratingSchema, probeSchema]);
+// Opening the frozen answer. Writes nothing to the answer row — it only marks
+// the moment the prediction stopped being blind, which the trail needs and no
+// other row records.
+const revealSchema = z.object({
+  action: z.literal('reveal'),
+  bankItemId: z.number().int().positive(),
+  atMs: z.number().int().min(0).max(MAX_MS).optional(),
+});
+const bodySchema = z.union([predictSchema, ratingSchema, probeSchema, revealSchema]);
 
 export async function POST(req: Request) {
   const participant = await getCurrentStudyParticipant();
@@ -100,6 +138,7 @@ export async function POST(req: Request) {
       expectation: parsed.expectation,
       guess: parsed.guess,
       pointing,
+      timing: parsed.timing ?? null,
     });
     if ('error' in result) return NextResponse.json({ error: result.error }, { status: 409 });
 
@@ -123,12 +162,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'not_revealed' }, { status: 409 });
   }
 
+  // The reveal is instrumentation only, and the client does not wait on it.
+  if (parsed.action === 'reveal') {
+    await logStudyEvent(clone.assignmentId, 'test_reveal', {
+      bankItemId: parsed.bankItemId,
+      atMs: parsed.atMs ?? null,
+    });
+    return NextResponse.json({ success: true });
+  }
+
   if (parsed.action === 'rating') {
     const rated = await recordRating({
       cloneAssignmentId: clone.assignmentId,
       bankItemId: parsed.bankItemId,
       rating: parsed.rating,
       whatsOff: parsed.whatsOff,
+      timing: parsed.timing ?? null,
     });
     if (!rated.ok) return NextResponse.json({ error: 'not_revealed' }, { status: 409 });
     // The probe opens on whether the prediction missed, and half of that is
@@ -144,6 +193,7 @@ export async function POST(req: Request) {
     cloneAssignmentId: clone.assignmentId,
     bankItemId: parsed.bankItemId,
     probe: parsed.probe,
+    timing: parsed.timing ?? null,
   });
   if (!probed.ok) return NextResponse.json({ error: 'not_rated' }, { status: 409 });
   return NextResponse.json({ success: true });

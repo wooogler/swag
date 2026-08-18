@@ -12,7 +12,7 @@
  * Both halves are first-answer-wins for the same reason: a second attempt is
  * made with knowledge the first did not have.
  */
-import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   baselinePromptVersions,
@@ -461,6 +461,39 @@ async function hasResponse(cloneAssignmentId: string, bankItemId: number): Promi
 }
 
 /**
+ * Per-step durations for one block-test item, in ms from when it appeared.
+ *
+ * Written by the client, which is the only place that can see them: the whole
+ * prediction is one write, so nothing server-side sits between the pointing
+ * step and the yes/no. `study_test_answers.timing` documents the fields.
+ */
+export interface StepTiming {
+  pointFirst?: number;
+  point?: number;
+  pointChanges?: number;
+  expectStart?: number;
+  expectEnd?: number;
+  guess?: number;
+  submit?: number;
+  reveal?: number;
+  rate?: number;
+  probe?: number;
+}
+
+/**
+ * MERGE the new durations into whatever the row already holds, rather than
+ * replacing them: the two passes write the same row minutes apart, and Pass 2
+ * knows nothing about the pointing time Pass 1 measured. Empty patch → no
+ * column in the update at all, so a client that sends nothing cannot blank it.
+ */
+function timingPatch(timing?: StepTiming | null) {
+  if (!timing || Object.keys(timing).length === 0) return {};
+  return {
+    timing: sql`coalesce(${studyTestAnswers.timing}, '{}'::jsonb) || ${JSON.stringify(timing)}::jsonb`,
+  };
+}
+
+/**
  * Record a whole prediction — description, yes/no, and pointing — in one write.
  *
  * One call because the participant now enters all three and presses Next
@@ -480,6 +513,8 @@ export async function recordPrediction(args: {
   expectation: string;
   guess: boolean;
   pointing: Pointing;
+  /** Per-step durations from when the question appeared (ms) — see schema. */
+  timing?: StepTiming | null;
 }): Promise<{ ok: true } | { error: 'no_response' }> {
   const { participant, cloneAssignmentId, bankItemId, expectation, guess, pointing } = args;
 
@@ -503,6 +538,7 @@ export async function recordPrediction(args: {
       pointedText: pointing.kind === 'span' ? pointing.text : null,
       guessedAt: now,
       pointedAt: now,
+      timing: args.timing ?? null,
     })
     // A re-submitted prediction keeps the FIRST one.
     .onConflictDoNothing({
@@ -526,6 +562,7 @@ export async function recordRating(args: {
   bankItemId: number;
   rating: number;
   whatsOff?: string | null;
+  timing?: StepTiming | null;
 }): Promise<{ ok: boolean }> {
   const updated = await db
     .update(studyTestAnswers)
@@ -535,6 +572,7 @@ export async function recordRating(args: {
       // stale answer surviving a corrected rating.
       whatsOff: args.rating <= 3 ? args.whatsOff?.trim() || null : null,
       ratedAt: new Date(),
+      ...timingPatch(args.timing),
     })
     .where(
       and(
@@ -556,10 +594,11 @@ export async function recordProbe(args: {
   cloneAssignmentId: string;
   bankItemId: number;
   probe: string;
+  timing?: StepTiming | null;
 }): Promise<{ ok: boolean }> {
   const updated = await db
     .update(studyTestAnswers)
-    .set({ probe: args.probe.trim() || null })
+    .set({ probe: args.probe.trim() || null, ...timingPatch(args.timing) })
     .where(
       and(
         eq(studyTestAnswers.cloneAssignmentId, args.cloneAssignmentId),

@@ -306,6 +306,12 @@ export async function ensureStudyTables(): Promise<void> {
         `"expectation" text`,
         `"whats_off" text`,
         `"probe" text`,
+        // Per-step durations from the moment the question appeared (ms). The
+        // three timestamps above all land in ONE write — the prediction is a
+        // single Next press — so without this there is no way to tell how long
+        // the pointing step itself took, which is the comprehension measure
+        // most directly about reading the configuration.
+        `"timing" jsonb`,
       ]) {
         await db.execute(
           sql`ALTER TABLE "study_test_answers" ADD COLUMN IF NOT EXISTS ${sql.raw(col)}`

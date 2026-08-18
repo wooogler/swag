@@ -33,6 +33,7 @@ import {
 import { TYPE_DEFINITIONS } from '@/lib/score/type-prompts';
 import { SCORE_RATING_MODEL } from '@/lib/score/models';
 import { runShardedRate } from './rate-runner';
+import { useSurfaceLog } from '@/lib/study/ui-log';
 import {
   AlertTriangle,
   Check,
@@ -2485,6 +2486,67 @@ export default function IntentBoard({
     }
     return out;
   }, [editIntent, newIntentSeed, intentById]);
+
+  // ---- Study trail: the browsing this board does entirely in React state ----
+  // Reading is an act too, and none of it reaches the server on its own (see
+  // lib/study/ui-log.ts). These four record WHICH scope was open, WHICH
+  // question was open, and how long the workbenches stayed up; the route drops
+  // the batch unless this assignment is a participant clone, so an ordinary
+  // instructor's browsing is never stored.
+  useSurfaceLog(
+    assignmentId,
+    'scope_view',
+    'scope_leave',
+    selection.kind === 'type'
+      ? `type:${selection.typeKey}`
+      : selection.kind === 'intent' || selection.kind === 'shadowed'
+        ? `${selection.kind}:${selection.id}`
+        : selection.kind === 'residue'
+          ? `residue:${selection.scopeId}`
+          : selection.kind,
+    {
+      kind: selection.kind,
+      type: selection.kind === 'type' ? selection.typeKey : null,
+      intentId:
+        selection.kind === 'intent' || selection.kind === 'shadowed'
+          ? selection.id
+          : selection.kind === 'residue'
+            ? selection.scopeId
+            : null,
+    }
+  );
+  useSurfaceLog(assignmentId, 'query_open', 'query_close', selectedMessageId, {
+    messageId: selectedMessageId,
+    queryType: selectedRow?.queryType ?? null,
+    // Where in the board it was opened from — a question read inside an intent
+    // is being checked against that intent, one read under a type is not.
+    scope: selection.kind,
+  });
+  useSurfaceLog(
+    assignmentId,
+    'intent_open',
+    'intent_close',
+    editIntent ? `edit:${editIntent.id}` : newIntentOpen ? 'create' : null,
+    { intentId: editIntent?.id ?? null, mode: editIntent ? 'edit' : 'create' }
+  );
+  useSurfaceLog(
+    assignmentId,
+    'rule_open',
+    'rule_close',
+    reviseTarget
+      ? `intent:${reviseTarget.intent.id}`
+      : promptReviseTarget
+        ? 'prompt'
+        : rootReviseTarget
+          ? `root:${rootReviseTarget.root.id}`
+          : null,
+    {
+      target: reviseTarget ? 'intent' : promptReviseTarget ? 'prompt' : 'type-root',
+      intentId: reviseTarget?.intent.id ?? rootReviseTarget?.root.id ?? null,
+      messageId:
+        reviseTarget?.row.messageId ?? promptReviseTarget?.row.messageId ?? null,
+    }
+  );
 
   if (deployView) {
     return <DeployVersionBoard rows={rows} deployView={deployView} />;

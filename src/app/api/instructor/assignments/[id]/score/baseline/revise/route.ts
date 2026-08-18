@@ -58,7 +58,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       feedback: body.mode === 'feedback' ? body.feedback : undefined,
       editedResponse: body.mode === 'edit_response' ? body.editedResponse : undefined,
     });
-    await logStudyEvent(id, 'revise_submit', { mode: body.mode, anchorMessageId: body.anchorMessageId });
+    await logStudyEvent(id, 'revise_submit', {
+      condition: 'baseline',
+      mode: body.mode,
+      anchorMessageId: body.anchorMessageId,
+      // The ask in the instructor's own words — see the SCORE route's note.
+      ...(body.mode === 'feedback'
+        ? { feedback: body.feedback }
+        : { editedChars: body.editedResponse?.length ?? 0 }),
+    });
     return NextResponse.json({ revisedPrompt: proposal.revisedPrompt, rationale: proposal.rationale });
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ error: 'invalid_input' }, { status: 400 });

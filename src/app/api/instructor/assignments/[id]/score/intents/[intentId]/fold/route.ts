@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentPins, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { logStudyEvent } from '@/lib/study/events';
 import {
   ensureIntentTables,
   recordConfigVersion,
@@ -177,7 +178,7 @@ export async function POST(req: Request, { params }: RouteParams) {
           )
         );
     }
-    return { consumed: consumed.length, versionNo };
+    return { consumed: consumed.length, versionNo, applies: body.applies };
   });
 
   // Anything still pending on these intents was NOT part of this fold (the
@@ -193,6 +194,28 @@ export async function POST(req: Request, { params }: RouteParams) {
         inArray(scoreIntentPins.intentId, targetIds)
       )
     );
+
+  // What the instructor DID with the proposal.
+  //
+  // The config version records the definition that landed; it cannot say
+  // whether that text is the model's or the instructor's, because the review
+  // modal lets them edit before applying. Pairing this with the `suggest_fold`
+  // that preceded it is what separates "accepted as offered" from "rewrote it"
+  // — and, with the modal's dwell (fold_open/fold_close), from "accepted
+  // without reading".
+  await logStudyEvent(id, 'fold_apply', {
+    intentId,
+    versionNo: result.versionNo,
+    consumed: result.consumed,
+    held: body.holdIds?.length ?? 0,
+    stillPending: stillPending[0]?.n ?? 0,
+    applied: body.applies.map((a) => ({
+      intentId: a.intentId,
+      chars: a.definition.length,
+      titleChanged: !!a.title,
+      definition: a.definition,
+    })),
+  });
 
   return NextResponse.json({
     consumed: result.consumed,

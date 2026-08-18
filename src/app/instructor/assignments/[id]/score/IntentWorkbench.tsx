@@ -28,6 +28,7 @@
  *    would write a second version identical to the first.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSurfaceLog } from '@/lib/study/ui-log';
 import {
   type RatingLevel,
   type ScoreQueryType,
@@ -322,6 +323,28 @@ export default function IntentWorkbench({
   const [foldProposals, setFoldProposals] = useState<FoldProposalView[] | null>(null);
   const [foldBusy, setFoldBusy] = useState(false);
   const [foldError, setFoldError] = useState<string | null>(null);
+  /**
+   * How long the fold review stays open, and what it was carrying.
+   *
+   * The modal is the safeguard between a model rewriting the definition and
+   * that rewrite becoming the classifier's boundary — so whether it was READ
+   * is a finding in itself, and nothing else records it: accepting a proposal
+   * two seconds after it lands and accepting it after ninety produce the same
+   * config version. The key changes when the proposal arrives, so waiting for
+   * the model and reading its answer are two spans, not one.
+   */
+  useSurfaceLog(
+    assignmentId,
+    'fold_open',
+    'fold_close',
+    foldOpen ? (foldProposals ? `proposed:${intentId}` : `waiting:${intentId}`) : null,
+    {
+      intentId,
+      // Set once the proposal is on screen — the earlier span is the model
+      // still running, which is not reading time.
+      proposals: foldProposals?.length ?? null,
+    }
+  );
   // The refine model's step-by-step audit, shown under the proposed definition.
   const [versions, setVersions] = useState<IntentVersion[] | null>(null);
   // Version CHECKOUT: clicking a history entry loads that version's full state
@@ -1167,7 +1190,14 @@ export default function IntentWorkbench({
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messageId: c.messageId, verdict: c.verdict, reason }),
+          // Typed in the review modal, in answer to the classifier's stated
+          // reading — always the instructor's own words, never a suggestion.
+          body: JSON.stringify({
+            messageId: c.messageId,
+            verdict: c.verdict,
+            reason,
+            reasonSource: { kind: 'custom' },
+          }),
         }
       );
       if (!res.ok) throw new Error('Could not save the new reason.');
@@ -1313,7 +1343,13 @@ export default function IntentWorkbench({
    * correction does not move the row — it changes nothing for students until
    * "Update definition" folds it in — so the pill going active IS the feedback.
    */
-  async function togglePin(row: RatingRow, verdict: 'in' | 'out', reason?: string) {
+  async function togglePin(
+    row: RatingRow,
+    verdict: 'in' | 'out',
+    reason?: string,
+    /** Where the reason text came from — see the route's `reasonSource`. */
+    reasonSource?: { kind: 'suggested' | 'edited' | 'custom'; index?: number }
+  ) {
     // Checkout is a read-only view of a past version.
     if (intentId === null || checkout !== null) return;
     const next = row.pinned === verdict ? null : verdict;
@@ -1345,6 +1381,7 @@ export default function IntentWorkbench({
                 messageId: row.messageId,
                 verdict,
                 ...(nextReason ? { reason: nextReason } : {}),
+                ...(nextReason && reasonSource ? { reasonSource } : {}),
               }),
             });
       if (!res.ok) {
@@ -1411,13 +1448,29 @@ export default function IntentWorkbench({
     }
   }
 
-  /** Commit the correction with the chosen/typed reason (blank = no reason). */
+  /**
+   * Commit the correction with the chosen/typed reason (blank = no reason).
+   *
+   * Also settles where the words came from. A suggestion clicked as offered,
+   * one clicked and then edited, and one typed from scratch all arrive here as
+   * the same string, and only this moment can still tell them apart — which is
+   * why it is recorded rather than reconstructed later by matching text.
+   */
   function pickReason(reason: string) {
     if (!reasonPicker) return;
     const row = data?.rows.find((r) => r.messageId === reasonPicker.messageId);
     const verdict = reasonPicker.verdict;
+    const text = reason.trim();
+    const offered = reasonPicker.reasons;
+    const exact = offered.findIndex((r) => r.trim() === text);
+    const source =
+      text.length === 0
+        ? undefined
+        : exact >= 0
+          ? ({ kind: 'suggested', index: exact } as const)
+          : ({ kind: 'custom' } as const);
     setReasonPicker(null);
-    if (row) togglePin(row, verdict, reason.trim() || undefined);
+    if (row) togglePin(row, verdict, text || undefined, source);
   }
 
   // Two instructor-facing buckets — the 4 internal rating levels stay hidden:

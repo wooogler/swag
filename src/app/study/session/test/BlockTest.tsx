@@ -59,6 +59,36 @@ function draftComplete(d: Draft): boolean {
   return d.expectation.trim().length > 0 && d.guess !== null && d.pointing !== null;
 }
 
+/**
+ * Per-step durations for one question, in ms from the moment it appeared.
+ *
+ * All three parts of a prediction land in ONE write (Next), so the stored
+ * timestamps cannot separate them. Yet the steps ask for different things:
+ * pointing is "read your configuration and find the part that governs this",
+ * the description is "say what it will do", the yes/no is the judgement. How
+ * long the POINTING takes — and how often it is changed before Next — is the
+ * comprehension signal, and the one a screen recording can only give by
+ * stopwatch. Measured with performance.now(), so a client clock that is wrong
+ * or adjusts mid-session cannot corrupt it.
+ */
+interface StepTiming {
+  /** Pass 1 · first pointing choice, and the one that survived to Next. */
+  pointFirst?: number;
+  point?: number;
+  /** How many times the pointing was changed after the first choice. */
+  pointChanges?: number;
+  /** Pass 1 · first and last keystroke of the description. */
+  expectStart?: number;
+  expectEnd?: number;
+  /** Pass 1 · the yes/no, and Next. */
+  guess?: number;
+  submit?: number;
+  /** Pass 2 · "Show the actual response", the rating, and Next. */
+  reveal?: number;
+  rate?: number;
+  probe?: number;
+}
+
 export default function BlockTest({
   config,
   items,
@@ -121,19 +151,35 @@ export default function BlockTest({
   const item = index >= 0 && index < state.length ? state[index] : undefined;
   const finished = pass === 'rate' && reviewAt >= state.length;
 
+  /**
+   * The stopwatch for the question on screen. `shownAt` restarts whenever a
+   * different item takes the card — including at the pass boundary, so Pass 2's
+   * reveal/rate are measured from the moment THAT card appeared rather than
+   * from a prediction made minutes earlier.
+   */
+  const shownAt = useRef<number>(0);
+  const timing = useRef<StepTiming>({});
+  const since = () => Math.round(performance.now() - shownAt.current);
+  const mark = (patch: StepTiming) => {
+    timing.current = { ...timing.current, ...patch };
+  };
+
   // A new question starts empty, and Pass 2 starts closed. Keyed on the item so
   // a reveal cannot carry over to the next one.
-  const shownId = useRef<number | null>(null);
+  const shownId = useRef<string | null>(null);
   useEffect(() => {
-    if (item && shownId.current !== item.bankItemId) {
-      shownId.current = item.bankItemId;
+    const key = item ? `${pass}:${item.bankItemId}` : null;
+    if (key && shownId.current !== key) {
+      shownId.current = key;
+      shownAt.current = performance.now();
+      timing.current = {};
       setDraft(EMPTY_DRAFT);
       setSelection(null);
       setRevealed(false);
       setWhatsOff('');
       setProbe('');
     }
-  }, [item]);
+  }, [item, pass]);
 
   /**
    * Patch, not replace. Handing the card a whole new Draft made every control
@@ -142,6 +188,26 @@ export default function BlockTest({
    * stayed shut with no sign of why.
    */
   const patchDraft = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
+
+  /**
+   * Time the parts of the draft as they are answered — first pointing, every
+   * change to it, the first and last keystroke of the description, the yes/no.
+   * Wrapping patchDraft keeps the cards themselves free of instrumentation.
+   */
+  const patchDraftTimed = (patch: Partial<Draft>) => {
+    const t = since();
+    if (patch.pointing !== undefined) {
+      if (timing.current.pointFirst === undefined) mark({ pointFirst: t, pointChanges: 0 });
+      else mark({ pointChanges: (timing.current.pointChanges ?? 0) + 1 });
+      mark({ point: t });
+    }
+    if (patch.expectation !== undefined) {
+      if (timing.current.expectStart === undefined) mark({ expectStart: t });
+      mark({ expectEnd: t });
+    }
+    if (patch.guess !== undefined) mark({ guess: t });
+    patchDraft(patch);
+  };
 
   const post = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -169,12 +235,14 @@ export default function BlockTest({
   /** Pass 1 · Next — all three parts of the prediction go in one write. */
   const submitPrediction = async () => {
     if (!item || !draftComplete(draft)) return;
+    mark({ submit: since() });
     const data = await post({
       action: 'predict',
       bankItemId: item.bankItemId,
       expectation: draft.expectation.trim(),
       guess: draft.guess,
       pointing: draft.pointing,
+      timing: timing.current,
     });
     if (!data) return;
     // The last prediction unlocks every answer at once and the server sends
@@ -199,14 +267,32 @@ export default function BlockTest({
     );
   };
 
+  /**
+   * Pass 2 · "Show the actual response". Recorded server-side as its own event
+   * so the trail carries the moment the answer was opened — the prediction was
+   * blind until here, and everything after it is not.
+   */
+  const reveal = () => {
+    if (!item) return;
+    mark({ reveal: since() });
+    setRevealed(true);
+    // Fire and forget: the response is already on the client, so waiting on
+    // instrumentation would delay the one screen the measurement is about.
+    void post({ action: 'reveal', bankItemId: item.bankItemId, atMs: timing.current.reveal });
+  };
+
   /** Pass 2 · the rating, carrying "what's off" when the rating opens it. */
   const submitRating = async (rating: number, off = whatsOff) => {
     if (!item) return;
+    // Only the FIRST rating is the reaction time; a corrected number later is
+    // a second thought and must not overwrite it.
+    if (timing.current.rate === undefined) mark({ rate: since() });
     const data = await post({
       action: 'rating',
       bankItemId: item.bankItemId,
       rating,
       ...(rating <= 3 ? { whatsOff: off } : {}),
+      timing: timing.current,
     });
     if (!data) return;
     setState((prev) =>
@@ -227,7 +313,13 @@ export default function BlockTest({
   const submitProbe = async () => {
     if (!item) return;
     if (probe.trim() && item.missed) {
-      const data = await post({ action: 'probe', bankItemId: item.bankItemId, probe });
+      mark({ probe: since() });
+      const data = await post({
+        action: 'probe',
+        bankItemId: item.bankItemId,
+        probe,
+        timing: timing.current,
+      });
       if (!data) return;
       setState((prev) =>
         prev.map((i) =>
@@ -418,7 +510,7 @@ export default function BlockTest({
                   draft={draft}
                   selection={selection}
                   busy={busy}
-                  onChange={patchDraft}
+                  onChange={patchDraftTimed}
                   onNext={submitPrediction}
                 />
               ) : (
@@ -430,7 +522,7 @@ export default function BlockTest({
                   probe={probe}
                   busy={busy}
                   last={index === state.length - 1}
-                  onReveal={() => setRevealed(true)}
+                  onReveal={reveal}
                   onWhatsOff={setWhatsOff}
                   onProbe={setProbe}
                   onRate={submitRating}

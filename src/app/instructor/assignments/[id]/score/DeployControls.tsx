@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Rocket } from 'lucide-react';
 import DeployModal from './DeployModal';
+import { useSurfaceLog } from '@/lib/study/ui-log';
 
 interface DeployControlsProps {
   assignmentId: string;
@@ -41,6 +42,15 @@ export default function DeployControls({ assignmentId, versions, selectedVersion
   useEffect(() => {
     refreshStatus();
   }, [refreshStatus]);
+
+  // The deploy modal is where "No rule yet — this intent adds nothing to the
+  // chatbot" is on screen. Whether it was open long enough to have been read
+  // before deploying is the difference between shipping an uncovered
+  // configuration knowingly and by accident, and nothing else records it.
+  useSurfaceLog(assignmentId, 'deploy_open', 'deploy_close', open ? 'deploy' : null, {
+    liveVersionNo: latestNo,
+    dirty,
+  });
 
   return (
     <span className="flex items-center gap-2">

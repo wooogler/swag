@@ -806,6 +806,20 @@ export const studyTestAnswers = pgTable('study_test_answers', {
   guessedAt: timestamp('guessed_at'),
   pointedAt: timestamp('pointed_at'),
   ratedAt: timestamp('rated_at'),
+  /**
+   * How long each step of the item took, in MILLISECONDS FROM THE MOMENT THE
+   * QUESTION APPEARED — measured on the client and sent with the write.
+   *
+   * Durations, not clocks: the three timestamps above all land in one write
+   * (the prediction is a single Next press), so they cannot say how long the
+   * participant spent deciding WHERE the answer comes from versus what it will
+   * say. Relative ms are also immune to client clock skew.
+   *
+   * Pass 1: { shown, pointFirst, point, pointChanges, expectStart, expectEnd,
+   *           guess, submit }. Pass 2: { reveal, rate, probe }, measured from
+   *           when the item's rate card appeared.
+   */
+  timing: jsonb('timing'),
 }, (table) => ({
   uniq: uniqueIndex('study_test_answers_unique').on(table.cloneAssignmentId, table.bankItemId),
   participantIdx: index('study_test_answers_participant_idx').on(table.participantId),

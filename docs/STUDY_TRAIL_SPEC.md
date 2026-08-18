@@ -37,7 +37,7 @@ RQ1(Organization — 교수자가 로그로부터 의도를 어떻게 설정으�
 ### 1.3 손대지 않는 것 (결정)
 
 - **Baseline RULES 저장 사이의 편집 스트로크는 로깅하지 않는다.** 저장 단위 버전(`baseline_prompt_versions`)이 이미 있고, 그 사이는 화면 녹화가 맡는다. 더 촘촘히 넣으면 두 조건의 계측 밀도가 달라져 비교가 오염된다.
-- **읽기 행위(GET) 전반은 로깅하지 않는다.** 예외는 §2.4의 제안 API 4종뿐 — 이들은 GET처럼 보이지만 LLM을 호출해 후보를 *만드는* 행위라 "생성 경로"의 일부다.
+- ~~**읽기 행위(GET) 전반은 로깅하지 않는다.**~~ **2026-08-18 번복 (파일럿 1회차 반영).** 예외는 §2.4의 제안 API 4종뿐이었으나, JELSON 파일럿에서 이 결정이 가장 큰 구멍으로 드러났다 — "블록 1에서 reviewing을 손대지 않았다"는 말할 수 있어도 "reviewing을 읽기는 했는가"는 알 수 없었고, *안 봤다*와 *보고 만족했다*는 RQ1에서 다른 답이다. 이제 **공용 화면의 열람 행위는 로깅한다**(§2.6): type/intent 스코프 전환, 질문 열기, 워크벤치·fold 검토·배포 모달의 열기/닫기와 머문 시간. 두 조건이 같은 보드를 쓰므로 계측 밀도 파리티는 유지된다. **스크롤·호버·키스트로크는 계속 로깅하지 않는다** — 그쪽은 화면 녹화가 맡는다. 원칙은 "읽기를 안 남긴다"에서 **"시스템 안에서 일어나는 의미 있는 인터랙션은 남기고, 사용자의 신체적 행동은 녹화가 맡는다"**로 바뀌었다.
 - **프롬프트 원문은 저장하지 않는다.** 제안 API 로그에는 결과 텍스트와 채택 여부만.
 - **참가자 화면·UX는 바꾸지 않는다.** revert는 지금처럼 화면에서 사라지게 둔다. 살리는 건 연구 데이터뿐이다.
 
@@ -87,6 +87,27 @@ RQ1(Organization — 교수자가 로그로부터 의도를 어떻게 설정으�
 ### 2.5 검증 (Step 1)
 
 `scripts/study/check-trail-events.ts` (신규): 데모 clone 하나에서 pin POST→PATCH(retire)→DELETE, rule save→apply→revert, intent revert, 제안 4종을 순서대로 호출하고 `study_events`에 기대 타입이 **정확히 그 순서로** 쌓였는지, revert payload에 삭제된 버전이 들어 있는지 assert. 기존 `check-measure.ts` 스타일(✓/✗ 출력, 끝에 cleanup).
+
+## 2.6 파일럿 1회차 이후 추가된 계측 (2026-08-18)
+
+JELSON 파일럿(`reports/JELSON/analysis.md`)에서 분석에 필요한데 export에 없어 DB를 직접 파야 했던 것들. 전부 구현 완료.
+
+| 무엇 | 어디 | 왜 |
+|---|---|---|
+| **열람 행위** — `scope_view`/`scope_leave`, `query_open`/`query_close`, `intent_open`/`close`, `rule_open`/`close`, `fold_open`/`close`, `deploy_open`/`close` (닫을 때 `dwellMs`) | `src/lib/study/ui-log.ts` (클라이언트 큐) → `POST …/score/ui-events` (스터디 클론만, 이벤트 타입 화이트리스트) | §1.3 번복 사유 참조. 배치 전송이라 각 이벤트는 "얼마 전에 일어났는가"를 실어 보내고 서버가 자기 시계에서 빼서 `created_at`을 만든다 — flush 지연이 순서를 바꾸지 않게 |
+| **fold 검토 머문 시간** | 위 `fold_open`/`fold_close` | 파일럿에서 fold 제안 14건 중 12건이 도착 **2~6초 만에** 수락됐다(800~1,100자 정의). 검토 모달이 안전장치로 설계됐는데 실제로 읽혔는지가 기록되지 않았다 |
+| **pin_set에 reason 원문 + 출처 + 뒤집은 판정** (`reason`, `reasonSource{kind,index}`, `ratingOverruled`, `priorVerdict`) | `pins/route.ts` (+ 워크벤치가 `reasonSource`를 보냄) | `score_intent_pins`는 현재 상태만 들고 있어 재핀하면 이전 이유가 사라진다. `ratingOverruled`는 **교정**(clearly_out→in)과 **경계 확정**(probably_in→in)을 가른다 |
+| **revise_submit에 피드백 원문** | `propose/route.ts`, `baseline/revise/route.ts` | 파일럿 분석에서 가장 유용했던 데이터. 거절된 제안은 rule 버전을 남기지 않으므로 이벤트가 유일한 기록 |
+| **suggest_fold에 제안 정의·시도 횟수·검증 결과** / 새 **`fold_apply`** (적용된 정의, 편집 여부) | `refine/route.ts`, `fold/route.ts` | 둘을 짝지으면 "제안대로 수락 / 고쳐서 수락 / 안 읽고 수락"이 갈린다. `attempts`는 fold 루프가 판정기를 통과시키려 몇 번 다시 썼는지 — **과잉구체화의 기제** |
+| **rating_run에 소속 델타** (`membership[]`, `flips`) | `rate/route.ts` (`membershipSnapshot` 전후 비교) | 파일럿에서 재판정 12회에 부수 flip 43건·핀 회귀 4건. 손으로 판정 이력을 파야 나왔던 표가 이제 이벤트에 있다 |
+| **search_run에 검색어** | `probe/route.ts` | baseline에서 자연어 검색은 열람이 아니라 **의도의 표명**이다 — SCORE의 intent 정의와 같은 행위. hash는 되읽을 수 없다 |
+| **deploy에 커버리지** (rule 없는 intent 목록, type rule 수) | `deploy/route.ts`; 타임라인은 **스냅샷에서 계산**하므로 과거 세션에도 적용된다 | rule 없는 intent는 시스템 프롬프트 없이 답한다. 파일럿은 intent 7개 중 4개만 rule을 가진 채 배포됐다 |
+| **라우팅 후보 전체** (`applied.candidates`) | `deploy-store.ts` | 지목이 빗나갔을 때 "간발의 차"인지 "애초에 후보가 아니었는지"를 가른다 |
+| **블록 테스트 단계별 소요 시간** (`study_test_answers.timing`) + **`test_reveal`** 이벤트 | `BlockTest.tsx` → `session/test/route.ts` → `measure-store.ts` | 예측 3요소가 Next 한 번에 저장돼 서버는 단계를 볼 수 없다. **포인팅에 걸린 시간**(`point`, `pointFirst`, `pointChanges`)이 핵심 — 설정을 *읽는* 단계 |
+
+export도 함께 넓혔다: `timeline.csv`에 **질문 원문**(`message_text`), `block-test.csv`에 **실제 라우팅·응답·단계별 ms·포인팅 정오**, 새 파일 **`review-set.csv`**(커버리지의 분모).
+
+---
 
 ## 3. Step 2 — 참가자 타임라인 빌더
 

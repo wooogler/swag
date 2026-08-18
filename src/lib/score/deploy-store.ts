@@ -331,6 +331,19 @@ export interface DeployedPromptResult {
      * the caller (see knownType) because the message was ALREADY typed and that
      * verdict is what a human was shown. */
     typeSource?: 'live' | 'frozen';
+    /**
+     * EVERY set the chain considered and how it was judged, in chain order —
+     * not just the winner.
+     *
+     * The winner alone cannot answer the question a missed prediction raises:
+     * an instructor points at an intent, the question goes elsewhere, and
+     * "elsewhere" is all the record holds. Whether their intent was judged a
+     * near miss or was never in contention is the difference between a
+     * definition that needs a word changed and a mental model that has the
+     * wrong shape — and both look identical afterwards, because the ratings a
+     * deploy-time route computes are never stored anywhere else.
+     */
+    candidates?: { intentId: number; rating: string }[];
   } | null;
   deployVersion: number | null;
 }
@@ -479,6 +492,10 @@ async function resolveAgainstSnapshot(args: {
           outcome,
           type: queryType,
           typeSource: frozenType ? ('frozen' as const) : ('live' as const),
+          // Chain order, so "it lost to an earlier set" is readable directly.
+          candidates: chain.order
+            .filter((intentId) => ratings.has(intentId))
+            .map((intentId) => ({ intentId, rating: ratings.get(intentId) as string })),
         }
       : null,
   };

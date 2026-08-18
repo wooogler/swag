@@ -33,10 +33,13 @@ import { computeDissections, hasEditorEventLog } from '@/lib/score/dissect';
 import {
   ensureIntentTables,
   loadIntentState,
+  pickDisplayRatings,
   type PromptReadyIntent,
 } from '@/lib/score/intent-store';
 import {
   DISSECTION_VERSION,
+  isIncludedRating,
+  isRatingLevel,
   TYPE_CLASSIFIER_VERSION,
   type DissectionResult,
   type MaterialKind,
@@ -252,6 +255,74 @@ async function loadRateStatus(
   return { jobs, total, remaining, rated: total - remaining };
 }
 
+/**
+ * Which questions each in-scope intent CLAIMS right now, as the board reads it.
+ *
+ * Taken before a run and again after, the difference is the thing an
+ * instructor actually experiences and no table records: a definition rewritten
+ * to fix one question re-judges every question, so decisions they had already
+ * settled can quietly come back the other way. Reading it through
+ * pickDisplayRatings is what makes it the board's answer rather than a
+ * different one — when no row carries the current hash, the newest row is what
+ * is on screen.
+ */
+async function membershipSnapshot(
+  assignmentId: string,
+  promptReady: PromptReadyIntent[],
+  scopedIntentIds: number[] | null,
+  messageIds: number[] | null
+): Promise<Map<number, Set<number>>> {
+  const wanted = scopedIntentIds
+    ? promptReady.filter((p) => scopedIntentIds.includes(p.intent.id))
+    : promptReady;
+  const out = new Map<number, Set<number>>();
+  if (wanted.length === 0) return out;
+  const rows = await db
+    .select({
+      messageId: scoreIntentRatings.messageId,
+      intentId: scoreIntentRatings.intentId,
+      defHash: scoreIntentRatings.defHash,
+      rating: scoreIntentRatings.rating,
+      ratedAt: scoreIntentRatings.ratedAt,
+    })
+    .from(scoreIntentRatings)
+    .where(eq(scoreIntentRatings.assignmentId, assignmentId));
+  const hashByIntent = new Map(wanted.map((p) => [p.intent.id, p.defHash]));
+  const scope = messageIds ? new Set(messageIds) : null;
+  const display = pickDisplayRatings(rows, hashByIntent);
+  for (const p of wanted) out.set(p.intent.id, new Set());
+  for (const [messageId, byIntent] of display) {
+    if (scope && !scope.has(messageId)) continue;
+    for (const [intentId, entry] of byIntent) {
+      const set = out.get(intentId);
+      if (!set) continue;
+      if (isRatingLevel(entry.row.rating) && isIncludedRating(entry.row.rating)) {
+        set.add(messageId);
+      }
+    }
+  }
+  return out;
+}
+
+/** in/out movement between two membership snapshots, per intent. */
+function membershipDelta(
+  before: Map<number, Set<number>>,
+  after: Map<number, Set<number>>
+): { intentId: number; before: number; after: number; gained: number[]; lost: number[] }[] {
+  const out: { intentId: number; before: number; after: number; gained: number[]; lost: number[] }[] = [];
+  for (const [intentId, now] of after) {
+    const was = before.get(intentId) ?? new Set<number>();
+    const gained = [...now].filter((m) => !was.has(m));
+    const lost = [...was].filter((m) => !now.has(m));
+    if (gained.length === 0 && lost.length === 0 && was.size === now.size) {
+      out.push({ intentId, before: was.size, after: now.size, gained: [], lost: [] });
+      continue;
+    }
+    out.push({ intentId, before: was.size, after: now.size, gained, lost });
+  }
+  return out;
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const auth = await authorizeAssignment(id);
@@ -367,6 +438,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // not the client — the picker is gone and body.model is now vestigial.
   const model = getDefaultScoreModel();
   const status = await loadRateStatus(id, state.promptReady, scoped, shard, body.messageIds ?? null);
+  // Before the writes below — the "after" is taken once they have all landed.
+  const membershipBefore = await membershipSnapshot(
+    id,
+    state.promptReady,
+    scoped,
+    body.messageIds ?? null
+  );
 
   // Call-bounded batch: 1 call per message job (always at least one job so we
   // make progress even when a single job exceeds the leftover budget).
@@ -579,7 +657,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   failed = batch.length - succeeded;
 
   const after = await loadRateStatus(id, state.promptReady, scoped, shard, body.messageIds ?? null);
-  if (batch.length > 0) await logStudyEvent(id, 'rating_run', { condition: 'score', processed: batch.length, intentIds: scoped ?? null });
+  if (batch.length > 0) {
+    const membershipAfter = await membershipSnapshot(
+      id,
+      state.promptReady,
+      scoped,
+      body.messageIds ?? null
+    );
+    const delta = membershipDelta(membershipBefore, membershipAfter);
+    await logStudyEvent(id, 'rating_run', {
+      condition: 'score',
+      processed: batch.length,
+      intentIds: scoped ?? null,
+      // A pass is sharded across several POSTs, so a delta is this slice's;
+      // the shard is recorded to let the analysis add them back up.
+      shard: shard.count > 1 ? { index: shard.index, count: shard.count } : null,
+      // WHAT MOVED. Without this the trail says a re-rating happened and not
+      // that it took three questions away from the intent — which is the loop
+      // the instructor is actually fighting when a definition will not settle.
+      membership: delta.filter((d) => d.gained.length > 0 || d.lost.length > 0),
+      flips: delta.reduce((n, d) => n + d.gained.length + d.lost.length, 0),
+    });
+  }
   return NextResponse.json({
     processed: batch.length,
     succeeded,

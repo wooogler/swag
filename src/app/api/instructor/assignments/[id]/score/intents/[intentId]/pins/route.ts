@@ -19,7 +19,7 @@
  * Labelling records no version either: the fold that consumes it does.
  */
 import { NextResponse } from 'next/server';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentPins, scoreIntentRatings, scoreIntents } from '@/db/schema';
@@ -54,6 +54,23 @@ const postSchema = z.object({
    * records a second correction — out, on the intercepting intent — which the
    * fold turns into an exclusion in ITS definition. Both land in one write. */
   routeHere: z.boolean().optional(),
+  /**
+   * Where the reason text came from: a suggestion taken as offered, one the
+   * instructor edited, or their own words — and, for the first two, which of
+   * the three it was.
+   *
+   * The client is the only place that knows. Recovering it afterwards by
+   * matching the stored reason against the suggestion log is guesswork the
+   * moment a word is changed, and the distinction matters: a boundary the
+   * instructor articulated and one they accepted off a list are different
+   * evidence for what they intended (RQ1), even though both fold identically.
+   */
+  reasonSource: z
+    .object({
+      kind: z.enum(['suggested', 'edited', 'custom']),
+      index: z.number().int().min(0).max(9).optional(),
+    })
+    .optional(),
 });
 
 type RouteParams = { params: Promise<{ id: string; intentId: string }> };
@@ -173,6 +190,21 @@ export async function POST(req: Request, { params }: RouteParams) {
     .select({ verdict: scoreIntentPins.verdict })
     .from(scoreIntentPins)
     .where(and(eq(scoreIntentPins.intentId, intent.id), eq(scoreIntentPins.messageId, body.messageId)));
+  // The judgement being overruled — newest row wins, which is the reading the
+  // board shows when no row carries the current definition's hash.
+  const [latestRating] = await db
+    .select({ rating: scoreIntentRatings.rating, defHash: scoreIntentRatings.defHash })
+    .from(scoreIntentRatings)
+    .where(
+      and(
+        eq(scoreIntentRatings.assignmentId, id),
+        eq(scoreIntentRatings.intentId, intent.id),
+        eq(scoreIntentRatings.messageId, body.messageId)
+      )
+    )
+    .orderBy(desc(scoreIntentRatings.ratedAt))
+    .limit(1);
+  const ratingAtPin = latestRating?.rating ?? null;
 
   await db.transaction(async (tx) => {
     await tx
@@ -213,6 +245,18 @@ export async function POST(req: Request, { params }: RouteParams) {
     hasReason: !!set.reason,
     replaced: !!priorPin,
     redirected: redirected.length,
+    // The reason VERBATIM. score_intent_pins holds only the current one — a
+    // question corrected twice overwrites the first reason and it is gone —
+    // and the reason is what the fold actually consumes, so the event is the
+    // only complete record of what was taught and when.
+    reason: set.reason,
+    reasonSource: body.reasonSource ?? null,
+    priorVerdict: priorPin?.verdict ?? null,
+    // What the classifier said at the moment it was overruled. This separates
+    // the two acts the same button performs: CORRECTING a confident judge
+    // (clearly_out → in) and SETTLING a boundary the judge was unsure of
+    // (probably_in → in). Only the first is a disagreement.
+    ratingOverruled: ratingAtPin,
   });
 
   const titleById = new Map(
