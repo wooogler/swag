@@ -39,6 +39,7 @@ import {
   DISSECTION_VERSION,
   SCORE_QUERY_TYPES,
   TYPE_CLASSIFIER_VERSION,
+  isIncludedRating,
   isRatingLevel,
   isScoreQueryType,
   type MaterialKind,
@@ -264,33 +265,39 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     ])
   );
 
-  // Live corrections per (message, intent) — teaching the definitions have not
-  // absorbed yet. Consumed rows are excluded on purpose: they are markers of
-  // teaching already folded in, and a board that read them as live labels would
-  // keep flagging a question as corrected long after the correction became part
-  // of the definition.
+  // Every decision per (message, intent) — the instructor's standing rulings.
   const pinsByMessage = new Map<number, Record<number, 'in' | 'out'>>();
-  // HELD corrections separately, because they mean something stronger: the fold
-  // was measured against them and could not reproduce them, so the system routes
-  // by the decision instead of the definition until it can. Only these override
-  // the judgment (see effectiveRatings) — a pending correction is still just a
-  // request for the definition to change.
+  // The subset that OVERRIDES the judgment: decisions the definition does not
+  // reproduce. That is a computation, not a stored state — the definition can
+  // drift off a decision at any re-rating, and the board has to show what a
+  // student actually gets, which is the decision until the text catches up. A
+  // decision the text does say needs no override: the two agree.
+  //
+  // Pending decisions are deliberately absent. Nothing has been folded yet, so
+  // nothing has changed for students, and a board that acted on them would stop
+  // mirroring the runtime it exists to mirror.
   const heldByMessage = new Map<number, Record<number, 'in' | 'out'>>();
-  for (const p of intentState.pins.filter((x) => x.status !== 'consumed')) {
+  for (const p of intentState.pins) {
     let m = pinsByMessage.get(p.messageId);
     if (!m) {
       m = {};
       pinsByMessage.set(p.messageId, m);
     }
-    m[p.intentId] = p.verdict as 'in' | 'out';
-    if (p.status === 'held') {
-      let h = heldByMessage.get(p.messageId);
-      if (!h) {
-        h = {};
-        heldByMessage.set(p.messageId, h);
-      }
-      h[p.intentId] = p.verdict as 'in' | 'out';
+    const verdict = p.verdict as 'in' | 'out';
+    m[p.intentId] = verdict;
+    if (p.status === 'pending') continue;
+    const pick = displayRatings.get(p.messageId)?.get(p.intentId);
+    // Unrated or stale → nothing to disagree with yet; leave the judgment alone
+    // rather than override on an answer about text that no longer exists.
+    if (!pick || !pick.fresh) continue;
+    if (!isRatingLevel(pick.row.rating)) continue;
+    if ((verdict === 'in') === isIncludedRating(pick.row.rating)) continue;
+    let h = heldByMessage.get(p.messageId);
+    if (!h) {
+      h = {};
+      heldByMessage.set(p.messageId, h);
     }
+    h[p.intentId] = verdict;
   }
 
   // Latest saved RULE version per intent (the intents panel's "Then vN name").
