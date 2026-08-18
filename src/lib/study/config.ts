@@ -176,3 +176,58 @@ export const CONDITION_NAMES: Record<StudioView, string> = {
 export function conditionName(view: StudioView): string {
   return CONDITION_NAMES[view];
 }
+
+/**
+ * The walkthrough films (design §5.1), by YouTube id.
+ *
+ * Three segments, not two: ⓐ the screens both versions share, then ⓑ or ⓒ for
+ * the version this block runs. Block 1 plays the shared one and its version's;
+ * block 2 plays only the other version's, because the shared screens are the
+ * ones they have just spent half an hour in.
+ *
+ * A film rather than a live demo, which reverses an 08-10 decision. The live
+ * walkthrough was meant to be clearer, and the 08-18 pilot found the thing a
+ * script cannot fix: two runs of it are not the same run. Everyone now gets
+ * the identical instruction, which is the only version of "the tutorial was
+ * held constant" that survives a reviewer.
+ *
+ * The two version segments must come within fifteen seconds of each other —
+ * teaching one arm for longer is a difference between the conditions, and the
+ * design admits exactly one of those. Nothing here can enforce that; it is a
+ * note for whoever cuts them.
+ *
+ * Empty until the films are uploaded, and the slot says so rather than
+ * rendering a broken player.
+ */
+export const STUDY_DEMO_VIDEOS: Record<'common' | StudioView, string> = {
+  common: process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON ?? '',
+  score: process.env.NEXT_PUBLIC_STUDY_DEMO_SCORE ?? '',
+  baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_BASELINE ?? '',
+};
+
+export interface DemoSegment {
+  key: 'common' | StudioView;
+  youtubeId: string;
+  /** What the segment is called on screen. */
+  label: string;
+  caption: string;
+}
+
+export function demoSegmentsFor(block: 1 | 2, condition: StudioView): DemoSegment[] {
+  const version: DemoSegment = {
+    key: condition,
+    youtubeId: STUDY_DEMO_VIDEOS[condition],
+    label: conditionName(condition),
+    caption: 'The version you will use in this round.',
+  };
+  if (block === 2) return [version];
+  return [
+    {
+      key: 'common',
+      youtubeId: STUDY_DEMO_VIDEOS.common,
+      label: 'Getting around',
+      caption: 'The questions, the search, and the conversation view.',
+    },
+    version,
+  ];
+}

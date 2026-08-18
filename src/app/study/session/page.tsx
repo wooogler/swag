@@ -5,7 +5,8 @@ import { studyClones } from '@/db/schema';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { ensureStudyTables } from '@/lib/study/store';
 import { cloneForBlock, getTestItems } from '@/lib/study/measure-store';
-import { isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
+import { blockPlan, isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
+import { demoSegmentsFor } from '@/lib/study/config';
 import TutorialStep from '@/components/study/TutorialStep';
 import WorkStart from '@/components/study/WorkStart';
 
@@ -67,6 +68,12 @@ export default async function StudySessionPage() {
   // The walkthrough steps carry a video, so they get room the one-line cards
   // do not need.
   const isTutorial = phase === 'not_started' || phase === 'break';
+  // Which version the upcoming block runs, so the walkthrough plays that one's
+  // segment. Read from the assigned cell rather than from the phase: at these
+  // two moments no board is open yet, which is the whole point of the step.
+  const plan = blockPlan(participant);
+  const conditionForBlock = (block: 1 | 2) =>
+    plan.find((b) => b.block === block)?.condition ?? 'score';
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--background))] px-6 py-12">
@@ -80,14 +87,16 @@ export default async function StudySessionPage() {
         {phase === 'not_started' ? (
           <TutorialStep
             title="Before you start"
-            body="Your facilitator will show you the tool you will use for the first part."
+            body="A short walkthrough of what you will be using. Watch it through — your facilitator will take questions after."
+            segments={demoSegmentsFor(1, conditionForBlock(1))}
             fromPhase={phase}
             buttonLabel="Start"
           />
         ) : phase === 'break' ? (
           <TutorialStep
             title="Second part"
-            body="Take a moment first. The second chatbot is set up with a different tool, and your facilitator will show you that one."
+            body="Take a moment first. The second chatbot is set up with a different version of the tool — here is a walkthrough of that one."
+            segments={demoSegmentsFor(2, conditionForBlock(2))}
             fromPhase={phase}
             buttonLabel="I'm ready"
           />
