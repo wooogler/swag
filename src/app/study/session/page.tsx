@@ -139,7 +139,9 @@ export default async function StudySessionPage() {
                     longer stated here; the facilitator gives it out loud and
                     the board's elapsed readout carries the "/ 25", so it is
                     still known before it is spent — which was the point. */}
-                <WorkStart href={`/instructor/assignments/${workAssignmentId}/score`} />
+                {/* The neutral alias (next.config rewrites) — the real path
+                    names the treatment. */}
+                <WorkStart href={`/studio/${workAssignmentId}`} />
               </>
             ) : access.testBlock ? (
               <>

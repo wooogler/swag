@@ -550,9 +550,15 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
             )}
             {/* Settings carries Delete account, which would remove the row
                 that IS this participant. Off for them, along with log out —
-                no other study screen has either. */}
+                no other study screen has either.
+
+                And a participant is shown their PARTICIPANT NUMBER, not the
+                address of the account behind it: study accounts live at
+                @study.score.local, which would have sat in the header naming
+                the treatment for the whole block. The number is also the thing
+                a facilitator actually reads off a shared screen. */}
             <InstructorHeaderActions
-              email={instructor.email}
+              email={participant ? `Participant ${participant.participantNumber}` : instructor.email}
               showAccountControls={!participant}
             />
           </div>

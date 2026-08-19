@@ -48,7 +48,11 @@ export default function StudyAccessForm({
     <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--background))] py-12 px-4 sm:px-6 lg:px-8">
       <Card className="w-full max-w-md border-0 sm:border shadow-none sm:shadow-sm">
         <CardHeader className="space-y-1 text-center">
-          <CardTitle className="text-3xl font-bold tracking-tight">SCORE</CardTitle>
+          {/* Not "SCORE": this is the first screen of a study whose whole
+              premise is that the participant cannot tell which of the two tools
+              is the researchers' own. "Chatbot Studio" is the name the rest of
+              the session already uses. */}
+          <CardTitle className="text-3xl font-bold tracking-tight">Chatbot Studio</CardTitle>
           <CardDescription>
             {notice === 'done'
               ? 'This study session is finished — thank you. There is nothing more to do here.'
