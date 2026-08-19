@@ -421,6 +421,24 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   const onWorkClock = workPhase === 'block1_work' || workPhase === 'block2_work';
   const phaseStartedAt = onWorkClock && participant ? await currentPhaseStartedAt(participant.id) : null;
 
+  // Where the header's back arrow goes — and whether there is one at all.
+  //
+  // A participant on the clock has nothing above this screen to go back TO. The
+  // assignment page is the instructor product's own hierarchy: a course they do
+  // not teach, a share link, a roster. It is not part of the task, it is not
+  // part of the protocol, and the way out of a block is "I'm done" once there
+  // is something deployed to measure. So for them the arrow is not repointed,
+  // it is absent — a back button that goes somewhere pointless still invites
+  // the click, and the 25 minutes are theirs.
+  //
+  // A DEMO keeps its exit. That is the researcher driving, and returning to the
+  // console is the one control the recording can carry.
+  const backHref = participant
+    ? participant.isDemo
+      ? '/api/study/admin/demo/exit'
+      : null
+    : `/instructor/assignments/${id}`;
+
   const studyDeployed = isBaselineView
     ? baselineState?.deployedVersionNo != null
     : chatDeploys.length > 0;
@@ -437,16 +455,15 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
         banner={participant ? <TaskBanner /> : null}
         header={
           <div className="flex items-center gap-4">
-            {/* Back out of a demo is back to the tool that started it, not up
-                the participant's own hierarchy — a researcher filming has no
-                use for the assignment page, and this is the only exit the demo
-                can carry without putting a control in the recording. Identical
-                to look at, so the frame is unchanged either way. */}
-            <Link href={participant?.isDemo ? '/api/study/admin/demo/exit' : `/instructor/assignments/${id}`}>
-              <Button variant="ghost" size="icon" className="hover:bg-[hsl(var(--muted))]">
-                <ChevronLeft className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />
-              </Button>
-            </Link>
+            {/* Absent for a participant — see `backHref`. Identical to look at
+                for everyone who does get one, so the frame is unchanged. */}
+            {backHref && (
+              <Link href={backHref}>
+                <Button variant="ghost" size="icon" className="hover:bg-[hsl(var(--muted))]">
+                  <ChevronLeft className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />
+                </Button>
+              </Link>
+            )}
             {/* The version's name, and under it the course. Design §3.1 puts
                 the name here and only here on the board — it is what the final
                 survey's two columns are labelled with, and a participant who
@@ -531,7 +548,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                 confirm="This ends the setup for this chatbot. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it."
               />
             )}
-            <InstructorHeaderActions email={instructor.email} />
+            {/* Settings carries Delete account, which would remove the row
+                that IS this participant. Off for them, along with log out —
+                no other study screen has either. */}
+            <InstructorHeaderActions
+              email={instructor.email}
+              showAccountControls={!participant}
+            />
           </div>
         }
       >
