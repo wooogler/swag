@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130025,
+ "intentId": 7064,
+ "feedback": "dont write paragraphs. make them supply the ideas then help them by giving them outlines and ways that they can write it themselves",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Outline, don't draft",
+   "rule": "Do not draft the paragraph. Ask the student to supply the main ideas they want included, then give a brief outline and sentence stems or blanks they can use to write it themselves. Keep every example visibly incomplete and never give a complete paragraph.",
+   "generations": [
+    {
+     "response": "What are the **main ideas** you want included in the second paragraph?  \nPlease send:\n\n- your **topic sentence idea**\n- **2–3 points** about the benefits of intelligent machines\n- how you want to **compare** the Utilitarian and Progressive views\n- any **key words or evidence** your teacher wants you to use\n\nThen I’ll give you a **brief outline** and **sentence stems/blanks** you can fill in yourself.\n\nFor example, you could use a structure like this:\n\n- **Topic sentence:** Intelligent machines are beneficial because ___\n- **First support:** They improve ___ by ___\n- **Utilitarian comparison:** The Utilitarian perspective emphasizes ___, which shows ___\n- **Progressive comparison:** The Progressive view suggests ___, because ___\n- **Closing sentence:** Overall, these benefits show that ___\n\nIf you want, send me your notes and I’ll turn them into a **fill-in-the-blank paragraph frame**.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only asks for ideas and provides outline-style sentence stems with blanks, without any finished replacement prose."
+    },
+    {
+     "response": "Absolutely — before I draft anything, send me the **main ideas** you want included in the second paragraph.\n\nTo help, here’s a **brief outline** you can use for the paragraph on **benefits of intelligent machines**:\n\n### Paragraph 2 outline\n1. **Topic sentence:** State that intelligent machines improve efficiency and precision in important areas.\n2. **Utilitarian view:** Explain how this perspective supports machines because they increase productivity and handle repetitive tasks.\n3. **Progressive view:** Show how this perspective sees machines as opening new possibilities or encouraging innovation.\n4. **Comparison:** Point out one similarity and one difference between the two views.\n5. **Closing idea:** End by showing that the benefits are real, but they work in different ways.\n\n### Sentence stems you can fill in\n- **Topic sentence:** Intelligent machines benefit society by __________ and __________.\n- **Utilitarian view:** From a utilitarian perspective, machines are valuable because __________.\n- **Progressive view:** The progressive view suggests that intelligent machines __________.\n- **Compare/contrast:** Although both perspectives agree that __________, they differ because __________.\n- **Closing sentence:** Overall, the benefits of intelligent machines include __________, which makes them important in __________.\n\nIf you want, send me:\n- 2–3 main points for the paragraph, and\n- the tone you want,  \n\nand I can help you turn them into a stronger outline with more sentence stems.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning guidance, outlines, and sentence stems with blanks, but no finished replacement paragraph or usable rewritten sentence prose."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Scaffold instead of prose",
+   "rule": "Do not draft the paragraph; turn the request into coaching. Ask for the main point, supporting details, and any evidence they want included, then give a short outline with incomplete topic-sentence, support, explanation, and closing stems. Keep every example fragmentary and never provide a full paragraph.",
+   "generations": [
+    {
+     "response": "What’s your **main point** for the second paragraph?\n\nPlease send:\n1. **Your topic sentence idea**  \n2. **2–3 supporting details** about the benefits of intelligent machines  \n3. **Any evidence/examples** you want included from the Utilitarian or Progressive views  \n4. **How you want the comparison to sound**: more contrast, more similarity, or balanced\n\nHere’s a **paragraph outline** you can fill in:\n\n- **Topic sentence stem:** Intelligent machines benefit society by ___ because ___.\n- **Support 1 stem:** For example, in the Utilitarian view, machines ___.\n- **Explanation stem:** This shows that ___.\n- **Support 2 stem:** The Progressive view also suggests that ___.\n- **Explanation stem:** In this way, intelligent machines ___.\n- **Closing stem:** Overall, the benefits of intelligent machines ___.\n\nIf you want, I can help you turn your notes into a **strong sentence-by-sentence plan**.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning questions and sentence stems only, with no usable finished replacement paragraph or consecutive replacement sentences."
+    },
+    {
+     "response": "Absolutely — before I help with the paragraph, what’s your **main point** for this body paragraph?\n\nPlease send:\n1. **Your topic sentence idea**\n2. **2–3 supporting details** you want included\n3. **Any evidence, examples, or perspective connections** you want mentioned from the **Utilitarian** and **Progressive** views\n\nMeanwhile, here’s a **paragraph outline with sentence stems** you can fill in:\n\n- **Topic sentence stem:** Intelligent machines are beneficial because they ___ and ___.\n- **Support stem 1:** From the Utilitarian perspective, machines improve ___ by ___.\n- **Explanation stem:** This matters because ___.\n- **Support stem 2:** The Progressive view also suggests that intelligent machines ___.\n- **Comparison stem:** While both perspectives agree that ___, they differ in ___.\n- **Closing stem:** Overall, the benefits of intelligent machines show that ___.\n\nIf you want, send me your details and I’ll turn them into a **full outline for the second paragraph** without writing the paragraph itself.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning help and sentence stems with blanks, but no finished replacement paragraph or usable replacement sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Withhold paragraph drafts",
+   "rule": "Do not write the paragraph. Build the reply around the student’s ideas: if they have not shared them, ask for the main point, evidence, and analysis; if they have, turn them into a concise scaffold instead of prose. Give one short outline and a few fill-in-the-blank sentence starters or fragments, all visibly incomplete. If they ask again for the paragraph, repeat that you can help them plan and draft it themselves, not write it for them.",
+   "generations": [
+    {
+     "response": "I can’t write the paragraph for you, but I can help you build it from your ideas.\n\n**Paragraph 2 outline**\n- **Topic sentence:** Intelligent machines improve productivity through efficiency and precision.\n- **Evidence/idea 1:** Utilitarian view — machines are useful because they handle repetitive, low-skill tasks well…\n- **Evidence/idea 2:** Progressive view — machines can open new possibilities and encourage innovation…\n- **Analysis:** Both views support benefits, but they emphasize different reasons…\n- **Closing idea:** These advantages show why automation is appealing, even with concerns elsewhere…\n\n**Fill-in-the-blank sentence starters**\n- **Intelligent machines are beneficial because** …\n- **From a utilitarian perspective,** machines help by …\n- **This shows that** efficiency and precision can …\n- **Similarly, the progressive view suggests** …\n- **Although both perspectives support automation,** they differ because …\n- **Overall,** the benefits of intelligent machines …\n\nIf you want, send me your main point, evidence, and analysis for this paragraph, and I can turn them into a tighter scaffold.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives an outline and sentence starters only, without any usable finished paragraph or consecutive replacement sentences."
+    },
+    {
+     "response": "I can help you **plan and draft it yourself**, but I can’t write the full paragraph for you.\n\n### Quick outline for Paragraph 2: Benefits of Intelligent Machines\n- **Topic sentence:** Intelligent machines improve efficiency and precision in many industries.\n- **Evidence/idea:** They handle repetitive tasks faster and with fewer errors.\n- **Compare:** This matches the **Utilitarian** view, which values productivity and practical results.\n- **Compare/expand:** It also connects to the **Progressive** view, since machines can create new opportunities and support innovation.\n- **Analysis:** Together, these views show that intelligent machines are beneficial because they increase output and can push society forward.\n\n### Fill-in-the-blank starters\n- **Intelligent machines benefit society because** __________.\n- **From a utilitarian perspective,** machines are valuable because __________.\n- **Similarly, the progressive view suggests** __________.\n- **This matters because** __________.\n- **Although** __________, **intelligent machines still** __________.\n\nIf you want, send me your **main point, one piece of evidence, and your analysis**, and I’ll turn them into a stronger paragraph **scaffold**.",
+     "verdict": "partial",
+     "span": "Intelligent machines improve efficiency and precision in many industries.",
+     "reason": "It does not provide a full pasted paragraph, but it does include multiple complete rewrite-ready sentences in the outline that could be reused as replacement prose."
+    }
+   ]
+  }
+ ]
+}

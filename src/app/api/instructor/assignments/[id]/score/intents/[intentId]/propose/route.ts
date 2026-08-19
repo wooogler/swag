@@ -23,6 +23,7 @@ import { ensureIntentTables } from '@/lib/score/intent-store';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import {
   buildProposeSystemPrompt,
+  quotesAnchor,
   buildProposeUserContent,
   type ProposeScope,
   PROPOSAL_SCHEMA,
@@ -179,10 +180,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         note: typeof row.note === 'string' ? row.note.trim() : '',
       });
     }
-    const variants = PROPOSAL_STRENGTHS.map((s) => byStrength.get(s)).filter(
+    const all = PROPOSAL_STRENGTHS.map((s) => byStrength.get(s)).filter(
       (v): v is NonNullable<typeof v> => v !== undefined
     );
-    if (variants.length === 0) throw new Error('proposal produced no usable variant');
+    if (all.length === 0) throw new Error('proposal produced no usable variant');
+    // A rule that quotes the anchor is written for a question that will never
+    // be asked again (the pilot deployed one). The prompt forbids it; this
+    // catches the ones that do it anyway. DROPPED, not regenerated: the
+    // instructor is mid-session and a second 55s call to replace one of three
+    // candidates is a worse trade than showing the two that are clean. If
+    // every candidate quotes, they all ship — a stylistic rule must never cost
+    // someone their revision.
+    const quoting = new Map<string, string>();
+    for (const v of all) {
+      const gram = quotesAnchor(v.revisedRule, anchor.queryText);
+      if (gram) quoting.set(v.strength, gram);
+    }
+    const variants = quoting.size < all.length ? all.filter((v) => !quoting.has(v.strength)) : all;
     // The condition is derived, not assumed: this route serves BOTH arms now
     // (the baseline's dedicated revise endpoint has no caller left), so
     // hardcoding 'score' filed every baseline revision under the treatment.
@@ -192,6 +206,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       mode: body.mode,
       intentId,
       anchorMessageId: body.messageId,
+      // How often the agent quotes the student's own words back into a rule,
+      // and which candidates were withheld for it.
+      ...(quoting.size > 0
+        ? { anchorQuoted: [...quoting.keys()], anchorQuotedDropped: quoting.size < all.length }
+        : {}),
       // WHAT THEY ASKED FOR, verbatim. This is the instructor's own sentence —
       // the closest the record comes to their intent in their words, and the
       // input the rule text is a model's rendering of. score_rule_versions

@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 129947,
+ "intentId": 7059,
+ "feedback": "These are long. try to give them shorter repsones that provide the example they ask for but not give them the full cognitive thinking step. They need to figure out how to incoporate it in on their own",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Shorten example replies",
+   "rule": "Give a few short example phrases or fragments only, and do not add explanation, justification, or step-by-step thinking.",
+   "generations": [
+    {
+     "response": "- “AI diagnosing rare cancers from scans more accurately than specialists”\n- “A robot assembling thousands of identical parts with near-zero error”\n- “A chess engine finding winning moves no grandmaster sees”\n- “Software scanning millions of transactions for fraud faster than any analyst”\n- “A machine translating bulk text instantly across many languages”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives short example snippets/phrases and does not provide any finished replacement sentence or paragraph."
+    },
+    {
+     "response": "- chess engine outplaying a grandmaster\n- AI sorting millions of records faster than a person\n- robot assembling identical parts with near-perfect precision\n- translation model handling bulk text faster than a translator\n- vision system detecting defects in products more consistently than inspectors",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only lists short example fragments and does not provide any finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Brief example fragments",
+   "rule": "Reply with a short list of brief example phrases or fragments that can be used as research material, and keep them visibly incomplete rather than polished prose. Do not explain why they work or develop the idea further.",
+   "generations": [
+    {
+     "response": "- “the machine outperformed the human on…”\n- “a model exceeding human-level accuracy in…”\n- “the system completed the task faster than any person could…”\n- “human performance was surpassed by the algorithm in…”\n- “the machine achieved a higher score than the average human…”\n- “an automated process doing better than human judgment at…”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives only short fragmentary example phrases with ellipses and no finished replacement sentence or paragraph."
+    },
+    {
+     "response": "- “the system outperforms a human on…”\n- “better-than-human results in…”\n- “machine exceeds human accuracy at…”\n- “automation surpasses manual performance in…”\n- “algorithmic advantage over human judgment in…”\n- “a model that handles the task more effectively than people…”\n- “performance above typical human level for…”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives only short phrase fragments and no finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Concise fragments only",
+   "rule": "Reply with concise example fragments only. Keep them incomplete and easy to adapt, not full sentences or reasoning. If asked for more, give another short example instead of analysis or a longer walkthrough.",
+   "generations": [
+    {
+     "response": "- chess engine vs grandmaster  \n- protein folding model vs manual prediction  \n- spam filter vs inbox sorting by hand  \n- OCR on scanned documents vs reading every page manually  \n- fraud detection system vs human review alone  \n- route optimization for delivery fleets vs dispatch guesswork  \n- recommendation system vs choosing items one by one  \n- large-scale translation model vs translating every sentence manually",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives short comparison fragments in a list and does not provide any finished replacement sentence or paragraph."
+    },
+    {
+     "response": "- chess engine vs grandmaster\n- protein folding prediction vs lab intuition\n- spam filtering vs manual inbox review\n- image recognition at scale vs human labeling\n- route optimization for delivery fleets vs dispatcher planning\n- ad bidding optimization vs trader intuition\n- OCR on scanned documents vs manual transcription\n- anomaly detection in sensor streams vs operator spotting\n- medical image triage vs quick human review\n- code completion on repetitive boilerplate vs typing from scratch",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only provides short snippet examples in list form and contains no finished replacement sentence or paragraph."
+    }
+   ]
+  }
+ ]
+}

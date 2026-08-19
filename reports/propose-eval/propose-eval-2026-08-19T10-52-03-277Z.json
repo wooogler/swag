@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130025,
+ "intentId": 7064,
+ "feedback": "dont write paragraphs. make them supply the ideas then help them by giving them outlines and ways that they can write it themselves",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Scaffold, don’t draft",
+   "rule": "Do not draft the paragraph. Ask the student for the main ideas they want included, then give a short scaffold that helps them write it themselves: a few bullet-point prompts, sentence stems, and fill-in-the-blank pieces like \"___\". Keep it brief, under 100 words.",
+   "generations": [
+    {
+     "response": "What **main ideas** do you want in this paragraph?\n\n- Benefit 1: ___  \n- Benefit 2: ___  \n- Compare with Utilitarian: ___  \n- Compare with Progressive: ___  \n\nYou can start with: **“One major benefit of intelligent machines is ___.”**  \nThen: **“This supports the Utilitarian view because ___.”**  \nAnd: **“It also connects to the Progressive view by ___.”**  \nFinish with: **“Overall, ___.”**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning prompts and sentence starters with blanks, but no finished replacement paragraph or usable replacement sentences."
+    },
+    {
+     "response": "What are the **main points** you want included about the benefits?\n\n- **Benefit 1:** ___\n- **Benefit 2:** ___\n- **Utilitarian view:** ___\n- **Progressive view:** ___\n\nSentence stems:\n- Intelligent machines are beneficial because ___.\n- The Utilitarian perspective supports this by ___.\n- The Progressive perspective adds that ___.\n- Together, these views show that ___.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives planning prompts and sentence stems with blanks, without any finished replacement sentence or paragraph prose."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Outline, not prose",
+   "rule": "Do not write the paragraph for the student. Prompt them to supply the key ideas they want to include, then respond with a compact outline and sentence starters that they can turn into their own paragraph. Use fragments, blanks, and partial phrases only; do not give complete sentences they could copy as-is. Keep the help concise, under 120 words.",
+   "generations": [
+    {
+     "response": "Share 2–4 key ideas you want in that paragraph.\n\n**Quick outline**\n- topic: benefits of intelligent machines\n- evidence/idea 1: efficiency, precision, productivity\n- compare: Utilitarian view — low-skill / repetitive tasks, output, cost\n- compare: Progressive view — innovation, new possibilities, challenge norms\n- closing link: benefit + mixed impact\n\n**Sentence starters**\n- “One major benefit is…”\n- “From a Utilitarian view, machines…”\n- “Similarly / unlike that, the Progressive perspective…”\n- “Together, these views suggest…”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives an outline and sentence starters for the student to write from, with no finished replacement paragraph or usable full sentences of essay prose."
+    },
+    {
+     "response": "Share the **key ideas** you want in paragraph 2 — 2–4 points, plus any **Utilitarian/Progressive** comparison words you need.\n\n**Outline**\n- Topic idea: **efficiency + precision**\n- Utilitarian: **repetitive tasks / productivity / output**\n- Progressive: **innovation / new possibilities / challenging norms**\n- Compare: **both value gains, different focus**\n\n**Sentence starters**\n- **Intelligent machines improve…**\n- **From a Utilitarian view, …**\n- **Similarly, the Progressive view…**\n- **Unlike the Utilitarian focus on…, Progressive thinkers emphasize…**\n- **Overall, these perspectives show…**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply provides planning bullets and sentence starters with ellipses, but no finished replacement paragraph or usable replacement sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Guide, don’t ghostwrite",
+   "rule": "Do not produce the paragraph text. Lead the student to the ideas first, then help them build the paragraph themselves with a brief outline, sentence stems, and blanks to fill in. If they already have material, shape it into a scaffold instead of rewriting it; if they ask again for the paragraph, restate that you can only help them plan and write it in their own words. Keep the response short, around 3–5 fragmentary bullets and no more than 130 words.",
+   "generations": [
+    {
+     "response": "- I can’t write the full paragraph for you, but I can help you build it in your own words.  \n- **Topic sentence:** Intelligent machines can improve __________ and __________ in many industries.  \n- **Evidence/compare:** The **Utilitarian** view suggests machines are useful because they __________ repetitive tasks and increase __________; the **Progressive** view adds that they __________ and open new __________.  \n- **Wrap-up:** Together, these views show that intelligent machines are beneficial because __________, even though __________.  \n- If you want, send your notes and I’ll turn them into a tighter paragraph scaffold.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning help and sentence scaffolds with blanks, but no finished replacement paragraph or usable full sentence of prose."
+    },
+    {
+     "response": "- I can’t write it for you, but I can help you build it. Start with: **“Intelligent machines offer clear benefits because ___.”**\n- Include 2–3 ideas: **efficiency**, **precision**, **better output in repetitive tasks**; then add how **Progressive** thinking sees machines as opening **new possibilities/innovation**.\n- Use a compare/contrast link: **“While the Utilitarian view emphasizes ___, the Progressive view adds ___.”**\n- Fill-in scaffold: **“For example, in ___, machines can ___. This supports the idea that ___. Unlike ___, the Progressive perspective suggests ___.”**\n- End by tying both views together: **“Together, these perspectives show that ___.”**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning scaffolds and sentence frames with blanks, but no usable finished paragraph or replacement sentence prose."
+    }
+   ]
+  }
+ ]
+}

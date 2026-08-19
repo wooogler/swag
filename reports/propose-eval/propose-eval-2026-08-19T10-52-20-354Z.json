@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 129947,
+ "intentId": 7059,
+ "feedback": "These are long. try to give them shorter repsones that provide the example they ask for but not give them the full cognitive thinking step. They need to figure out how to incoporate it in on their own",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Trim example answers",
+   "rule": "Give a few short example ideas the student can use in their writing, but do not do the full thinking for them. Keep each example brief and direct, so the student still has to explain how it fits on their own.",
+   "generations": [
+    {
+     "response": "Sure — here are a few brief examples:\n\n- **Calculating large sums** much faster than a person  \n- **Scanning medical images** and spotting tiny patterns  \n- **Sorting thousands of emails** into categories quickly  \n- **Playing chess** at a level most humans can’t match  \n- **Checking spelling or grammar** across a long document very fast  \n\nIf you want, I can also give examples for a specific subject like school, work, or everyday life.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives only short example fragments and brief guidance, with no finished replacement paragraph or full rewrite sentence for the student to use."
+    },
+    {
+     "response": "Yes — here are a few short examples you could use:\n\n- A machine can sort huge amounts of data much faster than a person.\n- A calculator can solve complicated math problems more accurately than a human doing it by hand.\n- An AI system can scan medical images and spot patterns very quickly.\n- A robot can repeat the same factory task all day without getting tired.\n- A translation tool can process lots of text faster than a human translator.\n\nIf you want, I can also give examples in a specific subject area like school, work, or sports.",
+     "verdict": "partial",
+     "span": "A calculator can solve complicated math problems more accurately than a human doing it by hand.",
+     "reason": "It stays in short example form, but it provides multiple complete usable sentences rather than only fragments or scaffolds."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Shorten example replies",
+   "rule": "Give 2-4 brief example ideas the student can build into their draft. Keep each one to a short sentence or phrase, not a paragraph, and avoid explaining the reasoning behind it. Make the examples concise enough that the student has to connect them to their argument themselves.",
+   "generations": [
+    {
+     "response": "- A calculator solving complex arithmetic faster than a person  \n- A chess engine finding the best move in seconds  \n- A translation app converting languages instantly  \n- A robot vacuum cleaning a room more consistently than a human",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives short example snippets and no finished replacement prose or explanatory paragraph."
+    },
+    {
+     "response": "- A chess engine finding a checkmate in fewer moves than most grandmasters.  \n- A spam filter identifying junk mail faster and more accurately than a person sorting messages by hand.  \n- A medical imaging system spotting tiny tumors in scans that a doctor might miss.  \n- A translation tool converting large volumes of text instantly across many languages.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives only short standalone example snippets in a list and does not provide any finished replacement paragraph or full prose sentence chain."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Concise example scaffolds",
+   "rule": "Give a small set of concise example ideas the student can use as research material, and keep them to fragments or short sentence stems rather than full explanations. Aim for 2-4 items, each no more than a short line, and stop there instead of walking through the logic or drafting the connection for the student. If the student asks for more detail, give another brief example, not a worked-out argument.",
+   "generations": [
+    {
+     "response": "- Chess engine finding a winning line faster than a grandmaster  \n- Translation tool handling thousands of phrases consistently in seconds  \n- Image recognition system spotting tiny defects on an assembly line  \n- Search algorithm sorting huge data sets far more quickly than a person",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives short example fragments in a list and does not provide any finished replacement sentence or paragraph."
+    },
+    {
+     "response": "- Chess or Go engine finding stronger moves than most humans  \n- Image recognition system spotting tumors in scans faster than a doctor  \n- Translation model handling large volumes of text more quickly than a human translator  \n- Spam filter classifying junk mail at scale with higher consistency",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives only short example fragments in a list, with no finished replacement sentence or paragraph."
+    }
+   ]
+  }
+ ]
+}

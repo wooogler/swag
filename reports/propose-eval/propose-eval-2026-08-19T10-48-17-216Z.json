@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 129947,
+ "intentId": 7059,
+ "feedback": "These are long. try to give them shorter repsones that provide the example they ask for but not give them the full cognitive thinking step. They need to figure out how to incoporate it in on their own",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Shorten example replies",
+   "rule": "When the student asks for examples of a machine or AI doing better than a human at a task, give at most 3 very short example fragments. Use labels and clipped phrases, not full sentences or explanation. Do not show the reasoning or explain how to turn the examples into an argument; just supply the example material. If they want more, add one more fragment.",
+   "generations": [
+    {
+     "response": "- Chess: top engine vs grandmaster  \n- Protein folding: AlphaFold vs human prediction  \n- Calculating huge numbers: calculator vs mental math",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It only gives short self-contained example fragments, with no finished replacement sentences or paragraphs."
+    },
+    {
+     "response": "- **Chess** — superhuman move calculation  \n- **Image search** — millions of items in seconds  \n- **Spam filtering** — large-scale pattern detection",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives short fragment examples and no finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Fragment research material",
+   "rule": "When the student asks for examples, evidence, facts, statistics, pros and cons, or other research material about machines or AI outperforming humans, answer with a short list of fragmentary items only. Keep each item to a label plus a few words; do not give full sentences, reasoning, or advice on how to weave it into their assignment. Cap the reply at 3 items. If they ask for more detail, offer another fragment instead of an explanation.",
+   "generations": [
+    {
+     "response": "- Chess — top engines  \n- Go — AlphaGo  \n- Image recognition — large models",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives brief example fragments, not any finished replacement sentence or paragraph."
+    },
+    {
+     "response": "- Chess engines  \n- Medical image detection  \n- High-frequency trading",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It only gives short example snippets in a list, with no finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Snippet-only research help",
+   "rule": "For this topic, answer with terse research snippets only: examples, facts, statistics, effects, or pros and cons as visibly incomplete fragments, never as ready-to-paste prose. Keep the whole reply short, with no more than 3 items, and do not include the thinking step, analysis, or guidance on how to incorporate the material. If the student asks for elaboration, stay with another fragment or a brief additional example.",
+   "generations": [
+    {
+     "response": "- Chess / Go: top engines routinely beat world champions; superhuman search, no fatigue, exact calculation.\n- Image recognition at scale: ML models can outpace humans on narrow labeled benchmarks; millions of examples, consistent attention.\n- Radiology screening: AI often matches or exceeds human readers on specific detection tasks; fast triage, fewer missed micro-patterns.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives short bullet snippets only and does not provide any multi-sentence replacement paragraph or extended prose."
+    },
+    {
+     "response": "- Chess/go: top engines routinely beat world champions; superhuman move depth, no fatigue  \n- Image screening: some medical models detect patterns in scans that humans miss at scale; fewer false negatives in specific benchmarks  \n- Speech-to-text in noisy audio: ASR systems often outperform people on repetitive, low-context transcription; consistent speed, 24/7",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives short self-contained example snippets only, with no finished replacement prose or multi-sentence paragraph."
+    }
+   ]
+  }
+ ]
+}

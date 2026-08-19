@@ -13,6 +13,8 @@ export type TrailFiles = Record<string, string>;
 const README = `SCORE user study — participant trail
 
 timeline.csv    every recorded action, in time order. One row per event.
+rerates.csv     SCORE only. One row per re-judgement pass: what it moved, and
+                whether it undid a decision they had already made.
 timeline.jsonl  the same events with their full payload, one JSON per line.
 blocks.json     the two blocks: dataset, condition, when each started.
 snapshots/      SCORE only. The whole intent tree as it stood at each save.
@@ -115,6 +117,23 @@ notes
     flush. They cover the shared surfaces only — scroll, hover and keystrokes
     are the screen recording's job.
 
+rerates.csv — SCORE only, one row per re-judgement PASS
+  cause         what moved the boundary just before it (fold_apply,
+                intent_update_definition, …); 'rerun' when nothing did.
+  moved_in / moved_out
+                questions that changed membership. These are the COLLATERAL —
+                the questions nobody was correcting — and they are the loop an
+                instructor fights when a definition will not settle.
+  decisions_hold / decisions_dont
+                how their own rulings stand after this pass.
+  regressed     rulings that held before this pass and do not now. A decision
+                coming back is what makes the same question get decided twice.
+  Shards of one pass are summed back together; a pass is the rating_run rows
+  with no other configuration act between them.
+  BLANK movement columns mean the pass predates the recording of it (sessions
+  before 2026-08-18), not that nothing moved. For those, the trajectory has to
+  be rebuilt from the hash-keyed history in score_intent_ratings.
+
 block-test.csv — beyond the answers
   routed_kind / routed_intent_id / routed_intent_title / routed_type
                 what actually answered. 'type_default' means no intent claimed
@@ -134,6 +153,133 @@ block-test.csv — beyond the answers
 
 function pad(n: number): string {
   return String(n).padStart(3, '0');
+}
+
+/**
+ * One row per RE-JUDGEMENT PASS — the table the pilot analysis had to build by
+ * hand from `score_intent_ratings`, and without which the correction trajectory
+ * cannot be described (analysis §3.2, §6.12).
+ *
+ * A pass is what one Apply costs: the definition changed, every question of the
+ * type is judged against it, and questions NOBODY was correcting move in and
+ * out. That collateral is the whack-a-mole — the pilot spent 13.7 minutes on a
+ * single set, 43 of the moves were collateral and 4 of them undid a decision
+ * the instructor had already made, which is why the same question was decided
+ * three times.
+ *
+ * Two things this does that reading `rating_run` rows one by one does not:
+ *  - a pass is SHARDED across several POSTs, so the rows are summed back into
+ *    the pass they belong to (adjacent rows on one clone, no other
+ *    configuration act between them);
+ *  - `regressed` diffs each pass's decision standing against the one before it,
+ *    which is the number that says a decision came back — a count no single
+ *    event carries, because each one only knows its own moment.
+ */
+function rerateReport(events: ParticipantTrail['events']): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  // Anything that can move a boundary. A pass that follows one of these was
+  // caused by it; a pass with nothing in front of it is a plain re-run.
+  const CAUSES = new Set([
+    'fold_apply',
+    'intent_apply',
+    'intent_update_definition',
+    'intent_create',
+    'intent_update',
+    'intent_revert',
+  ]);
+  let open: {
+    at: string;
+    block: number | null;
+    tBlock: number | null;
+    cause: string;
+    causeIntent: string;
+    processed: number;
+    gained: number;
+    lost: number;
+    intents: Set<number>;
+    standing: Map<number, { hold: number; dont: number }>;
+    /** Did ANY shard of this pass carry the movement payload? Sessions run
+     * before it existed have none, and a zero there would read as "nothing
+     * moved" when it means "never recorded". */
+    measured: boolean;
+  } | null = null;
+  let cause = { kind: '', intent: '' };
+  // Decision standing as the PREVIOUS pass left it, per intent.
+  const prevStanding = new Map<number, { hold: number; dont: number }>();
+
+  const close = () => {
+    if (!open) return;
+    let regressed = 0;
+    for (const [intentId, now] of open.standing) {
+      const before = prevStanding.get(intentId);
+      // A decision that held last time and does not now. Only rises count:
+      // a `dont` that drops is the definition catching up, not a regression.
+      if (before && now.dont > before.dont) regressed += now.dont - before.dont;
+      prevStanding.set(intentId, now);
+    }
+    const hold = [...open.standing.values()].reduce((n, d) => n + d.hold, 0);
+    const dont = [...open.standing.values()].reduce((n, d) => n + d.dont, 0);
+    rows.push({
+      at: open.at,
+      block: open.block ?? '',
+      t_block: open.tBlock ?? '',
+      cause: open.cause,
+      cause_intent: open.causeIntent,
+      intents: [...open.intents].join(' '),
+      questions_judged: open.processed,
+      moved_in: open.measured ? open.gained : '',
+      moved_out: open.measured ? open.lost : '',
+      moved_total: open.measured ? open.gained + open.lost : '',
+      decisions_hold: open.measured ? hold : '',
+      decisions_dont: open.measured ? dont : '',
+      regressed: open.measured ? regressed : '',
+    });
+    open = null;
+  };
+
+  for (const e of events) {
+    if (e.kind !== 'rating_run') {
+      // Shards of one pass are adjacent; anything else between them ends it.
+      close();
+      if (CAUSES.has(e.kind)) cause = { kind: e.kind, intent: e.intentTitle ?? String(e.intentId ?? '') };
+      continue;
+    }
+    const p = (e.payload ?? {}) as {
+      processed?: number;
+      intentIds?: number[] | null;
+      membership?: { intentId: number; gained?: unknown[]; lost?: unknown[] }[];
+      decisions?: { intentId: number; hold?: number; dont?: number }[];
+    };
+    if (!open) {
+      open = {
+        at: e.at,
+        block: e.block ?? null,
+        tBlock: e.tBlock ?? null,
+        cause: cause.kind || 'rerun',
+        causeIntent: cause.intent,
+        processed: 0,
+        gained: 0,
+        lost: 0,
+        intents: new Set(),
+        standing: new Map(),
+        measured: false,
+      };
+      cause = { kind: '', intent: '' };
+    }
+    open.processed += p.processed ?? 0;
+    if (p.membership !== undefined) open.measured = true;
+    for (const m of p.membership ?? []) {
+      open.gained += m.gained?.length ?? 0;
+      open.lost += m.lost?.length ?? 0;
+      open.intents.add(m.intentId);
+    }
+    // Standing is a snapshot, not a delta: the last shard's is the pass's.
+    for (const d of p.decisions ?? []) {
+      open.standing.set(d.intentId, { hold: d.hold ?? 0, dont: d.dont ?? 0 });
+    }
+  }
+  close();
+  return rows;
 }
 
 export function trailToFiles(
@@ -193,6 +339,8 @@ export function trailToFiles(
       typeof f.config === 'string' ? f.config : JSON.stringify(f.config, null, 2);
   }
 
+  const rerates = rerateReport(trail.events);
+  if (rerates.length > 0) files['rerates.csv'] = toCsv(rerates);
   files['block-test.csv'] = toCsv(extra.blockTest);
   files['review-set.csv'] = toCsv(extra.reviewSet);
   files['survey.csv'] = toCsv(extra.survey);

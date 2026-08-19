@@ -46,22 +46,21 @@
 - **바꾸면**: 보드 type 헤더에 "No default rule" 배지 + 첫 intent 생성 전 "Planning 질문 전부에 적용될 기본 rule부터 쓸까요?" 한 줄. (4번과 합치면 기본 rule이 그 안의 안 건드린 set에 그대로 흘러감 — stance를 **type당 1번**만 쓰면 됨.)
 - **화면에서는**: `Planning · 12 questions · ⚠ No default rule — questions no set claims get no instructions. [Write it]`
 
-### 7. Rule에 적용 조건(WHEN)을 쓰지 않기 — M · 결정 + 재측정 필요
-- **지금**: 4개 rule 전부 "When a student asks you to X… (but not Y)"로 **정의를 rule 안에 다시 베껴 넣음**. 원인은 `propose-prompt.ts`: 정의를 입력으로 주고, 현재 rule이 비었을 때 강도를 "트리거 범위"(minimal = 정확히 그 요청만, moderate = rephrase까지)로 나눔 — 단일 프롬프트(baseline)엔 맞는 논리인데 intent scope로 그대로 넘어옴. 문제 두 가지: (i) fold로 정의가 바뀌면 rule 속 사본과 어긋남 — 7062 rule엔 "feedback 요청엔 해당 없음"이 박혀 있어, 나중에 feedback 요청이 이 set에 들어오면 모델은 자기 시스템 프롬프트가 해당 없다고 읽고 **아무 지시 없이** 답함(one-layer라 else가 없음); (ii) 이식성 — 7059 rule에 "machines, AI, automation…"이 박힘.
-- **바꾸면**: intent/type 기본 scope에선 "이 프롬프트는 이미 매치된 요청에만 실행 — 적용 조건은 쓰지 말고 행동만" + 강도를 행동 서술 깊이로. baseline scope는 그대로.
-- **화면에서는** (같은 피드백 "dont rewrite for them but guide them"):
-  - 지금: *"When a student asks you to directly rewrite, rephrase, or recast existing text, do not rewrite… This applies to … but not to requests for feedback…"*
-  - 바꾸면: *"Do not rewrite the passage. Give concise guidance on which phrases to make more formal or clearer; any example stays visibly incomplete. If they ask again for the exact rewrite, refuse briefly."*
-- **주의**: 이 프롬프트는 08-04에 실측 튜닝(11/1/0)된 것 — `scripts/score/propose-eval.ts`로 재측정 없이 바꾸지 말 것.
+### 7. Rule에 적용 조건(WHEN)을 쓰지 않기 — **2026-08-19 적용**
+- **지금이었던 것**: rule 4개 전부 "When a student asks you to X… (but not Y)"로 **정의를 rule 안에 다시 베껴 넣음**. 원인은 빈-rule 강도 사다리가 트리거 폭으로 등급을 매긴 것. fold로 정의가 바뀌면 rule 속 사본이 어긋나고, one-layer라 else가 없어 지시가 0이 된다. 이식성도 깎인다.
+- **적용**: 사다리를 **행동 서술 깊이**로 교체 + 적용 조건 금지 명시(baseline 단일 프롬프트는 예외 — 거긴 조건이 필요하다).
+- **측정**(30생성/arm): 준수 **25/5/0 vs 24/6/0**(동률), 조건절로 시작한 rule **12/18 → 0/18**, 과제 주제어 **2/18 → 0/18**. 1차 시도는 minimal에서 "대신 무엇을"이 빠져 canonical 2/2/2로 나빠졌고, 모든 등급에 복원해 10/2/0으로 회복.
+- **화면에서는** (같은 피드백 "dont rewrite for them but guide them"): 전 *"When a student asks you to directly rewrite… This applies to … but not to feedback…"* → 후 *"Guide the student on how to revise the text instead of rewriting it for them. Name the changes to make — tone, clarity, word choice — and give only incomplete stems."*
 
 ### 8. 강제 장치(푸시백 절 · 숫자 상한 · 빈칸 예시) — **2026-08-19 결정·적용: 3줄 → 1줄**
 - **문제였던 것**: 프롬프트가 **모든 변형에** 셋을 강제("pushback 한 줄", "셀 수 있는 상한 하나", "예시는 미완성 `___`"). 사용자는 그런 요구가 있는 줄 몰랐고, JELSON은 빈칸을 빼는 데 한 라운드를 썼다. `analysis.md` §2.1/§6.8이 "모델 습관"이라 한 것은 오기 — 우리 요구였다(2026-08-04에 추가, `RULE_WORKBENCH_V2_PLAN.md` §9).
 - **측정**(12생성×4설정, compliant/partial/violation): 세 줄 **8/4/0** · 미완성-예시 한 줄만 **9/3/0** · 추상 표현 **3/8/1** · 전부 제거 **1/11/0**. JELSON 앵커 3개에서도 한 줄 **15/3/0** vs 세 줄 **8/10/0**.
 - **적용**: 상한·pushback 강제 삭제(모델이 알아서 쓴다), "예시는 눈에 띄게 미완성" 한 줄만 유지. `buildProposeSystemPrompt(scope,{devices})` 기본 `'form'`; `'all'|'goal'|'off'`는 `propose-eval.ts --devices`로 재현.
 
-### 9. rewrite 모드 앵커 누출 방지 — S · 바로
-- **지금**: 7064 v6/v7 *"including a rephrase like 'write the second paragraph,'"* = 앵커 130025 원문. 프롬프트의 "never the anchor-specific content" 위반.
-- **바꾸면**: 프롬프트에 "앵커 문장을 인용하지 말 것" 명시 + 서버에서 앵커 n-gram 검출 시 1회 재생성.
+### 9. rewrite 모드 앵커 누출 방지 — **2026-08-19 적용**
+- **지금이었던 것**: 7064 v6/v7 *"including a rephrase like 'write the second paragraph,'"* = 앵커 130025 원문.
+- **적용**: 프롬프트에 "앵커는 증거일 뿐 — 학생의 표현을 인용·환언하지 말고 그들이 가져온 텍스트나 주제를 지목하지 말 것" + 라우트에서 앵커 n-gram 검출 시 그 변형만 제외(전부 걸리면 전부 통과 — 문체 규칙이 저작을 막아선 안 된다).
+- **결과**: 금지 전 39개 rule 중 1건 인용, 금지 후 0건. 모델에게 대놓고 인용하라고 시켜도 인용하지 않아, **라우트 필터가 실제로 발동하는 것은 관측되지 않았다**(검출기 자체는 파일럿의 실제 유출로 검증).
 
 ## C. 부모 ↔ 자식 rule
 

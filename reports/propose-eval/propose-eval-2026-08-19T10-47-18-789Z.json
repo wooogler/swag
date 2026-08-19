@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130081,
+ "intentId": 7062,
+ "feedback": "dont rewrite for the but guide them in how to rewrite",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Guide instead of rewrite",
+   "rule": "When the user asks you to make writing sound more professional, do not hand back a full polished rewrite. Briefly name the main changes to make, then give 1–3 incomplete replacement phrases or sentence stems with blanks (for example, “However, ___” or “I believe ___”) so the student can finish the revision themselves. Keep it to 2–4 short sentences and never provide a complete paragraph they could paste as-is.",
+   "generations": [
+    {
+     "response": "To make this sound more professional, tighten the wording, avoid conversational phrases like “I think,” and use more precise language such as “routine” or “repetitive” instead of “boring.” You could revise it by emphasizing balance and a clearer stance: “Automation is effective for ___, but it should not replace ___.”  \n\nTry stems like: “While automation can improve ___, it should not be used in areas such as ___.” “Overall, I support the view that ___ because ___.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance and sentence stems with blanks, without providing a finished replacement sentence or paragraph the student could paste in."
+    },
+    {
+     "response": "You could make it sound more professional by using a more formal tone, tightening the structure, and replacing informal phrases like “boring and easy to replace” with more precise language. You might also clarify your stance and use stronger transitions such as **“however”** or **“for example.”**\n\nPossible revision starters:\n- “Automation is beneficial for repetitive, low-skill tasks such as ___, but I believe ___.”\n- “However, when it comes to important areas like education, ___.”\n- “Overall, I agree with the view that ___.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives guidance and sentence stems with blanks, but it does not provide any finished replacement sentence or paragraph that the student could paste directly."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Guide instead of rewrite",
+   "rule": "When the user asks you to rewrite, rephrase, or recast writing to sound more professional or formal, guide the revision instead of producing a finished version. Say the main tone changes to make, then offer a few visibly incomplete sentence stems or partial replacements with blanks, not a submit-ready paragraph. If the user only wants editing advice, feedback, or asks whether anything should change, give that advice without pretending to rewrite.",
+   "generations": [
+    {
+     "response": "To make this sound more professional, I’d suggest:\n\n- **Use more neutral wording** instead of “boring” or “easy to replace”\n- **Avoid casual phrasing** like “lots of automation” and “good thing for humans”\n- **Clarify the argument** by separating your examples from your conclusion\n- **Sound more balanced** by acknowledging both benefits and limits of automation\n\nYou could revise it with sentence stems like these:\n\n- “I believe automation is beneficial for tasks that are ___ and repetitive, such as ___.”\n- “However, I also agree that certain responsibilities should remain ___, particularly in areas such as ___.”\n- “For example, in education, I do not think there should be extensive automation because ___.”\n- “Although AI can support learning, ___.”\n- “Overall, I support the second perspective because automation is generally ___, especially for ___ tasks.”\n\nIf you want, I can also help you make it sound **more academic**, **more concise**, or **more persuasive**.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance and sentence stems with blanks, but no finished replacement paragraph or usable complete rewritten sentence."
+    },
+    {
+     "response": "To make this sound more professional, I’d suggest:\n\n- Using a more neutral tone instead of “boring” and “easy to replace”\n- Replacing informal phrasing like “I agree” and “I think” with more measured language\n- Making the contrast clearer between where automation is helpful and where human involvement matters\n- Tightening repeated ideas\n\nPossible revisions for key parts:\n\n- “automation is good for tasks that are boring and easy to replace” → “automation is particularly effective for repetitive, routine tasks”\n- “such as a cashier or someone that works at the post office” → “such as cashiering or certain administrative duties”\n- “some things shouldn't be taken away” → “some responsibilities should remain human-led”\n- “important things like education” → “areas such as education”\n- “that should remain a human process” → “that should continue to be primarily human-centered”\n- “AI is useful in learning” → “AI can still serve as a valuable support tool in education”\n- “repetitive low skill tasks” → “repetitive, low-skill tasks”\n\nA more professional structure could be:\n\n- “I support automation in ______, particularly when it improves efficiency in ______.”\n- “However, I believe that ______ should remain ______ because ______.”\n- “Overall, I agree with the view that ______, especially in contexts where ______.”\n\nIf you want, I can also help you make it sound:\n1. more academic,  \n2. more formal, or  \n3. more concise.",
+     "verdict": "partial",
+     "span": "AI can still serve as a valuable support tool in education",
+     "reason": "It gives several complete rewritten sentences and phrase-level replacements the student could paste, but not a full replacement paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Guide instead of rewrite",
+   "rule": "For any request to rewrite, rephrase, or recast existing writing, coach the student rather than giving a complete polished rewrite. Preserve the original meaning, point out the key changes needed for a more professional tone, and then provide only a few incomplete fragments or sentence stems with blanks that model the revision, never a full paragraph they could paste as-is. If the user is only asking for feedback, suggested improvements, or whether anything should be changed, respond with advice instead of a rewrite, and keep the reply brief: 2–4 short sentences total.",
+   "generations": [
+    {
+     "response": "A more professional version would use:\n- more neutral wording instead of “boring” and “easy to replace”\n- clearer, more formal transitions\n- a more balanced tone about automation and education\n\nYou could revise it along these lines:\n\n- “I believe automation is well suited to ___ and ___ tasks, such as ___ or ___.”\n- “However, I also agree that ___ should not be fully automated, especially in areas like ___.”\n- “Overall, I support the second perspective because ___, particularly in ___ tasks.”\n\nIf you want, I can also help you make it sound **more academic** or **more concise**.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance and sentence stems with blanks, not finished replacement prose or usable complete sentences."
+    },
+    {
+     "response": "To make it sound more professional, keep the same idea but use more formal wording and a more balanced tone. You could replace informal phrases like “boring and easy to replace” with “repetitive and easily automated,” and “shouldn’t be taken away” with “should remain human-centered.”\n\nTry revising it along these lines:\n- “I believe automation is beneficial for ____ and ____ tasks, such as ____.”\n- “However, I also think that certain areas, particularly ____, should remain ____.”\n- “Overall, I agree with the second perspective because automation can be ____ for ____.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives revision guidance, single-phrase swaps, and sentence templates with blanks; it does not provide any finished replacement sentence or paragraph."
+    }
+   ]
+  }
+ ]
+}

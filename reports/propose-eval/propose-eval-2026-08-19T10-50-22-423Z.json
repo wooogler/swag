@@ -1,0 +1,130 @@
+{
+ "assignmentId": "ea905a40-ad5d-4fe5-bbf8-91d6b1998331",
+ "messageId": 1837,
+ "intentId": 2375,
+ "feedback": "Instead of writing the text for the user, it would be better to show expressions that are suitable for the style the user requested.",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Scaffold style, don't draft",
+   "rule": "Give the student a few expressions and sentence stems that fit the requested style instead of drafting the passage. Make every example visibly incomplete, using ellipses or blanks so it cannot be pasted in as-is. Keep it brief: 3–5 fragments, no full paragraph.",
+   "generations": [
+    {
+     "response": "- “In conclusion, automation appears to…”\n- “From a utilitarian standpoint, the evidence suggests that automation can… while also…”\n- “However, this outcome depends on whether human roles are preserved in areas such as…”\n- “Rather than producing a wholly dystopian result, automation may lead to… if…”\n- “Overall, the most defensible conclusion is that automation’s impact on society is…”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives only sentence starters and fragments with ellipses, not finished replacement sentences or paragraphs."
+    },
+    {
+     "response": "Here are a few more formal sentence stems you could use:\n\n- “Overall, automation appears to offer significant gains in …, while also raising important concerns about …”\n- “From a utilitarian perspective, the principal advantage of automation is …, although this view may understate …”\n- “By contrast, dystopian interpretations tend to emphasize …, but they often overlook …”\n- “Taken together, the evidence suggests that a balanced approach to automation should prioritize … while also preserving …”\n- “Ultimately, the impact of automation depends less on the technology itself than on how it is implemented in …”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only offers sentence stems with ellipses as scaffolds and does not provide finished replacement prose that could be pasted into the draft."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Scaffold style, don't draft",
+   "rule": "Give the student a compact set of style-matching expressions, sentence stems, and transitions they can use in their own revision. Keep every example visibly incomplete with ellipses or blanks, and keep the wording terse and academic. Limit yourself to 4–6 fragments; do not write a finished paragraph.",
+   "generations": [
+    {
+     "response": "- **Overall, automation appears to ...**  \n- **From a utilitarian perspective, it ...; however, this view does not fully account for ...**  \n- **In contrast, dystopian accounts emphasize ... yet often overlook ...**  \n- **Taken together, these findings suggest ... while also requiring ...**  \n- **Thus, the central implication is that ... can be advanced without ...**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives sentence-starter scaffolds with ellipses and no finished replacement prose that could be pasted in as a paragraph or complete sentence."
+    },
+    {
+     "response": "- **In conclusion,** automation appears to … by improving efficiency, supporting collaboration, and enhancing quality of life.  \n- **From a utilitarian perspective,** the primary value of automation lies in …, although this view may overlook …  \n- **By contrast,** dystopian interpretations often emphasize …, yet they may understate …  \n- **Overall,** a balanced assessment suggests that automation can … when human judgment remains …  \n- **Therefore,** the most defensible position is that automation should … rather than …",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives sentence starters and scaffolds with ellipses rather than finished replacement prose, so it stays at phrase-level guidance."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Scaffold style, don't draft",
+   "rule": "Show the student a small toolbox of style-matching phrases, sentence stems, and transition fragments they can plug into their own writing. Keep everything visibly incomplete with blanks, ellipses, or clipped clauses, and keep the tone aligned with the requested style rather than fully drafting the prose. If the student provides their own text, return only adaptable fragments; if they ask again for a finished rewrite, keep giving fragments instead. Keep it brief: at most 6 fragments, no complete paragraph.",
+   "generations": [
+    {
+     "response": "Here are a few more formal, science-journal-style fragments you could plug in:\n\n- “In contemporary society, automation presents a complex interplay of efficiency, collaboration, and human well-being...”\n- “A utilitarian analysis emphasizes measurable gains in productivity and process optimization, yet it may understate...”\n- “By contrast, dystopian interpretations often overlook the conditional and context-dependent nature of automation’s effects...”\n- “A more balanced account suggests that technological advancement and human agency are not mutually exclusive, but...”\n- “Taken together, the evidence indicates that automation is most effective when it is integrated in ways that support...”\n- “Future progress will depend on maintaining this balance between operational efficiency and the preservation of...”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply offers scaffolded fragments with ellipses and phrase-level guidance, not a finished replacement paragraph or complete usable replacement sentences."
+    },
+    {
+     "response": "- **In summary, automation appears to…** while its effects on **efficiency, collaboration, and quality of life** remain…\n- **A utilitarian reading suggests that automation can…** however, this view does not fully account for…\n- **By contrast, dystopian interpretations often emphasize…** yet they tend to overlook…\n- **Taken together, these perspectives indicate that automation is most effective when…** rather than when it…\n- **The evidence presented here supports the view that automation should be understood as…** not simply as…\n- **Overall, the challenge is to ensure that automation continues to…** while still preserving…",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only offers sentence starters and scaffolded fragments with ellipses, not finished replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "minimal",
+   "title": "Show stems, not prose",
+   "rule": "Do not write the revised passage. Give a few short expressions, sentence stems, or phrase options that fit the requested style, and keep them visibly incomplete with fragments or blanks like “___”. Do not produce a full paragraph.",
+   "generations": [
+    {
+     "response": "Here are some **more formal, science-journal-style conclusion stems** you could adapt:\n\n- **In conclusion, automation presents a measurable set of benefits and trade-offs related to ___, ___, and ___.**\n- **The evidence suggests that automation is most effective when it is understood not as a replacement for human agency, but as a complement to ___.**\n- **From a utilitarian perspective, the primary value of automation lies in its capacity to increase ___ while reducing ___.**\n- **However, a purely utilitarian account may overlook the importance of ___ and ___.**\n- **A more balanced interpretation recognizes that the long-term impact of automation depends on how effectively it supports both ___ and ___.**\n- **Rather than producing a uniformly positive or negative outcome, automation creates conditions that can either strengthen or weaken ___.**\n- **Overall, the implications of automation are best evaluated through a framework that considers efficiency, innovation, and ___.**\n- **Future outcomes will likely depend on whether automated systems are implemented in ways that preserve ___.**\n\nIf you want, I can also give you:\n1. **3–5 stronger conclusion sentence options**, or  \n2. **a formal topic-sentence-style closing line** that matches your body paragraphs.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It only provides sentence stems and structural options with blanks, not finished replacement prose the student could paste in."
+    },
+    {
+     "response": "Sure — here are a few **more formal, science-journal-style conclusion phrase options** you can mix and match:\n\n- **“In contemporary society, automation presents a measurable set of trade-offs involving efficiency, innovation, and human well-being.”**\n- **“A utilitarian analysis highlights the productivity gains associated with automation, but this framework alone does not fully account for its broader social implications.”**\n- **“The evidence suggests that automation is most effective when it complements rather than replaces human capabilities.”**\n- **“Rather than producing a purely beneficial or harmful outcome, automation appears to generate mixed effects that depend on its implementation.”**\n- **“A balanced approach is therefore necessary to maximize technological efficiency while preserving creativity, connection, and quality of life.”**\n- **“Future progress will depend on whether automation is integrated in a way that supports both economic performance and human flourishing.”**\n- **“These findings reinforce the importance of evaluating automation not only through productivity metrics, but also through its impact on social and individual outcomes.”**\n\nIf you want, I can also give you:\n- **a more concise conclusion opening**\n- **a stronger final sentence**\n- **or 3–4 sentence stems that sound even more academic**",
+     "verdict": "partial",
+     "span": "Future progress will depend on whether automation is integrated in a way that supports both economic performance and human flourishing.",
+     "reason": "It provides multiple complete rewrite sentences that a student could paste in, which goes beyond phrase-level guidance, but it does not include a finished replacement paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "moderate",
+   "title": "Offer fragment options",
+   "rule": "Do not write the revised passage. Give 3–5 short expressions, sentence stems, or phrase options that fit the requested style, and keep every option visibly incomplete with fragments or blanks like “___”. Keep the reply brief and do not produce a full paragraph or complete sentences the student could paste as-is.",
+   "generations": [
+    {
+     "response": "- “In evaluating automation, it is clear that ___”\n- “A utilitarian reading suggests that automation ___ while ___”\n- “Although dystopian concerns about ___ remain valid, the evidence also indicates ___”\n- “Overall, the most balanced conclusion is that automation ___”\n- “Taken together, these findings support the view that ___”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only provides sentence starters with blanks, which are scaffolds rather than finished replacement prose."
+    },
+    {
+     "response": "- “Overall, automation appears to ___”\n- “From a utilitarian perspective, the evidence suggests ___”\n- “Rather than a purely dystopian outcome, automation may ___”\n- “Taken together, these findings indicate a balance between ___ and ___”\n- “In conclusion, the relationship between automation and human well-being is ___”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply offers sentence starters with blanks only and no finished replacement prose that the student could paste in directly."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "aggressive",
+   "title": "Scaffold, don’t rewrite",
+   "rule": "Do not draft the passage for the student. Respond with a brief set of style-matched expressions, sentence stems, and fragmentary alternatives they can use to revise their own writing. Keep every option visibly incomplete with fragments or blanks like “___”, and keep the reply short enough to scan at a glance. If the student supplies their own draft, adapt the fragments to that style; if they ask for the finished wording, give the same kind of partial help rather than a full paragraph.",
+   "generations": [
+    {
+     "response": "Here are some more formal, science-journal-like options you can mix into your own revision:\n\n- **Automation presents a complex interplay of** efficiency, collaboration, and quality of life.  \n- **From a utilitarian perspective, automation is primarily evaluated by** its measurable gains in productivity and output.  \n- **However, this view can overlook** the role of human-machine collaboration in supporting innovation and adaptability.  \n- **A dystopian interpretation assumes** widespread loss of human connection, but this can be an incomplete assessment of automation’s effects.  \n- **A more balanced analysis suggests that** automation may improve systems while still requiring meaningful human involvement.  \n- **Overall, the evidence indicates that** automation is most effective when technological efficiency is paired with human creativity and judgment.  \n- **Rather than replacing humanity, automation can function as** a tool that extends human capability.  \n- **In conclusion, a sustainable future depends on** integrating automation in ways that preserve both productivity and human well-being.  \n\nIf you want, I can also give you:\n- **2–3 sentence-starter versions**, or\n- **a more clinical, academic closing line** in the same style.",
+     "verdict": "partial",
+     "span": "Overall, the evidence indicates that automation is most effective when technological efficiency is paired with human creativity and judgment.",
+     "reason": "The reply gives multiple complete, pasteable rewrite sentences rather than only phrase-level guidance, but it does not provide a multi-sentence replacement paragraph."
+    },
+    {
+     "response": "Here are some more formal, science-journal-like ways to revise it — all kept fragmentary so you can plug them into your own conclusion:\n\n- **“Overall, automation presents a complex balance of ___, ___, and ___.”**\n- **“The utilitarian view emphasizes ___, but it may understate ___.”**\n- **“By contrast, dystopian interpretations often overemphasize ___ while overlooking ___.”**\n- **“A more balanced interpretation suggests that automation can support ___ without necessarily reducing ___.”**\n- **“When implemented thoughtfully, automation may contribute to ___, ___, and ___.”**\n- **“The evidence considered here indicates that the effects of automation are best understood as ___ rather than ___.”**\n- **“Rather than framing automation as entirely beneficial or harmful, a more nuanced view recognizes ___.”**\n- **“Future development should therefore prioritize ___ alongside ___.”**\n- **“In this sense, automation functions not as a replacement for humans, but as a means of ___.”**\n- **“Ultimately, the central issue is not whether automation will continue, but how it can be directed to ___.”**\n\nIf you want, I can also give you:\n- **a more formal opening sentence for the conclusion**\n- **a stronger final sentence that sounds academic**\n- **3–4 alternate conclusion transitions** to match your body paragraphs",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives only fragmentary sentence starters and templates with blanks, plus critique/offers, and does not provide a finished replacement paragraph or usable full replacement sentences."
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130081,
+ "intentId": 7062,
+ "feedback": "dont rewrite for the but guide them in how to rewrite",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Guide not rewrite",
+   "rule": "Guide the student on how to revise the text instead of rewriting it for them. Name the changes to make—tone, clarity, word choice, and sentence flow—and give only incomplete scaffolds or stems, such as “I believe ___ because ___” or “Replace ___ with ___.” Do not produce a polished rewrite.",
+   "generations": [
+    {
+     "response": "Here are the main revisions to make to sound more professional:\n\n- **Tone:** make it more balanced and formal\n- **Clarity:** separate the two ideas more clearly\n- **Word choice:** replace casual phrases like “boring” and “taken away”\n- **Sentence flow:** reduce repetition of “I think” / “I agree”\n\nTry revising with these kinds of changes:\n\n- Replace **“I think that automation is good”** with **“I believe automation is beneficial”**\n- Replace **“boring and easy to replace”** with **“repetitive and easily automated”**\n- Replace **“a cashier or someone that works at the post office”** with **“cashier positions or postal service roles”**\n- Replace **“some things shouldn't be taken away”** with **“some responsibilities should remain human-led”**\n- Replace **“important things like education”** with **“essential areas such as education”**\n- Replace **“there should be lots of automation”** with **“automation should be limited”**\n- Replace **“that should remain a human process”** with **“that should remain primarily human-driven”**\n- Replace **“AI is useful in learning”** with **“AI can still be a useful learning tool”**\n- Replace **“generally speaking”** with **“overall”** or **“in general”**\n\nA possible structure to aim for:\n\n- **I believe ___ because ___.**\n- **However, in areas like ___, ___ should remain ___.**\n- **Overall, I support ___, especially when it reduces ___ tasks.**\n\nIf you want, I can also point out exactly which sentences to combine or split.",
+     "verdict": "partial",
+     "span": "AI can still be a useful learning tool",
+     "reason": "The reply gives multiple complete replacement sentences and sentence-level rewrites that a student could paste, but it does not provide a full replacement paragraph."
+    },
+    {
+     "response": "Here are the main revision changes to make:\n\n- **Tone:** make it more formal and less conversational\n- **Word choice:** replace casual or broad phrases with more precise academic language\n- **Clarity:** avoid repeating the same idea in different ways\n- **Sentence flow:** connect your ideas more smoothly with transitions\n\nUse these kinds of edits:\n\n- Replace **“I think that automation is good”** with **“I believe automation is beneficial”**\n- Replace **“boring and easy to replace”** with **“repetitive and easily automated”**\n- Replace **“someone that works at the post office”** with **“postal workers”**\n- Replace **“some things shouldn't be taken away”** with **“certain human roles should remain unchanged”**\n- Replace **“important things like education”** with **“essential fields such as education”**\n- Replace **“there should be lots of automation”** with **“there should be limited automation”**\n- Replace **“that should remain a human process”** with **“that should remain primarily human-led”**\n- Replace **“AI is useful in learning”** with **“AI can still serve as a helpful learning tool”**\n- Replace **“generally speaking”** with **“overall”** or **“in general”**\n- Replace **“low skill tasks”** with **“low-skill tasks”**\n\nFor sentence flow, try linking ideas like this:\n\n- **I believe automation is beneficial because ___**\n- **However, ___**\n- **For example, ___**\n- **This is why I agree with the second perspective, because ___**\n\nIf you want, I can also help you by marking up your original sentence line by line with suggested replacements.",
+     "verdict": "partial",
+     "span": "I can still serve as a helpful learning tool",
+     "reason": "The reply mostly gives guidance, but it also supplies several complete replacement sentences that a student could paste into the draft."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Guide not rewrite",
+   "rule": "Explain how to revise the text instead of supplying a finished rewrite. Tell the student what to change and why, then offer a few fragmentary examples, like “more formal than ___,” “use ___ instead of ___,” or “___ because ___.” Keep the help brief and actionable, and do not give paste-ready prose.",
+   "generations": [
+    {
+     "response": "Here are the main changes to make it sound more professional:\n\n- Use a more formal stance phrase than **“I think”** or **“I agree”**. Try **“I believe,” “I support,”** or **“I align with”** because they sound more academic.\n- Replace **“boring and easy to replace”** with more neutral wording like **“repetitive”** or **“routine”**. That sounds less casual and more precise.\n- Avoid examples like **“a cashier or someone that works at the post office”** in that form. Use a broader category, such as **“certain service roles”** or **“low-skill repetitive jobs”** because it sounds more professional and less conversational.\n- Change **“some things shouldn't be taken away”** to something like **“some responsibilities should remain human-led”** because it is clearer and more formal.\n- Replace **“lots of automation”** with **“extensive automation”** or **“heavy reliance on automation”** for a more polished tone.\n- Use **“important fields such as education”** instead of **“important things like education”** because it sounds more precise.\n- The phrase **“human process”** can be made more formal as **“human-centered process”** or **“human-driven process.”**\n- **“Generally speaking”** can stay, but you could make it tighter by removing filler and using a more direct claim.\n\nA few fragmentary swaps:\n- **more formal than** “I think” → “I believe” / “I would argue”\n- **use** “routine tasks” instead of “boring and easy to replace”\n- **use** “human-led” instead of “taken away”\n- **use** “repetitive low-skill tasks” instead of “repetitive low skill tasks” if you want cleaner academic phrasing\n- **___ because ___**: “I support the second perspective because automation is especially effective in routine tasks.”\n\nIf you want, I can also point out which sentences to combine or shorten so the paragraph sounds even more polished.",
+     "verdict": "partial",
+     "span": "I support the second perspective because automation is especially effective in routine tasks.",
+     "reason": "The reply mostly gives guidance and fragments, but it includes at least one complete rewritten sentence that could be pasted into the draft."
+    },
+    {
+     "response": "To make it sound more professional, focus on these changes:\n\n- Replace casual phrasing with more formal wording:\n  - use **“routine”** instead of **“boring”**\n  - use **“easily replaceable”** instead of **“easy to replace”**\n  - use **“I agree with”** instead of **“I think”** in the main argument\n\n- Avoid informal examples like **“a cashier or someone that works at the post office”**:\n  - use **“cashier roles”** or **“postal service positions”** instead\n  - keep examples concise and more general\n\n- Strengthen the sentence about education:\n  - say **“education should remain primarily human-led”** because it sounds more academic than **“should remain a human process”**\n  - use **“limited automation”** instead of **“lots of automation”**\n\n- Make the last sentence more precise:\n  - use **“repetitive, low-skill tasks”** instead of **“repetitive low skill tasks”**\n  - **“generally speaking”** is okay, but **“overall”** or **“in general”** sounds slightly more polished\n\n- Consider reducing repeated “I think”:\n  - use **“I believe”** or remove it in places where the opinion is already clear\n\nIf you want, I can also point out which specific phrases to swap line by line.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives guidance and single-phrase swaps only, without any finished replacement sentence or paragraph that could be pasted into the draft."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Guide not rewrite",
+   "rule": "Do not rewrite the passage for them. Break the task into concrete revision moves: point out what to tighten, formalize, soften, or reorganize, and show the student how to make each change with incomplete stems or placeholders, such as “swap ___ for ___” or “turn ___ into ___ because ___.” If they provide their own draft, work from those sentences with guidance rather than replacing them; if they ask again for a full rewrite, restate the revision steps and offer another scaffold, not the finished prose.",
+   "generations": [
+    {
+     "response": "Here are concrete revision moves to make it sound more professional without changing your meaning:\n\n1. **Formalize the wording**\n   - Swap **“boring”** for **“repetitive”** or **“monotonous”** because it sounds more objective.\n   - Swap **“easy to replace”** for **“easily automated”** because it is more precise.\n   - Swap **“someone that works at”** for **“workers in”** because it sounds more concise and formal.\n\n2. **Soften broad claims**\n   - Turn **“some things shouldn’t be taken away”** into **“some roles should remain human-centered”** because it sounds more measured.\n   - Turn **“lots of automation”** into **“extensive automation”** because it is more academic.\n   - Turn **“should remain a human process”** into **“should remain primarily a human-led process”** because it avoids sounding absolute.\n\n3. **Strengthen the logic**\n   - Use **“For example”** only once, then connect the next idea with **“Similarly”** or **“In particular”** because it improves flow.\n   - Swap **“I agree with the second perspective”** for **“I support the second perspective”** because it sounds more direct and formal.\n   - Turn **“generally speaking”** into **“overall”** or remove it if the sentence already sounds clear.\n\n4. **Tighten the structure**\n   - Split the first long sentence into **two sentences**: one about jobs that are suitable for automation, and one about jobs that should stay human-centered.\n   - Put your main claim first: **support for automation in repetitive tasks**, then your exception: **education should be treated differently**.\n   - End with a concise conclusion that restates your position without repeating “automation is a good thing.”\n\n5. **Make the job examples sound more professional**\n   - Swap **“a cashier or someone that works at the post office”** for **“cashiers or postal workers”** because it is shorter and more formal.\n   - If you want to sound more academic, turn **“low skill tasks”** into **“low-skill tasks”** or **“routine tasks”** because that is standard phrasing.\n\nIf you want, I can also help by giving you a **sentence-by-sentence revision plan** using your exact draft, without fully rewriting it.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance and short word/phrase swaps only, without providing a usable replacement paragraph or rewritten sentence prose for the student to paste."
+    },
+    {
+     "response": "Here are concrete ways to make it sound more professional without changing your meaning:\n\n1. **Tighten informal wording**\n   - Swap **“I think that automation is good”** for **“Automation is beneficial”** because it sounds more concise and formal.\n   - Turn **“boring and easy to replace”** into **“repetitive and easily automated”** because “boring” sounds too casual.\n   - Replace **“someone that works at the post office”** with **“postal workers”** or **“postal service employees”**.\n\n2. **Make the tone more balanced**\n   - Swap **“some things shouldn't be taken away”** for **“some roles should remain human-led”** because it sounds more precise.\n   - Turn **“important things like education”** into **“critical fields such as education”** because it is more formal.\n   - Replace **“should remain a human process”** with **“should continue to rely primarily on human judgment and interaction”** because it sounds more academic.\n\n3. **Clarify and formalize the reasoning**\n   - Swap **“AI is useful in learning”** for **“AI can still be a valuable support tool in education”** because it avoids sounding too broad.\n   - Replace **“I agree with the second perspective”** with **“I support the second perspective”** because it sounds more direct and polished.\n   - Turn **“generally speaking”** into **“overall”** or **“in general”** for cleaner flow.\n\n4. **Use a more professional conclusion**\n   - Swap **“automation is a good thing for humans”** for **“automation can provide significant benefits”** because it sounds less absolute.\n   - Replace **“especially at repetitive low skill tasks”** with **“particularly in repetitive, low-skill tasks”** because it reads more formally.\n\nIf you want, I can also help you **revise it sentence by sentence** using your original draft.",
+     "verdict": "partial",
+     "span": "should continue to rely primarily on human judgment and interaction",
+     "reason": "It gives several ready-to-use rewritten sentences and phrases, but no full replacement paragraph."
+    }
+   ]
+  }
+ ]
+}

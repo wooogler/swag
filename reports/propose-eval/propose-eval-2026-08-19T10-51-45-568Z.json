@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130081,
+ "intentId": 7062,
+ "feedback": "dont rewrite for the but guide them in how to rewrite",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Guide, don't rewrite",
+   "rule": "Act as a revision coach, not a ghostwriter. Tell the writer what to change to make the passage more professional, and show the kind of wording to use with incomplete sentence starters or fragments like 'I believe…', 'However…', or 'Overall…' rather than a full polished rewrite. Keep the reply to one short paragraph or a few bullets, and do not give paste-ready prose.",
+   "generations": [
+    {
+     "response": "To make it sound more professional, shift from casual phrasing to more precise, balanced language: change **“I think that”** to **“I believe”** or **“In my view”**; replace **“boring and easy to replace”** with **“routine or easily automated”**; and use **“positions such as cashier or postal worker”** instead of **“a cashier or someone that works at the post office.”** For the education point, try a starter like **“However, in fields such as education…”** and use **“should remain primarily human-centered”** instead of **“should remain a human process.”** In the final sentence, make the agreement more formal with **“Overall, I agree with the second perspective because…”** and consider **“repetitive, low-skill tasks”** or **“routine tasks that do not require extensive human judgment.”**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance, phrase swaps, and sentence starters, but no finished replacement sentence or paragraph the student could paste directly."
+    },
+    {
+     "response": "- Use more formal phrasing and avoid “I think”/“someone that”; try starters like **“I believe…”**, **“For example…”**, **“However…”**, and **“Overall…”**.  \n- Replace casual or dismissive wording like **“boring and easy to replace”** with **“repetitive, routine tasks”** or **“positions involving repetitive duties.”**  \n- Instead of naming jobs in a blunt way, frame it more neutrally: **“such as cashier roles or postal service positions.”**  \n- Make the education point sound more academic: **“In contrast, education should remain primarily human-centered, although AI can still support learning.”**  \n- For the conclusion, use a clearer, more measured claim: **“Overall, I agree with the second perspective because automation can benefit society, particularly in repetitive, lower-skill tasks.”**",
+     "verdict": "partial",
+     "span": "Overall, I agree with the second perspective because automation can benefit society, particularly in repetitive, lower-skill tasks.",
+     "reason": "It mainly gives revision guidance, but it also provides several complete rewritten sentences that the student could paste directly."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Guide, don't rewrite",
+   "rule": "Act as a revision coach. Break down the draft into the main changes that would improve it, such as tightening tone, swapping informal wording, and smoothing transitions, and show each change with incomplete sentence stems or fragments instead of a finished replacement. Keep the help concise in a short paragraph or a few bullets, and leave the student with a clear path to rewrite it themselves.",
+   "generations": [
+    {
+     "response": "Here are the main changes to make it sound more professional:\n\n- **Soften the opinionated wording**: swap phrases like “I think” and “boring and easy to replace” for more formal, measured wording such as “automation is well suited to…” or “routine, repetitive roles…”\n- **Use more precise terms**: instead of “someone that works at the post office,” try a more general category like “postal work” or “public-facing service roles…”\n- **Refine the education point**: replace “shouldn’t be taken away” with language about preserving “human judgment,” “personal interaction,” or “teacher-led instruction…”\n- **Improve transitions**: connect your ideas more smoothly with phrases like “However,” “For example,” and “Overall…”\n\nA more professional version could be built by aiming for:\n- “Automation is well suited to…”  \n- “routine, repetitive tasks…”  \n- “areas that require human judgment, such as education…”  \n- “Overall, I agree with the second perspective because…”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance, phrase swaps, and sentence stems only; it does not provide a finished replacement paragraph or usable rewritten sentence."
+    },
+    {
+     "response": "Here are the main revisions to make it sound more professional:\n\n- **Soften informal phrasing**: change “I think,” “boring,” and “low skill” to more neutral, academic wording like **“I believe,” “routine,” “entry-level,”** or **“repetitive tasks.”**\n- **Clarify and formalize examples**: instead of “a cashier or someone that works at the post office,” use a more precise phrase like **“positions such as cashiers or postal workers.”**\n- **Strengthen the transition between ideas**: add a smoother contrast between automation in routine work and limits in education, such as **“however,” “by contrast,”** or **“that said.”**\n- **Make the stance more concise and formal**: replace “I agree with the second perspective” with a more direct academic claim like **“I support the second perspective because...”**\n\nA possible rewrite structure could start like: **“Automation is beneficial for routine and easily replaceable tasks…”** then move to **“however, it should be used more cautiously in areas such as education…”** and end with **“overall, I support the view that automation is most effective in repetitive, low-complexity work.”**",
+     "verdict": "partial",
+     "span": "Automation is beneficial for routine and easily replaceable tasks…",
+     "reason": "It gives several usable rewritten sentences and sentence-level replacement text, but not a full finished replacement paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Guide, don't rewrite",
+   "rule": "Act as a revision coach. Read the draft for tone, clarity, and organization, then explain the edits the writer should make and demonstrate them with fragments, sentence starters, or blanks like '___' so the model stays incomplete. Never supply a complete rewritten passage; keep the reply brief and focused on helping the writer produce the revision themselves. If the writer asks again for the rewrite, repeat the guidance with another incomplete model rather than filling in the final wording.",
+   "generations": [
+    {
+     "response": "To make this sound more professional, focus on three things:\n\n- **Use more formal word choice**: replace phrases like “boring,” “someone that works,” and “lots of automation” with more precise language.\n- **Make the position clearer**: state your main argument first, then support it with examples.\n- **Tighten the sentence structure**: break up long sentences and reduce repetition of “I think” and “I agree.”\n\nYou could revise it by using a structure like:\n\n- “Automation is beneficial for ___ and ___ tasks, such as ___.”\n- “However, certain areas should remain primarily human-driven, especially ___.”\n- “For example, in education, ___.”\n- “Overall, I support the second perspective because ___.”\n\nIf you want, I can also help you make it sound **more formal, more persuasive, or more academic**.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance and sentence stems with blanks, but it does not provide any finished replacement prose or usable replacement sentences."
+    },
+    {
+     "response": "To make it sound more professional, focus on these edits:\n\n- Replace casual phrasing like **“I think”** and **“a good thing”** with more formal language such as **“I believe”**, **“I would argue”**, or **“is beneficial.”**\n- Avoid broad, informal job examples like **“a cashier”** and **“someone that works at the post office”**; use more precise wording such as **“routine service positions.”**\n- Tighten the sentence about education so it sounds clearer and more balanced.\n- Reduce repetition of **“automation”** by varying the wording with **“automated systems”** or **“technology.”**\n\nHere are some sentence starters and fragments you could use:\n\n- **I believe automation is most effective in tasks that are repetitive and easily replaced, such as ___**\n- **However, I agree that certain areas should remain primarily human-led, especially ___**\n- **For example, in education, I do not think there should be extensive automation because ___**\n- **Although AI can support learning, the core of education should remain ___**\n- **Overall, I support the view that automation can be beneficial, particularly in ___**\n\nIf you want, I can also help you make it sound **more academic** or **more concise**.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance, phrase swaps, and scaffolded sentence starters with blanks, but no finished replacement prose or usable complete replacement sentences."
+    }
+   ]
+  }
+ ]
+}

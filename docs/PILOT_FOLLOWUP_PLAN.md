@@ -19,12 +19,18 @@
 JELSON 실제 앵커 3개(빈 rule 첫 수정): 한 줄 **15/3/0** vs 세 줄 **8/10/0**.
 → 기본값 = 한 줄. 상한·pushback 강제 삭제(모델이 알아서 쓴다). 재현: `npx tsx scripts/score/propose-eval.ts --devices all|goal|off [--emptyrule]`.
 
-**⑦ 적용 조건 금지 / ⑨ 앵커 인용 금지는 아직 미적용** — W7의 강도 사다리 개편(트리거 범위 → 행동 서술 깊이)과 함께 별도 라운드로. 위 측정은 강제 장치 축만 바꾼 것이다.
+**⑦ 적용 조건 금지 · ⑨ 앵커 인용 금지 (2026-08-19 2차 라운드, 완료)**
+- 강도 사다리를 **트리거 폭 → 행동 서술 깊이**로 교체 + "이미 매치된 요청에만 실행되니 적용 조건을 쓰지 말라" 명시. `buildProposeSystemPrompt(scope,{scoping})` 기본 `'behavior'`, `'trigger'`가 구 텍스트(baseline scope는 항상 trigger — 단일 프롬프트는 적용 조건이 필요하다).
+- **30생성/arm: 준수 25/5/0 vs 구 24/6/0(동률). 조건절로 시작한 rule 12/18 → 0/18, 과제 주제어를 담은 rule 2/18 → 0/18.**
+- **1차 시도는 실패해서 고쳤다**: minimal을 "행동만"으로 두자 canonical **2/2/2**(구 4/2/0) — 금지만 있는 rule은 모델이 대체물로 완성 문장을 고른다. "대신 무엇을"을 모든 등급에 복원 → canonical **10/2/0** vs trigger 7/5/0.
+- ⑨: 프롬프트 한 줄 + 라우트의 `quotesAnchor`(n-gram 길이 = 앵커 단어수, 최대 5; 4단어 미만 앵커는 건너뜀) → 인용한 변형만 제외, 전부 인용이면 전부 통과. 금지 전 39개 rule 중 1건 인용, 금지 후 0건. 실측상 프롬프트만으로 막히므로 **라우트 필터가 실제로 발동하는 것은 관측하지 못했다**(검출기는 파일럿의 실제 유출 사례와 손수 만든 케이스로 검증, 39개 정상 rule에 오탐 0).
+
+**W9d — trail export (2026-08-19, 완료)**: `rerates.csv` 신설 — 재판정 **패스 1개당 1행**(샤드는 합산, 사이에 다른 설정 행위가 없으면 같은 패스), 원인(fold_apply/intent_update_definition/…/rerun), 판정 질문 수, moved_in/out, 결정 hold/dont, **regressed**(직전 패스 대비 무너진 결정 수 — 어떤 이벤트 하나도 갖지 못하는 값). 파일럿(08-17)은 `membership`/`decisions` payload가 생기기 전이라 이동 열이 **빈칸**(0이 아니라 빈칸 — "기록 안 됨"과 "안 움직임"을 구분). WOOK 트레일에서 실제 값 확인(44문항 판정, +19/−3, hold 1). 나머지 §6.9–14(피드백 원문·실제 라우팅·응답·message_text·검토 세트·핀 이유)는 **이미 구현돼 있었다.**
 
 **앱에서 확인한 것**(scratch assignment, 픽스처 purge 완료): 배포 게이트 문구·`Deploy anyway`, type 칩, 부모 저장 시 `Also updated: ZZ Fresh · Changed since: ZZ Parent`(자식/손자 follow, 편집된 자식 보존, 진단이 갈라진 노드에서 가지치기), 저장 버전에 앵커 외 2개 응답 저장(=W2), fold 리뷰의 `Rename to` 체크 → 실제 개명, `rule_save` payload의 `strength: minimal`·`followed`·`diverged`.
 `proposal_dismiss`는 클라이언트 발화와 라우트 화이트리스트·문자열 일치까지 확인(영속화는 study clone에서만 일어나며 clone은 건드리지 않음).
 
-남은 것: ⑦ 적용 조건 금지 + ⑨ 앵커 인용 금지(재측정 포함), W9d(trail export 보강 — 분석 도구).
+계획된 항목은 전부 반영됐다. 남은 판단거리: ⑪ type 경계(v7 근간이라 본 스터디에선 인터뷰 문항으로만), ⑩(a) intent pre-seed는 (c)를 택해 보류.
 
 ---
 
