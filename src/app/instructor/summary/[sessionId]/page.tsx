@@ -4,6 +4,7 @@ import { eq, and, asc, inArray } from 'drizzle-orm';
 import { redirect, notFound } from 'next/navigation';
 import ViewWrapper from './ViewWrapper';
 import { getInstructor, isAdministrator } from '@/lib/auth';
+import { getCurrentStudyParticipant } from '@/lib/study/session';
 
 type PasteSourceArea = 'chat' | 'editor' | 'instruction' | 'external' | 'unknown';
 type PasteTargetArea = 'editor' | 'chat';
@@ -18,6 +19,17 @@ export default async function ViewPage({ params }: PageProps) {
 
   if (!instructor) {
     redirect('/login');
+  }
+
+  // Another student's writing session, end to end. Not their material and not
+  // in the protocol.
+  // A study participant holds an instructor session — that is how the study
+  // signs them in — so every /instructor route is reachable by typing it, and
+  // the ones that are not their workspace have to say no themselves. Removing
+  // the header links only stopped the wandering; this stops the arriving.
+  const studyParticipant = await getCurrentStudyParticipant();
+  if (studyParticipant) {
+    redirect('/study/session');
   }
 
   // Get student session

@@ -69,6 +69,15 @@ interface PageProps {
   searchParams: Promise<{ chatv?: string; view?: string }>;
 }
 
+/**
+ * The browser tab. Every other study screen sets its own title; this one was
+ * the last inheriting the root layout's "SWAG — Student Writing with
+ * Accountable Generative AI", which named the platform the study is built on to
+ * a participant who has no reason to know it — on the screen they sit in front
+ * of for twenty-five minutes.
+ */
+export const metadata = { title: 'Chatbot Studio' };
+
 export default async function ScorePage({ params, searchParams }: PageProps) {
   const { id } = await params;
   const { chatv, view } = await searchParams;

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronLeft, FileText } from 'lucide-react';
 import ReplayClient from './ReplayClient';
 import { getInstructor, isAdministrator } from '@/lib/auth';
+import { getCurrentStudyParticipant } from '@/lib/study/session';
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
@@ -18,6 +19,17 @@ export default async function ReplayPage({ params }: PageProps) {
 
   if (!instructor) {
     redirect('/login');
+  }
+
+  // The keystroke-level replay of a student writing. Same reason as the
+  // summary: not their material, not in the protocol.
+  // A study participant holds an instructor session — that is how the study
+  // signs them in — so every /instructor route is reachable by typing it, and
+  // the ones that are not their workspace have to say no themselves. Removing
+  // the header links only stopped the wandering; this stops the arriving.
+  const studyParticipant = await getCurrentStudyParticipant();
+  if (studyParticipant) {
+    redirect('/study/session');
   }
 
   // Get student session

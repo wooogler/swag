@@ -3,12 +3,26 @@ import BackLink from '@/components/ui/BackLink';
 import DeleteAccountButton from './DeleteAccountButton';
 import { Button } from '@/components/ui/button';
 import { getInstructor } from '@/lib/auth';
+import { getCurrentStudyParticipant } from '@/lib/study/session';
 
 export default async function SettingsPage() {
   const instructor = await getInstructor();
 
   if (!instructor) {
     redirect('/login');
+  }
+
+  // THE DESTRUCTIVE ONE. This page carries Delete account, and
+  // /api/auth/delete-account removes the `instructors` row — which for a
+  // participant IS the participant, taking both clones and the block they are
+  // in the middle of with it.
+  // A study participant holds an instructor session — that is how the study
+  // signs them in — so every /instructor route is reachable by typing it, and
+  // the ones that are not their workspace have to say no themselves. Removing
+  // the header links only stopped the wandering; this stops the arriving.
+  const studyParticipant = await getCurrentStudyParticipant();
+  if (studyParticipant) {
+    redirect('/study/session');
   }
 
   return (
