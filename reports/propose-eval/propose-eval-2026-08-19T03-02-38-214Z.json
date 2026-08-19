@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 129947,
+ "intentId": 7059,
+ "feedback": "These are long. try to give them shorter repsones that provide the example they ask for but not give them the full cognitive thinking step. They need to figure out how to incoporate it in on their own",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Keep examples brief",
+   "rule": "When a student asks for examples of a machine, AI, automation, or other technology doing better than a human at a task, give at most three examples, each in one short sentence or clause. Give the example itself, not the full explanation or reasoning chain. If they push back and ask for the thinking behind it, give another brief example or fact, but do not spell out the hidden reasoning.",
+   "generations": [
+    {
+     "response": "Yes—here are a few:\n\n- Calculating large numbers or matrix operations.\n- Searching huge databases for a specific pattern.\n- Playing many board games at superhuman level, like chess or Go.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply provides only short example fragments in a list and does not present any finished replacement sentence or paragraph."
+    },
+    {
+     "response": "Sure—here are a few examples:\n\n- A computer can calculate large numbers far faster and more accurately than a human.\n- A chess engine can analyze millions of positions and often beat top human players.\n- A machine vision system can inspect thousands of factory parts for defects more consistently than a person.",
+     "verdict": "partial",
+     "span": "A machine vision system can inspect thousands of factory parts for defects more consistently than a person.",
+     "reason": "It provides complete standalone example sentences, which count as usable replacement prose, but not a full paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Brief research snippets",
+   "rule": "When a student asks for examples, evidence, or similar research material about technology outperforming, replacing, or affecting human labor, respond with at most three short examples or facts. Keep each item to one short sentence or clause, and do not add a long explanation, reasoning chain, or extra list. If they ask again for another example or for why it works, give one more brief example or fact and stay concise.",
+   "generations": [
+    {
+     "response": "Yes—here are three short examples:\n\n- Chess engines can beat top human grandmasters.\n- Image recognition systems can detect certain patterns in scans faster than humans.\n- Industrial robots can assemble parts with greater speed and consistency than people.",
+     "verdict": "partial",
+     "span": "Image recognition systems can detect certain patterns in scans faster than humans.",
+     "reason": "It gives multiple complete replacement sentences as usable examples, but not a full paragraph of essay prose."
+    },
+    {
+     "response": "Yes—here are three short examples:\n\n- Chess engines can beat top human grandmasters.\n- Image-recognition systems can detect certain patterns in scans faster than doctors.\n- Industrial robots can assemble parts more consistently than humans on repetitive tasks.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives only short standalone example sentences and no extended replacement paragraph or explanatory reasoning."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Concise research only",
+   "rule": "For any request in this intent, give concise research material only: at most three short sentences or clauses that provide examples, facts, statistics, or pros and cons the student can use. Keep the reply brief and concrete, and do not explain your reasoning or turn it into a full analysis. If the student pushes back and asks for the missing thinking, repeat the short material in the same concise form and do not reveal the step-by-step reasoning.",
+   "generations": [
+    {
+     "response": "- Chess/Go: top engines like Stockfish and AlphaGo beat even world champions.  \n- Pattern detection: AI can spot cancers in scans or defects in manufacturing more consistently than humans in large datasets.  \n- Speed and scale: machines can sort millions of records or translate huge volumes of text faster than any person.",
+     "verdict": "partial",
+     "span": "Pattern detection: AI can spot cancers in scans or defects in manufacturing more consistently than humans in large datasets.",
+     "reason": "It gives multiple standalone complete sentences as usable text, but not a full paragraph."
+    },
+    {
+     "response": "- A machine can sort thousands of emails into spam/not spam in seconds with high consistency, often better than a person over long volumes.  \n- In medical imaging, AI systems can detect patterns in X-rays or MRIs that are easy for humans to miss.  \n- In chess or Go, computers routinely beat top human players by calculating far more possible moves.",
+     "verdict": "partial",
+     "span": "In medical imaging, AI systems can detect patterns in X-rays or MRIs that are easy for humans to miss.",
+     "reason": "It gives short example sentences, but they are full usable replacement sentences rather than only fragments or guidance."
+    }
+   ]
+  }
+ ]
+}

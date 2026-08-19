@@ -39,6 +39,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
+import { logUi } from '@/lib/study/ui-log';
 import type { IntentSummary, ScoreQueryRow } from './IntentBoard';
 import { MaterialSegments } from './materials';
 import { ConversationThread } from './conversation';
@@ -52,7 +53,7 @@ import RuleApplyPreview from './RuleApplyPreview';
 import ProposalPreviewModal, { type ProposalVariant } from './ProposalPreviewModal';
 import { RuleDiff } from './rule-diff';
 
-type RuleSource = 'direct' | 'feedback' | 'rewrite' | 'manual' | 'seed';
+type RuleSource = 'direct' | 'feedback' | 'rewrite' | 'manual' | 'seed' | 'follow';
 
 /** One saved rule version (score_rule_versions) — its own axis, separate from
  * the intent config-version timeline. */
@@ -735,6 +736,20 @@ export default function RuleWorkbench({
   }
 
   /** Generate previews for `ids` under the viewed rule context. */
+  /**
+   * A version this session just produced, whose effect the OTHER open tabs
+   * should be shown without being clicked.
+   *
+   * A rule was only ever tried on its anchor: the pilot wrote four rules, each
+   * checked against one question, and deployed seven seconds after the last —
+   * every one of them live on a set of questions nobody had seen it answer. In
+   * the other condition a save previewed the whole log, and that is where the
+   * participant said it clicked ("across the board, even questions I hadn't
+   * looked at"). Two more, not the whole set: enough to see the rule generalize
+   * or not, without paying for a scope-wide run on every step.
+   */
+  const [spreadFor, setSpreadFor] = useState<number | null>(null);
+
   async function generateUpdated(ids: number[], draftRule: string | null | undefined, gen: number) {
     if (ids.length === 0) return;
     const fresh = () => live() && gen === genRef.current;
@@ -779,6 +794,17 @@ export default function RuleWorkbench({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewed?.versionNo, activeId, viewedCoversActive]);
 
+  // Runs after the two effects above (declaration order): the viewed version
+  // has settled, `updated` was cleared, genRef is current.
+  useEffect(() => {
+    if (spreadFor === null || viewed?.versionNo !== spreadFor) return;
+    setSpreadFor(null);
+    const others = (caseIds ?? []).filter((id) => id !== activeId).slice(0, 2);
+    if (others.length === 0) return;
+    void generateUpdated(others, ruleParamFor(viewed), genRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spreadFor, viewed?.versionNo]);
+
   function selectTab(id: number) {
     setActiveId(id);
     setConvoOpen(false);
@@ -802,7 +828,8 @@ export default function RuleWorkbench({
     name?: string,
     note?: string,
     precomputed?: string,
-    instruction?: string
+    instruction?: string,
+    strength?: string
   ): Promise<{ versionNo: number } | null> {
     if (simulating) return null;
     setSimulating(true);
@@ -828,6 +855,7 @@ export default function RuleWorkbench({
           name,
           note,
           instruction,
+          ...(strength ? { strength } : {}),
           minor: true,
         }),
         signal: signal(),
@@ -837,7 +865,9 @@ export default function RuleWorkbench({
       if (!live() || gen !== genRef.current) return null;
       await loadVersions();
       setViewNo(null); // the new step is the working state
-      return (data.version as { versionNo: number }) ?? null;
+      const created = (data.version as { versionNo: number }) ?? null;
+      if (created) setSpreadFor(created.versionNo);
+      return created;
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError' && live()) setError((e as Error).message);
       return null;
@@ -976,7 +1006,8 @@ export default function RuleWorkbench({
       v.title || undefined,
       v.note || undefined,
       previewText ?? undefined,
-      proposal.instruction || undefined
+      proposal.instruction || undefined,
+      v.strength
     );
     if (created && live()) {
       pushChat({
@@ -1039,6 +1070,12 @@ export default function RuleWorkbench({
     return null;
   };
   const [leavePrompt, setLeavePrompt] = useState(false);
+  /** Set by the last Save: the enclosed sets it moved, and the ones it did not.
+   * Shown once, under the button that did it. */
+  const [carried, setCarried] = useState<{
+    followed: { id: number; title: string }[];
+    diverged: { id: number; title: string }[];
+  } | null>(null);
   // Browser-level leave (reload, tab close): the native confirm, reading fresh.
   const leaveLossRef = useRef(leaveLoss);
   leaveLossRef.current = leaveLoss;
@@ -1073,6 +1110,13 @@ export default function RuleWorkbench({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(typeof data?.message === 'string' ? data.message : 'Save failed.');
       const saved = (data.version as RuleVersion) ?? null;
+      // What the Save carried into the sets inside this one, and what it left
+      // alone because someone had edited it (§3.5 — see followEnclosed).
+      if (live()) {
+        const followed = (data.followed ?? []) as { id: number; title: string }[];
+        const diverged = (data.diverged ?? []) as { id: number; title: string }[];
+        setCarried(followed.length > 0 || diverged.length > 0 ? { followed, diverged } : null);
+      }
       // Persist this session's already-generated previews onto the saved
       // version (store-only, no LLM cost) — the board's per-question version
       // dropdown reads score_rule_version_responses, and without this only the
@@ -1530,6 +1574,26 @@ export default function RuleWorkbench({
                   {monolith ? 'Save rules' : 'Save rule'}
                 </button>
               </div>
+              {/* What the Save just did BEYOND this rule. Sets that never got a
+                  rule of their own answer with this text, so they move with it;
+                  sets someone edited keep their words and are named here so the
+                  change can be carried by hand. One line, after the fact — not
+                  a dialog, because following is the rule and not a choice. */}
+              {carried && (
+                <p className="mt-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  {carried.followed.length > 0 && (
+                    <span title="These sets were still using this rule word for word, so they now use the new one.">
+                      Also updated: {carried.followed.map((c) => c.title).join(', ')}
+                    </span>
+                  )}
+                  {carried.followed.length > 0 && carried.diverged.length > 0 && ' · '}
+                  {carried.diverged.length > 0 && (
+                    <span title="These sets have rules of their own — nothing was changed in them.">
+                      Changed since: {carried.diverged.map((c) => c.title).join(', ')}
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -2185,7 +2249,16 @@ export default function RuleWorkbench({
           row={activeRow}
           busy={simulating}
           onChoose={(v, text) => void chooseVariant(v, text)}
-          onClose={() => !simulating && setProposal(null)}
+          onClose={() => {
+            if (simulating) return;
+            // Closing without picking: the round happened and produced nothing.
+            logUi(assignmentId, 'proposal_dismiss', {
+              intentId: intent.id,
+              mode: proposal.mode,
+              variants: proposal.variants.length,
+            });
+            setProposal(null);
+          }}
         />
       )}
     </div>

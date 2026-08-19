@@ -17,6 +17,9 @@
  *
  *   npx tsx scripts/score/propose-eval.ts [--samples 2] [--gen 1]
  *     [--assignment <id>] [--message <id>] [--intent <id>] [--feedback "..."]
+ *     [--devices form|all|goal|off]  form (default) = production's one line; all = the
+ *                           pre-08-19 three lines; goal = abstract; off = none
+ *     [--emptyrule]     revise from an EMPTY rule (the first-revision case)
  */
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
@@ -95,6 +98,14 @@ async function main() {
   const { buildProposeSystemPrompt, buildProposeUserContent, PROPOSAL_SCHEMA, PROPOSAL_STRENGTHS } =
     await import('@/lib/score/propose-prompt');
 
+  // --devices off: author the rules WITHOUT the three enforcement lines
+  // (substitute+cap, incomplete examples, pushback) to measure what they buy.
+  const devices = (arg('devices') ?? 'form') as 'form' | 'all' | 'goal' | 'off';
+  console.log(`enforcement devices: ${devices}${devices === 'form' ? ' (production)' : ''}`);
+  // Reproduce the FIRST revision of an intent, whose rule was empty at the
+  // time — the case the devices matter most in and the one every JELSON rule
+  // was born from. Without this the harness revises today's saved rule.
+  const emptyRule = process.argv.includes('--emptyrule');
   const assignmentId = arg('assignment') ?? DEFAULTS.assignment;
   const messageId = Number(arg('message') ?? DEFAULTS.message);
   const intentId = Number(arg('intent') ?? DEFAULTS.intent);
@@ -147,7 +158,7 @@ async function main() {
   for (let s = 0; s < samples; s++) {
     const user = buildProposeUserContent({
       definition: intent.definition,
-      currentRule: intent.rule,
+      currentRule: emptyRule ? null : intent.rule,
       anchor: {
         queryText: anchor.queryText,
         prevQueryText: anchor.prevQueryText,
@@ -156,7 +167,7 @@ async function main() {
       currentResponse: anchor.responseText ?? undefined,
       input: { mode: 'feedback', feedback },
     });
-    const raw = await callModel(buildProposeSystemPrompt(), user, scoreModel, 'medium', PROPOSAL_SCHEMA, {
+    const raw = await callModel(buildProposeSystemPrompt('intent', { devices }), user, scoreModel, 'medium', PROPOSAL_SCHEMA, {
       timeoutMs: 90_000,
       maxRetries: 1,
     });

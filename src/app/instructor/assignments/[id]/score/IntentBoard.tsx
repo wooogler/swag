@@ -2959,6 +2959,31 @@ export default function IntentBoard({
                           No intent yet
                         </span>
                       )}
+                      {/* The type's own rule is the ONE rule that answers a
+                          whole type, and the pilot never found it: four roots
+                          went out empty, so every question no set claimed was
+                          answered with no system prompt. Naming the gap on the
+                          section line is what makes it findable — writing it
+                          here is also the only way to state a stance ONCE per
+                          type instead of re-typing it into every set. */}
+                      {!root.rule?.trim() && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const anchor =
+                              sortedRows.find(
+                                (r) =>
+                                  r.queryType === root.type &&
+                                  resolutions.get(r.messageId)?.kind === 'type_default'
+                              ) ?? null;
+                            if (anchor) setRootReviseTarget({ row: anchor, root });
+                          }}
+                          className="shrink-0 text-[10px] text-amber-600 underline-offset-2 hover:underline"
+                          title={`Questions no set here claims get no instructions. Click to write the ${QUERY_TYPE_LABELS[root.type]} rule.`}
+                        >
+                          No default rule
+                        </button>
+                      )}
                       <div className="ml-auto shrink-0">
                         <Badge n={total} />
                       </div>

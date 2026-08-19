@@ -59,9 +59,11 @@ kinds
                  intent_move · intent_reorder · intent_fold · intent_apply
                  intent_update · intent_revert · pins_changed
   corrections    pin_set · pin_retire · pin_remove · pin_remove_all
-  rules          rule_save · rule_apply · rule_revert
+  rules          rule_save · rule_apply · rule_revert · rule_follow (an enclosing
+                 set's Save carried its text onto a set that had not changed it)
   baseline       prompt_save · prompt_deploy · search_run · search_save
   suggestions    suggest_intents · suggest_rewrite_intents · suggest_reasons
+                 proposal_dismiss (a rule proposal closed without taking one)
                  suggest_fold
   folds          suggest_fold (what was OFFERED) · fold_apply (what was
                  APPLIED — pair them to see whether the proposal was edited)

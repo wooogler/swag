@@ -1,0 +1,130 @@
+{
+ "assignmentId": "ea905a40-ad5d-4fe5-bbf8-91d6b1998331",
+ "messageId": 1837,
+ "intentId": 2375,
+ "feedback": "Instead of writing the text for the user, it would be better to show expressions that are suitable for the style the user requested.",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Show style cues",
+   "rule": "When a student asks you to revise a passage for a requested style, do not write the revised passage. Give a few expressions, sentence stems, or word choices that fit the style they named so they can use them in their own draft. Keep it brief and limit yourself to at most 5 suggestions.",
+   "generations": [
+    {
+     "response": "Here are a few more formal, science-journal-style options you can use or adapt:\n\n- “Overall, automation presents measurable gains in efficiency, productivity, and quality of life, but its effects depend on how effectively it is integrated with human judgment and creativity.”\n- “A balanced evaluation suggests that automation is most beneficial when it complements rather than replaces human capabilities.”\n- “While utilitarian arguments emphasize the practical advantages of automation, a broader analysis also recognizes the importance of collaboration, innovation, and social well-being.”\n- “The evidence points to a nuanced outcome: automation can improve systems and outcomes, but its long-term value depends on maintaining meaningful human involvement.”\n- “Rather than viewing automation as either wholly beneficial or inherently harmful, it is more accurate to assess it as a tool whose impact is shaped by its application.”",
+     "verdict": "partial",
+     "span": "Overall, automation presents measurable gains in efficiency, productivity, and quality of life, but its effects depend on how effectively it is integrated with human judgment and creativity.",
+     "reason": "The reply gives multiple complete, paste-ready replacement sentences, but not a finished multi-sentence paragraph."
+    },
+    {
+     "response": "Here are a few more formal, science-journal-like options you can use in your own revision:\n\n- “Taken together, these findings suggest that automation produces its greatest benefits when efficiency gains are balanced with human oversight and collaboration.”\n- “From a utilitarian standpoint, automation is valuable insofar as it increases productivity and improves overall outcomes, but its broader effects depend on how it is implemented.”\n- “Rather than replacing human contribution entirely, automation is most effective when it supports innovation, preserves meaningful work, and enhances quality of life.”\n- “A purely dystopian interpretation overlooks the evidence that automation can coexist with human agency and social well-being under appropriate conditions.”\n- “Ultimately, the impact of automation should be evaluated not only by its technical efficiency, but also by its capacity to promote long-term societal benefit.”",
+     "verdict": "partial",
+     "span": "Rather than replacing human contribution entirely, automation is most effective when it supports innovation, preserves meaningful work, and enhances quality of life.",
+     "reason": "The reply gives multiple full replacement sentences the student could paste in, but not a two-sentence paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Broaden style cues",
+   "rule": "When a student asks to make their writing sound more like a particular style, tone, or voice, do not draft the whole replacement passage. Briefly name the style they want, then give a small set of expressions, sentence stems, or phrasing patterns that fit it and can be inserted into their own work. Cover close rephrasings like “make it sound more X” or “channel X,” and keep the suggestions to at most 5. If they want the rewritten text itself, steer them to style-appropriate expressions instead.",
+   "generations": [
+    {
+     "response": "You’re aiming for a **science-journal style**: formal, restrained, and analytical.\n\nA few phrasing patterns you can use in place of the more literary wording:\n\n1. **“The evidence suggests that…”**  \n2. **“Taken together, these findings indicate…”**  \n3. **“Rather than presenting automation as wholly beneficial or wholly detrimental, this analysis shows…”**  \n4. **“A balanced assessment must account for both the efficiencies gained and the social costs incurred.”**  \n5. **“Overall, automation appears most effective when implemented in ways that preserve human oversight and well-being.”**\n\nIf you want, I can also help you **build a more formal conclusion sentence by sentence** using your existing ideas.",
+     "verdict": "partial",
+     "span": "A balanced assessment must account for both the efficiencies gained and the social costs incurred.",
+     "reason": "It gives multiple complete replacement sentences the student could paste, though not a full paragraph."
+    },
+    {
+     "response": "You want a **science-journal style**: formal, precise, and restrained.\n\nTry these kinds of phrases instead:\n\n1. **“Overall, the evidence suggests that automation…”**\n2. **“This analysis indicates that…”**\n3. **“While automation offers clear gains in efficiency, it also…”**\n4. **“A balanced interpretation shows that…”**\n5. **“Taken together, these findings support the view that…”**\n\nIf you want, I can also help you **swap specific sentences from your conclusion** into a more academic tone without rewriting the whole thing.",
+     "verdict": "partial",
+     "span": "While automation offers clear gains in efficiency, it also…",
+     "reason": "It stays at phrase/sentence-starter level and does not give a finished paragraph, but it does provide multiple complete rewritten sentence options that could be reused directly."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Guide style rewrites",
+   "rule": "For any request to revise, rewrite, or change the style of a passage, do not produce a full polished replacement. Identify the style the student wants and give a compact set of expressions, sentence frames, tone markers, or transition phrases that would fit that style and help them revise their own draft. Keep the reply brief and limit it to at most 5 suggestions. If the request is vague, ask what tone or audience they want; if they ask for the rewritten text itself, refuse that part and offer style-appropriate expressions instead.",
+   "generations": [
+    {
+     "response": "Absolutely — for a more science-journal, formal tone, use wording like:\n\n1. **“This analysis indicates that…”**  \n2. **“From a utilitarian standpoint, automation primarily…”**  \n3. **“However, this interpretation does not fully account for…”**  \n4. **“A balanced assessment suggests that…”**  \n5. **“Overall, the evidence supports the conclusion that…”**\n\nIf you want, I can also give you a **more scientific closing sentence frame** or a **full outline of how to restructure the conclusion** without making it flowery.",
+     "verdict": "partial",
+     "span": "Overall, the evidence supports the conclusion that…",
+     "reason": "The reply gives several complete sentence frames that could be pasted into the draft, but it does not provide a full replacement paragraph."
+    },
+    {
+     "response": "Absolutely — for a **science-journal-like** tone, aim for these kinds of phrases and transitions:\n\n1. **“This analysis suggests that…”**  \n   Use this to sound evidence-based and measured.\n\n2. **“From a utilitarian standpoint, automation appears to…”**  \n   Good for a formal, analytical framing.\n\n3. **“However, this perspective does not fully account for…”**  \n   Helps you introduce a limitation in a neutral academic way.\n\n4. **“A more balanced interpretation indicates that…”**  \n   Useful for sounding objective and nuanced.\n\n5. **“Overall, the evidence supports the conclusion that…”**  \n   Strong for a formal closing without sounding dramatic.\n\nIf you want, I can also help you turn your existing conclusion into a **more scientific-sounding version phrase by phrase** without rewriting the whole thing.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives phrase-level academic wording and transition suggestions, not a finished replacement paragraph or usable rewritten sentence block."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "minimal",
+   "title": "Show style phrases",
+   "rule": "When the student asks you to revise prose to match a specific style or tone, do not write the full revised passage. Give 3–5 style-appropriate expressions, sentence starters, or word swaps they can use instead, plus one brief note about why they fit. Keep the reply under 120 words. If they ask for the whole text, politely say you can help with phrases rather than the full rewrite.",
+   "generations": [
+    {
+     "response": "Here are some more formal, science-journal-style options you can use:\n\n- **“This analysis suggests that automation produces both measurable efficiency gains and important social trade-offs.”**\n- **“A balanced evaluation of automation must consider productivity, innovation, and human well-being together.”**\n- **“Rather than viewing automation as inherently beneficial or harmful, its effects depend on how it is implemented and integrated.”**\n- **“The evidence supports a nuanced perspective in which automation can improve outcomes without eliminating the importance of human contribution.”**\n\nThese choices sound more analytical, restrained, and objective.",
+     "verdict": "partial",
+     "span": "The evidence supports a nuanced perspective in which automation can improve outcomes without eliminating the importance of human contribution.",
+     "reason": "It provides several complete rewritten sentences the student could paste in, but not a full replacement paragraph."
+    },
+    {
+     "response": "Here are some science-journal-style swaps you can use:\n\n- “In contemporary society, automation presents a multifaceted impact on efficiency, collaboration, and well-being.”\n- “A utilitarian framework emphasizes gains in productivity and process optimization, but may understate the role of human-machine collaboration in innovation.”\n- “By contrast, dystopian accounts often overstate the risks of social disconnection while overlooking more balanced outcomes.”\n- “A more measured perspective suggests that automation is most effective when it complements, rather than replaces, human capabilities.”\n- “Overall, the evidence supports a nuanced coexistence between technological advancement and human agency.”\n\nThese keep the tone formal, analytical, and less figurative.",
+     "verdict": "partial",
+     "span": "A more measured perspective suggests that automation is most effective when it complements, rather than replaces, human capabilities.",
+     "reason": "The reply gives several complete replacement sentences the student could paste into a draft, rather than only phrase-level guidance."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "moderate",
+   "title": "Coach, don't ghostwrite",
+   "rule": "When a student asks you to make writing sound more formal, scientific, academic, concise, playful, or similar, answer with style-suitable expressions, sentence frames, and replacement words instead of a full rewrite. Keep the suggestions tied to the requested tone, add a brief note on how they fit, and keep the reply under 150 words with no more than 6 examples. If the user wants the whole passage written out, briefly decline and offer phrasing help instead.",
+   "generations": [
+    {
+     "response": "Absolutely — for a more science-journal tone, try these kinds of revisions:\n\n- **“Automation presents a complex relationship between efficiency, collaboration, and human well-being.”**\n- **“From a utilitarian perspective, automation increases productivity and operational efficiency.”**\n- **“However, this view does not fully account for the role of human-machine collaboration in innovation.”**\n- **“Dystopian interpretations often overstate the loss of human connection and understate potential benefits.”**\n- **“A balanced approach suggests that automation is most effective when it complements rather than replaces human labor.”**\n- **“Overall, automation should be evaluated not only by its economic output but also by its effects on creativity and quality of life.”**\n\nThese keep the tone formal, objective, and analytical, which fits a scientific/journal-style conclusion. If you want, I can also help you turn your full conclusion into a more academic version.",
+     "verdict": "partial",
+     "span": "Overall, automation should be evaluated not only by its economic output but also by its effects on creativity and quality of life.",
+     "reason": "It provides several full rewritten sentences that could be pasted into the draft, but not a multi-sentence replacement paragraph."
+    },
+    {
+     "response": "Absolutely — here are some **more formal, science-journal-like alternatives** you can use to replace the more whimsical phrasing:\n\n- **“Automation presents a multifaceted impact on modern society, shaping efficiency, collaboration, and quality of life.”**  \n  *Formal opening that sounds analytical and restrained.*\n\n- **“While utilitarian perspectives emphasize productivity gains, they do not fully account for the role of human-machine collaboration in fostering innovation.”**  \n  *Good for a balanced, academic contrast.*\n\n- **“Dystopian interpretations often overstate the social costs of automation by overlooking its potential to support meaningful human interaction and improved living standards.”**  \n  *Keeps the argument critical but measured.*\n\n- **“A more effective approach is to recognize automation as a tool whose outcomes depend on how it is implemented and integrated into society.”**  \n  *Scientific, objective framing.*\n\n- **“Overall, automation is most beneficial when efficiency is paired with human-centered design and creative collaboration.”**  \n  *Concise and conclusion-friendly.*\n\nIf you want, I can also help you **swap the whole conclusion paragraph piece by piece** while keeping your original ideas.",
+     "verdict": "partial",
+     "span": "Automation presents a multifaceted impact on modern society, shaping efficiency, collaboration, and quality of life.",
+     "reason": "The reply gives several complete rewritten sentences that a student could paste in as replacement text, but it does not provide a full multi-sentence paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "aggressive",
+   "title": "Coach, not ghostwrite",
+   "rule": "Act as a revision coach, not a ghostwriter. For requests to change tone, voice, register, audience, or style, identify the requested style and give a short set of phrases, sentence frames, transition options, and word choices that match it. Do not draft the finished paragraph or essay; show usable building blocks the student can assemble. If the request is vague, give a few plausible options or ask one quick clarifying question. Keep the reply short, usually 3–6 items and under 150 words. If the student asks for the whole text, politely say you can help with style-appropriate expressions instead.",
+   "generations": [
+    {
+     "response": "Here are **science-journal-style building blocks** you can use to make it more formal and restrained:\n\n- **Opening frame:**  \n  *In contemporary society, automation presents a multifaceted set of outcomes, particularly in relation to efficiency, collaboration, and quality of life.*\n\n- **Compare the views:**  \n  *A utilitarian framework emphasizes productivity gains and operational efficiency, but it may understate the role of human-machine collaboration in supporting innovation.*  \n  *By contrast, dystopian interpretations often overstate the disruptive potential of automation while neglecting its measurable social benefits.*\n\n- **Balanced takeaway:**  \n  *A more balanced assessment suggests that automation is most effective when it complements rather than replaces human agency.*\n\n- **Closing sentence options:**  \n  *Overall, the long-term value of automation depends on how well technological progress is aligned with human needs, creativity, and social well-being.*  \n  *Future developments should therefore prioritize both efficiency and the preservation of meaningful human contribution.*\n\nIf you want, I can also give you **3 stronger science-journal-style closing sentence options** to choose from.",
+     "verdict": "partial",
+     "span": "A more balanced assessment suggests that automation is most effective when it complements rather than replaces human agency.",
+     "reason": "It gives several complete rewrite sentences as paste-ready options, but not a full replacement paragraph."
+    },
+    {
+     "response": "Got it — you want a **more formal, restrained, science-journal-like conclusion**. Here are building blocks you can use:\n\n- **Opening frames:**  \n  - “In summary, automation presents both measurable advantages and important social considerations.”  \n  - “Overall, the evidence suggests that automation has significant potential to improve…”  \n\n- **Comparison phrases:**  \n  - “From a utilitarian perspective…”  \n  - “By contrast, dystopian interpretations tend to overlook…”  \n  - “A more balanced analysis indicates…”  \n\n- **Serious transition words:**  \n  - “therefore,” “however,” “consequently,” “in contrast,” “moreover,” “thus”\n\n- **Conclusion-style wording:**  \n  - “enhance productivity and quality of life”  \n  - “support human collaboration and innovation”  \n  - “preserve meaningful human involvement”  \n  - “balance efficiency with social well-being”\n\n- **Closing frames:**  \n  - “Future development should prioritize both efficiency and ethical responsibility.”  \n  - “The challenge is not whether to adopt automation, but how to integrate it responsibly.”",
+     "verdict": "partial",
+     "span": "The challenge is not whether to adopt automation, but how to integrate it responsibly.",
+     "reason": "It mostly gives phrase-level frames, but it also includes complete rewrite-ready sentences that a student could paste as replacement prose."
+    }
+   ]
+  }
+ ]
+}

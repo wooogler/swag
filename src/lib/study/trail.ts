@@ -520,7 +520,10 @@ export async function buildParticipantTrail(
     raw.push({
       at: iso(r.createdAt)!,
       source: 'rule',
-      kind: 'rule_save',
+      // A 'follow' row is not something the participant did here — a Save on
+      // the enclosing set carried this text down. Own kind, so the trail does
+      // not read as N rules written in the same second.
+      kind: r.source === 'follow' ? 'rule_follow' : 'rule_save',
       intentId: r.intentId,
       messageId: r.anchorMessageId ?? null,
       detail: `v${r.versionNo} · ${r.source}${r.minor ? ' · minor' : ''} · ${(r.rule ?? '').length} chars`,
@@ -991,6 +994,8 @@ function describeEvent(kind: string, p: Record<string, unknown>): string | null 
       return typeof p.mode === 'string' ? String(p.mode) : null;
     case 'rule_open':
       return typeof p.target === 'string' ? String(p.target) : null;
+    case 'proposal_dismiss':
+      return typeof p.mode === 'string' ? `${p.mode} · none taken` : 'none taken';
     case 'deploy':
       return typeof p.intents === 'number'
         ? `v${p.versionNo} · ${p.intentsWithRule}/${p.intents} intent rule(s) · ${p.typeRootsWithRule}/${p.typeRoots} type rule(s)`

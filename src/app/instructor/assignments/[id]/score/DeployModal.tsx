@@ -124,6 +124,18 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
 
   const selected = status?.live.intents.find((i) => i.id === selectedId) ?? null;
 
+  /**
+   * What deploying would send students with NO system prompt at all. v7 has no
+   * base-prompt fallback: an intent or type root whose rule is empty answers
+   * its questions as a bare chatbot. The pilot deployed 7 such holders seven
+   * seconds after the last save and half the test questions came back
+   * unguided — the modal listed them, but nothing made the reader stop.
+   */
+  const ruleless = [
+    ...(status?.live.intents ?? []).filter((i) => !i.rule?.trim()).map((i) => i.title),
+    ...(status?.live.typeRules ?? []).filter((t) => !t.rule?.trim()).map((t) => `${t.label} default`),
+  ];
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-50">
       <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
@@ -341,6 +353,19 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
                 <AlertTriangle className="w-3.5 h-3.5" /> {error}
               </p>
             )}
+            {ruleless.length > 0 && (
+              <p
+                className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-500"
+                title={`No rule: ${ruleless.join(', ')}`}
+              >
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">
+                  {ruleless.length} without a rule — those questions get no instructions:{' '}
+                  {ruleless.slice(0, 2).join(', ')}
+                  {ruleless.length > 2 ? `, +${ruleless.length - 2}` : ''}
+                </span>
+              </p>
+            )}
             <div className="flex items-center gap-2">
               <input
                 value={name}
@@ -360,7 +385,8 @@ export default function DeployModal({ open, onClose, assignmentId, onDeployed }:
                 }
               >
                 {deploying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />}
-                Deploy{status?.latest ? ` → chat v${status.latest.versionNo + 1}` : ' → chat v1'}
+                Deploy{ruleless.length > 0 ? ' anyway' : ''}
+                {status?.latest ? ` → chat v${status.latest.versionNo + 1}` : ' → chat v1'}
               </button>
             </div>
             <p className="text-[10px] text-[hsl(var(--muted-foreground))]">

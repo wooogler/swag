@@ -1,0 +1,349 @@
+seq,at,t_block,block,condition,phase,source,kind,intent_id,intent_title,message_id,detail
+1,2026-08-17T17:16:16.670Z,,,,block1_work,session,phase_advance,,,,not_started → block1_work
+2,2026-08-17T17:17:25.097Z,68,1,baseline,block1_work,event,suggest_intents,,,129458,3 offered
+3,2026-08-17T17:18:15.813Z,119,1,baseline,block1_work,event,search_run,,,,
+4,2026-08-17T17:18:41.218Z,145,1,baseline,block1_work,rule,rule_save,6987,Rules document,129458,v2 · direct · minor · 449 chars
+5,2026-08-17T17:19:30.041Z,193,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+6,2026-08-17T17:19:51.093Z,214,1,baseline,block1_work,rule,rule_save,6987,Rules document,129458,v3 · feedback · minor · 660 chars
+7,2026-08-17T17:20:24.064Z,247,1,baseline,block1_work,rule,rule_save,6987,Rules document,129458,v4 · feedback · 660 chars
+8,2026-08-17T17:20:28.195Z,252,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+9,2026-08-17T17:20:36.876Z,260,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+10,2026-08-17T17:20:44.761Z,268,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+11,2026-08-17T17:20:51.942Z,275,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+12,2026-08-17T17:20:58.081Z,281,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+13,2026-08-17T17:21:04.496Z,288,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+14,2026-08-17T17:21:13.346Z,297,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+15,2026-08-17T17:21:18.835Z,302,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+16,2026-08-17T17:21:27.670Z,311,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 6 question(s)
+17,2026-08-17T17:21:36.268Z,320,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v4 on 5 question(s)
+18,2026-08-17T17:22:06.641Z,350,1,baseline,block1_work,event,suggest_rewrite_intents,6987,Rules document,129434,4 offered
+19,2026-08-17T17:23:09.044Z,412,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+20,2026-08-17T17:23:28.839Z,432,1,baseline,block1_work,rule,rule_save,6987,Rules document,129434,v5 · rewrite · minor · 853 chars
+21,2026-08-17T17:24:30.541Z,494,1,baseline,block1_work,event,suggest_rewrite_intents,6987,Rules document,129428,3 offered
+22,2026-08-17T17:25:04.675Z,528,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+23,2026-08-17T17:25:21.638Z,545,1,baseline,block1_work,rule,rule_save,6987,Rules document,129428,v6 · rewrite · minor · 1016 chars
+24,2026-08-17T17:25:24.577Z,548,1,baseline,block1_work,rule,rule_save,6987,Rules document,129428,v7 · rewrite · 1016 chars
+25,2026-08-17T17:25:28.352Z,552,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+26,2026-08-17T17:25:32.941Z,556,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+27,2026-08-17T17:25:36.092Z,559,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+28,2026-08-17T17:25:39.874Z,563,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+29,2026-08-17T17:25:42.504Z,566,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+30,2026-08-17T17:25:49.754Z,573,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+31,2026-08-17T17:25:53.821Z,577,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+32,2026-08-17T17:25:57.793Z,581,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+33,2026-08-17T17:26:01.762Z,585,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 6 question(s)
+34,2026-08-17T17:26:05.535Z,589,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v7 on 5 question(s)
+35,2026-08-17T17:30:10.673Z,834,1,baseline,block1_work,event,suggest_rewrite_intents,6987,Rules document,129484,4 offered
+36,2026-08-17T17:30:34.136Z,857,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+37,2026-08-17T17:30:58.092Z,881,1,baseline,block1_work,rule,rule_save,6987,Rules document,129484,v8 · rewrite · minor · 892 chars
+38,2026-08-17T17:32:07.205Z,951,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+39,2026-08-17T17:32:30.742Z,974,1,baseline,block1_work,rule,rule_save,6987,Rules document,129484,v9 · feedback · minor · 883 chars
+40,2026-08-17T17:32:32.946Z,976,1,baseline,block1_work,rule,rule_save,6987,Rules document,129484,v10 · feedback · 883 chars
+41,2026-08-17T17:32:37.676Z,981,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+42,2026-08-17T17:32:40.813Z,984,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+43,2026-08-17T17:32:44.954Z,988,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+44,2026-08-17T17:32:47.755Z,991,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+45,2026-08-17T17:32:50.489Z,994,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+46,2026-08-17T17:32:53.523Z,997,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+47,2026-08-17T17:32:58.326Z,1002,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+48,2026-08-17T17:33:01.399Z,1005,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+49,2026-08-17T17:33:05.132Z,1008,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 6 question(s)
+50,2026-08-17T17:33:08.055Z,1011,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v10 on 5 question(s)
+51,2026-08-17T17:33:28.523Z,1032,1,baseline,block1_work,event,suggest_rewrite_intents,6987,Rules document,129516,3 offered
+52,2026-08-17T17:33:55.985Z,1059,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+53,2026-08-17T17:34:22.130Z,1085,1,baseline,block1_work,rule,rule_save,6987,Rules document,129516,v11 · rewrite · minor · 1134 chars
+54,2026-08-17T17:35:00.640Z,1124,1,baseline,block1_work,event,suggest_rewrite_intents,6987,Rules document,129516,4 offered
+55,2026-08-17T17:35:30.474Z,1154,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+56,2026-08-17T17:35:39.148Z,1162,1,baseline,block1_work,rule,rule_save,6987,Rules document,129516,v12 · rewrite · minor · 1108 chars
+57,2026-08-17T17:36:05.626Z,1189,1,baseline,block1_work,rule,rule_save,6987,Rules document,129516,v13 · direct · minor · 1112 chars
+58,2026-08-17T17:36:14.075Z,1197,1,baseline,block1_work,rule,rule_save,6987,Rules document,129516,v14 · direct · 1112 chars
+59,2026-08-17T17:36:16.641Z,1200,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+60,2026-08-17T17:36:18.863Z,1202,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+61,2026-08-17T17:36:22.600Z,1206,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+62,2026-08-17T17:36:26.244Z,1210,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+63,2026-08-17T17:36:28.418Z,1212,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+64,2026-08-17T17:36:30.736Z,1214,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+65,2026-08-17T17:36:34.627Z,1218,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+66,2026-08-17T17:36:37.333Z,1221,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+67,2026-08-17T17:36:40.166Z,1223,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 6 question(s)
+68,2026-08-17T17:36:42.746Z,1226,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v14 on 5 question(s)
+69,2026-08-17T17:38:02.894Z,1306,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+70,2026-08-17T17:38:18.073Z,1321,1,baseline,block1_work,rule,rule_save,6987,Rules document,129438,v15 · feedback · minor · 1328 chars
+71,2026-08-17T17:38:34.347Z,1338,1,baseline,block1_work,event,suggest_rewrite_intents,6987,Rules document,129438,3 offered
+72,2026-08-17T17:39:00.350Z,1364,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+73,2026-08-17T17:39:17.495Z,1381,1,baseline,block1_work,rule,rule_save,6987,Rules document,129438,v16 · rewrite · minor · 1487 chars
+74,2026-08-17T17:39:20.434Z,1384,1,baseline,block1_work,rule,rule_save,6987,Rules document,129438,v17 · rewrite · 1487 chars
+75,2026-08-17T17:39:22.514Z,1386,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+76,2026-08-17T17:39:25.400Z,1389,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+77,2026-08-17T17:39:28.784Z,1392,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+78,2026-08-17T17:39:31.672Z,1395,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+79,2026-08-17T17:39:34.292Z,1398,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+80,2026-08-17T17:39:37.864Z,1401,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+81,2026-08-17T17:39:40.624Z,1404,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+82,2026-08-17T17:39:42.754Z,1406,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+83,2026-08-17T17:39:45.574Z,1409,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 6 question(s)
+84,2026-08-17T17:39:49.197Z,1413,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v17 on 5 question(s)
+85,2026-08-17T17:41:00.646Z,1484,1,baseline,block1_work,event,revise_submit,6987,Rules document,,
+86,2026-08-17T17:41:24.472Z,1508,1,baseline,block1_work,rule,rule_save,6987,Rules document,129444,v18 · feedback · minor · 1774 chars
+87,2026-08-17T17:41:31.980Z,1515,1,baseline,block1_work,rule,rule_save,6987,Rules document,129444,v19 · feedback · 1774 chars
+88,2026-08-17T17:41:34.516Z,1518,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+89,2026-08-17T17:41:38.068Z,1521,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+90,2026-08-17T17:41:40.608Z,1524,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+91,2026-08-17T17:41:43.489Z,1527,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+92,2026-08-17T17:41:45.585Z,1529,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+93,2026-08-17T17:41:48.385Z,1532,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+94,2026-08-17T17:41:51.740Z,1535,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+95,2026-08-17T17:41:54.021Z,1537,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+96,2026-08-17T17:41:57.095Z,1540,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 6 question(s)
+97,2026-08-17T17:42:00.079Z,1543,1,baseline,block1_work,event,rule_apply,6987,Rules document,,v19 on 5 question(s)
+98,2026-08-17T17:44:10.063Z,1673,1,baseline,block1_work,prompt,prompt_deploy,,,,v1
+99,2026-08-17T17:44:17.228Z,,,,block1_test,session,phase_advance,,,,block1_work → block1_test
+100,2026-08-17T17:46:17.786Z,1801,1,baseline,block1_test,test,test_predict,,,,q2 · yes · pointed span
+101,2026-08-17T17:47:11.128Z,1854,1,baseline,block1_test,test,test_predict,,,,q5 · yes · pointed span
+102,2026-08-17T17:47:37.799Z,1881,1,baseline,block1_test,test,test_predict,,,,q6 · yes · pointed span
+103,2026-08-17T17:48:12.631Z,1916,1,baseline,block1_test,test,test_predict,,,,q4 · yes · pointed span
+104,2026-08-17T17:48:35.567Z,1939,1,baseline,block1_test,test,test_predict,,,,q3 · yes · pointed span
+105,2026-08-17T17:48:54.811Z,1958,1,baseline,block1_test,test,test_predict,,,,q1 · yes · pointed span
+106,2026-08-17T17:49:47.060Z,2010,1,baseline,block1_test,test,test_predict,,,,q7 · yes · pointed span
+107,2026-08-17T17:50:11.748Z,2035,1,baseline,block1_test,test,test_predict,,,,q0 · yes · pointed span
+108,2026-08-17T17:50:31.283Z,2055,1,baseline,block1_test,test,test_rate,,,,q2 · 5/5
+109,2026-08-17T17:51:11.165Z,2094,1,baseline,block1_test,test,test_rate,,,,q5 · 1/5 · what’s off · probed
+110,2026-08-17T17:51:54.626Z,2138,1,baseline,block1_test,test,test_rate,,,,q6 · 5/5
+111,2026-08-17T17:52:05.204Z,2149,1,baseline,block1_test,test,test_rate,,,,q4 · 4/5
+112,2026-08-17T17:52:12.236Z,2156,1,baseline,block1_test,test,test_rate,,,,q3 · 5/5
+113,2026-08-17T17:52:30.999Z,2174,1,baseline,block1_test,test,test_rate,,,,q1 · 2/5 · what’s off · probed
+114,2026-08-17T17:53:27.215Z,2231,1,baseline,block1_test,test,test_rate,,,,q7 · 5/5
+115,2026-08-17T17:53:39.120Z,2242,1,baseline,block1_test,test,test_rate,,,,q0 · 3/5 · what’s off · probed
+116,2026-08-17T17:54:13.122Z,,,,block1_survey,session,phase_advance,,,,block1_test → block1_survey
+117,2026-08-17T17:54:39.141Z,2302,1,baseline,block1_survey,survey,survey_answer,,,,control_future = 5
+118,2026-08-17T17:54:39.141Z,2302,1,baseline,block1_survey,survey,survey_answer,,,,control_achieve = 5
+119,2026-08-17T17:54:39.141Z,2302,1,baseline,block1_survey,survey,survey_answer,,,,load_mental = 6
+120,2026-08-17T17:54:39.141Z,2302,1,baseline,block1_survey,survey,survey_answer,,,,load_frustration = 3
+121,2026-08-17T17:54:39.141Z,2302,1,baseline,block1_survey,survey,survey_answer,,,,trust_future = 6
+122,2026-08-17T17:54:43.718Z,,,,break,session,phase_advance,,,,block1_survey → break
+123,2026-08-17T18:01:23.135Z,,,,block2_work,session,phase_advance,,,,break → block2_work
+124,2026-08-17T18:01:51.439Z,28,2,score,block2_work,event,suggest_intents,,,129947,3 offered
+125,2026-08-17T18:01:55.117Z,32,2,score,block2_work,event,intent_draft,7059,Generate Task Examples,,
+126,2026-08-17T18:01:59.105Z,36,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+127,2026-08-17T18:02:04.696Z,42,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+128,2026-08-17T18:02:05.335Z,42,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130027,3 offered
+129,2026-08-17T18:02:07.047Z,44,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+130,2026-08-17T18:02:10.510Z,47,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130027,in · with reason
+131,2026-08-17T18:02:29.413Z,66,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,1 correction(s) → 1 candidate(s)
+132,2026-08-17T18:02:31.306Z,68,2,score,block2_work,snapshot,config_seed,,,,v1 4 entries at block start
+133,2026-08-17T18:02:35.078Z,72,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+134,2026-08-17T18:02:40.335Z,77,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+135,2026-08-17T18:02:41.508Z,78,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+136,2026-08-17T18:02:44.779Z,82,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129889,3 offered
+137,2026-08-17T18:03:06.589Z,103,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129889,in · with reason
+138,2026-08-17T18:03:25.692Z,123,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,1 correction(s) → 1 candidate(s)
+139,2026-08-17T18:03:27.731Z,125,2,score,block2_work,snapshot,intent_apply,7059,Generate Task Examples,,v2 definition from 1 correction
+140,2026-08-17T18:03:32.335Z,129,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+141,2026-08-17T18:03:37.677Z,135,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+142,2026-08-17T18:03:38.453Z,135,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+143,2026-08-17T18:03:48.429Z,145,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129977,3 offered
+144,2026-08-17T18:03:49.922Z,147,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129977,in · with reason
+145,2026-08-17T18:03:59.405Z,156,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130051,3 offered
+146,2026-08-17T18:04:08.929Z,166,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130051,in · with reason
+147,2026-08-17T18:04:16.235Z,173,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130101,3 offered
+148,2026-08-17T18:04:19.623Z,176,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130101,in · with reason
+149,2026-08-17T18:04:38.355Z,195,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,3 correction(s) → 1 candidate(s)
+150,2026-08-17T18:04:40.177Z,197,2,score,block2_work,snapshot,intent_apply,7059,Generate Task Examples,,v3 definition from 3 corrections
+151,2026-08-17T18:04:44.079Z,201,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+152,2026-08-17T18:04:49.385Z,206,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+153,2026-08-17T18:04:50.369Z,207,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+154,2026-08-17T18:04:52.298Z,209,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130107,3 offered
+155,2026-08-17T18:04:53.632Z,210,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130107,in · with reason
+156,2026-08-17T18:05:11.966Z,229,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,1 correction(s) → 1 candidate(s)
+157,2026-08-17T18:05:13.668Z,231,2,score,block2_work,snapshot,intent_apply,7059,Generate Task Examples,,v4 definition from 1 correction
+158,2026-08-17T18:05:17.487Z,234,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+159,2026-08-17T18:05:22.678Z,240,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129893,3 offered
+160,2026-08-17T18:05:23.320Z,240,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+161,2026-08-17T18:05:23.971Z,241,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+162,2026-08-17T18:05:24.461Z,241,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129893,out · with reason
+163,2026-08-17T18:05:33.639Z,251,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129941,3 offered
+164,2026-08-17T18:05:35.245Z,252,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129941,out · with reason
+165,2026-08-17T18:06:08.276Z,285,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,2 correction(s) → 1 candidate(s)
+166,2026-08-17T18:06:10.826Z,288,2,score,block2_work,snapshot,intent_apply,7059,Generate Task Examples,,v5 definition from 2 corrections
+167,2026-08-17T18:06:14.703Z,292,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+168,2026-08-17T18:06:20.786Z,298,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+169,2026-08-17T18:06:21.213Z,298,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+170,2026-08-17T18:06:23.508Z,300,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129891,3 offered
+171,2026-08-17T18:06:26.931Z,304,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129891,out · with reason
+172,2026-08-17T18:06:58.653Z,336,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,1 correction(s) → 1 candidate(s)
+173,2026-08-17T18:07:00.750Z,338,2,score,block2_work,snapshot,intent_apply,7059,Generate Task Examples,,v6 definition from 1 correction
+174,2026-08-17T18:07:05.366Z,342,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+175,2026-08-17T18:07:10.550Z,347,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+176,2026-08-17T18:07:10.726Z,348,2,score,block2_work,snapshot,intent_create,7059,Generate Task Examples,,v7 “Generate Task Examples” · activated+definition+title
+177,2026-08-17T18:07:10.951Z,348,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+178,2026-08-17T18:07:39.415Z,376,2,score,block2_work,event,suggest_intents,,,129986,3 offered
+179,2026-08-17T18:07:42.844Z,380,2,score,block2_work,event,intent_draft,7060,Interpret Assignment Requirements,,
+180,2026-08-17T18:07:45.887Z,383,2,score,block2_work,event,rating_run,7060,Interpret Assignment Requirements,,15 question(s)
+181,2026-08-17T18:07:49.818Z,387,2,score,block2_work,snapshot,intent_create,7060,Interpret Assignment Requirements,,v8 “Interpret Assignment Requirements” · activated+definition+title
+182,2026-08-17T18:07:51.785Z,389,2,score,block2_work,event,rating_run,7060,Interpret Assignment Requirements,,3 question(s)
+183,2026-08-17T18:07:54.220Z,391,2,score,block2_work,event,rating_run,7060,Interpret Assignment Requirements,,26 question(s)
+184,2026-08-17T18:08:56.651Z,454,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+185,2026-08-17T18:09:01.472Z,458,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+186,2026-08-17T18:09:01.783Z,459,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+187,2026-08-17T18:09:03.976Z,461,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129941,3 offered
+188,2026-08-17T18:09:24.757Z,482,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129941,3 offered
+189,2026-08-17T18:09:26.244Z,483,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129941,out (replaced) · with reason
+190,2026-08-17T18:09:45.851Z,503,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,1 correction(s) → 1 candidate(s)
+191,2026-08-17T18:09:49.412Z,506,2,score,block2_work,snapshot,intent_update_definition,7059,Generate Task Examples,,v9 “Generate Task Examples” Δ-84 chars · definition from 1 correction
+192,2026-08-17T18:09:53.735Z,511,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+193,2026-08-17T18:09:59.378Z,516,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+194,2026-08-17T18:09:59.833Z,517,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+195,2026-08-17T18:10:11.741Z,529,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130107,3 offered
+196,2026-08-17T18:10:32.012Z,549,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130107,in (replaced) · with reason
+197,2026-08-17T18:10:58.988Z,576,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,1 correction(s) → 1 candidate(s)
+198,2026-08-17T18:11:02.396Z,579,2,score,block2_work,snapshot,intent_update_definition,7059,Generate Task Examples,,v10 “Generate Task Examples” Δ+269 chars · definition from 1 correction
+199,2026-08-17T18:11:07.112Z,584,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+200,2026-08-17T18:11:12.097Z,589,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+201,2026-08-17T18:11:12.408Z,589,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+202,2026-08-17T18:11:29.648Z,607,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130051,3 offered
+203,2026-08-17T18:11:49.182Z,626,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130051,in (replaced) · with reason
+204,2026-08-17T18:11:54.257Z,631,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129835,3 offered
+205,2026-08-17T18:11:55.431Z,632,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129835,in · with reason
+206,2026-08-17T18:12:04.341Z,641,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130055,3 offered
+207,2026-08-17T18:12:06.210Z,643,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130055,in · with reason
+208,2026-08-17T18:12:14.029Z,651,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129900,3 offered
+209,2026-08-17T18:12:15.392Z,652,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129900,in · with reason
+210,2026-08-17T18:13:08.303Z,705,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,4 correction(s) → 1 candidate(s)
+211,2026-08-17T18:13:29.775Z,727,2,score,block2_work,snapshot,intent_update_definition,7059,Generate Task Examples,,v11 “Generate Task Examples” Δ-81 chars · definition from 4 corrections
+212,2026-08-17T18:13:46.376Z,743,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,129941,3 offered
+213,2026-08-17T18:13:47.285Z,744,2,score,block2_work,event,pin_set,7059,Generate Task Examples,129941,out (replaced) · with reason
+214,2026-08-17T18:13:59.673Z,757,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130051,3 offered
+215,2026-08-17T18:14:02.535Z,759,2,score,block2_work,event,pin_set,7059,Generate Task Examples,130051,in (replaced) · with reason
+216,2026-08-17T18:14:18.631Z,775,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+217,2026-08-17T18:14:23.768Z,781,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+218,2026-08-17T18:14:37.688Z,795,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130055,3 offered
+219,2026-08-17T18:14:53.044Z,810,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+220,2026-08-17T18:14:55.500Z,812,2,score,block2_work,event,suggest_fold,7059,Generate Task Examples,,2 correction(s) → 1 candidate(s)
+221,2026-08-17T18:15:01.461Z,818,2,score,block2_work,snapshot,intent_update_definition,7059,Generate Task Examples,,v12 “Generate Task Examples” Δ+86 chars · definition from 2 corrections
+222,2026-08-17T18:15:06.181Z,823,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,15 question(s)
+223,2026-08-17T18:15:12.553Z,829,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,26 question(s)
+224,2026-08-17T18:15:13.170Z,830,2,score,block2_work,event,rating_run,7059,Generate Task Examples,,3 question(s)
+225,2026-08-17T18:15:18.438Z,835,2,score,block2_work,event,suggest_reasons,7059,Generate Task Examples,130051,3 offered
+226,2026-08-17T18:15:33.793Z,851,2,score,block2_work,snapshot,intent_update,7059,Generate Task Examples,,v13 definition+title
+227,2026-08-17T18:15:57.155Z,874,2,score,block2_work,event,suggest_intents,,,129813,3 offered
+228,2026-08-17T18:16:15.170Z,892,2,score,block2_work,event,intent_draft,7061,Proofread,,
+229,2026-08-17T18:16:18.594Z,895,2,score,block2_work,event,rating_run,7061,Proofread,,15 question(s)
+230,2026-08-17T18:16:25.198Z,902,2,score,block2_work,event,rating_run,7061,Proofread,,24 question(s)
+231,2026-08-17T18:16:29.460Z,906,2,score,block2_work,event,rating_run,7061,Proofread,,8 question(s)
+232,2026-08-17T18:16:46.615Z,923,2,score,block2_work,event,suggest_reasons,7061,Proofread,129859,3 offered
+233,2026-08-17T18:16:48.650Z,926,2,score,block2_work,snapshot,intent_create,7061,Proofread,,v14 “Proofread” · activated+definition+title
+234,2026-08-17T18:17:05.716Z,943,2,score,block2_work,event,suggest_intents,,,130081,3 offered
+235,2026-08-17T18:17:09.075Z,946,2,score,block2_work,event,intent_draft,7062,Rewrite to Spec,,
+236,2026-08-17T18:17:19.449Z,956,2,score,block2_work,event,suggest_reasons,7062,Rewrite to Spec,129967,3 offered
+237,2026-08-17T18:17:27.972Z,965,2,score,block2_work,event,suggest_reasons,7062,Rewrite to Spec,129929,3 offered
+238,2026-08-17T18:17:29.679Z,967,2,score,block2_work,event,pin_set,7062,Rewrite to Spec,129929,out · with reason
+239,2026-08-17T18:17:33.865Z,971,2,score,block2_work,event,suggest_reasons,7062,Rewrite to Spec,129917,3 offered
+240,2026-08-17T18:17:35.372Z,972,2,score,block2_work,event,pin_set,7062,Rewrite to Spec,129917,out · with reason
+241,2026-08-17T18:17:53.633Z,990,2,score,block2_work,event,suggest_fold,7062,Rewrite to Spec,,2 correction(s) → 1 candidate(s)
+242,2026-08-17T18:17:56.170Z,993,2,score,block2_work,snapshot,intent_apply,7062,Rewrite to Spec,,v15 definition from 2 corrections
+243,2026-08-17T18:18:00.637Z,998,2,score,block2_work,event,rating_run,7062,Rewrite to Spec,,15 question(s)
+244,2026-08-17T18:18:06.065Z,1003,2,score,block2_work,event,rating_run,7062,Rewrite to Spec,,24 question(s)
+245,2026-08-17T18:18:06.490Z,1003,2,score,block2_work,event,rating_run,7062,Rewrite to Spec,,8 question(s)
+246,2026-08-17T18:18:06.862Z,1004,2,score,block2_work,snapshot,intent_create,7062,Rewrite to Spec,,v16 “Rewrite to Spec” · activated+definition+title
+247,2026-08-17T18:18:49.976Z,1047,2,score,block2_work,event,suggest_intents,,,129906,3 offered
+248,2026-08-17T18:19:25.422Z,1082,2,score,block2_work,event,intent_draft,7063,Generate Text with a criteria,,
+249,2026-08-17T18:19:36.202Z,1093,2,score,block2_work,snapshot,intent_create,7063,Generate Text with a criteria,,v17 “Generate Text with a criteria” · activated+definition+title
+250,2026-08-17T18:19:49.372Z,1106,2,score,block2_work,event,suggest_intents,,,130025,3 offered
+251,2026-08-17T18:19:53.856Z,1111,2,score,block2_work,event,intent_draft,7064,Draft Body Paragraph,,
+252,2026-08-17T18:19:56.826Z,1114,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,15 question(s)
+253,2026-08-17T18:20:03.131Z,1120,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,10 question(s)
+254,2026-08-17T18:20:03.494Z,1120,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,16 question(s)
+255,2026-08-17T18:20:18.874Z,1136,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,15 question(s)
+256,2026-08-17T18:20:24.447Z,1141,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,10 question(s)
+257,2026-08-17T18:20:25.432Z,1142,2,score,block2_work,event,suggest_reasons,7064,Draft Body Paragraph,130038,3 offered
+258,2026-08-17T18:20:25.627Z,1142,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,16 question(s)
+259,2026-08-17T18:20:27.804Z,1145,2,score,block2_work,event,pin_set,7064,Draft Body Paragraph,130038,out · with reason
+260,2026-08-17T18:20:29.724Z,1147,2,score,block2_work,event,pin_remove,7064,Draft Body Paragraph,130038,withdrew out
+261,2026-08-17T18:20:31.853Z,1149,2,score,block2_work,event,suggest_reasons,7064,Draft Body Paragraph,130038,3 offered
+262,2026-08-17T18:20:47.796Z,1165,2,score,block2_work,event,pin_set,7064,Draft Body Paragraph,130038,out · with reason
+263,2026-08-17T18:20:52.900Z,1170,2,score,block2_work,event,suggest_reasons,7064,Draft Body Paragraph,129935,3 offered
+264,2026-08-17T18:20:54.665Z,1172,2,score,block2_work,event,pin_set,7064,Draft Body Paragraph,129935,out · with reason
+265,2026-08-17T18:21:12.908Z,1190,2,score,block2_work,event,suggest_fold,7064,Draft Body Paragraph,,2 correction(s) → 1 candidate(s)
+266,2026-08-17T18:21:16.884Z,1194,2,score,block2_work,snapshot,intent_apply,7064,Draft Body Paragraph,,v18 definition from 2 corrections
+267,2026-08-17T18:21:22.898Z,1200,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,15 question(s)
+268,2026-08-17T18:21:29.496Z,1206,2,score,block2_work,snapshot,intent_create,7064,Draft Body Paragraph,,v19 “Draft Body Paragraph” · activated+definition+title
+269,2026-08-17T18:21:29.517Z,1206,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,10 question(s)
+270,2026-08-17T18:21:29.920Z,1207,2,score,block2_work,event,rating_run,7064,Draft Body Paragraph,,16 question(s)
+271,2026-08-17T18:21:43.804Z,1221,2,score,block2_work,event,suggest_intents,,,129931,3 offered
+272,2026-08-17T18:21:48.071Z,1225,2,score,block2_work,event,intent_draft,7065,Draft Prompt Essay,,
+273,2026-08-17T18:21:51.207Z,1228,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,15 question(s)
+274,2026-08-17T18:21:57.103Z,1234,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,10 question(s)
+275,2026-08-17T18:21:57.210Z,1234,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,16 question(s)
+276,2026-08-17T18:21:59.203Z,1236,2,score,block2_work,event,suggest_reasons,7065,Draft Prompt Essay,129907,3 offered
+277,2026-08-17T18:22:11.214Z,1248,2,score,block2_work,event,suggest_reasons,7065,Draft Prompt Essay,129907,3 offered
+278,2026-08-17T18:22:24.576Z,1261,2,score,block2_work,event,pin_set,7065,Draft Prompt Essay,129907,in · with reason
+279,2026-08-17T18:22:41.555Z,1278,2,score,block2_work,event,suggest_fold,7065,Draft Prompt Essay,,1 correction(s) → 1 candidate(s)
+280,2026-08-17T18:22:57.412Z,1294,2,score,block2_work,event,suggest_fold,7065,Draft Prompt Essay,,1 correction(s) → 1 candidate(s)
+281,2026-08-17T18:23:00.001Z,1297,2,score,block2_work,snapshot,intent_apply,7065,Draft Prompt Essay,,v20 definition from 1 correction
+282,2026-08-17T18:23:03.781Z,1301,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,15 question(s)
+283,2026-08-17T18:23:09.718Z,1307,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,16 question(s)
+284,2026-08-17T18:23:09.868Z,1307,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,10 question(s)
+285,2026-08-17T18:23:12.289Z,1309,2,score,block2_work,event,suggest_reasons,7065,Draft Prompt Essay,129867,3 offered
+286,2026-08-17T18:23:16.084Z,1313,2,score,block2_work,event,pin_set,7065,Draft Prompt Essay,129867,out · with reason
+287,2026-08-17T18:23:30.081Z,1327,2,score,block2_work,event,suggest_reasons,7065,Draft Prompt Essay,130038,3 offered
+288,2026-08-17T18:23:32.759Z,1330,2,score,block2_work,event,pin_set,7065,Draft Prompt Essay,130038,in · with reason
+289,2026-08-17T18:23:57.949Z,1355,2,score,block2_work,event,suggest_fold,7065,Draft Prompt Essay,,2 correction(s) → 1 candidate(s)
+290,2026-08-17T18:23:59.744Z,1357,2,score,block2_work,snapshot,intent_apply,7065,Draft Prompt Essay,,v21 definition from 2 corrections
+291,2026-08-17T18:24:04.403Z,1361,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,15 question(s)
+292,2026-08-17T18:24:09.742Z,1367,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,10 question(s)
+293,2026-08-17T18:24:09.841Z,1367,2,score,block2_work,event,rating_run,7065,Draft Prompt Essay,,16 question(s)
+294,2026-08-17T18:24:13.174Z,1370,2,score,block2_work,event,suggest_reasons,7065,Draft Prompt Essay,129867,3 offered
+295,2026-08-17T18:24:14.218Z,1371,2,score,block2_work,snapshot,intent_create,7065,Draft Prompt Essay,,v22 “Draft Prompt Essay” · activated+definition+title
+296,2026-08-17T18:25:31.864Z,1449,2,score,block2_work,event,revise_submit,7059,Generate Task Examples,,
+297,2026-08-17T18:25:46.746Z,1464,2,score,block2_work,rule,rule_save,7059,Generate Task Examples,129947,v2 · feedback · minor · 564 chars
+298,2026-08-17T18:25:54.657Z,1472,2,score,block2_work,rule,rule_save,7059,Generate Task Examples,129947,v3 · direct · minor · 566 chars
+299,2026-08-17T18:26:00.974Z,1478,2,score,block2_work,rule,rule_save,7059,Generate Task Examples,129947,v4 · direct · 566 chars
+300,2026-08-17T18:26:05.453Z,1482,2,score,block2_work,event,rule_apply,7059,Generate Task Examples,,v4 on 6 question(s)
+301,2026-08-17T18:26:09.488Z,1486,2,score,block2_work,event,rule_apply,7059,Generate Task Examples,,v4 on 1 question(s)
+302,2026-08-17T18:27:04.339Z,1541,2,score,block2_work,event,revise_submit,7062,Rewrite to Spec,,
+303,2026-08-17T18:27:20.824Z,1558,2,score,block2_work,rule,rule_save,7062,Rewrite to Spec,130081,v2 · feedback · minor · 623 chars
+304,2026-08-17T18:27:28.722Z,1566,2,score,block2_work,rule,rule_save,7062,Rewrite to Spec,130081,v3 · feedback · 623 chars
+305,2026-08-17T18:27:33.541Z,1570,2,score,block2_work,event,rule_apply,7062,Rewrite to Spec,,v3 on 1 question(s)
+306,2026-08-17T18:28:35.465Z,1632,2,score,block2_work,event,revise_submit,7063,Generate Text with a criteria,,
+307,2026-08-17T18:28:54.836Z,1652,2,score,block2_work,rule,rule_save,7063,Generate Text with a criteria,130018,v2 · feedback · minor · 524 chars
+308,2026-08-17T18:28:57.101Z,1654,2,score,block2_work,rule,rule_save,7063,Generate Text with a criteria,130018,v3 · feedback · 524 chars
+309,2026-08-17T18:29:08.112Z,1665,2,score,block2_work,event,rule_apply,7063,Generate Text with a criteria,,v3 on 4 question(s)
+310,2026-08-17T18:30:04.040Z,1721,2,score,block2_work,event,revise_submit,7064,Draft Body Paragraph,,
+311,2026-08-17T18:30:24.488Z,1741,2,score,block2_work,rule,rule_save,7064,Draft Body Paragraph,130025,v2 · feedback · minor · 497 chars
+312,2026-08-17T18:31:28.404Z,1805,2,score,block2_work,event,revise_submit,7064,Draft Body Paragraph,,
+313,2026-08-17T18:31:40.670Z,1818,2,score,block2_work,rule,rule_save,7064,Draft Body Paragraph,130025,v3 · feedback · minor · 669 chars
+314,2026-08-17T18:32:51.865Z,1889,2,score,block2_work,event,revise_submit,7064,Draft Body Paragraph,,
+315,2026-08-17T18:33:06.560Z,1903,2,score,block2_work,rule,rule_save,7064,Draft Body Paragraph,130025,v4 · feedback · 669 chars
+316,2026-08-17T18:33:14.280Z,1911,2,score,block2_work,event,rule_apply,7064,Draft Body Paragraph,,v4 on 3 question(s)
+317,2026-08-17T18:33:35.800Z,1933,2,score,block2_work,event,revise_submit,7064,Draft Body Paragraph,,
+318,2026-08-17T18:33:49.041Z,1946,2,score,block2_work,rule,rule_save,7064,Draft Body Paragraph,130025,v5 · feedback · minor · 684 chars
+319,2026-08-17T18:34:53.727Z,2011,2,score,block2_work,event,suggest_rewrite_intents,7064,Draft Body Paragraph,130025,5 offered
+320,2026-08-17T18:35:24.552Z,2041,2,score,block2_work,event,revise_submit,7064,Draft Body Paragraph,,
+321,2026-08-17T18:35:32.883Z,2050,2,score,block2_work,rule,rule_save,7064,Draft Body Paragraph,130025,v6 · rewrite · minor · 545 chars
+322,2026-08-17T18:35:37.025Z,2054,2,score,block2_work,rule,rule_save,7064,Draft Body Paragraph,130025,v7 · rewrite · 545 chars
+323,2026-08-17T18:35:38.932Z,2056,2,score,block2_work,event,rule_apply,7064,Draft Body Paragraph,,v7 on 3 question(s)
+324,2026-08-17T18:35:45.184Z,2062,2,score,block2_work,deploy,deploy,,,,chat v1
+325,2026-08-17T18:35:52.726Z,,,,block2_test,session,phase_advance,,,,block2_work → block2_test
+326,2026-08-17T18:36:17.340Z,2094,2,score,block2_test,test,test_predict,7061,Proofread,,q2 · yes · pointed intent
+327,2026-08-17T18:36:40.141Z,2117,2,score,block2_test,test,test_predict,7063,Generate Text with a criteria,,q4 · yes · pointed intent
+328,2026-08-17T18:37:01.573Z,2138,2,score,block2_test,test,test_predict,7059,Generate Task Examples,,q1 · yes · pointed intent
+329,2026-08-17T18:37:10.644Z,2148,2,score,block2_test,test,test_predict,7059,Generate Task Examples,,q7 · yes · pointed intent
+330,2026-08-17T18:37:25.400Z,2162,2,score,block2_test,test,test_predict,,,,q3 · no · pointed none
+331,2026-08-17T18:37:40.974Z,2178,2,score,block2_test,test,test_predict,7062,Rewrite to Spec,,q6 · yes · pointed intent
+332,2026-08-17T18:37:51.767Z,2189,2,score,block2_test,test,test_predict,7062,Rewrite to Spec,,q0 · yes · pointed intent
+333,2026-08-17T18:38:06.215Z,2203,2,score,block2_test,test,test_predict,7064,Draft Body Paragraph,,q5 · yes · pointed intent
+334,2026-08-17T18:38:16.274Z,2213,2,score,block2_test,test,test_rate,,,,q2 · 4/5 · probed
+335,2026-08-17T18:38:35.837Z,2233,2,score,block2_test,test,test_rate,,,,q4 · 5/5 · probed
+336,2026-08-17T18:39:17.822Z,2275,2,score,block2_test,test,test_rate,,,,q1 · 1/5 · what’s off · probed
+337,2026-08-17T18:39:23.644Z,2281,2,score,block2_test,test,test_rate,,,,q7 · 5/5
+338,2026-08-17T18:39:41.247Z,2298,2,score,block2_test,test,test_rate,,,,q3 · 2/5 · what’s off
+339,2026-08-17T18:39:44.834Z,2302,2,score,block2_test,test,test_rate,,,,q6 · 5/5
+340,2026-08-17T18:39:59.584Z,2316,2,score,block2_test,test,test_rate,,,,q0 · 1/5 · what’s off · probed
+341,2026-08-17T18:40:21.414Z,2338,2,score,block2_test,test,test_rate,,,,q5 · 5/5
+342,2026-08-17T18:40:22.974Z,,,,block2_survey,session,phase_advance,,,,block2_test → block2_survey
+343,2026-08-17T18:40:42.087Z,2359,2,score,block2_survey,survey,survey_answer,,,,control_future = 5
+344,2026-08-17T18:40:42.087Z,2359,2,score,block2_survey,survey,survey_answer,,,,control_achieve = 3
+345,2026-08-17T18:40:42.087Z,2359,2,score,block2_survey,survey,survey_answer,,,,load_mental = 6
+346,2026-08-17T18:40:42.087Z,2359,2,score,block2_survey,survey,survey_answer,,,,load_frustration = 4
+347,2026-08-17T18:40:42.087Z,2359,2,score,block2_survey,survey,survey_answer,,,,trust_future = 6
+348,2026-08-17T18:40:46.735Z,,,,done,session,phase_advance,,,,block2_survey → done

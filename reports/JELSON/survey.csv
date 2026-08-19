@@ -1,0 +1,11 @@
+participant,block,condition,item,value,answered_at
+JELSON,1,baseline,control_future,5,2026-08-17T17:54:39.141Z
+JELSON,1,baseline,control_achieve,5,2026-08-17T17:54:39.141Z
+JELSON,1,baseline,load_mental,6,2026-08-17T17:54:39.141Z
+JELSON,1,baseline,load_frustration,3,2026-08-17T17:54:39.141Z
+JELSON,1,baseline,trust_future,6,2026-08-17T17:54:39.141Z
+JELSON,2,score,control_future,5,2026-08-17T18:40:42.087Z
+JELSON,2,score,control_achieve,3,2026-08-17T18:40:42.087Z
+JELSON,2,score,load_mental,6,2026-08-17T18:40:42.087Z
+JELSON,2,score,load_frustration,4,2026-08-17T18:40:42.087Z
+JELSON,2,score,trust_future,6,2026-08-17T18:40:42.087Z

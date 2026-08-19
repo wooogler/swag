@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130081,
+ "intentId": 7062,
+ "feedback": "dont rewrite for the but guide them in how to rewrite",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Coach the rewrite",
+   "rule": "When a student asks you to directly rewrite, rephrase, or recast text, do not write the polished revision for them. Instead, briefly guide them on how to change it and give only visibly incomplete sentence stems or fragments they can finish, not a full paste-ready paragraph. Keep the reply to one short paragraph.",
+   "generations": [
+    {
+     "response": "You could make it more professional by using a balanced tone, stronger transitions, and more precise wording. Try starting with something like: “Automation can be beneficial for repetitive, routine tasks…” Then contrast it with: “…however, certain areas, such as education, should remain primarily human-centered…” You can finish with a more formal concluding phrase such as: “…for these reasons, I generally support the second perspective because…”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance and sentence stems with ellipses rather than finished replacement sentences or a full paragraph."
+    },
+    {
+     "response": "You can make it sound more professional by using more neutral wording, tightening the structure, and replacing casual phrases like “boring” and “easy to replace” with more formal terms such as “repetitive” or “routine.” You could start with something like: “I believe automation is beneficial for routine tasks that are repetitive and easily standardized, such as…” and then add a transition like “However, I also think certain areas should remain primarily human-led, particularly…” Finish by connecting your view to the second perspective with a stem like: “Overall, I agree with the second perspective because…”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives revision guidance and sentence stems with ellipses rather than finished replacement prose the student could paste in."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Coach, don’t ghostwrite",
+   "rule": "When a student asks you to rewrite text or make it sound more professional, formal, clearer, or similar, act as a coach rather than a ghostwriter. Point out the main changes they should make and offer incomplete stems, fragments, or fill-in-the-blank phrasing they can use, but do not produce a polished final version. If they are only asking for feedback or whether something should be rephrased, respond with brief revision advice only. Keep it brief.",
+   "generations": [
+    {
+     "response": "A few ways to make it sound more professional:\n\n- Replace informal phrases like **“boring and easy to replace”** with **“repetitive”** or **“routine”**\n- Use **“I agree with the second perspective”** only once, then explain your reasoning more clearly\n- Strengthen the contrast with **“however,” “in contrast,”** or **“that said”**\n- Change **“low skill tasks”** to **“lower-skill tasks”** or **“routine labor”**\n\nYou could revise it using stems like:\n\n- **“Automation is effective for routine tasks, such as ____.”**\n- **“However, I believe some areas should remain primarily human-led, especially ____.”**\n- **“In the case of education, ____.”**\n- **“Overall, I agree with the second perspective because ____.”**\n\nIf you want, I can also help you make it sound **more formal**, **more concise**, or **more persuasive**.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance, single-phrase alternatives, and sentence stems with blanks, but no usable finished replacement sentence or paragraph."
+    },
+    {
+     "response": "To make it sound more professional, aim for these changes:\n\n- Replace casual wording like **“boring and easy to replace”** with **“routine”**, **“repetitive”**, or **“easily automated”**\n- Use more formal phrasing for **“I think”** and **“I agree”**, such as **“I believe”**, **“I would argue”**, or **“I support”**\n- Tighten the examples:\n  - instead of **“a cashier or someone that works at the post office”**, use **“cashiers or postal workers”**\n- Make the education point more precise:\n  - **“education should remain a human-centered process”**\n  - **“AI can support learning, but not fully replace human involvement”**\n- Replace **“generally speaking”** with a stronger transition like **“overall”** or **“in general”**\n\nYou could revise it by using a structure like:\n\n- **Automation is effective for ____ tasks, such as ____ and ____.**\n- **However, I believe certain areas, such as ____, should remain ____ because ____.**\n- **While AI can ____ , it should not ____ .**\n- **Overall, I support the second perspective because ____ .**\n\nIf you want, I can also help you make it **more formal sentence by sentence**.",
+     "verdict": "partial",
+     "span": "AI can support learning, but not fully replace human involvement",
+     "reason": "It mostly gives revision guidance, but it also provides complete replacement sentences that could be pasted into the draft."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Rewrite by coaching",
+   "rule": "When a student asks you to rewrite, rephrase, recast, or otherwise revise existing text, respond as a writing coach: explain what to change, why it helps, and how to reshape the wording. Give only visibly incomplete examples, fragments, or sentence stems with blanks, and never provide a clean rewritten passage they could submit as-is. If the student is only asking for advice, feedback, or whether something should be rephrased, stay in coaching mode and do not draft the revision for them. Keep the answer short and practical.",
+   "generations": [
+    {
+     "response": "To make this sound more professional, focus on:\n\n- using more formal transitions like “however,” “for example,” and “overall”\n- replacing casual phrases like “boring” and “easy to replace” with more neutral language\n- tightening repeated ideas so the argument sounds more deliberate\n\nYou could reshape it with something like:\n\n- “...is well suited to repetitive or routine tasks, such as ____”\n- “However, I believe certain areas should remain primarily human-led, especially ____”\n- “Although AI can support learning, education should ____”\n- “Overall, I agree with the second perspective because automation can ____”\n\nIf you want, I can also help you make it sound:\n1. more academic,\n2. more concise, or\n3. more persuasive.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives guidance, fragments, and sentence stems with blanks rather than any usable finished replacement prose or complete rewritten sentences."
+    },
+    {
+     "response": "To make this sound more professional, focus on:\n- using more formal wording instead of phrases like **“boring”** or **“easy to replace”**\n- avoiding overly casual examples like **“someone that works at the post office”**\n- tightening the logic so your position sounds more balanced and precise\n\nWhat to change:\n- **“I think”** → **“I believe”** or **“I would argue”**\n- **“boring”** → **“repetitive”** or **“routine”**\n- **“taken away”** → **“replaced”** or **“automated”**\n- **“human process”** → **“human-centered process”**\n- **“low skill tasks”** → **“lower-skill tasks”** or **“routine tasks”**\n\nA more professional structure could look like this:\n- **I believe automation is beneficial for routine tasks, particularly those that are repetitive and easily standardized.**\n- **However, I also believe that certain areas, such as education, should remain primarily human-centered because of the importance of personal interaction and judgment.**\n- **Overall, I support the second perspective because automation can be especially useful for repetitive, lower-skill work.**\n\nIf you want, I can help you make it sound **more academic**, **more formal**, or **more concise**.",
+     "verdict": "partial",
+     "span": "However, I also believe that certain areas, such as education, should remain primarily human-centered because of the importance of personal interaction and judgment.",
+     "reason": "It gives multiple full rewritten sentences that a student could paste in, rather than only guidance or fragments."
+    }
+   ]
+  }
+ ]
+}

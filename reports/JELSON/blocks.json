@@ -1,0 +1,35 @@
+{
+  "participant": {
+    "id": "a3166fc6-5f59-44da-b53a-c016ff99be3c",
+    "number": "JELSON",
+    "cell": 1,
+    "blockOrder": [
+      "swag",
+      "nirvana"
+    ],
+    "createdAt": "2026-08-17T16:53:47.166Z",
+    "lastLoginAt": "2026-08-17T17:06:20.213Z"
+  },
+  "blocks": [
+    {
+      "block": 1,
+      "datasetKey": "swag",
+      "condition": "baseline",
+      "assignmentId": "42293d40-e04c-487f-98e6-b38bc6b81269",
+      "startedAt": "2026-08-17T17:16:16.670Z",
+      "endedAt": "2026-08-17T17:54:39.141Z",
+      "tZeroSource": "phase",
+      "events": 118
+    },
+    {
+      "block": 2,
+      "datasetKey": "nirvana",
+      "condition": "score",
+      "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+      "startedAt": "2026-08-17T18:01:23.135Z",
+      "endedAt": "2026-08-17T18:40:42.087Z",
+      "tZeroSource": "phase",
+      "events": 222
+    }
+  ]
+}

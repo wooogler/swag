@@ -1064,7 +1064,8 @@ export default function IntentWorkbench({
    */
   async function applyFold(
     edited: Record<number, string>,
-    split: { consume: number[]; hold: number[] }
+    split: { consume: number[]; hold: number[] },
+    renames: Record<number, string> = {}
   ) {
     if (!foldProposals || intentId === null) return;
     setFoldBusy(true);
@@ -1073,9 +1074,13 @@ export default function IntentWorkbench({
       const applies = foldProposals.map((p) => ({
         intentId: p.intentId,
         definition: (edited[p.intentId] ?? p.after).trim(),
-        ...(p.intentId === intentId && p.suggestedTitle && !title.trim()
-          ? { title: p.suggestedTitle }
-          : {}),
+        // An explicit tick in the review wins; otherwise the old rule stands
+        // (auto-title only an intent that has no name of its own yet).
+        ...(renames[p.intentId]
+          ? { title: renames[p.intentId] }
+          : p.intentId === intentId && p.suggestedTitle && !title.trim()
+            ? { title: p.suggestedTitle }
+            : {}),
       }));
       const res = await fetch(
         `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/fold`,

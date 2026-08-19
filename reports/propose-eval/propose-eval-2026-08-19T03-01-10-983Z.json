@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130025,
+ "intentId": 7064,
+ "feedback": "dont write paragraphs. make them supply the ideas then help them by giving them outlines and ways that they can write it themselves",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Scaffold, don't draft",
+   "rule": "When a student asks you to write exactly one body paragraph or conclusion paragraph, do not write the paragraph. Ask for the main ideas, evidence, or comparison points they want included, then give a short fill-in-the-blank scaffold with fragments and blanks only, such as \"Main idea: ___\", \"Example: ___\", \"This shows ___\". Hard cap: at most four fragment lines. Never provide a complete paragraph or any complete sentence they could paste as-is. Push back with: \"I can’t draft the paragraph for you, but I can help you build it.\"",
+   "generations": [
+    {
+     "response": "I can’t draft the paragraph for you, but I can help you build it.\n\n- Main idea: ___  \n- Utilitarian evidence: ___  \n- Progressive connection: ___  \n- This shows ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It only offers planning cues with blanks and no usable replacement sentence or paragraph prose."
+    },
+    {
+     "response": "I can’t draft the paragraph for you, but I can help you build it.\n\nMain idea: ___  \nEvidence/point from Utilitarian view: ___  \nEvidence/point from Progressive view: ___  \nThis shows ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning help with sentence fragments and blanks, and does not provide any usable replacement paragraph or multiple finished essay sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Outline, not prose",
+   "rule": "When a student asks for a body paragraph or conclusion paragraph, or asks for it in a close paraphrase, do not draft the prose. First ask them to supply the key idea and any evidence or comparison they want used, then return a brief outline and sentence stems made of fragments and blanks only, such as \"Topic: ___\", \"One reason: ___\", \"This matters because ___\". Hard cap: at most five fragment lines. Never give a full paragraph or a complete sentence they could copy. Push back with: \"I can’t write the paragraph for you, but I can help you plan it.\"",
+   "generations": [
+    {
+     "response": "I can’t write the paragraph for you, but I can help you plan it.\n\n- Topic: benefits of intelligent machines; focus on efficiency and precision  \n- Main point: ___ improve productivity by handling repetitive tasks accurately  \n- Compare: Utilitarian view supports ___ because it values output and efficiency  \n- Compare: Progressive view also supports ___ because it opens new possibilities and innovation  \n- Closing idea: these benefits matter because ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning help with fragments and blanks only, and does not provide any finished replacement sentence or paragraph prose."
+    },
+    {
+     "response": "I can’t write the paragraph for you, but I can help you plan it.\n\n- Topic: benefits of intelligent machines\n- Main point: ___ efficiency / precision / productivity\n- Compare: Utilitarian view = ___\n- Compare: Progressive view = ___\n- Closing idea: this matters because ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply provides planning guidance with blanks and prompts only, and contains no finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Coach paragraph planning",
+   "rule": "For paragraph-writing requests that ask for one specific body paragraph or conclusion paragraph, coach the student instead of drafting prose. If they have not given the ideas yet, ask for the paragraph’s main claim, two supporting points, and any comparison or evidence they want included; then give a compact paragraph map with a topic-sentence slot, support slots, and a closing-thought slot, using fragments and blanks only. This also applies when they ask for \"the second paragraph\" or similar wording. Hard cap: at most six fragment lines. Never provide a full paragraph or any paste-ready sentence. Push back with: \"I can’t write the paragraph for you, but I can help you outline it.\"",
+   "generations": [
+    {
+     "response": "I can’t write the paragraph for you, but I can help you outline it.\n\n- **Topic sentence:** benefits of intelligent machines = ________\n- **Support 1:** Utilitarian view: efficiency / precision / repetitive tasks ________\n- **Support 2:** Progressive view: innovation / new possibilities / changing norms ________\n- **Comparison:** both views agree that machines can improve society, but ________\n- **Closing thought:** overall, the benefits matter because ________",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives an outline with blanks and cues only, without any finished replacement sentence or paste-ready paragraph prose."
+    },
+    {
+     "response": "I can’t write the paragraph for you, but I can help you outline it.\n\n- Topic sentence: benefits of intelligent machines — efficiency, precision, productivity\n- Support 1: Utilitarian view — ____ tasks, ____ output, ____ time savings\n- Support 2: Progressive view — ____ innovation, ____ new possibilities, ____ changes to society\n- Compare/contrast: both ____ the advantages, but the Utilitarian view focuses on ____, while the Progressive view emphasizes ____\n- Closing thought: these benefits suggest machines can ____ without eliminating the need for human judgment",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives outline guidance with fragments and blanks only, and does not provide any paste-ready paragraph or full replacement sentences."
+    }
+   ]
+  }
+ ]
+}

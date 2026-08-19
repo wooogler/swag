@@ -40,7 +40,9 @@ const bodySchema = z.object({
   // 'seed' = the auto-created v1 baseline (current rule / base-prompt
   // fallback) — a real major for numbering and revert, but NOT a deployable
   // artifact: it must not touch the live rule or feed the board's viewer.
-  source: z.enum(['direct', 'feedback', 'rewrite', 'manual', 'seed']),
+  // 'follow' = written BY a parent's Save onto a set that still held the
+  // parent's exact text (see followEnclosed) — never sent by a client.
+  source: z.enum(['direct', 'feedback', 'rewrite', 'manual', 'seed', 'follow']),
   // Short label naming the rule. The agent supplies it for feedback/rewrite; a
   // direct edit has none → we auto-title from the rule below.
   name: z.string().trim().max(120).optional(),
@@ -50,6 +52,10 @@ const bodySchema = z.object({
    * chat is reconstructed from versions on reopen; this is its user half. */
   instruction: z.string().trim().max(4000).optional(),
   anchorMessageId: z.number().int().positive().optional(),
+  /** Which of the three proposed variants this came from. Recorded on the
+   * event only: the version already holds the text, but not the fact that the
+   * instructor reached for the widest or the narrowest of what was offered. */
+  strength: z.enum(['minimal', 'moderate', 'aggressive']).optional(),
   // MINOR = a simulated preview, not a Save: recorded for checkout/revert but
   // does NOT touch the live intent rule or the per-version response store.
   minor: z.boolean().optional(),
@@ -150,6 +156,104 @@ export async function GET(_req: Request, { params }: RouteParams) {
   });
 }
 
+/**
+ * A Save on a set carries the sets INSIDE it that never got a rule of their own.
+ *
+ * Rules are seeded copy-on-create and inheritance is not live (design §3.5), so
+ * a nested set holds a COPY of the text that enclosed it when it was made.
+ * Editing the enclosing rule afterwards left that copy behind silently: the
+ * instructor believes they changed how a scope answers, and the sets inside it
+ * — whose questions are, by containment, that scope's questions — keep the old
+ * words. Nothing on the board said so, and the origin chip said the opposite
+ * ("own rule", as if the set had added something).
+ *
+ * So: a descendant whose rule is still character-for-character what this one
+ * was follows it, and gets its own version row for it (revertible, and honest
+ * about where the text came from). A descendant that was EDITED is never
+ * rewritten — that text is the instructor's, and merging two prose rules is how
+ * you get a rule nobody wrote. It is reported back instead, for them to review.
+ *
+ * One layer stays one layer: this copies text at Save time, it does not stack a
+ * parent's rule under a child's at runtime.
+ */
+async function followEnclosed(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  args: { assignmentId: string; parent: typeof scoreIntents.$inferSelect; previousRule: string | null; rule: string | null; versionNo: number; instructorId: string | null; now: Date }
+): Promise<{ followed: { id: number; title: string }[]; diverged: { id: number; title: string }[] }> {
+  const { assignmentId, parent, previousRule, rule, versionNo, instructorId, now } = args;
+  const norm = (r: string | null | undefined) => (r ?? '').trim();
+  // Nothing to inherit from a rule that was never written: EVERY empty-ruled
+  // set in the type would match, including ones deliberately left blank.
+  if (norm(previousRule) === '' || norm(previousRule) === norm(rule) || !parent.type) {
+    return { followed: [], diverged: [] };
+  }
+  const siblings = await tx
+    .select()
+    .from(scoreIntents)
+    .where(
+      and(
+        eq(scoreIntents.assignmentId, assignmentId),
+        eq(scoreIntents.type, parent.type),
+        eq(scoreIntents.archived, false),
+        eq(scoreIntents.isTemplate, false)
+      )
+    );
+  // Descendants of the saved set — for a type root, everything in its type
+  // (that is what "the scope around it" means when the scope IS the type).
+  const children = new Map<number | null, typeof siblings>();
+  for (const row of siblings) {
+    const key = row.kind === 'type_root' ? -1 : row.parentIntentId;
+    const list = children.get(key) ?? [];
+    list.push(row);
+    children.set(key, list);
+  }
+  const followed: { id: number; title: string }[] = [];
+  const diverged: { id: number; title: string }[] = [];
+  const seen = new Set<number>([parent.id]);
+  const queue: (number | null)[] = [parent.kind === 'type_root' ? null : parent.id];
+  for (let guard = 0; queue.length > 0 && guard < 200; guard++) {
+    const next = queue.shift()!;
+    for (const row of children.get(next) ?? []) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      if (norm(row.rule) === norm(previousRule)) {
+        followed.push({ id: row.id, title: row.title });
+        queue.push(row.id);
+      } else {
+        // It has a rule of its own, so the walk STOPS here: whatever is nested
+        // inside it follows IT, not this save, and naming those sets would
+        // report an instructor edit where there was none.
+        diverged.push({ id: row.id, title: row.title });
+      }
+    }
+  }
+  for (const child of followed) {
+    await tx
+      .update(scoreIntents)
+      .set({ rule, updatedAt: now })
+      .where(and(eq(scoreIntents.id, child.id), eq(scoreIntents.assignmentId, assignmentId)));
+    const [{ max }] = await tx
+      .select({ max: sql<number | null>`max(${scoreRuleVersions.versionNo})` })
+      .from(scoreRuleVersions)
+      .where(eq(scoreRuleVersions.intentId, child.id));
+    await tx.insert(scoreRuleVersions).values({
+      assignmentId,
+      intentId: child.id,
+      versionNo: (max ?? 0) + 1,
+      name: `Follows ${parent.title} v${versionNo}`,
+      rule,
+      updatedResponse: null,
+      anchorMessageId: null,
+      source: 'follow',
+      note: null,
+      minor: false,
+      createdBy: instructorId,
+      createdAt: now,
+    });
+  }
+  return { followed, diverged };
+}
+
 export async function POST(req: Request, { params }: RouteParams) {
   const { id, intentId: intentIdRaw } = await params;
   const auth = await authorizeAssignment(id);
@@ -211,6 +315,10 @@ export async function POST(req: Request, { params }: RouteParams) {
           createdAt: now,
         })
         .returning();
+      let carried: { followed: { id: number; title: string }[]; diverged: { id: number; title: string }[] } = {
+        followed: [],
+        diverged: [],
+      };
       // MAJORS only: Save reflects to the LIVE intent rule (no config version),
       // and the anchor's preview doubles as its per-version response so the
       // board chip/dropdown pick it up without an "apply" run. Minors are
@@ -232,13 +340,28 @@ export async function POST(req: Request, { params }: RouteParams) {
             createdAt: now,
           });
         }
+        // Same transaction as the parent's own update: a Save either moves the
+        // whole scope or none of it.
+        carried = await followEnclosed(tx, {
+          assignmentId: id,
+          parent: intent,
+          previousRule: intent.rule,
+          rule,
+          versionNo: row.versionNo,
+          instructorId: auth.instructor.id,
+          now,
+        });
       }
-      return row;
+      return { row, carried };
     });
 
   let row;
+  let carried: { followed: { id: number; title: string }[]; diverged: { id: number; title: string }[] } = {
+    followed: [],
+    diverged: [],
+  };
   try {
-    row = await insertOnce();
+    ({ row, carried } = await insertOnce());
     await logStudyEvent(id, 'rule_save', {
       intentId,
       versionNo: row.versionNo,
@@ -247,12 +370,16 @@ export async function POST(req: Request, { params }: RouteParams) {
       chars: rule?.length ?? 0,
       hasInstruction: !!body.instruction,
       anchorMessageId: body.anchorMessageId ?? null,
+      ...(body.strength ? { strength: body.strength } : {}),
+      ...(carried.followed.length > 0 || carried.diverged.length > 0
+        ? { followed: carried.followed.map((c) => c.id), diverged: carried.diverged.map((c) => c.id) }
+        : {}),
     });
   } catch (error) {
     // max+1 can collide under concurrent Saves — the unique (intent, version)
     // index rejects the loser; one recompute-and-retry resolves it.
     if (typeof error === 'object' && error && (error as { code?: string }).code === '23505') {
-      row = await insertOnce();
+      ({ row, carried } = await insertOnce());
     } else {
       console.error(`SCORE rule-version save failed for intent ${intentId}:`, error);
       return NextResponse.json(
@@ -276,5 +403,9 @@ export async function POST(req: Request, { params }: RouteParams) {
       minor: row.minor,
       createdAt: row.createdAt.toISOString(),
     },
+    // What the Save carried, and what it deliberately did not — the workbench
+    // says both in one line under the button.
+    followed: carried.followed,
+    diverged: carried.diverged,
   });
 }

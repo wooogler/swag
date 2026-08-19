@@ -7,9 +7,8 @@
  *
  * Why the prompt reads the way it does (2026-08-04, empirical — plan §9):
  * a rule that only FORBIDS ("do not write the text") loses to the model's
- * helpful-assistant instinct, so every variant must pair a prohibition with
- * what to give INSTEAD (plus one countable cap), keep substitute examples
- * visibly incomplete, and cover the pushback case. The heavier machinery an
+ * helpful-assistant instinct, so every variant must keep substitute examples
+ * visibly incomplete. The heavier machinery an
  * earlier revision demanded — mandated section headings, a fixed opening
  * line, a precedent-disavowal sentence — existed to beat the OLD preview's
  * verbatim replay of the prior thread; the digest context (preview-service
@@ -18,6 +17,15 @@
  * rules come out half the length and read as the instructor's own
  * instruction. The user content shows the agent the prior turn so it knows
  * what the anchor's "it/that" refers to.
+ *
+ * 2026-08-19 — the mandated lines were cut from three to ONE. Re-measured on
+ * the same scenario (12 generations each, compliant/partial/violation):
+ * three lines 8/4/0 · the incomplete-examples line alone 9/3/0 · that idea
+ * stated abstractly 3/8/1 · nothing 1/11/0. So the countable cap and the
+ * pushback line bought nothing measurable — the agent writes both unprompted
+ * — while the concrete form requirement is the whole effect, and stating it
+ * abstractly loses it. Dropping the other two also stops the rules from
+ * carrying stances the instructor never asked for (JELSON pilot §7).
  */
 import { headTail, MAX_PRIOR_QUERY_CHARS, MAX_PRIOR_RESPONSE_CHARS, MAX_QUERY_CHARS } from './prompts';
 
@@ -83,7 +91,22 @@ export const PROPOSAL_SCHEMA = {
  */
 export type ProposeScope = 'intent' | 'type-root' | 'prompt';
 
-export function buildProposeSystemPrompt(scope: ProposeScope = 'intent'): string {
+/**
+ * `devices` — how much enforcement every variant is told to carry. Production
+ * uses 'form' (2026-08-19); the other modes exist so propose-eval.ts can
+ * re-run the A/B that chose it. See the header for the measurement.
+ *
+ *   'form'  ONE line: substitute examples must be visibly incomplete
+ *   'all'   + a countable cap + a pushback line + the "how the prompt is used"
+ *           preamble (production before 2026-08-19)
+ *   'goal'  the same idea as 'form' stated abstractly ("not paste-ready")
+ *   'off'   nothing
+ */
+export function buildProposeSystemPrompt(
+  scope: ProposeScope = 'intent',
+  opts: { devices?: 'form' | 'all' | 'goal' | 'off' } = {}
+): string {
+  const devices = opts.devices ?? 'form';
   const framing =
     scope === 'prompt'
       ? [
@@ -103,11 +126,25 @@ export function buildProposeSystemPrompt(scope: ProposeScope = 'intent'): string
   return [
     'You revise the SYSTEM PROMPT of a writing-support chatbot that students use for school assignments.',
     ...framing,
-    "HOW THE PROMPT IS USED — this decides what a good one looks like. The chatbot answers real student messages with only this prompt as guidance, and the model's default instinct is to be maximally helpful — for a \"change the style\" request that means writing the improved text itself. A bare prohibition is not enough to override that instinct.",
-    'Therefore, in EVERY variant:',
-    '- Whenever the input forbids something, also state POSITIVELY what a reply gives instead, with one concrete hard cap in countable units (e.g. "never more than one complete sentence of finished prose").',
-    '- When the rule offers templates or examples as a substitute for a withheld output, require them to be visibly incomplete (blanks like "___", fragments) — never complete sentences the student could paste as-is.',
-    '- Say in one line what the chatbot does when the student pushes back and asks again for exactly what the prompt withholds.',
+    ...(devices === 'all'
+      ? [
+          "HOW THE PROMPT IS USED — this decides what a good one looks like. The chatbot answers real student messages with only this prompt as guidance, and the model's default instinct is to be maximally helpful — for a \"change the style\" request that means writing the improved text itself. A bare prohibition is not enough to override that instinct.",
+          'Therefore, in EVERY variant:',
+          '- Whenever the input forbids something, also state POSITIVELY what a reply gives instead, with one concrete hard cap in countable units (e.g. "never more than one complete sentence of finished prose").',
+          '- When the rule offers templates or examples as a substitute for a withheld output, require them to be visibly incomplete (blanks like "___", fragments) — never complete sentences the student could paste as-is.',
+          '- Say in one line what the chatbot does when the student pushes back and asks again for exactly what the prompt withholds.',
+        ]
+      : devices === 'form'
+        ? [
+            'In EVERY variant:',
+            '- When the rule offers expressions, templates or examples as a substitute for a withheld output, require them to be visibly incomplete (fragments, sentence stems, blanks like "___") — never complete sentences the student could paste as-is.',
+          ]
+      : devices === 'goal'
+        ? [
+            'In EVERY variant:',
+            '- If the input withholds finished text, make sure whatever the reply offers instead cannot be pasted into the draft as-is (fragments, stems, cues — not complete sentences).',
+          ]
+        : ['In EVERY variant:']),
     "- Keep the rule SHORT — it should read as the instructor's own instruction, not a form specification. A few sentences is usually right. Do not mandate named sections, headings, exact bullet counts, or word budgets unless the instructor's input itself asks for structured replies.",
     '- Be imperative, addressed to the chatbot, coherent and self-contained.',
     'Return THREE candidates, one per strength, minimal first. Strength is how much of the CURRENT prompt each touches, never how enforceable it is:',

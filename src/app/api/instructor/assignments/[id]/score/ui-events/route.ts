@@ -50,6 +50,10 @@ const UI_EVENTS = [
   /** The deploy modal, where "no rule yet" is visible before the deploy. */
   'deploy_open',
   'deploy_close',
+  /** The revision chooser closed without a variant. Nothing is written when a
+   * proposal is rejected, so without this a round the instructor threw away
+   * looks identical to one that never happened. */
+  'proposal_dismiss',
 ] as const;
 
 const bodySchema = z.object({

@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 129947,
+ "intentId": 7059,
+ "feedback": "These are long. try to give them shorter repsones that provide the example they ask for but not give them the full cognitive thinking step. They need to figure out how to incoporate it in on their own",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Trim example responses",
+   "rule": "When the student asks for examples of a machine doing better at a task than a human, give 1-3 brief examples only. Keep each example visibly incomplete, like a fragment or sentence stem, and do not explain the reasoning or write a full paragraph they can copy.",
+   "generations": [
+    {
+     "response": "- Calculating huge numbers or sorting millions of records in…\n- Detecting tiny patterns in medical scans that a person might…\n- Repeating the same precision task thousands of times without…",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives short fragment examples with trailing ellipses and no finished replacement sentence or paragraph."
+    },
+    {
+     "response": "Sure — a few brief examples:\n\n- Sorting millions of records by…\n- Detecting tiny patterns in medical scans…\n- Calculating a route across many roads in seconds…",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It only gives short example fragments with ellipses and no finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Short example snippets",
+   "rule": "When the student asks for examples, another example, or more examples of technology outperforming, replacing, or being used instead of human labor, give a short list of brief examples only. Keep each item visibly incomplete, as a fragment or sentence stem, and do not explain the reasoning, develop the argument, or write a full paragraph they can paste.",
+   "generations": [
+    {
+     "response": "Sure — here are a few brief examples:\n\n- A chess engine spotting a winning line in seconds\n- A spam filter catching thousands of unwanted emails\n- A medical image system detecting tiny tumors in scans\n- A robot assembling the same part with exact precision all day\n- An autocorrect tool fixing typos faster than a person typing\n- A navigation app finding the fastest route through traffic",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It only gives short example fragments in a list and does not provide any finished replacement sentence or paragraph."
+    },
+    {
+     "response": "Sure — here are a few brief examples:\n\n- A chess engine calculating millions of positions per second...\n- A factory robot assembling identical parts with high precision...\n- A spreadsheet macro processing thousands of rows instantly...\n- A translation system handling large volumes of text quickly...\n- A medical imaging model spotting patterns in scans...",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only gives short fragment examples with ellipses and no finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Concise research snippets",
+   "rule": "For research requests about machines, AI, automation, and related labor effects, answer with concise, usable snippets only. When the student asks for examples, give at most 4 brief examples and keep each one visibly incomplete; when they ask for evidence, facts, statistics, affected jobs, benefits, harms, trends, predictions, or argument material, provide only the specific material requested in short form. Do not explain your reasoning or build the full case for them.",
+   "generations": [
+    {
+     "response": "Yes—here are a few brief examples:\n\n- **Chess engines**: can calculate far more candidate moves than a person.\n- **OCR/scanning software**: reads printed text faster and more consistently than manual typing.\n- **Industrial robots**: assemble identical parts with very steady precision…\n- **Medical image analysis tools**: spot some patterns in scans that humans can miss…",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives short self-contained examples as fragments and bullet points, with no finished replacement paragraph or extended prose."
+    },
+    {
+     "response": "Yes—here are a few brief examples:\n\n- **Chess**: a computer can calculate many more moves ahead and beat top human players.\n- **Sorting large data sets**: a machine can organize millions of records much faster than a person.\n- **Repeated quality inspection**: a camera system can spot tiny defects on a production line...\n- **Navigation / routing**: software can find the fastest route across many roads and traffic conditions...\n\nIf you want, I can also give examples for **AI specifically**, **physical machines**, or **workplace tasks**.",
+     "verdict": "partial",
+     "span": "a computer can calculate many more moves ahead and beat top human players.",
+     "reason": "It stays brief and example-based, but it includes multiple complete replacement sentences rather than only fragments or scaffolds."
+    }
+   ]
+  }
+ ]
+}

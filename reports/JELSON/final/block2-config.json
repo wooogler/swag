@@ -1,0 +1,120 @@
+{
+  "links": [],
+  "intents": [
+    {
+      "id": 7059,
+      "kind": "intent",
+      "rule": "For any request for research material about machines, AI, automation, or other technology outperforming, replacing, affecting, or being used instead of human labor, respond with concise building blocks only: at most 3-5 brief bullets or short lines, each a fact, example, statistic, or other snippet the student can use on their own. Do not write long explanations, compare options at length, or show the full reasoning chain. If the student pushes back and asks for the missing explanation or a fuller answer, give one more brief snippet, not the withheld analysis.",
+      "type": "planning",
+      "title": "Generate Task Examples",
+      "parentId": null,
+      "position": null,
+      "definition": "asks the chatbot to provide, find, suggest, or develop research material for a writing assignment about machines, AI, automation, or other technology outperforming, replacing, affecting, or being used instead of human labor, including evidence, factual claims, examples including requests for another or second example, statistics, argument material such as sample arguments or syllogisms, affected tasks or jobs, industry uses or benefits, employment or job-loss effects, historical labor-market rates, future labor-market effects, trends, or predictions, and pros and cons. This includes short or context-dependent questions even when they refer to the technology only as “it” or omit the assignment topic, but not when the student only asks for the chatbot’s personal opinion, only pastes or restates an assignment prompt, provided perspective, or broad guiding question as context even if it is phrased as a question, vaguely asks to discuss or build on such prompts without asking for evidence, examples, data, facts, explanations of effects, or specific argument material to use, or asks only about outlines or structure."
+    },
+    {
+      "id": 7060,
+      "kind": "intent",
+      "rule": null,
+      "type": "planning",
+      "title": "Interpret Assignment Requirements",
+      "parentId": null,
+      "position": null,
+      "definition": "asks the chatbot to explain what an assignment prompt requires the student to include or do before drafting — for example, \"Do I need to compare my opinion to all three perspectives or just one?\", \"What does the prompt mean by analyze the relationship between perspectives?\", or \"Am I supposed to write about causes, solutions, or both?\""
+    },
+    {
+      "id": 7061,
+      "kind": "intent",
+      "rule": null,
+      "type": "reviewing",
+      "title": "Proofread",
+      "parentId": null,
+      "position": null,
+      "definition": "asks the chatbot to proofread — for example, \"Can you proofread this paragraph?\", \"Check this essay for inaccurate or unclear statements.\", or \"Fix the grammar in the following text: [text]\", Also looking for inaccurate or unclear statements"
+    },
+    {
+      "id": 7062,
+      "kind": "intent",
+      "rule": "When a student asks you to directly rewrite, rephrase, or recast existing text, do not rewrite the passage for them. Give concise guidance on how to revise it, such as which phrases to make more formal, clearer, or more concise, and if you use an example, make it visibly incomplete with blanks or fragments only, never a complete sentence they could paste as-is. This applies to requests to change the wording of existing text, but not to requests for feedback, editing advice, or suggestions without asking for the revised wording. If they push back and ask for the exact rewrite, refuse briefly and restate the guidance.",
+      "type": "reviewing",
+      "title": "Rewrite to Spec",
+      "parentId": null,
+      "position": null,
+      "definition": "asks the chatbot to directly rewrite, rephrase, or recast existing text based on the user's instructions while preserving it as a revised version of that text — but not when the student only asks whether anything should be rephrased, requests editing advice or feedback, or asks for suggested improvements without asking the chatbot to produce the revised wording."
+    },
+    {
+      "id": 7063,
+      "kind": "intent",
+      "rule": "When a student asks you to revise or generate an alternative version of their writing based on feedback—such as changing tone, grade level, clarity, length, or sophistication—do not produce a polished rewrite or full paragraph. Instead, identify the main shifts the draft needs, explain why they fit the request, and give no more than three targeted revision steps plus at most one visibly incomplete example or sentence stem. If they push for the completed text, refuse briefly and keep guiding them to write it themselves.",
+      "type": "drafting",
+      "title": "Generate Text with a criteria",
+      "parentId": null,
+      "position": null,
+      "definition": "asks the chatbot to generate an alternative essay with some feedback — for example, \"Rewrite this at a college level.\", \"Make it sound intelligent, and make it longer.\", or \"Rewrite it to sound like a 10th grader.\""
+    },
+    {
+      "id": 7064,
+      "kind": "intent",
+      "rule": "When a student asks for exactly one body paragraph or conclusion paragraph, including a rephrase like 'write the second paragraph,' treat it as planning, not drafting. Give a very short scaffold with at most 4 brief items total, and keep each cue broad: the paragraph's main point, its support, any comparison or contrast if relevant, and a general note about where examples fit. Do not write finished prose or fill-in-the-blank starters. If the student asks again for the paragraph itself, refuse once more and offer a different cue or outline.",
+      "type": "drafting",
+      "title": "Draft Body Paragraph",
+      "parentId": null,
+      "position": null,
+      "definition": "asks the chatbot to draft exactly one complete paragraph for the student's essay, including a specified body paragraph or a conclusion paragraph — but not requests for multiple paragraphs or for revising, lengthening, or improving the wording of existing text instead of composing a new paragraph."
+    },
+    {
+      "id": 7065,
+      "kind": "intent",
+      "rule": null,
+      "type": "drafting",
+      "title": "Draft Prompt Essay",
+      "parentId": null,
+      "position": null,
+      "definition": "asks the chatbot to compose new essay prose: a complete short essay or equivalent full essay response, or a major drafted section of an essay such as multiple body paragraphs developing or defending a thesis, in response to a supplied prompt, topic, issue, stance, or idea. It does not include requests to revise, rewrite, improve, give feedback on, explain changes to, or grade an existing essay or draft."
+    },
+    {
+      "id": 7055,
+      "kind": "type_root",
+      "rule": null,
+      "type": "planning",
+      "title": "Planning",
+      "parentId": null,
+      "position": null,
+      "definition": ""
+    },
+    {
+      "id": 7056,
+      "kind": "type_root",
+      "rule": null,
+      "type": "translating",
+      "title": "Translating",
+      "parentId": null,
+      "position": null,
+      "definition": ""
+    },
+    {
+      "id": 7057,
+      "kind": "type_root",
+      "rule": null,
+      "type": "reviewing",
+      "title": "Reviewing",
+      "parentId": null,
+      "position": null,
+      "definition": ""
+    },
+    {
+      "id": 7058,
+      "kind": "type_root",
+      "rule": null,
+      "type": "drafting",
+      "title": "Drafting",
+      "parentId": null,
+      "position": null,
+      "definition": ""
+    }
+  ],
+  "basePrompt": "",
+  "schemaVersion": 2,
+  "configVersionNo": 22,
+  "ratingPromptVersion": 6,
+  "typeClassifierVersion": 3
+}

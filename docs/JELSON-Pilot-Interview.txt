@@ -1,0 +1,75 @@
+Researcher (00:19):
+Thank you. So yeah, this is over. I think I need to add a survey to compare those two system directly. And so I don't have interview guide yet, but I'll ask some question to you. So you used two versions today. How did they feel different in how you got the chatbot to do what you want? So
+
+Jelson (00:55):
+The first one kind of felt like a giant system prompt, whereas the second one felt like it was tailored for specific problems, which I think was the intent. I think I kind of preferred the second one because with the first one, sometimes my changes for a planning code might break what I had already said for all code, whereas that doesn't really happen when it's in the criteria mode. I do think though that I was fighting with the criteria and it sometimes would classify things that I wanted classified together. So I don't know if criteria should be based on the entire question set rather than planning, translating, reviewing. But yeah, something like that.
+
+Researcher (01:43):
+Okay. For each version, was there a moment it clicked or a moment it got in your way?
+
+Jelson (01:53):
+So for the second version, it got in my way with the intents when it kept adding things back in that I had told it explicitly not to, or it tried to remove things that I had said to keep in. I think maybe the tool should not add things on its own after that first initial find, but it should put everything on that sidebar so I can review it manually. And then there could be an in or an out button there so I can say, "Hey, this doesn't fit because of X. This does fit because of X." And then when it clicked, definitely for the first one, it was probably around iteration seven or eight when I started to see all of my responses were becoming more and more what I wanted to see across the board.
+
+Researcher (02:42):
+So
+
+Jelson (02:42):
+I guess just through that repetitive cycle, by the seventh, eighth, ninth cycle, I was really happy with the responses I was seeing, even for questions I hadn't necessarily looked at yet.
+
+Researcher (03:00):
+Okay. So the next question is in the second block, so second system, were you trying to reveal what you made in the first one? How did that go?
+
+Jelson (03:18):
+A little bit. It's definitely slower because you have to get the intents first. But I think if this was like, I'm using this for a class, I'm using this multiple times, the intent section is more of a one-time setup. Whereas if I wasn't using intense, I feel like I would have to do that whole iterative cycle every assignment because every assignment is different. Whereas the intense is giving me a, okay, I have this already preset up system and I can just go in and tailor the fine-tuning aspects, and that's a lot better, if that makes sense.
+
+Researcher (04:00):
+Okay. If you were to use one of these for your own course next term, which would you pick and why?
+
+Jelson (04:11):
+Probably the second one because it is isolating things by the criteria so I can set specific rules. So having the generate examples was one of the planning rules that I set up. And I think that that can sometimes be mixed with translating in ways. And so having that rule of, hey, this is only for when they ask for examples, not when they ask you to write about set examples helps because then I can pre-filter how the AI is going to answer specific questions rather than just saying blanketly, oh, do X, and then the system has to figure out what questions X applies to, if that makes sense.
+
+Researcher (05:01):
+Okay. So yeah, I think that's all. So anything about either version you wanted to say but you weren't asked?
+
+Jelson (05:19):
+Yeah, so I guess some kind of final feedback. I think after the deploy where you're fact-checking the AI, I think it would probably be better to do question, then answer, question than answer instead of answering all the questions and then looking at all the answers. And maybe if time's an issue, going down to five questions instead of eight.
+
+(05:46):
+And then potentially if the phase two was already generated, there were already some criteria generated might be better because I think I spent more time in phase two working on the intense than on the rules. Whereas in phase one, I was focused a lot on the rules. So I'm not sure. Maybe the intense thing was handy and helpful to use. Or maybe just structure it to where phase two, you don't work on rules at all, you only work on intense or something. I feel like that step became a lot bigger than step one because it had both make intense and make rules versus phase one was just make rules. Yeah, that's the feedback I have, I think.
+
+Researcher (06:41):
+Okay. Thank you for participating in our study. Then I'll ask Sam to send you the conversation. Yeah.
+
+Jelson (06:55):
+Okay. Well, yeah,
+
+Researcher (06:57):
+Thank
+
+Jelson (06:57):
+You. Thank
+
+Researcher (06:58):
+You.
+
+Jelson (06:58):
+I hope it goes well. Y said this is going to potentially be a chi paper.
+
+Researcher (07:03):
+Yes, yes, but I need to. I don't know. I think concept is good, but actually the system seems too complex or it can be a little bit difficult for the user who are not familiar with the system, computer. Yeah. Yeah. Yeah, but I'll try.
+
+Jelson (07:28):
+Yeah, you could also talk, I think this is very similar to some of the stuff Dr. Chen does with his coding platform stuff. This is just kind of a different field. He may have advice on good conferences too, but yeah, good luck.
+
+Researcher (07:43):
+Thank you.
+
+Jelson (07:44):
+It looks good. Have a good one.
+
+Researcher (07:48):
+You too.
+
+Jelson (07:49):
+Bye.
+

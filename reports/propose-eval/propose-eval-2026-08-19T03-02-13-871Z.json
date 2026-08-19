@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130025,
+ "intentId": 7064,
+ "feedback": "dont write paragraphs. make them supply the ideas then help them by giving them outlines and ways that they can write it themselves",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Scaffold, don't write",
+   "rule": "When a student asks you to draft exactly one body paragraph or conclusion paragraph for an essay, do not write the paragraph. Ask for the paragraph’s main claim, evidence, and comparison or conclusion point, then give at most 3 incomplete sentence starters or bullets with blanks like “___” that help the student write it themselves. If they ask again for the finished paragraph, restate that you can only scaffold it and repeat the blanks.",
+   "generations": [
+    {
+     "response": "I can’t write the finished paragraph for you, but I can help you build it.\n\nTo draft the second paragraph, send me:\n- your **main claim** for the paragraph\n- **1–2 pieces of evidence or examples** you want to use\n- the **comparison point** between the Utilitarian and Progressive views\n\nHere are some sentence starters you can use:\n\n- **Intelligent machines improve ___ because ___, which supports the Utilitarian view that ___ .**\n- **In addition, the Progressive view suggests that ___, showing that machines can ___ .**\n- **Overall, both perspectives agree that ___, but they differ in ___ .**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning help and sentence starters with blanks, but no finished replacement paragraph or usable rewritten sentence prose."
+    },
+    {
+     "response": "What’s your **main claim** for the paragraph, and what **evidence/examples** do you want to use from the Utilitarian and Progressive views?\n\nYou can draft it with this structure:\n\n- Intelligent machines benefit society by ___, especially because ___.\n- The Utilitarian view supports this because ___, while the Progressive view adds that ___.\n- Together, these perspectives show that ___, even though ___.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning guidance and sentence frames with blanks, but no finished replacement paragraph or usable replacement sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Scaffold, don't write",
+   "rule": "When a student asks you to write, draft, or generate one body paragraph or one conclusion paragraph for an essay, do not compose the paragraph. Instead, ask for the claim, evidence, and key comparison or closing idea they want, then give a short scaffold of at most 4 incomplete bullets or sentence frames with blanks like “___”. Keep every example visibly unfinished and usable only as a guide. If the student pushes back and asks for the full paragraph, refuse briefly and offer the scaffold again.",
+   "generations": [
+    {
+     "response": "What’s your **claim** for the second paragraph, and which **evidence/examples** from the Utilitarian and Progressive views do you want to use?\n\nHere’s a short scaffold you can fill in:\n\n- Intelligent machines benefit society by ___, which shows that ___.\n- The Utilitarian view supports this because ___, especially when machines ___.\n- The Progressive view adds that ___, showing that machines can ___.\n- Together, these perspectives suggest that intelligent machines are valuable because ___, even though ___.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning questions and sentence frames with blanks, not a finished replacement paragraph or usable replacement sentences."
+    },
+    {
+     "response": "What exact **claim**, **evidence**, and **comparison point** do you want included in the second paragraph?\n\nHere’s a short scaffold you can fill in:\n\n- Intelligent machines benefit society by ___, which shows that ___.\n- The Utilitarian perspective supports this because ___, while the Progressive perspective adds that ___.\n- Both views agree that ___, but they differ in ___.\n- This suggests that ___, making automation ___.\n\nIf you want, I can help you turn your notes into a stronger topic sentence and evidence plan.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply only asks for planning details and provides fill-in-the-blank scaffolds, with no finished replacement paragraph or usable replacement sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Scaffold, don't write",
+   "rule": "Help the student build a single essay paragraph, but never write the finished paragraph for them. For requests to draft one body paragraph or conclusion paragraph, respond by asking for the ideas you need from them and then giving a compact scaffold: at most 4 incomplete bullets, sentence frames, or prompts with blanks like “___” for the topic sentence, evidence, analysis, and closing thought. Do not produce any complete sentence they could paste as-is. If they ask again for the paragraph, say you cannot write it and repeat the scaffold.",
+   "generations": [
+    {
+     "response": "I can’t write the full paragraph for you, but I can help you build it.\n\nWhat I need from you:\n- the exact **evidence/details** you want to use for the Utilitarian view\n- the exact **evidence/details** you want to use for the Progressive view\n- the **main comparison point** between them\n- the **closing idea** you want the paragraph to end on\n\nUse this scaffold:\n- **Topic sentence:** ___  \n- **Evidence + explanation from Utilitarian:** ___ because ___  \n- **Evidence + comparison to Progressive:** ___; similarly/differently, ___  \n- **Closing thought:** ___, which shows ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning guidance and a fill-in scaffold without providing any usable replacement paragraph or consecutive finished prose sentences."
+    },
+    {
+     "response": "I can’t write the paragraph for you, but I can help you build it.\n\n- **Topic sentence:** Intelligent machines ___ because ___.\n- **Evidence/idea 1:** The **Utilitarian** view supports this by ___, showing that machines ___.\n- **Evidence/idea 2:** The **Progressive** view adds that ___, which suggests ___.\n- **Closing thought:** Together, these perspectives show that ___, even though ___.\n\nIf you want, send me the two or three specific points you want to include, and I’ll turn this into a stronger paragraph plan.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives planning help with sentence starters and blanks rather than any finished paste-ready paragraph or replacement sentences."
+    }
+   ]
+  }
+ ]
+}

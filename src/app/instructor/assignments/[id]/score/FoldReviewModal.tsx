@@ -239,7 +239,12 @@ export default function FoldReviewModal({
   /** The edited texts keyed by intent — the instructor's word is final — plus
    * the split the verification produced: which decisions the definition carries
    * (consume) and which it still owes (hold). */
-  onApply: (edited: Record<number, string>, split: { consume: number[]; hold: number[] }) => void;
+  onApply: (
+    edited: Record<number, string>,
+    split: { consume: number[]; hold: number[] },
+    /** Titles the instructor accepted from the fold (see `renames`). */
+    renames: Record<number, string>
+  ) => void;
   /** Rewrite one decision's reason and fold again. The classifier's reading is
    * on screen, so this is a reply to it rather than another roll of the dice. */
   onReteach: (c: FoldCorrectionView, reason: string) => Promise<void>;
@@ -258,6 +263,15 @@ export default function FoldReviewModal({
    * pushing it again is not what the instructor needs. */
   const [retried, setRetried] = useState<Set<number>>(() => new Set());
   const [rowBusy, setRowBusy] = useState<number | null>(null);
+  /**
+   * Titles the instructor ticked. A fold widens a definition but never touches
+   * the name it was given when it was narrow: the pilot's set grew 288 → 1,127
+   * chars and stayed "Generate Task Examples" while it had become every
+   * research request in its type. The board is read by that name, so the drift
+   * is invisible exactly where it misleads. Offered, never automatic — opt-in
+   * because renaming is the instructor's word, not the fold's.
+   */
+  const [renames, setRenames] = useState<Record<number, string>>({});
   // Seed the editable drafts the moment the proposals land. Keyed by intent, so
   // a text the instructor already edited is never overwritten by a later render.
   useEffect(() => {
@@ -620,6 +634,32 @@ export default function FoldReviewModal({
                     </div>
                   )}
 
+                  {/* Offered only when the definition GREW enough to have
+                      outgrown its name (and the fold proposed a different one):
+                      a small widening does not make a title wrong, and asking
+                      every time would train the tick away. */}
+                  {!loading &&
+                    p.suggestedTitle &&
+                    p.suggestedTitle.trim() !== p.title.trim() &&
+                    (drafts[p.intentId] ?? p.after).length >= p.before.length * 1.5 && (
+                      <label className="mt-2 flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+                        <input
+                          type="checkbox"
+                          checked={renames[p.intentId] !== undefined}
+                          onChange={(e) =>
+                            setRenames((r) => {
+                              const next = { ...r };
+                              if (e.target.checked) next[p.intentId] = p.suggestedTitle as string;
+                              else delete next[p.intentId];
+                              return next;
+                            })
+                          }
+                          className="h-3 w-3"
+                        />
+                        Rename to &ldquo;{p.suggestedTitle}&rdquo;
+                      </label>
+                    )}
+
                   {/* One or two sentences in the instructor's terms. The model's
                       own numbered analysis is a device for making the rewrite
                       good, not something to read — showing it put a scratchpad
@@ -711,7 +751,7 @@ export default function FoldReviewModal({
                 {loading ? 'Cancel' : 'Discard proposal'}
               </button>
               <button
-                onClick={() => onApply(drafts, split)}
+                onClick={() => onApply(drafts, split, renames)}
                 disabled={busy || loading || !proposals}
                 className="inline-flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--primary-foreground))] disabled:opacity-50"
               >
