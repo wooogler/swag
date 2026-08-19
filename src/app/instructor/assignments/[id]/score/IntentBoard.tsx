@@ -36,7 +36,6 @@ import { runShardedRate } from './rate-runner';
 import { useSurfaceLog } from '@/lib/study/ui-log';
 import {
   AlertTriangle,
-  Check,
   ChevronRight,
   GripVertical,
   Loader2,
@@ -571,9 +570,6 @@ function ClampedText({
 /** What the outermost scope is called when nothing above a rule has one. */
 const DEFAULT_PROMPT_SCOPE = 'the default prompt';
 
-/** Questions per post-Apply backfill call — MAX_APPLY_MESSAGES in the apply
- * route, which generates them inside one maxDuration=60 invocation. */
-const BACKFILL_BATCH = 6;
 
 /**
  * Whether a rule says anything its enclosing scope did not.
@@ -786,21 +782,33 @@ function ResponseVersionBar({
   versions,
   selected,
   onSelect,
+  pending,
   isBaseline,
 }: {
   versions: ViewerRuleVersion[];
   selected: number | null;
   onSelect: (versionNo: number | null) => void;
+  /** The version whose reply is being worked out right now, if any. */
+  pending: number | null;
   isBaseline: boolean;
 }) {
   const viewing = selected === null ? null : versions.find((v) => v.versionNo === selected) ?? null;
+  // Three states, and the sentence has to tell them apart honestly. While a
+  // reply is being generated the thread below still shows the DELIVERED one,
+  // so the bar must not claim the reply is under the new rule yet — it says it
+  // is working it out. A selected version with no response and nothing pending
+  // is a generation that failed; picking it again retries.
+  const working = pending !== null && pending === selected;
+  const unavailable = !!viewing && !viewing.response && !working;
   return (
     <div
       className={`mb-2 flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs ${
         viewing ? 'text-blue-800 dark:text-blue-200' : 'text-[hsl(var(--muted-foreground))]'
       }`}
     >
-      {viewing ? (
+      {working ? (
+        <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+      ) : viewing ? (
         <RefreshCw className="w-3.5 h-3.5 shrink-0" />
       ) : (
         <MessageSquare className="w-3.5 h-3.5 shrink-0" />
@@ -808,7 +816,13 @@ function ResponseVersionBar({
       {/* The select finishes the sentence, so it carries the state instead of
           a note repeating it: "…under the rule v2 · Cap example count", or
           plain "…is Original (as delivered)". */}
-      <span className="font-medium">{viewing ? 'This reply is under the rule' : 'This reply is'}</span>
+      <span className="font-medium">
+        {working
+          ? 'Working out this reply under the rule'
+          : viewing
+            ? 'This reply is under the rule'
+            : 'This reply is'}
+      </span>
       <select
         value={selected ?? ''}
         onChange={(e) => {
@@ -836,6 +850,16 @@ function ResponseVersionBar({
           </option>
         ))}
       </select>
+      {working && (
+        <span className="text-[hsl(var(--muted-foreground))]">
+          — showing the delivered reply meanwhile
+        </span>
+      )}
+      {unavailable && (
+        <span className="text-[hsl(var(--muted-foreground))]">
+          — could not be worked out; choose it again to retry
+        </span>
+      )}
     </div>
   );
 }
@@ -1970,8 +1994,16 @@ export default function IntentBoard({
         // Land on the most recently applied rule rather than the delivered
         // original: that version is what the instructor just built, and it is
         // what students would get today. The API returns newest-first, so the
-        // first one carrying a response for this question is the latest.
-        setViewedVersionNo(versions.find((v) => v.response)?.versionNo ?? null);
+        // latest is simply the first.
+        //
+        // It no longer has to already CARRY a response to be landed on —
+        // nothing is generated at save time now — so when the newest one is
+        // empty here, this is the moment it gets worked out.
+        const latest = versions[0] ?? null;
+        setViewedVersionNo(latest?.versionNo ?? null);
+        if (latest && !latest.response) {
+          void ensureVersionResponse(selectedOwnerId, latest.versionNo, selectedMessageId);
+        }
       })
       .catch(() => {
         if (alive) setViewerVersions([]);
@@ -1979,6 +2011,10 @@ export default function IntentBoard({
     return () => {
       alive = false;
     };
+    // ensureVersionResponse is a plain function reference, new every render;
+    // depending on it would re-run this fetch (and re-select the version) on
+    // every keystroke elsewhere in the board.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignmentId, selectedMessageId, selectedOwnerId, viewerVersionsNonce]);
   const viewedVersion = useMemo(
     () =>
@@ -1988,87 +2024,71 @@ export default function IntentBoard({
     [viewedVersionNo, viewerVersions]
   );
 
-  // ---- Post-Apply version backfill ----------------------------------------
+  // ---- On-demand version responses ----------------------------------------
   /**
-   * After Apply, generate the new version's response for EVERY question the
-   * rule answers — SCORE: the ones the chain routes to it; baseline: the whole
-   * question list, since the one rules document answers all of them. Without
-   * this the viewer's dropdown only ever appeared on the anchor and the
-   * questions that happened to be pulled into the workbench as tabs, so "what
-   * did my edit do to the rest?" had no answer on the board.
+   * "What does vN answer HERE?" — generated when someone looks, not when they
+   * save.
    *
-   * It runs HERE rather than in the workbench because the move right after
-   * Apply is to go back to the questions: the board outlives the workbench, so
-   * leaving does not cancel the run. Batches mirror the apply route's own cap
-   * (6 generated messages per call) and run sequentially — a 60-question scope
-   * must not fan out 60 chat completions at once.
+   * It used to run at Save across every question the rule answers. For SCORE
+   * that is the handful the chain routes to it; for the baseline it is the
+   * WHOLE list, because one rules document genuinely answers everything
+   * (RuleWorkbench's `scopeRows` falls through to all rows). On a 60-question
+   * review set, six per call and sequential, that made every baseline save cost
+   * minutes where the equivalent SCORE save cost seconds — an asymmetry in the
+   * tool rather than in the thing the study compares, landing squarely on the
+   * block survey's own mental-demand and frustration items.
+   *
+   * Deferring costs no capability. Same builder, same prompt, same caches
+   * (score_rule_previews by rule hash, score_rule_version_responses by
+   * version+message), so a second look is still free — it simply is not paid
+   * for questions nobody opens. Nothing measured depended on it either: the
+   * block test generates its own answers at deploy (lib/study/generate.ts).
+   *
+   * BOTH ARMS, deliberately. Making only the baseline lazy would trade one
+   * asymmetry for another — SCORE browsing with instant dropdowns while the
+   * baseline paid a beat per question — and preview is meant to be equal across
+   * conditions (docs/SCORE_BASELINE_DESIGN.md §0 principle 1).
    */
-  const [backfill, setBackfill] = useState<{
-    label: string;
-    total: number;
-    done: number;
-    failed: number;
-    finished: boolean;
-  } | null>(null);
-  const backfillAbort = useRef<AbortController | null>(null);
-  useEffect(() => () => backfillAbort.current?.abort(), []);
-  // Read inside the loop without making the selection a dependency of it.
-  const selectedMessageIdRef = useRef(selectedMessageId);
-  selectedMessageIdRef.current = selectedMessageId;
+  const [versionPending, setVersionPending] = useState<number | null>(null);
+  const versionAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => versionAbort.current?.abort(), []);
 
-  async function backfillVersionResponses(opts: {
-    intentId: number;
-    versionNo: number;
-    label: string;
-    messageIds: number[];
-  }) {
-    const { intentId, versionNo, label, messageIds } = opts;
-    backfillAbort.current?.abort();
+  async function ensureVersionResponse(ownerId: number, versionNo: number, messageId: number) {
+    versionAbort.current?.abort();
     const controller = new AbortController();
-    backfillAbort.current = controller;
-    setBackfill({ label, total: messageIds.length, done: 0, failed: 0, finished: false });
-    for (let i = 0; i < messageIds.length; i += BACKFILL_BATCH) {
-      const batch = messageIds.slice(i, i + BACKFILL_BATCH);
-      let failed = batch.length;
-      try {
-        const res = await fetch(
-          `/api/instructor/assignments/${assignmentId}/score/intents/${intentId}/rule-versions/${versionNo}/apply`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messageIds: batch }),
-            signal: controller.signal,
-          }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (controller.signal.aborted) return;
-        if (!res.ok) throw new Error('generation failed');
-        const got = (data.responses ?? []) as { messageId: number; response: string | null }[];
-        failed = batch.length - got.filter((r) => r.response).length;
-      } catch (e) {
-        if ((e as Error)?.name === 'AbortError' || controller.signal.aborted) return;
-        // Counted, not fatal: one question the model choked on must not stop
-        // the rest of the scope from getting the new rule's response.
-      }
-      setBackfill((prev) =>
-        prev ? { ...prev, done: prev.done + batch.length, failed: prev.failed + failed } : prev
+    versionAbort.current = controller;
+    setVersionPending(versionNo);
+    try {
+      const res = await fetch(
+        `/api/instructor/assignments/${assignmentId}/score/intents/${ownerId}/rule-versions/${versionNo}/apply`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messageIds: [messageId] }),
+          signal: controller.signal,
+        }
       );
-      // The question on screen just got its response — refresh its dropdown now
-      // rather than at the end of a run that may still have minutes to go.
-      if (selectedMessageIdRef.current !== null && batch.includes(selectedMessageIdRef.current)) {
-        setViewerVersionsNonce((n) => n + 1);
-      }
+      const data = await res.json().catch(() => ({}));
+      if (controller.signal.aborted) return;
+      const text = ((data.responses ?? []) as { messageId: number; response: string | null }[]).find(
+        (r) => r.messageId === messageId
+      )?.response;
+      if (!res.ok || !text) return;
+      // Patched in place rather than refetched: the list's own effect keys on
+      // the selection, so re-running it would throw away the version the
+      // instructor just picked.
+      setViewerVersions((prev) =>
+        prev ? prev.map((v) => (v.versionNo === versionNo ? { ...v, response: text } : v)) : prev
+      );
+    } catch {
+      // Left unresolved on purpose — the bar says the reply could not be worked
+      // out, and choosing the version again retries.
+    } finally {
+      // Only the run that is still current may clear the flag; an aborted one
+      // has already been replaced by a newer request that set it.
+      if (versionAbort.current === controller) setVersionPending(null);
     }
-    if (controller.signal.aborted) return;
-    setViewerVersionsNonce((n) => n + 1);
-    setBackfill((prev) => (prev ? { ...prev, finished: true } : prev));
   }
-  // The finished strip is a receipt, not a state — it clears itself.
-  useEffect(() => {
-    if (!backfill?.finished) return;
-    const t = setTimeout(() => setBackfill(null), 8000);
-    return () => clearTimeout(t);
-  }, [backfill?.finished]);
   // Which response to render, resolved WITHOUT flicker: a question whose owner
   // has a rule may carry an applied-version response, so we hold the pane until
   // the version fetch lands rather than flashing the delivered original first.
@@ -2566,51 +2586,8 @@ export default function IntentBoard({
       {/* Slim status strip — only mounts while a starter-set rating run is in
           flight (or failed); the old permanent control bar is gone (deploy +
           versions moved to the page header). */}
-      {(runError || (running && runProgress) || boardRefreshing || backfill) && (
+      {(runError || (running && runProgress) || boardRefreshing) && (
         <div className="shrink-0 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 flex items-center gap-3 text-xs">
-          {/* Post-Apply backfill. Sits ABOVE the workbench/board switch on
-              purpose: the run continues after Revise closes, so its progress
-              has to be visible from both. */}
-          {backfill && (
-            <span className="flex items-center gap-2 text-[hsl(var(--muted-foreground))]">
-              {backfill.finished ? (
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
-              ) : (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              )}
-              <span>
-                {backfill.finished
-                  ? `${backfill.label} ready on ${backfill.total} question${backfill.total === 1 ? '' : 's'}`
-                  : `Applying ${backfill.label} to ${backfill.total} question${backfill.total === 1 ? '' : 's'}…`}
-              </span>
-              {!backfill.finished && (
-                <span className="w-32 h-1.5 rounded bg-[hsl(var(--muted))] overflow-hidden inline-block">
-                  <span
-                    className="block h-full bg-[hsl(var(--primary))] transition-all"
-                    style={{
-                      width: `${backfill.total ? Math.round((backfill.done / backfill.total) * 100) : 0}%`,
-                    }}
-                  />
-                </span>
-              )}
-              <span className="tabular-nums">
-                {backfill.done}/{backfill.total}
-                {backfill.failed > 0 && <span className="text-red-600"> · {backfill.failed} failed</span>}
-              </span>
-              {!backfill.finished && (
-                <button
-                  onClick={() => {
-                    backfillAbort.current?.abort();
-                    setBackfill(null);
-                  }}
-                  className="underline hover:text-[hsl(var(--foreground))]"
-                  title="Stop generating — the questions already done keep their response"
-                >
-                  Stop
-                </button>
-              )}
-            </span>
-          )}
           {boardRefreshing && (
             <span className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))]">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2674,14 +2651,6 @@ export default function IntentBoard({
                 ? titleOf(reviseTarget.intent.parentIntentId)
                 : null,
           }}
-          onApplied={({ versionNo, label, messageIds }) =>
-            void backfillVersionResponses({
-              intentId: reviseTarget.intent.id,
-              versionNo,
-              label,
-              messageIds,
-            })
-          }
           onClose={(changed) => {
             const savedIntentId = reviseTarget.intent.id;
             setReviseTarget(null);
@@ -2730,14 +2699,6 @@ export default function IntentBoard({
           // No scopeMessageIds → the workbench's scope is the whole question
           // list, which is exactly right here: one rules document answers all
           // of them, so all of them get the new version's response.
-          onApplied={({ versionNo, label, messageIds }) =>
-            void backfillVersionResponses({
-              intentId: promptHolder.id,
-              versionNo,
-              label,
-              messageIds,
-            })
-          }
           onClose={(changed) => {
             setPromptReviseTarget(null);
             if (changed) {
@@ -2789,14 +2750,6 @@ export default function IntentBoard({
             .map((r) => r.messageId)}
           scopeLabel={QUERY_TYPE_LABELS[rootReviseTarget.root.type]}
           fixedWhen={typeRootWhen(rootReviseTarget.root.type)}
-          onApplied={({ versionNo, label, messageIds }) =>
-            void backfillVersionResponses({
-              intentId: rootReviseTarget.root.id,
-              versionNo,
-              label,
-              messageIds,
-            })
-          }
           onClose={(changed) => {
             setRootReviseTarget(null);
             if (changed) {
@@ -3625,11 +3578,22 @@ export default function IntentBoard({
                     // Only questions that have a version-generated response to
                     // show get the picker — with nothing to switch to, it would
                     // be a control over a single option.
-                    viewerVersions && viewerVersions.some((v) => v.response) ? (
+                    // Every APPLIED version is offered, whether or not its
+                    // reply has been worked out yet — that is what picking one
+                    // now does.
+                    viewerVersions && viewerVersions.length > 0 ? (
                       <ResponseVersionBar
-                        versions={viewerVersions.filter((v) => v.response)}
+                        versions={viewerVersions}
                         selected={viewedVersionNo}
-                        onSelect={setViewedVersionNo}
+                        onSelect={(no) => {
+                          setViewedVersionNo(no);
+                          if (no === null || selectedOwnerId === null) return;
+                          const picked = viewerVersions.find((v) => v.versionNo === no);
+                          if (picked && !picked.response) {
+                            void ensureVersionResponse(selectedOwnerId, no, selectedRow.messageId);
+                          }
+                        }}
+                        pending={versionPending}
                         isBaseline={isBaseline}
                       />
                     ) : null

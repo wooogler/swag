@@ -379,7 +379,6 @@ interface RuleWorkbenchProps {
    * rule answers rather than only the ones this session opened — and so leaving
    * for the board, the natural next move, does not cancel the run.
    */
-  onApplied?: (opts: { versionNo: number; label: string; messageIds: number[] }) => void;
   /**
    * WHICH of the three rules this workbench is editing. This used to be one
    * `promptMode` boolean, which collapsed the last two together — and since the
@@ -435,7 +434,6 @@ export default function RuleWorkbench({
   deployedRule = null,
   viewVersion = null,
   onClose,
-  onApplied,
   variant = 'intent',
   scopeMessageIds = null,
   scopeLabel = null,
@@ -1098,21 +1096,11 @@ export default function RuleWorkbench({
             /* the anchor row (stored by the save itself) still lands */
           }
         }
-        // Everything else in scope has no response under this version yet. Hand
-        // the remainder to the board to generate — the session's tabs are the
-        // questions the instructor chose to look at, not the questions the rule
-        // answers, and the dropdown should cover the second set.
-        const covered = new Set([anchorId, ...responses.map((r) => r.messageId)]);
-        const pending = scopeRows.map((r) => r.messageId).filter((id) => !covered.has(id));
-        if (pending.length > 0) {
-          // A major bumps the display number; the raw versionNo runs ahead of
-          // it (the seed and every simulated minor occupy the same sequence).
-          onApplied?.({
-            versionNo: saved.versionNo,
-            label: `v${(versions?.[0]?.major ?? 0) + 1}`,
-            messageIds: pending,
-          });
-        }
+        // Everything else in scope is left alone. It used to be handed to the
+        // board to generate right here — the whole log for the baseline, whose
+        // one document answers everything — which is what made saving cost
+        // minutes on this side and seconds on the other. The board now works a
+        // reply out when someone opens that question under this version.
       }
       if (live()) {
         savedAnyRef.current = true;
