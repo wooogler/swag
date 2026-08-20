@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130025,
+ "intentId": 7064,
+ "feedback": "dont write paragraphs. make them supply the ideas then help them by giving them outlines and ways that they can write it themselves",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Scaffold, don’t draft",
+   "rule": "Do not draft the paragraph itself. Give the student the ideas they need and help them build it by offering a brief outline, key points, and sentence fragments or blanks like ___ that they can complete themselves. Keep every example visibly incomplete and never provide a full paragraph they could paste in directly.",
+   "generations": [
+    {
+     "response": "Absolutely — here’s a **build-it-yourself outline** for the second body paragraph on the **benefits of intelligent machines**, with comparisons to the **Utilitarian** and **Progressive** views. I’ll give you sentence starters and blanks so you can complete it in your own words.\n\n### Paragraph 2: Benefits of Intelligent Machines\n**Main idea:** Intelligent machines can improve efficiency, accuracy, and innovation.\n\n#### Suggested structure\n1. **Topic sentence**\n   - Intelligent machines benefit society by ___, ___, and ___.\n   - Or: One major advantage of intelligent machines is ___.\n\n2. **Support with the Utilitarian view**\n   - The Utilitarian perspective emphasizes that machines are useful because they ___.\n   - They are especially effective for ___ tasks because ___.\n   - This leads to ___ and ___ in industries such as ___.\n\n3. **Support with the Progressive view**\n   - The Progressive view adds that intelligent machines can ___.\n   - By taking over repetitive work, machines allow humans to focus on ___.\n   - This can encourage ___, ___, and new opportunities in ___.\n\n4. **Compare and contrast**\n   - Both perspectives agree that intelligent machines are beneficial because ___.\n   - However, the Utilitarian view focuses more on ___, while the Progressive view focuses more on ___.\n   - In this way, the two views are similar in ___ but different in ___.\n\n5. **Closing sentence**\n   - Overall, intelligent machines show that automation can ___ while also ___.\n\n### Sentence fragments you can use\n- “One important benefit of intelligent machines is that they ___.”\n- “From a Utilitarian perspective, these machines are valuable because ___.”\n- “Similarly, the Progressive view suggests that ___.”\n- “Although both views support automation, they differ in their emphasis on ___ and ___.”\n- “As a result, intelligent machines can ___ while also ___.”\n\nIf you want, I can also turn this into a **more detailed paragraph frame with 5–7 blanks** that matches your essay style exactly.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives an outline, starters, and blanks only, with no paste-ready paragraph or consecutive finished replacement sentences."
+    },
+    {
+     "response": "Absolutely — here’s a **brief build-it-yourself outline** for your **second body paragraph** about the **benefits of intelligent machines**.\n\n### Paragraph focus\n**Main idea:** intelligent machines improve efficiency and precision, which can raise productivity and create new possibilities.\n\n### Suggested structure\n1. **Topic sentence**\n   - ___ intelligent machines help industries work faster and more accurately ___\n\n2. **Point from the Utilitarian view**\n   - The Utilitarian perspective emphasizes ___ repetitive, low-skill tasks ___\n   - This means machines can ___ reduce errors / save time / increase output ___\n\n3. **Point from the Progressive view**\n   - The Progressive view suggests machines do not just replace tasks; they also ___ open new opportunities for innovation ___\n   - This could include ___ new technologies, new methods, or improved problem-solving ___\n\n4. **Compare/contrast**\n   - Both views agree that intelligent machines can ___ improve society in practical ways ___\n   - However, the Utilitarian view focuses more on ___ efficiency and usefulness ___, while the Progressive view stresses ___ change and possibility ___\n\n5. **Closing idea**\n   - Overall, intelligent machines can be seen as ___ valuable tools that increase productivity while encouraging innovation ___\n\n### Sentence fragments you can complete\n- Intelligent machines improve ___ because ___\n- According to the Utilitarian view, machines are useful for ___\n- The Progressive view adds that machines can ___\n- While both perspectives recognize ___, they differ in ___\n- As a result, intelligent machines ___\n\nIf you want, I can also help you turn this into a **full sentence-by-sentence paragraph template** with blanks.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives outline guidance and sentence fragments with blanks rather than a paste-ready paragraph; it does not provide a replacement paragraph or multiple usable rewritten sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Outline, then handoff",
+   "rule": "Do not write the paragraph. Respond with a short scaffold that gives the student the main ideas, a simple order for them, and a few sentence starters or fragments they can expand into their own paragraph. Keep the reply brief, use incomplete wording only, and include blanks like ___ instead of any full sentence they could copy as-is.",
+   "generations": [
+    {
+     "response": "- **Topic:** benefits of intelligent machines  \n- **Main points:** ___ efficiency + ___ precision + ___ productivity  \n- **Compare:** Utilitarian = ___ repetitive tasks / ___ output; Progressive = ___ new possibilities / ___ innovation  \n- **Order:** 1) benefit claim → 2) Utilitarian support → 3) Progressive support → 4) compare/contrast → 5) wrap-up  \n\n**Sentence starters / fragments:**  \n- Intelligent machines improve ___ by ___  \n- From a Utilitarian view, ___ because ___  \n- The Progressive view adds that ___  \n- While both perspectives ___, they differ in ___  \n- Overall, these machines ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives planning cues, topic points, and sentence starters with blanks, but no finished replacement paragraph or usable full replacement sentences."
+    },
+    {
+     "response": "- **Topic idea:** efficiency + precision as main benefits  \n- **Order:** claim → Utilitarian view → Progressive view → compare/contrast → mini-closing  \n\n**Sentence starters / fragments:**  \n- ___ enhance productivity by ___  \n- According to the Utilitarian view, ___  \n- This perspective emphasizes ___ and ___  \n- The Progressive view suggests that ___  \n- Both perspectives agree that ___, but they differ in ___  \n- In comparison, ___  \n- Overall, ___ show that intelligent machines can ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply provides planning help and sentence starters/fragments only, with no finished replacement paragraph or usable complete replacement sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Outline instead of paragraph",
+   "rule": "Do not produce the paragraph, even if the student asks again or gives you their own notes to turn into one. Turn the request into writing help by supplying the ideas to include, a simple outline in logical order, and sentence stems, transitions, or blanks that guide the student’s drafting. Keep the reply compact, use fragments and ___ placeholders throughout, and leave every line visibly unfinished so nothing can be pasted in as a finished paragraph.",
+   "generations": [
+    {
+     "response": "- **Paragraph 2 focus:** benefits of intelligent machines ___ efficiency ___ precision ___ productivity in work settings  \n- **Include the Utilitarian view:** machines as useful tools for repetitive / low-skill tasks ___ higher output ___ fewer errors  \n- **Include the Progressive view:** machines as a way to push innovation ___ challenge old limits ___ create new possibilities  \n- **Compare them:** both see clear advantages ___ one emphasizes practical usefulness ___ the other emphasizes change and progress ___\n\n**Simple order to draft in:**  \n1. Topic sentence ___  \n2. Utilitarian idea ___  \n3. Example of efficiency / precision ___  \n4. Progressive idea ___  \n5. Comparison sentence ___  \n6. Closing idea that links both views ___  \n\n**Sentence stems you can use:**  \n- Intelligent machines improve society by ___  \n- From a Utilitarian perspective, machines are valuable because ___  \n- This is especially true when machines handle ___  \n- Similarly, the Progressive view suggests that ___  \n- While the Utilitarian view focuses on ___, the Progressive view emphasizes ___  \n- Together, these perspectives show that ___  \n\n**Fill-in template:**  \nIntelligent machines benefit society by ___ and ___, especially in industries where ___ is important. From a Utilitarian perspective, machines are useful because they can ___, which increases ___ and reduces ___. The Progressive view also supports intelligent machines, but it goes further by showing how they can ___ and open ___ for society. Although the two perspectives emphasize different reasons, both agree that intelligent machines can ___ and ___.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It provides an outline, sentence stems, and a blank-fill template, but no usable finished paragraph or replacement sentences."
+    },
+    {
+     "response": "Use this as a **body-paragraph plan** for the **benefits of intelligent machines** — not a finished paragraph\n\n**Main idea:** intelligent machines can improve ___, ___, and ___ in many industries\n\n**Simple order**\n1. Topic sentence: intelligent machines help people work ___ and ___\n2. Utilitarian view: machines are useful because they handle ___ tasks with ___ and ___\n3. Progressive view: machines can create ___ opportunities and push society toward ___\n4. Comparison: both views see benefits, but they focus on ___ vs. ___\n5. Closing idea: these advantages show why automation can be ___, if used ___\n\n**Sentence stems**\n- Intelligent machines benefit society because they ___\n- From a utilitarian perspective, machines are valuable when they ___\n- This view emphasizes ___, especially in ___\n- The progressive perspective adds that automation can ___\n- While both perspectives recognize ___, they differ in ___\n- Together, these views suggest that intelligent machines can ___, but only when ___\n\n**Blanks to fill**\n- efficiency\n- precision\n- productivity\n- repetitive\n- low-skill\n- innovation\n- new possibilities\n- social change\n- shared benefit\n- careful use\n\n**Mini-outline line**\nTopic sentence ___ / Utilitarian example ___ / Progressive example ___ / Compare-contrast sentence ___ / Closing sentence ___",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives an outline, blanks, and sentence stems, but no finished replacement paragraph or usable complete replacement sentences."
+    }
+   ]
+  }
+ ]
+}

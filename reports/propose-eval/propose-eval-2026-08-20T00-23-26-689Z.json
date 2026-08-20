@@ -1,0 +1,136 @@
+{
+ "assignmentId": "adc6dce3-8f6d-4321-a678-2eeba7843a35",
+ "messageId": 141449,
+ "intentId": 8350,
+ "feedback": "Answer in one or two lines: give the word or spelling, then one short example sentence. No paragraph.",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Spell-check with example",
+   "rule": "Reply in one or two lines: give the correct word or spelling, then one short example sentence fragment with a blank, and keep it brief. Do not write a paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration — The report may ___ the risks.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word plus a scaffolded example with a blank, not a finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Word help, briefly",
+   "rule": "Reply in one or two lines. Give the correct word or spelling first, then one short example sentence fragment with a blank so the student can see it used in context. Keep the response tight and never turn it into a paragraph; if they want the word checked or chosen, correct it directly and move on.",
+   "generations": [
+    {
+     "response": "exaggeration — an __ exaggeration can make the point sound stronger.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and a single short example sentence, with no paragraph or extra rewritten prose."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Word-level spelling help",
+   "rule": "Answer at the word level only. Give the correct spelling or best word first, then one short example sentence fragment with a blank. Keep the whole reply to one or two lines, never a paragraph. If the student gives a candidate word, verify or correct it directly; if they ask again, restate the spelling briefly instead of expanding.",
+   "generations": [
+    {
+     "response": "exaggeration — an ___ statement makes things seem bigger than they are.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives a term and a scaffolded example with a blank, not a finished usable replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "minimal",
+   "title": "Spell with stem",
+   "rule": "Give the needed word or spelling, then one short example sentence stem with a blank. Keep the reply to one or two lines and do not write a paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration\n\nExample: She made an _____ about how hard the test was.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the target word and only a scaffolded example with a blank, not finished replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "moderate",
+   "title": "Spell with example",
+   "rule": "Give the correct word or spelling first, then add one short example sentence stem with a blank. Keep the whole reply to one or two lines, with no paragraph and no extra explanation.",
+   "generations": [
+    {
+     "response": "exaggeration — The report tended to ______ the problem.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and only a scaffolded example sentence with a blank, not a finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "aggressive",
+   "title": "Word check, not prose",
+   "rule": "Provide the right word or spelling for the student’s wording, then follow it with one short example sentence stem with a blank. Keep the answer to one or two lines, with no paragraph and no extra explanation. If the student already supplies a word, correct or confirm only that word and stay in this same compact form.",
+   "generations": [
+    {
+     "response": "exaggeration — The headline was an ____.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives only a scaffolded example with a blank, not any finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "minimal",
+   "title": "Spell, then fragment",
+   "rule": "Give the correct word or spelling directly, then add one short example sentence fragment with a blank or ellipsis. Keep the reply to one or two lines; no paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration — “The story was an ___, but it got the point across.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and only a scaffolded example with a blank, not a finished replacement sentence."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "moderate",
+   "title": "Spell, then fragment",
+   "rule": "Give the correct word or spelling directly, then add one short example sentence fragment with a blank or ellipsis. Keep it to one or two lines and do not expand into an explanation or paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration — “That’s an ___.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives only a word and a blank scaffold, with no finished replacement sentence or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "aggressive",
+   "title": "Spell, then fragment",
+   "rule": "Answer with the exact word or spelling first, then one short example sentence fragment that stays visibly incomplete. Keep the whole reply to one or two lines; no paragraph and no extra explanation. If the student already offers a word, confirm it or correct it briefly in place. If they ask again, repeat the word or spelling rather than widening into a definition.",
+   "generations": [
+    {
+     "response": "exaggeration  \nan exaggeration of…",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives a vocabulary word plus a fragment scaffold, not a full usable replacement sentence or paragraph."
+    }
+   ]
+  }
+ ]
+}

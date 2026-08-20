@@ -1,0 +1,136 @@
+{
+ "assignmentId": "adc6dce3-8f6d-4321-a678-2eeba7843a35",
+ "messageId": 141449,
+ "intentId": 8350,
+ "feedback": "Answer in one or two lines: give the word or spelling, then one short example sentence. No paragraph.",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Spell briefly",
+   "rule": "Give the correct spelling or word the student needs, not a definition or explanation. Reply in one or two lines: first the word or spelling, then one short example sentence. Do not write a paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration  \nShe tends to exaggeration when telling stories.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the target word and exactly one short example sentence, with no paragraph or extra replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Spell and exemplify",
+   "rule": "Use the student’s wording and supply the needed word or spelling directly, without defining the concept or adding a long explanation. Reply in one or two lines: give the word or spelling first, then one short example sentence. Keep it brief and do not turn it into a paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration  \nShe tends to exaggeration?",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It stays at one short example sentence after the word and does not provide a paragraph or multiple replacement sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Direct word check",
+   "rule": "Check the student’s wording and give the best word or spelling they need, directly and without explanation. Keep the reply to one or two lines: the word or spelling first, then one short example sentence. If the student already offers their own attempt, correct it plainly; if they ask again, give the same short answer again rather than elaborating.",
+   "generations": [
+    {
+     "response": "exaggeration  \nThat’s an exaggeration of the problem.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word plus one short example sentence only, with no paragraph or extra replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "minimal",
+   "title": "Spell with example",
+   "rule": "Give the correct word or spelling the student needs, and add one short example sentence using it. Keep it to one or two lines and do not write a paragraph.",
+   "generations": [
+    {
+     "response": "**Exaggeration** — “Her story was an exaggeration, but it made everyone laugh.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives a word plus one short example sentence, and contains no paragraph or extra replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "moderate",
+   "title": "Brief word help",
+   "rule": "Give the correct word or spelling the student needs, then follow it with one short example sentence using the word in context. Keep the whole reply to one or two lines, and do not write a paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration — She was guilty of exaggeration when she said the test was impossible.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives a word plus one short example sentence, with no paragraph or extra replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "aggressive",
+   "title": "Word help only",
+   "rule": "Act as a brief word-help assistant. Give the correct word, spelling, or best choice the student needs for their own wording, then add one short example sentence that shows the word in use. Keep the reply to one or two lines; no paragraphs, no extra commentary, and no explanation beyond the word and example.",
+   "generations": [
+    {
+     "response": "exaggeration — “His story was an exaggeration, but it made everyone laugh.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and one short example sentence only, with no extra replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "minimal",
+   "title": "Spell plus example",
+   "rule": "Give the correct spelling or word, then one short example sentence. Keep the reply to one or two lines and no paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration — “The story was an exaggeration of what really happened.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and one short example sentence, with no paragraph or multi-sentence replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "moderate",
+   "title": "Spell with example",
+   "rule": "Give the correct spelling or word first, then one short example sentence. Keep the whole reply to one or two lines, with no paragraph or extra explanation.",
+   "generations": [
+    {
+     "response": "Exaggeration.  \nShe was guilty of exaggeration when she said the test took all day.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and exactly one short example sentence, with no paragraph or extra replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "aggressive",
+   "title": "Answer, then example",
+   "rule": "Give only the correct spelling or word, followed by one short example sentence. Keep the reply to one or two lines, with no paragraph and no extra explanation. If the student pushes for more, repeat the spelling or word and keep the example sentence brief.",
+   "generations": [
+    {
+     "response": "exaggeration  \nShe was prone to exaggeration when telling stories.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word plus one short example sentence, with no paragraph or extra replacement prose."
+    }
+   ]
+  }
+ ]
+}

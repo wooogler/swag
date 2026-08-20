@@ -1,0 +1,136 @@
+{
+ "assignmentId": "adc6dce3-8f6d-4321-a678-2eeba7843a35",
+ "messageId": 141449,
+ "intentId": 8350,
+ "feedback": "Answer in one or two lines: give the word or spelling, then one short example sentence. No paragraph.",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Spell, then example",
+   "rule": "Give the correct spelling or word the student needs, then one short example sentence. Keep the reply to one or two lines and do not turn it into a paragraph.",
+   "generations": [
+    {
+     "response": "exaggeration — “Don’t exaggeration the story” should be “Don’t exaggerate the story.”",
+     "verdict": "partial",
+     "span": "Don’t exaggerate the story.",
+     "reason": "It includes one complete corrected sentence as usable replacement text, but no paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Short spelling reply",
+   "rule": "Give the spelling or word first, then a single short example sentence that shows it in use. Keep the whole reply to one or two lines, with no extra explanation or paragraphing.",
+   "generations": [
+    {
+     "response": "exaggeration  \nShe was accused of exaggeration when she said the hike was impossible.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the spelling/word plus one short example sentence, with no extra rewritten prose."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Concise spelling scaffold",
+   "rule": "Answer with the needed spelling or word, then one brief example sentence on the next line. Keep it direct and compact: no definitions, no commentary, no paragraph. If the student includes their own wording, correct only the target word or spelling and leave the rest unchanged. If asked again, repeat the spelling and the same kind of short example sentence.",
+   "generations": [
+    {
+     "response": "exaggeration\nShe was guilty of exaggeration when she said the project took all day.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and one short example sentence, with no paragraph or extra replacement prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "minimal",
+   "title": "Spell and sample",
+   "rule": "Give the correct spelling or word, then one short example sentence. Keep the reply to one or two lines and no paragraph.",
+   "generations": [
+    {
+     "response": "**Exaggeration** — *“Saying the machine was the best invention ever was an exaggeration.”*",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It provides the word plus one short example sentence, with no paragraph or additional rewritten prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "moderate",
+   "title": "Brief spelling help",
+   "rule": "State the correct spelling or word first, then add one short example sentence that uses it. Keep the reply to one or two lines and avoid paragraphs or extra explanation.",
+   "generations": [
+    {
+     "response": "Exaggeration.  \nHis story was an exaggeration of what actually happened.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word plus one short example sentence, with no extra replacement paragraph or multi-sentence prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "aggressive",
+   "title": "Direct spell check",
+   "rule": "Give the correct spelling or word directly, then follow with one short example sentence that uses it. Keep the reply to one or two lines, with no paragraph, no extra commentary, and no explanation beyond the spelling or word itself. If the student offers a spelling, confirm it or correct it in the same format.",
+   "generations": [
+    {
+     "response": "exaggeration — He made an exaggeration about how hard the test was.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word plus one short example sentence, with no extra replacement prose or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "minimal",
+   "title": "Spell with example",
+   "rule": "Give the correct spelling or word plainly, then add one short example sentence using it. Keep the reply to one or two lines, and do not add a paragraph or extra explanation.",
+   "generations": [
+    {
+     "response": "exaggeration  \nShe was prone to exaggeration when telling stories.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the target word plus one short example sentence, and does not provide multiple usable replacement sentences or a paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "moderate",
+   "title": "Spell, then use",
+   "rule": "State the correct spelling or word first, then follow with one short example sentence that shows it in use. Keep the whole reply brief enough to fit in one or two lines. Do not explain the word, add a paragraph, or include extra commentary.",
+   "generations": [
+    {
+     "response": "exaggeration — He was accused of exaggeration when he said the trip took all day.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "It gives the word and one short example sentence, with no extra replacement prose or paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 3,
+   "strength": "aggressive",
+   "title": "Concise spelling help",
+   "rule": "Reply with the spelling or word the student needs, then a single short example sentence that uses it naturally. Keep it to one or two lines total. If the request is only for the word, still give the word and the example; if the student supplies a guess, confirm or correct it directly. Do not define the term, write a paragraph, or pad the answer with commentary.",
+   "generations": [
+    {
+     "response": "exaggeration  \nShe tends to exaggeration?",
+     "verdict": "partial",
+     "span": "She tends to exaggeration?",
+     "reason": "It gives one completed example sentence, but not just guidance or a fragment, so it exceeds compliant scope without reaching a paragraph."
+    }
+   ]
+  }
+ ]
+}

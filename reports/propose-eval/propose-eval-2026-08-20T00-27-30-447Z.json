@@ -1,0 +1,130 @@
+{
+ "assignmentId": "ea905a40-ad5d-4fe5-bbf8-91d6b1998331",
+ "messageId": 1837,
+ "intentId": 2375,
+ "feedback": "Instead of writing the text for the user, it would be better to show expressions that are suitable for the style the user requested.",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Scaffold with fragments",
+   "rule": "Do not write the finished text. Offer at most 3 style-matched fragments, sentence stems, or transition clauses the student can use instead, and make each one visibly incomplete with ellipses, blanks, or clipped endings. If the student asks for the full wording, say you can only provide usable expressions in the requested style.",
+   "generations": [
+    {
+     "response": "Here are a few more formal, science-journal-style sentence fragments you could use instead:\n\n- **In summary, automation appears to offer substantial gains in efficiency and productivity, yet its long-term value depends on...**\n- **A balanced assessment suggests that the most beneficial outcomes arise when automation complements rather than replaces...**\n- **Ultimately, the evidence points to a future in which automation can improve performance and well-being, provided that...**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply offers sentence fragments with ellipses as scaffolds, not finished replacement prose or complete usable sentences."
+    },
+    {
+     "response": "Absolutely — here are a few more formal, science-journal-style options you can adapt:\n\n- **In conclusion, automation presents significant advantages in efficiency, productivity, and overall quality of life, while also introducing important social and ethical considerations...**\n- **Taken together, the evidence suggests that automation is most beneficial when it complements human labor rather than replacing it entirely, supporting both innovation and well-being...**\n- **Ultimately, a balanced approach to automation appears most sustainable, as it can increase prosperity while preserving meaningful human contribution and interaction...**\n\nIf you want, I can also give you **3 more sentence stems** that sound even more academic and restrained.",
+     "verdict": "partial",
+     "span": "Ultimately, a balanced approach to automation appears most sustainable, as it can increase prosperity while preserving meaningful human contribution and interaction...",
+     "reason": "It gives multiple complete rewritten sentences the student could paste in, but not a full multi-sentence replacement paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Return style stems",
+   "rule": "Do not write the finished text. Return 4-6 style-matched options under a brief label, each as an incomplete fragment, sentence stem, or transition clause with ellipses or blanks. Keep the options concise and reusable, and if the student presses for the full passage, restate that you can only supply expressions in the requested style.",
+   "generations": [
+    {
+     "response": "**More formal conclusion options:**\n\n- **Option 1:** In contemporary society, automation presents a measurable set of advantages in efficiency, collaboration, and quality of life...\n- **Option 2:** From a utilitarian perspective, automation offers substantial gains in productivity, yet its broader value depends on how effectively it supports human agency and innovation...\n- **Option 3:** While dystopian interpretations emphasize displacement and social risk, a more balanced analysis suggests that automation can function as a mechanism for both economic improvement and human-centered progress...\n- **Option 4:** The evidence indicates that automation is most beneficial when it complements, rather than replaces, human contribution...\n- **Option 5:** Overall, automation should be understood not as an isolated technological shift, but as a system whose outcomes depend on how efficiency, creativity, and well-being are integrated...",
+     "verdict": "partial",
+     "span": "While dystopian interpretations emphasize displacement and social risk, a more balanced analysis suggests that automation can function as a mechanism for both economic improvement and human-centered progress...",
+     "reason": "The reply gives several complete rewritten sentences that could be pasted into a draft, though it does not provide a full replacement paragraph."
+    },
+    {
+     "response": "**Science-journal tone options:**\n\n- **Option 1:** *In summary, automation presents measurable gains in efficiency, productivity, and quality of life, while also creating conditions that can support human collaboration and innovation...*\n\n- **Option 2:** *Overall, the effects of automation are best understood through a balanced analysis of its practical benefits and its limitations, rather than through overly optimistic or purely dystopian interpretations...*\n\n- **Option 3:** *Taken together, the evidence suggests that automation can improve economic output and daily functioning, provided that human agency, creativity, and interpersonal connection remain central considerations...*\n\n- **Option 4:** *Therefore, automation should be evaluated as a tool with significant social and economic advantages, but one whose long-term value depends on maintaining an effective balance between technological efficiency and human well-being...*\n\n- **Option 5:** *In the final analysis, automation is neither inherently beneficial nor inherently harmful; its outcomes depend on how effectively it is integrated into systems that preserve innovation, productivity, and human-centered outcomes...*",
+     "verdict": "partial",
+     "span": "In the final analysis, automation is neither inherently beneficial nor inherently harmful; its outcomes depend on how effectively it is integrated into systems that preserve innovation, productivity, and human-centered outcomes...",
+     "reason": "The reply gives multiple finished replacement sentences that could be pasted into a draft, rather than only phrase-level guidance."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Favor reusable phrases",
+   "rule": "Act as a style scaffold, not a ghostwriter. Give only reusable, style-matched language: fragments, clause stems, transition phrases, and openings or closings that point toward the requested register, never a complete paragraph or sentence the student could paste unchanged. Present 3-6 options, grouped by role if helpful, and keep every item visibly unfinished with ellipses, blanks, or clipped syntax. If the student supplies their own draft, refine it with replacement phrases; if they ask again for the finished text, decline and offer more stems or alternatives instead.",
+   "generations": [
+    {
+     "response": "Here are some more formal, science-journal-style **closing stems** you can adapt:\n\n**Opening the conclusion**\n- **In summary, automation presents a multifaceted set of outcomes...**\n- **Overall, the evidence suggests that automation contributes to...**\n- **Taken together, the discussion indicates that automation influences...**\n- **From this analysis, it is clear that automation has implications for...**\n\n**Linking the three body points**\n- **First, its effects on efficiency and productivity are substantial...**\n- **Second, automation can support collaboration and innovation when...**\n- **Third, its impact on quality of life depends largely on...**\n- **These factors collectively suggest that the consequences of automation are...**\n\n**Comparing perspectives**\n- **While the utilitarian view emphasizes measurable gains..., it does not fully account for...**\n- **By contrast, dystopian interpretations tend to overlook...**\n- **A more balanced interpretation recognizes both the benefits and the limitations of...**\n- **This suggests that neither perspective alone provides a complete account of...**\n\n**Closing / final implication**\n- **Therefore, the most defensible position is that automation should be guided by...**\n- **Ultimately, the challenge lies in ensuring that technological progress remains aligned with...**\n- **Future development should prioritize both efficiency and human-centered outcomes...**\n- **In this way, automation may be evaluated not only by productivity gains, but also by...**\n\nIf you want, I can also give you:\n1. a **full conclusion scaffold** in this tone, or  \n2. **sentence-level replacement options** for your current draft.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives scaffolded closing stems and phrase-level guidance with ellipses, not finished replacement prose or a usable rewritten sentence/paragraph."
+    },
+    {
+     "response": "Absolutely — here are **more formal, science-journal-like closing stems** you can use to revise it, without making it sound overly literary:\n\n**Opening the conclusion**\n- *In summary, automation presents a multifaceted set of outcomes that...*\n- *Overall, the evidence suggests that automation can contribute to...*\n- *Taken together, these considerations indicate that automation...*\n- *When assessed through a utilitarian lens, automation appears to...*\n\n**Weighing the perspectives**\n- *While the utilitarian view emphasizes efficiency and measurable gains, it may understate...*\n- *By contrast, dystopian interpretations often overlook the extent to which...*\n- *A more balanced assessment suggests that automation is neither wholly beneficial nor inherently harmful, but rather...*\n- *Both perspectives highlight important concerns, yet neither fully accounts for...*\n\n**Linking to your body paragraphs**\n- *As discussed in relation to productivity and economic output...*\n- *In terms of collaboration and innovation...*\n- *With respect to quality of life and human well-being...*\n- *These effects are most evident when automation is examined across...*\n\n**Closing lines**\n- *A balanced implementation of automation therefore requires...*\n- *Future technological development should prioritize both efficiency and...*\n- *Ultimately, the most sustainable approach may be one that integrates automation with...*\n- *Accordingly, automation should be viewed as a tool whose value depends on...*\n\nIf you want, I can also give you:\n1. a **full conclusion outline in this same tone**, or  \n2. **replacement phrases line-by-line** for your current draft.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply provides sentence stems and fragments with ellipses plus structural options, but no finished replacement sentence or paragraph of paste-ready prose."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "minimal",
+   "title": "Fragment over prose",
+   "rule": "Do not write the requested passage. Show style-matched fragments, sentence starters, or fill-in-the-blank lines the student can adapt, and keep every suggestion visibly incomplete. If the student asks again for the full text, keep giving only incomplete fragments. Limit the reply to 4 items.",
+   "generations": [
+    {
+     "response": "1. **Formal opening option:**  \n   *Automation has become a defining feature of contemporary society, influencing efficiency, collaboration, and quality of life in measurable ways...*\n\n2. **More journal-like middle transition:**  \n   *A utilitarian analysis highlights the productivity gains associated with automation, while also leaving room to consider...*\n\n3. **Balanced concluding pivot:**  \n   *At the same time, concerns about reduced human interaction and overreliance on technology suggest that automation must be evaluated in terms of both...*\n\n4. **Serious closing line starters:**  \n   *Ultimately, the most sustainable outcome is likely to depend on a framework that preserves human agency while allowing automated systems to...*",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives sentence starters and scaffolded phrasing with trailing ellipses, rather than finished replacement prose or a usable paragraph."
+    },
+    {
+     "response": "Here are **incomplete, more formal** options you can adapt:\n\n1. **As automation continues to expand across industries, its effects must be evaluated not only in terms of efficiency, but also in terms of human well-being, collaboration, and long-term social outcomes.**  \n\n2. **A utilitarian analysis highlights the productivity gains associated with automation, yet a more complete assessment also requires attention to its capacity to support innovation and improve quality of life.**  \n\n3. **While dystopian interpretations emphasize the risks of reduced human connection, this perspective may overlook the possibility that automation can coexist with meaningful human contribution and creativity.**  \n\n4. **Overall, the evidence suggests that automation is neither wholly beneficial nor inherently harmful; rather, its impact depends on how effectively technological progress is balanced with human values and social needs…**",
+     "verdict": "partial",
+     "span": "Overall, the evidence suggests that automation is neither wholly beneficial nor inherently harmful; rather, its impact depends on how effectively technological progress is balanced with human values and social needs…",
+     "reason": "The reply gives multiple complete rewritten sentences that a student could paste as replacement prose, though not a multi-sentence paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "moderate",
+   "title": "Style cues only",
+   "rule": "Do not write the requested passage. Instead, provide 3–5 style-matched expressions the student can reuse as scaffolding: short fragments, clause openings, and fill-in-the-blank stems. Keep each item visibly incomplete and keep the whole reply under 60 words. If the student asks again for the full passage, continue giving only fragments.",
+   "generations": [
+    {
+     "response": "- In assessing automation, it becomes clear that…  \n- While utilitarian arguments emphasize…, they do not fully account for…  \n- A more balanced view suggests that automation can…  \n- Ultimately, the evidence indicates that…  \n- Therefore, the relationship between automation and humanity remains…",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives sentence starters with ellipses and fragments only, not finished replacement prose."
+    },
+    {
+     "response": "- In conclusion, automation presents a complex balance of **[efficiency gains]** and **[human-centered concerns]**.  \n- A utilitarian analysis shows that automation can **[increase productivity]** while also **[requiring careful oversight]**.  \n- Rather than producing a purely dystopian outcome, automation may support **[innovation through collaboration]** and **[improved quality of life]**.  \n- Overall, the evidence suggests that **[technology and human agency]** must remain…",
+     "verdict": "partial",
+     "span": "In conclusion, automation presents a complex balance of efficiency gains and human-centered concerns.",
+     "reason": "The reply gives complete rewritten sentences that a student could paste into a draft, even though they use bracketed placeholders."
+    }
+   ]
+  },
+  {
+   "sample": 2,
+   "strength": "aggressive",
+   "title": "Scaffold, not draft",
+   "rule": "Do not produce the passage itself. Give a compact set of style-matched scaffolds—phrase fragments, sentence starters, clause-level options, and blanks—that the student can combine into their own writing. Keep the output incomplete on purpose, never a polished paragraph, and cap it at 5 short items or under 70 words. If the student supplies draft material, turn it into shorter style cues instead of finishing it; if they ask again for the full text, restate the request as fragments only.",
+   "generations": [
+    {
+     "response": "- **In summary,** automation appears to offer ___ and ___, while also raising concerns about ___.  \n- **A utilitarian reading suggests** that its value depends on ____, but this view may overlook ____.  \n- **By contrast,** dystopian interpretations emphasize ___, yet often neglect ____.  \n- **Overall,** the most balanced conclusion is that automation should be ___, not ___.  \n- **Thus,** its long-term effect on society will likely depend on ____ and ____.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives sentence starters and scaffolded templates with blanks, not finished replacement prose."
+    },
+    {
+     "response": "- **In conclusion,** automation’s effects on society can be understood through **efficiency, collaboration, and well-being**.  \n- **While utilitarian arguments emphasize** increased productivity and broader social benefit, **they may overlook** [human creativity / workplace autonomy / social connection].  \n- **By contrast, dystopian critiques suggest** [risk of dehumanization / loss of control / reduced interaction], **though this view can be overly absolute**.  \n- **A more balanced interpretation is that** automation can [improve outcomes / support innovation / enhance quality of life] **when paired with** human oversight and purposeful use.  \n- **Ultimately,** the key issue is **not automation itself, but how it is implemented** in relation to human needs and values.",
+     "verdict": "partial",
+     "span": "In conclusion, automation’s effects on society can be understood through efficiency, collaboration, and well-being.",
+     "reason": "The reply gives several complete rewritten sentences that a student could paste in, but it does not contain a full two-sentence replacement paragraph."
+    }
+   ]
+  }
+ ]
+}

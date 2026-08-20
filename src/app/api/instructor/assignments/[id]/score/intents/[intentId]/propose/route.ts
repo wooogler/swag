@@ -31,6 +31,7 @@ import {
   type ProposalStrength,
 } from '@/lib/score/propose-prompt';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
+import { classifyWithholding } from '@/lib/score/intent-agent';
 import { logStudyEvent } from '@/lib/study/events';
 
 export const dynamic = 'force-dynamic';
@@ -152,9 +153,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         : { mode: 'rewrite', editedResponse: body.editedResponse, changeIntents: body.changeIntents },
   });
 
+  // WHAT THE INSTRUCTOR IS ASKING FOR, as the enforcement clause needs it: an
+  // input that takes an output away gets the clause, an input that only shapes
+  // one does not. For a rewrite the ask is the confirmed change intents (the
+  // claim); the edited response is only its evidence, and judging the evidence
+  // would call every rewrite a withholding.
+  const askText =
+    body.mode === 'feedback'
+      ? body.feedback
+      : (body.changeIntents ?? []).join('\n') || body.editedResponse;
+  const withholds = await classifyWithholding(askText);
   try {
     const raw = await callModel(
-      buildProposeSystemPrompt(scope),
+      buildProposeSystemPrompt(scope, { withholds }),
       user,
       getDefaultScoreModel(),
       'medium', // revision authoring warrants more deliberation than batch rating
@@ -206,6 +217,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       mode: body.mode,
       intentId,
       anchorMessageId: body.messageId,
+      // Which prompt authored this revision — the enforcement clause is only
+      // present when the ask takes something away, and knowing which rules were
+      // written under it is the difference between "the model added that" and
+      // "we asked for that".
+      withholds,
       // How often the agent quotes the student's own words back into a rule,
       // and which candidates were withheld for it.
       ...(quoting.size > 0

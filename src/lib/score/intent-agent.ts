@@ -21,6 +21,7 @@
  *    back through `previousAttempt` — see its verification loop.
  */
 import { callModel, extractJsonObject } from './classifier';
+import { headTail } from './prompts';
 import { pinPromptText } from './intents';
 
 /** Small/fast model for the git-commit-style auto-title (env-overridable). */
@@ -59,6 +60,68 @@ export async function generateIntentTitle(definition: string): Promise<string | 
   } catch (error) {
     console.error('SCORE intent auto-title failed (keeping fallback):', error);
     return null;
+  }
+}
+
+/**
+ * Does the instructor's input tell the chatbot to STOP HANDING OVER something
+ * the student asked for?
+ *
+ * The rule-authoring prompt carries one enforcement clause — substitutes for a
+ * withheld output must be visibly incomplete — and it only makes sense when
+ * something IS being withheld. Written as a condition inside that prompt it
+ * misfires: measured on a real session, an instructor who asked for "one short
+ * example sentence" got nine rules out of nine demanding a blank instead,
+ * because the clause reads as unconditional however it is phrased. Hoisting the
+ * condition to the front, or subordinating the clause to the instructor's
+ * words, each fixed that case and cost the withholding case instead.
+ *
+ * So the decision is made HERE, once, on the instructor's sentence alone, and
+ * the prompt gets a flat instruction or nothing. This is a much easier question
+ * than the one the propose call is answering, and it is the only thing this
+ * asks.
+ *
+ * Returns false on any failure: the plain prompt is the safe default (see
+ * buildProposeSystemPrompt).
+ */
+const WITHHOLDING_SYSTEM = `An instructor is adjusting a writing-support chatbot that students use for school assignments. You get what they just told it to change.
+
+Answer ONE question: does their instruction tell the chatbot to WITHHOLD an output — to stop writing, producing, or handing over something a student asked it for, and offer something lesser in its place?
+
+YES — "don't write the essay for them", "stop rewriting their sentences", "give hints instead of the answer", "never hand over a finished paragraph".
+NO — anything else, including instructions about FORM or LENGTH that take nothing away: "keep it to two lines", "no paragraph", "use bullets", "be warmer", "give the word and one example sentence", "answer in Korean".
+
+NO — taking away a DEVICE the chatbot had been using of its own accord: "do not give fill-in-the-blank stems", "stop offering to help further", "drop the headings", "no emoji". The student never asked for those, so nothing is withheld from them; the instructor is deciding how the answer looks.
+
+The test is whether a STUDENT ends up without something THEY asked for. An instruction that only shapes how an answer is delivered is NO, however flatly it is phrased as a prohibition.`;
+
+const WITHHOLDING_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['withholds'],
+  properties: {
+    withholds: { type: 'boolean', description: 'true only if an output is being taken away' },
+  },
+};
+
+export async function classifyWithholding(input: string): Promise<boolean> {
+  const text = input.trim();
+  if (!text) return false;
+  try {
+    const raw = await callModel(
+      WITHHOLDING_SYSTEM,
+      `INSTRUCTOR'S INPUT:\n"""\n${headTail(text, 2000)}\n"""`,
+      TITLE_MODEL,
+      'low',
+      { name: 'withholding', schema: WITHHOLDING_SCHEMA as Record<string, unknown> },
+      // On the propose path, in front of a 55s call — must never be the reason
+      // an instructor's revision fails or hangs.
+      { timeoutMs: 15_000, maxRetries: 1 }
+    );
+    return extractJsonObject(raw).withholds === true;
+  } catch (error) {
+    console.error('SCORE withholding check failed (authoring the plain prompt):', error);
+    return false;
   }
 }
 

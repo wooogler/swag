@@ -17,8 +17,8 @@
  *
  *   npx tsx scripts/score/propose-eval.ts [--samples 2] [--gen 1]
  *     [--assignment <id>] [--message <id>] [--intent <id>] [--feedback "..."]
- *     [--devices form|all|goal|off]  form (default) = production's one line; all = the
- *                           pre-08-19 three lines; goal = abstract; off = none
+ *     [--withholds yes|no]  pin the enforcement clause instead of classifying
+ *                           the feedback for it (production classifies)
  *     [--emptyrule]     revise from an EMPTY rule (the first-revision case)
  *     [--scoping trigger]  the pre-08-19 ladder (graded by trigger width)
  */
@@ -98,23 +98,30 @@ async function main() {
   const { getDefaultScoreModel } = await import('@/lib/score/models');
   const { buildProposeSystemPrompt, buildProposeUserContent, PROPOSAL_SCHEMA, PROPOSAL_STRENGTHS } =
     await import('@/lib/score/propose-prompt');
+  const { classifyWithholding } = await import('@/lib/score/intent-agent');
 
-  // --devices off: author the rules WITHOUT the three enforcement lines
-  // (substitute+cap, incomplete examples, pushback) to measure what they buy.
-  const devices = (arg('devices') ?? 'form') as 'form' | 'all' | 'goal' | 'off';
-  // 'behavior' (production) writes rules that state what to DO; 'trigger' is
-  // the pre-08-19 text whose ladder graded rules by how wide a trigger they
-  // opened with. Pass --scoping trigger to re-run that half of the A/B.
-  const scoping = (arg('scoping') ?? 'behavior') as 'behavior' | 'trigger';
-  console.log(`devices: ${devices}${devices === 'form' ? ' (production)' : ''} · scoping: ${scoping}${scoping === 'behavior' ? ' (production)' : ''}`);
-  // Reproduce the FIRST revision of an intent, whose rule was empty at the
-  // time — the case the devices matter most in and the one every JELSON rule
-  // was born from. Without this the harness revises today's saved rule.
-  const emptyRule = process.argv.includes('--emptyrule');
   const assignmentId = arg('assignment') ?? DEFAULTS.assignment;
   const messageId = Number(arg('message') ?? DEFAULTS.message);
   const intentId = Number(arg('intent') ?? DEFAULTS.intent);
   const feedback = arg('feedback') ?? DEFAULTS.feedback;
+  // Production decides this per input (classifyWithholding); --withholds pins
+  // it so a run measures one prompt rather than two.
+  // 'behavior' (production) writes rules that state what to DO; 'trigger' is
+  // the pre-08-19 text whose ladder graded rules by how wide a trigger they
+  // opened with. Pass --scoping trigger to re-run that half of the A/B.
+  const scoping = (arg('scoping') ?? 'behavior') as 'behavior' | 'trigger';
+  // Reproduce the FIRST revision of an intent, whose rule was empty at the
+  // time — the case the clause matters most in and the one every JELSON rule
+  // was born from. Without this the harness revises today's saved rule.
+  const emptyRule = process.argv.includes('--emptyrule');
+  const withholdsArg = arg('withholds');
+  const withholds =
+    withholdsArg === 'yes' ? true : withholdsArg === 'no' ? false : await classifyWithholding(feedback);
+  console.log(
+    `withholds: ${withholds}${withholdsArg ? ' (pinned)' : ' (classified)'} · scoping: ${scoping}${
+      scoping === 'behavior' ? ' (production)' : ''
+    }`
+  );
   const samples = Number(arg('samples') ?? DEFAULTS.samples);
   const gen = Number(arg('gen') ?? DEFAULTS.gen);
   const judgeSystem = buildJudgeSystem(arg('directive') ?? DEFAULT_DIRECTIVE);
@@ -172,7 +179,7 @@ async function main() {
       currentResponse: anchor.responseText ?? undefined,
       input: { mode: 'feedback', feedback },
     });
-    const raw = await callModel(buildProposeSystemPrompt('intent', { devices, scoping }), user, scoreModel, 'medium', PROPOSAL_SCHEMA, {
+    const raw = await callModel(buildProposeSystemPrompt('intent', { withholds, scoping }), user, scoreModel, 'medium', PROPOSAL_SCHEMA, {
       timeoutMs: 90_000,
       maxRetries: 1,
     });

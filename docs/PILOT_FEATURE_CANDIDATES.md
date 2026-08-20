@@ -52,10 +52,11 @@
 - **측정**(30생성/arm): 준수 **25/5/0 vs 24/6/0**(동률), 조건절로 시작한 rule **12/18 → 0/18**, 과제 주제어 **2/18 → 0/18**. 1차 시도는 minimal에서 "대신 무엇을"이 빠져 canonical 2/2/2로 나빠졌고, 모든 등급에 복원해 10/2/0으로 회복.
 - **화면에서는** (같은 피드백 "dont rewrite for them but guide them"): 전 *"When a student asks you to directly rewrite… This applies to … but not to feedback…"* → 후 *"Guide the student on how to revise the text instead of rewriting it for them. Name the changes to make — tone, clarity, word choice — and give only incomplete stems."*
 
-### 8. 강제 장치(푸시백 절 · 숫자 상한 · 빈칸 예시) — **2026-08-19 결정·적용: 3줄 → 1줄**
-- **문제였던 것**: 프롬프트가 **모든 변형에** 셋을 강제("pushback 한 줄", "셀 수 있는 상한 하나", "예시는 미완성 `___`"). 사용자는 그런 요구가 있는 줄 몰랐고, JELSON은 빈칸을 빼는 데 한 라운드를 썼다. `analysis.md` §2.1/§6.8이 "모델 습관"이라 한 것은 오기 — 우리 요구였다(2026-08-04에 추가, `RULE_WORKBENCH_V2_PLAN.md` §9).
-- **측정**(12생성×4설정, compliant/partial/violation): 세 줄 **8/4/0** · 미완성-예시 한 줄만 **9/3/0** · 추상 표현 **3/8/1** · 전부 제거 **1/11/0**. JELSON 앵커 3개에서도 한 줄 **15/3/0** vs 세 줄 **8/10/0**.
-- **적용**: 상한·pushback 강제 삭제(모델이 알아서 쓴다), "예시는 눈에 띄게 미완성" 한 줄만 유지. `buildProposeSystemPrompt(scope,{devices})` 기본 `'form'`; `'all'|'goal'|'off'`는 `propose-eval.ts --devices`로 재현.
+### 8. 강제 장치(푸시백 절 · 숫자 상한 · 빈칸 예시) — **2026-08-19 3줄→1줄, 2026-08-20 그 1줄의 조건을 코드로**
+- **문제였던 것**: 프롬프트가 **모든 변형에** 셋을 강제. 사용자는 그런 요구가 있는 줄 몰랐고, JELSON은 빈칸을 빼는 데 한 라운드를 썼다. `analysis.md` §2.1/§6.8이 "모델 습관"이라 한 것은 오기 — 우리 요구였다.
+- **1차 측정**(12생성×4설정): 세 줄 **8/4/0** · 미완성-예시 한 줄만 **9/3/0** · 추상 표현 **3/8/1** · 전부 제거 **1/11/0** → 한 줄만 남김.
+- **그 한 줄이 오작동했다**(데모, 2026-08-20): "예문 하나 달라"는 피드백에 **9/9 룰이 빈칸을 강제**하고 챗봇도 따랐다(`exaggeration — The report may ___ the risks.`). 조건("감춘 출력의 대체물일 때")을 모델이 무시한다. 문구 변형 4종 전부 실패 — 오염을 잡으면 억제 케이스가 무너진다(4/6/2 · 6/6/0 · 7/4/1 vs 무조건 11/1/0).
+- **적용**: 조건을 **코드로**. `classifyWithholding`이 피드백만 보고 "학생이 요청한 출력을 빼앗는가"를 판정 → 프롬프트는 무조건 문장을 받거나 아무것도 안 받는다. **오염 0/9 + 억제 12/0/0.** 분류기 15/15(실패 시 false = 순수 프롬프트).
 
 ### 9. rewrite 모드 앵커 누출 방지 — **2026-08-19 적용**
 - **지금이었던 것**: 7064 v6/v7 *"including a rephrase like 'write the second paragraph,'"* = 앵커 130025 원문.

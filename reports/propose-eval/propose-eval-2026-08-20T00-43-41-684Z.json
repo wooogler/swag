@@ -1,0 +1,70 @@
+{
+ "assignmentId": "81556ea0-4895-4149-9996-ca08702a2000",
+ "messageId": 130081,
+ "intentId": 7062,
+ "feedback": "dont rewrite for the but guide them in how to rewrite",
+ "chatModel": "gpt-5.4-mini",
+ "scoreModel": "gpt-5.4-mini",
+ "runs": [
+  {
+   "sample": 1,
+   "strength": "minimal",
+   "title": "Coach, don't rewrite",
+   "rule": "Coach the student through the rewrite instead of rewriting the text for them. Give brief, actionable guidance about the main changes to make, plus sentence starters, fragments, or blanks like '___' that show the wording is still unfinished. Keep the reply to one short paragraph and a few incomplete rewrite cues; do not supply a polished, paste-ready version.",
+   "generations": [
+    {
+     "response": "To sound more professional, make the tone more neutral and precise: swap “boring” and “easy to replace” for stronger wording like “routine,” “repetitive,” or “low-complexity,” and avoid phrases like “taken away.” You can also tighten the main point by separating your agreement from the example. Try framing it like this: “I believe automation is effective for ___, such as ___, but certain areas should remain primarily human-led. For instance, in education, ___ because ___.” Then finish with a clear conclusion: “Overall, I support the second perspective because ___, particularly in ___.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision advice and sentence stems with blanks, but no finished replacement prose or usable full replacement sentences."
+    },
+    {
+     "response": "To sound more professional, swap informal phrases like “I think,” “boring,” and “low skill” for more precise language, and make the argument more balanced by using terms like “routine,” “repetitive,” and “essential human interaction.” You can also tighten the structure by stating your position first, then giving your example, then your conclusion. Try shaping it like: “I believe automation is beneficial for ___ tasks, such as ___ and ___. However, I agree that certain areas, particularly ___, should remain primarily human-led because ___.” Then finish with something like: “Overall, I support the second perspective because ___.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance and sentence stems with blanks, but no finished replacement prose or usable pasted sentences."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "moderate",
+   "title": "Fragmented rewrite guidance",
+   "rule": "Act as a rewrite coach, not a ghostwriter. Point out the main improvements the student should make, such as tighter word choice, clearer structure, or a stronger tone, and support each point with incomplete examples, sentence stems, or fill-in-the-blank fragments. Keep the response brief — one short paragraph of guidance plus a few fragments — and never turn it into a complete revised passage.",
+   "generations": [
+    {
+     "response": "To make this sound more professional, focus on replacing casual phrasing with more precise, balanced language, and reduce repetition in your viewpoint. You can also make your position sound stronger by using transitions that show contrast and qualification, like “however” or “while.” Try tightening phrases such as **“boring and easy to replace”** into something like **“routine and easily automated”**, and **“someone that works at the post office”** into **“postal workers”** or **“front-line service roles.”** Consider structuring it as: **“I agree that automation is beneficial in ___, particularly when ___, but I believe ___ should remain human-centered because ___.”**",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance, phrase-level alternatives, and a blanked template, but no finished replacement sentence or paragraph the student could paste in."
+    },
+    {
+     "response": "To make this sound more professional, focus on replacing casual or conversational phrasing with more precise, balanced language, and tighten the structure so your main position is clear earlier. You can also soften broad claims like “boring” and “someone that works at…” by using more formal wording and a more nuanced tone about where automation is helpful versus where human judgment still matters.\n\nTry shifting phrases like:\n- “I think that automation is good for…” → “Automation is beneficial for…”\n- “boring and easy to replace” → “routine, repetitive tasks”\n- “someone that works at the post office” → “postal workers” or “certain clerical roles”\n- “I don’t think there should be lots of automation” → “I do not believe automation should be heavily applied”\n- “that should remain a human process” → “that should remain primarily human-led”\n\nYou could also organize it more clearly:\n- State your overall position: “I support automation in…”\n- Add a qualifier: “however, I believe…”\n- End with a concise reason: “because…”",
+     "verdict": "partial",
+     "span": "I do not believe automation should be heavily applied",
+     "reason": "It provides several usable rewritten sentences as direct replacement text, though not a full replacement paragraph."
+    }
+   ]
+  },
+  {
+   "sample": 1,
+   "strength": "aggressive",
+   "title": "Partial rewrite coaching",
+   "rule": "Act as a rewrite coach. Explain the key moves the student should make, then model them only with fragments, stems, and blanks such as '___', 'You could start with…', or 'Replace ___ with ___'; every example you give must stay visibly unfinished. If the student has already supplied draft text, respond to the draft's style and structure rather than producing a finished replacement, and if they ask again for the full rewrite, restate the guidance and keep the wording partial. Keep the reply compact: one short paragraph of advice with a few incomplete examples, never a paste-ready passage.",
+   "generations": [
+    {
+     "response": "You could make it sound more professional by smoothing the contrast, replacing casual wording like “boring” and “good thing,” and using more precise terms such as “routine,” “repetitive,” or “human-centered.” You might also tighten the structure by stating your position first, then giving examples, then explaining the exception: “I support ___ because ___; however, ___ should remain ___.” For example, replace “a cashier or someone that works at the post office” with “roles such as cashiers or postal workers,” and “shouldn’t be taken away” with “should not be fully replaced.” You could end with something like “Overall, I agree with ___ because ___,” but keep it concise and formal.",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance, phrasing alternatives, and sentence stems with blanks, but no finished replacement sentence or paragraph the student could paste directly."
+    },
+    {
+     "response": "You can make this sound more professional by tightening the stance, reducing repetition, and swapping informal phrases like “I think,” “boring,” and “good thing” for more precise language. Try structuring it as: ___ is beneficial for ___, but ___ should remain human-led; then connect your reason with a phrase like “particularly in contexts such as ___.” For example, you could replace “boring and easy to replace” with “routine and highly automatable,” and “shouldn’t be taken away” with “should remain under human control.” You might also start the final sentence with “Overall, I support the second perspective because ___,” then add a more formal qualifier like “especially in repetitive, low-skill roles.”",
+     "verdict": "compliant",
+     "span": "",
+     "reason": "The reply gives revision guidance, sentence stems, and short phrase swaps, but no finished replacement sentence or paragraph the student could paste in."
+    }
+   ]
+  }
+ ]
+}

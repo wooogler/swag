@@ -24,8 +24,21 @@
  * stated abstractly 3/8/1 · nothing 1/11/0. So the countable cap and the
  * pushback line bought nothing measurable — the agent writes both unprompted
  * — while the concrete form requirement is the whole effect, and stating it
- * abstractly loses it. Dropping the other two also stops the rules from
- * carrying stances the instructor never asked for (JELSON pilot §7).
+ * abstractly loses it.
+ *
+ * 2026-08-20 — and that last line moved OUT of the prompt's own judgement.
+ * It is written for an input that WITHHOLDS an output, but the model applied
+ * it to every input: an instructor who asked for "one short example sentence"
+ * got 9 rules out of 9 demanding a blank instead, and the chatbot obeyed —
+ * students got "exaggeration — The report may ___ the risks." Four rewordings
+ * were measured (condition buried, condition hoisted to the front, condition
+ * plus an explicit negative case, and the instructor's input declared to
+ * outrank it). Every one of them either kept firing on inputs that withheld
+ * nothing or went soft where it was needed: 0/9 contamination but 4/6/2,
+ * 6/6/0, 7/4/1 on the withholding case against 11/1/0 for the flat clause.
+ * The conditionality now lives in `classifyWithholding` and the prompt gets a
+ * flat instruction or none: 0/9 contamination AND 12/0/0 on the withholding
+ * case, the best that scenario has measured.
  *
  * 2026-08-19, second change — a set's rule stops restating its own definition.
  * Every rule the pilot wrote opened with an applicability clause ("When a
@@ -110,21 +123,19 @@ export const PROPOSAL_SCHEMA = {
 export type ProposeScope = 'intent' | 'type-root' | 'prompt';
 
 /**
- * `devices` — how much enforcement every variant is told to carry. Production
- * uses 'form' (2026-08-19); the other modes exist so propose-eval.ts can
- * re-run the A/B that chose it. See the header for the measurement.
- *
- *   'form'  ONE line: substitute examples must be visibly incomplete
- *   'all'   + a countable cap + a pushback line + the "how the prompt is used"
- *           preamble (production before 2026-08-19)
- *   'goal'  the same idea as 'form' stated abstractly ("not paste-ready")
- *   'off'   nothing
+ * `withholds` — does the instructor's input tell the chatbot NOT to produce
+ * something the student asked for? Decided by the caller (see
+ * `classifyWithholding`), never by this prompt: when the enforcement clause is
+ * written conditionally the model applies it either always or barely. Default
+ * false, so the prompt is the plain one unless someone has actually judged the
+ * input — a rule that under-enforces is visible in the very next preview,
+ * while one that quietly adds a requirement nobody asked for is not.
  */
 export function buildProposeSystemPrompt(
   scope: ProposeScope = 'intent',
-  opts: { devices?: 'form' | 'all' | 'goal' | 'off'; scoping?: 'behavior' | 'trigger' } = {}
+  opts: { withholds?: boolean; scoping?: 'behavior' | 'trigger' } = {}
 ): string {
-  const devices = opts.devices ?? 'form';
+  const withholds = opts.withholds ?? false;
   // 'behavior' (production, 2026-08-19) — a set's rule states BEHAVIOR only,
   // because routing already decided it applies. 'trigger' reproduces the older
   // text, whose strength ladder graded rules by how wide a trigger they wrote;
@@ -164,25 +175,20 @@ export function buildProposeSystemPrompt(
     'You revise the SYSTEM PROMPT of a writing-support chatbot that students use for school assignments.',
     ...framing,
     ...behaviorOnly,
-    ...(devices === 'all'
+    ...(withholds
       ? [
-          "HOW THE PROMPT IS USED — this decides what a good one looks like. The chatbot answers real student messages with only this prompt as guidance, and the model's default instinct is to be maximally helpful — for a \"change the style\" request that means writing the improved text itself. A bare prohibition is not enough to override that instinct.",
-          'Therefore, in EVERY variant:',
-          '- Whenever the input forbids something, also state POSITIVELY what a reply gives instead, with one concrete hard cap in countable units (e.g. "never more than one complete sentence of finished prose").',
-          '- When the rule offers templates or examples as a substitute for a withheld output, require them to be visibly incomplete (blanks like "___", fragments) — never complete sentences the student could paste as-is.',
-          '- Say in one line what the chatbot does when the student pushes back and asks again for exactly what the prompt withholds.',
+          'In EVERY variant:',
+          // UNCONDITIONAL — the CALLER already decided this input withholds
+          // something. Every attempt to make the model apply it conditionally
+          // failed in one of two directions: left buried or hoisted to the
+          // front, the clause either fired on inputs that withheld nothing
+          // (9 of 9 rules demanded a blank where the instructor had ASKED for
+          // a complete example sentence) or went soft where it was needed
+          // (violations on the withholding case). A flat instruction is what
+          // this model obeys, so the condition lives in code, not in here.
+          '- The instructor\'s input WITHHOLDS an output. Say what a reply gives INSTEAD, and require anything offered in place of the withheld output to be visibly incomplete (fragments, sentence stems, blanks like "___") — never a complete sentence the student could paste in its place.',
         ]
-      : devices === 'form'
-        ? [
-            'In EVERY variant:',
-            '- When the rule offers expressions, templates or examples as a substitute for a withheld output, require them to be visibly incomplete (fragments, sentence stems, blanks like "___") — never complete sentences the student could paste as-is.',
-          ]
-      : devices === 'goal'
-        ? [
-            'In EVERY variant:',
-            '- If the input withholds finished text, make sure whatever the reply offers instead cannot be pasted into the draft as-is (fragments, stems, cues — not complete sentences).',
-          ]
-        : ['In EVERY variant:']),
+      : ['In EVERY variant:']),
     "- Keep the rule SHORT — it should read as the instructor's own instruction, not a form specification. A few sentences is usually right. Do not mandate named sections, headings, exact bullet counts, or word budgets unless the instructor's input itself asks for structured replies.",
     '- Be imperative, addressed to the chatbot, coherent and self-contained.',
     'Return THREE candidates, one per strength, minimal first. Strength is how much of the CURRENT prompt each touches, never how enforceable it is:',
