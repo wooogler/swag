@@ -37,7 +37,7 @@ async function ownershipFor(assignmentId: string, snapshot: SimpleSnapshot, mess
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const gate = await simpleContext(id);
+  const gate = await simpleContext(id, new URL(request.url).searchParams.get('view'));
   if ('error' in gate) return gate.error;
   const { condition, seedPrompt } = gate.context;
 

@@ -23,7 +23,7 @@ const bodySchema = z.object({ messageId: z.number().int() });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const gate = await simpleContext(id);
+  const gate = await simpleContext(id, new URL(request.url).searchParams.get('view'));
   if ('error' in gate) return gate.error;
 
   let body: z.infer<typeof bodySchema>;
@@ -42,7 +42,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const gate = await simpleContext(id);
+  const gate = await simpleContext(id, new URL(request.url).searchParams.get('view'));
   if ('error' in gate) return gate.error;
 
   const messageId = Number(new URL(request.url).searchParams.get('messageId'));

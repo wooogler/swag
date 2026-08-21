@@ -65,11 +65,16 @@ export default function SimpleStudio({
   rows,
   isNirvana,
   initialState,
+  viewParam,
 }: {
   assignmentId: string;
   rows: ScoreQueryRow[];
   isNirvana: boolean;
   initialState: StatePayload;
+  /** Set only when a researcher opened this with ?view= on an assignment that
+   * is not a clone. It tells the routes which arm the preview is; on a real
+   * clone the clone decides and this is ignored. */
+  viewParam?: string | null;
 }) {
   const [state, setState] = useState<StatePayload>(initialState);
   const [draft, setDraft] = useState<SimpleSnapshot>(initialState.snapshot);
@@ -85,6 +90,15 @@ export default function SimpleStudio({
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
   const arm = state.arm;
   const readOnly = !state.atTip;
+  const api = useCallback(
+    (path: string, query = '') => {
+      const params = new URLSearchParams(query);
+      if (viewParam) params.set('view', viewParam);
+      const qs = params.toString();
+      return `/api/instructor/assignments/${assignmentId}/score/simple/${path}${qs ? `?${qs}` : ''}`;
+    },
+    [assignmentId, viewParam]
+  );
 
   /* --------------------------------------------------------------- */
   /* Loading state                                                    */
@@ -97,9 +111,7 @@ export default function SimpleStudio({
       if (versionNo != null) params.set('versionNo', String(versionNo));
       const df = opts?.diffFrom === undefined ? diffFrom : opts.diffFrom;
       if (df != null) params.set('diffFrom', String(df));
-      const res = await fetch(
-        `/api/instructor/assignments/${assignmentId}/score/simple/state?${params}`
-      );
+      const res = await fetch(api('state', params.toString()));
       if (!res.ok) return null;
       const next: StatePayload = await res.json();
       setState(next);
@@ -120,18 +132,15 @@ export default function SimpleStudio({
     setJudging(true);
     try {
       for (let round = 0; round < 40; round += 1) {
-        const res = await fetch(
-          `/api/instructor/assignments/${assignmentId}/score/simple/judge`,
-          {
+        const res = await fetch(api('judge'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             // What is on screen first, so the list being read fills in before
             // the tail of the log does.
-            body: JSON.stringify({
-              priorityMessageIds: [...state.pinned, ...rows.slice(0, 40).map((r) => r.messageId)],
-            }),
-          }
-        );
+          body: JSON.stringify({
+            priorityMessageIds: [...state.pinned, ...rows.slice(0, 40).map((r) => r.messageId)],
+          }),
+        });
         if (!res.ok) break;
         const progress = await res.json();
         await load({ keepDraft: true });
@@ -158,20 +167,17 @@ export default function SimpleStudio({
       setSaving(true);
       const previousVersion = state.versions[0]?.versionNo ?? null;
       try {
-        const res = await fetch(
-          `/api/instructor/assignments/${assignmentId}/score/simple/save`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              prompt: next.prompt,
-              rootRule: next.rootRule,
-              intents: next.intents,
-              focusSid,
-              recentMessageIds: selectedMessageId ? [selectedMessageId] : [],
-            }),
-          }
-        );
+        const res = await fetch(api('save'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: next.prompt,
+            rootRule: next.rootRule,
+            intents: next.intents,
+            focusSid,
+            recentMessageIds: selectedMessageId ? [selectedMessageId] : [],
+          }),
+        });
         if (!res.ok) return;
         // Against the version that WAS current, so the list shows what this
         // save moved — the only comparison a participant did not have to ask
@@ -188,7 +194,7 @@ export default function SimpleStudio({
 
   const restore = useCallback(
     async (versionNo: number) => {
-      await fetch(`/api/instructor/assignments/${assignmentId}/score/simple/restore`, {
+      await fetch(api('restore'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ versionNo }),
@@ -211,8 +217,7 @@ export default function SimpleStudio({
         ...s,
         pinned: pinned ? s.pinned.filter((m) => m !== messageId) : [messageId, ...s.pinned],
       }));
-      const url = `/api/instructor/assignments/${assignmentId}/score/simple/pins`;
-      await fetch(pinned ? `${url}?messageId=${messageId}` : url, {
+      await fetch(pinned ? api('pins', `messageId=${messageId}`) : api('pins'), {
         method: pinned ? 'DELETE' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: pinned ? undefined : JSON.stringify({ messageId }),
@@ -322,7 +327,7 @@ export default function SimpleStudio({
       />
 
       <ViewerColumn
-        assignmentId={assignmentId}
+        api={api}
         rows={rows}
         row={selectedRow}
         isNirvana={isNirvana}
@@ -699,7 +704,13 @@ function Tree({
             seedRule={draft.rootRule}
             draft={draft}
             onCancel={() => setCreatingUnder(undefined)}
-            onCreate={(next, sid) => onSave(next, sid)}
+            onCreate={async (next, sid) => {
+              // Closed on the way out, not on the way back: leaving the form
+              // open after a save invites a second click that writes the same
+              // intent again.
+              setCreatingUnder(undefined);
+              await onSave(next, sid);
+            }}
           />
         </div>
       )}
@@ -1198,7 +1209,7 @@ function QuestionRow({
 /* =================================================================== */
 
 function ViewerColumn({
-  assignmentId,
+  api,
   rows,
   row,
   isNirvana,
@@ -1208,7 +1219,7 @@ function ViewerColumn({
   setLocalVersionNo,
   titleOf,
 }: {
-  assignmentId: string;
+  api: (path: string, query?: string) => string;
   rows: ScoreQueryRow[];
   row: ScoreQueryRow | null;
   isNirvana: boolean;
@@ -1242,15 +1253,12 @@ function ViewerColumn({
     (async () => {
       setAnswer({ messageId, versionNo, text: '', state: 'streaming', owner: null });
       try {
-        const res = await fetch(
-          `/api/instructor/assignments/${assignmentId}/score/simple/respond`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messageId, versionNo }),
-            signal: controller.signal,
-          }
-        );
+        const res = await fetch(api('respond'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messageId, versionNo }),
+          signal: controller.signal,
+        });
         if (!res.ok) {
           setAnswer({ messageId, versionNo, text: '', state: 'failed', owner: null });
           return;
@@ -1291,7 +1299,7 @@ function ViewerColumn({
     })();
 
     return () => controller.abort();
-  }, [assignmentId, row, versionNo, titleOf]);
+  }, [api, row, versionNo, titleOf]);
 
   if (!row) {
     return (

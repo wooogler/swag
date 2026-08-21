@@ -21,7 +21,7 @@ const bodySchema = z.object({ versionNo: z.number().int().positive() });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const gate = await simpleContext(id);
+  const gate = await simpleContext(id, new URL(request.url).searchParams.get('view'));
   if ('error' in gate) return gate.error;
   const { condition, seedPrompt } = gate.context;
 

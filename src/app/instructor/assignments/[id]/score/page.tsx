@@ -188,6 +188,8 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
             rows={simpleRows}
             isNirvana={assignment.shareToken === 'nirvana-dataset'}
             initialState={initialState}
+            // Only meaningful when this is not a clone — see simpleContext.
+            viewParam={storedCondition ? null : view ?? null}
           />
         </StudioShell>
       </div>

@@ -29,14 +29,24 @@ export interface SimpleContext {
 }
 
 /**
- * Authorize, and refuse anything that is not a simple clone.
+ * Authorize, and refuse a clone that belongs to the other version.
  *
- * Researchers previewing with `?view=simple_score` are refused too: the
- * preview renders a board, and a board that could write to a full clone's
- * timeline would be a preview with side effects.
+ * An assignment that is not a study clone at all is allowed through, and that
+ * is the researcher's preview: `?view=simple_score` on their own assignment
+ * renders the simple board and can actually be used, because there is no
+ * second configuration there for this one to disagree with. The refusal is
+ * specifically about a clone whose participant is running the full version —
+ * writing a snapshot onto that would leave two answers to "what is their
+ * configuration", which is the thing this file exists to prevent.
+ *
+ * The same convention the full version already follows: a route acts on what
+ * the CLONE is, and `?view` only ever changes what is drawn.
  */
 export async function simpleContext(
-  id: string
+  id: string,
+  /** `?view=` from the request — honoured ONLY when there is no clone, so it
+   * can pick an arm for a preview and can never re-dress a participant's. */
+  viewParam?: string | null
 ): Promise<{ error: NextResponse } | { context: SimpleContext }> {
   const auth = await authorizeAssignment(id);
   if ('error' in auth) {
@@ -45,13 +55,18 @@ export async function simpleContext(
   }
   await ensureStudyTables();
   const condition = await getCloneCondition(id);
-  if (!condition || familyOf(condition) !== 'simple') {
+  if (condition && familyOf(condition) !== 'simple') {
     return {
-      error: NextResponse.json({ error: 'not_a_simple_clone' }, { status: 409 }),
+      error: NextResponse.json({ error: 'not_available_in_this_version' }, { status: 409 }),
     };
   }
+  const preview =
+    viewParam === 'simple_baseline' || viewParam === 'simple_score' ? viewParam : 'simple_score';
   return {
-    context: { condition, seedPrompt: assignmentBasePrompt(auth.assignment) },
+    context: {
+      condition: condition ?? preview,
+      seedPrompt: assignmentBasePrompt(auth.assignment),
+    },
   };
 }
 
