@@ -871,7 +871,7 @@ function Tree({
               Apply
             </button>
           )}
-          <div className="mt-2">
+          <div className="mt-2.5">
             <IntentHistory
               versions={intentVersions['0'] ?? []}
               currentDefinition=""
