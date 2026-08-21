@@ -41,3 +41,6 @@ next-env.d.ts
 *.db-wal
 
 .agents
+# Participant data written by scripts/study/export-metrics.ts. Research
+# output, regenerable, and not the repository's to carry.
+export/

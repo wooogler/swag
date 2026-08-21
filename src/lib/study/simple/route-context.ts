@@ -14,7 +14,6 @@
  * button that would do it, and this is what makes that true rather than
  * merely likely.
  */
-import 'server-only';
 import { NextResponse } from 'next/server';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { authErrorResponse, authorizeAssignment } from '@/lib/score/authz';

@@ -137,6 +137,8 @@ export async function loadSimpleBoard(args: {
       versions: state.versions,
       viewing: state.viewing,
       atTip: state.atTip,
+      savedVersionNo: state.savedVersionNo,
+      dirty: state.dirty,
       pinned: state.pinned,
       owners: Object.fromEntries(
         [...owners.entries()].map(([messageId, o]) => [

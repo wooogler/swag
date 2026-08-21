@@ -89,6 +89,13 @@ export async function ensureStudyTables(): Promise<void> {
       await db.execute(
         sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_config_versions_unique" ON "simple_config_versions" ("assignment_id","version_no")`
       );
+      // 'apply' = took effect, 'save' = took effect AND was marked as a point
+      // to come back to. The newest row of either kind is what the board shows
+      // and answers from; the newest SAVE is what the study measures. Defaulted
+      // to 'save' so every row written before the split stays measurable.
+      await db.execute(
+        sql`ALTER TABLE "simple_config_versions" ADD COLUMN IF NOT EXISTS "kind" text NOT NULL DEFAULT 'save'`
+      );
 
       // Judgments, keyed by the DEFINITION TEXT rather than by any intent id.
       // Editing one definition therefore re-rates that definition and nothing

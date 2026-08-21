@@ -21,7 +21,6 @@
  * planning" and "asking for examples" are both things an instructor might want
  * one rule for.
  */
-import 'server-only';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { scoreIntentRatings, scoreIntents, simpleRatings } from '@/db/schema';

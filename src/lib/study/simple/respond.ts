@@ -20,7 +20,6 @@
  * manipulation — a local edit versus a global one — and is left visible rather
  * than smoothed over.
  */
-import 'server-only';
 import OpenAI from 'openai';
 import { and, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';

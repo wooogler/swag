@@ -52,6 +52,8 @@ interface StateBody {
   snapshot: { rootRule: string; prompt: string; intents: { sid: number; title: string }[] };
   versions: { versionNo: number; displayNo: number; name: string | null }[];
   atTip: boolean;
+  savedVersionNo: number | null;
+  dirty: boolean;
   pinned: number[];
   owners: Record<string, { sid: number | null; outcome: string }>;
   counts: Record<string, number>;
@@ -123,6 +125,7 @@ async function main() {
     return { status: res.status, body, text, res };
   };
 
+  const { deployStateFor } = await import('../../src/lib/study/console-store');
   const state = async () => (await call('state')).body as unknown as StateBody;
 
   const [{ high }] = await db
@@ -411,6 +414,70 @@ async function main() {
   check('and are not in the participant-facing list', afterRestore.versions.length <= kept.length);
 
   }
+  // 8b. Apply, Save and Revert — and the invariant the split rests on: the
+  //     study measures the SAVE, so a block must not be endable while
+  //     something is applied and unsaved.
+  if (!startersOnly) {
+    const beforeApply = await state();
+    const savedBefore = beforeApply.savedVersionNo;
+    await call('save', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'apply',
+        rootRule: 'Answer briefly. Applied, not saved.',
+        prompt: 'Answer briefly. Applied, not saved.',
+        intents: beforeApply.snapshot.intents,
+      }),
+    });
+    const applied = await state();
+    check('an apply takes effect', applied.snapshot.rootRule.includes('Applied, not saved'));
+    check('and is not in the history', applied.versions.length === beforeApply.versions.length,
+      `${beforeApply.versions.length} → ${applied.versions.length}`);
+    check('and leaves the save where it was', applied.savedVersionNo === savedBefore);
+    check('and says so', applied.dirty);
+
+    // The gate the whole split depends on.
+    const gate = await deployStateFor({
+      assignmentId,
+      condition: view ?? 'simple_score',
+    });
+    check('a block cannot end on unsaved changes', !gate.deployed && gate.unsaved === true,
+      `deployed=${gate.deployed} unsaved=${gate.unsaved}`);
+
+    // Revert: back to the point they marked.
+    await call('revert', { method: 'POST' });
+    const reverted = await state();
+    check('revert drops the applies', !reverted.snapshot.rootRule.includes('Applied, not saved'));
+    check('and clears the unsaved state', !reverted.dirty);
+    check('and keeps the save', reverted.savedVersionNo === savedBefore);
+
+    // Apply again, then commit it — Save takes what is in EFFECT.
+    await call('save', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'apply',
+        rootRule: 'Answer briefly. This one gets kept.',
+        prompt: 'Answer briefly. This one gets kept.',
+        intents: reverted.snapshot.intents,
+      }),
+    });
+    await call('commit', { method: 'POST' });
+    const committed = await state();
+    check('commit marks what is in effect', !committed.dirty);
+    check('and it is in the history', committed.versions.length === beforeApply.versions.length + 1,
+      `${beforeApply.versions.length} → ${committed.versions.length}`);
+    check(
+      'and it is what the study would measure',
+      committed.savedVersionNo === committed.versions[0]?.versionNo &&
+        committed.snapshot.rootRule.includes('This one gets kept')
+    );
+    const gateAfter = await deployStateFor({
+      assignmentId,
+      condition: view ?? 'simple_score',
+    });
+    check('and the block can end now', gateAfter.deployed, `${gateAfter.label}`);
+  }
+
   // 9. The starter library, and the claim that adopting one is free.
   //
   //    Every clone is provisioned with the taxonomy's categories already rated

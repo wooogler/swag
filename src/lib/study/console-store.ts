@@ -115,13 +115,16 @@ function conditionOf(clone: { condition: string }): StudioArm {
 export async function deployStateFor(clone: {
   assignmentId: string;
   condition: string;
-}): Promise<{ deployed: boolean; label: string | null }> {
-  // The simple version has no deploy step — the newest saved version is what a
-  // question is answered against — so "is there something to measure" is "have
-  // they saved anything".
+}): Promise<{ deployed: boolean; label: string | null; unsaved?: boolean }> {
+  // The simple version has no deploy step. What it has instead is a save, and
+  // two things have to hold before a block can end on it: there is one, and
+  // nothing has been applied since. The second matters because the block test
+  // measures the SAVE — letting someone finish with unsaved changes would
+  // measure a configuration they had already moved on from, and nothing about
+  // the answers would look wrong.
   if (viewFamily(clone.condition as StudioView) === 'simple') {
-    const [tip] = await db
-      .select({ versionNo: simpleConfigVersions.versionNo })
+    const rows = await db
+      .select({ versionNo: simpleConfigVersions.versionNo, kind: simpleConfigVersions.kind })
       .from(simpleConfigVersions)
       .where(
         and(
@@ -131,7 +134,12 @@ export async function deployStateFor(clone: {
       )
       .orderBy(desc(simpleConfigVersions.versionNo))
       .limit(1);
-    return { deployed: !!tip, label: tip ? `v${tip.versionNo}` : null };
+    const tip = rows[0];
+    if (!tip) return { deployed: false, label: null };
+    if (tip.kind !== 'save') {
+      return { deployed: false, label: 'unsaved changes', unsaved: true };
+    }
+    return { deployed: true, label: `v${tip.versionNo}` };
   }
   if (conditionOf(clone) === 'baseline') {
     const [live] = await db
@@ -172,6 +180,7 @@ async function workFor(assignmentId: string, family: StudioFamily): Promise<Clon
     deploys: number;
     last_deploy: Date | null;
     simple_saves: number;
+    simple_applies: number;
     simple_last_save: Date | null;
     simple_intents: number | null;
     simple_prompt_chars: number | null;
@@ -205,10 +214,14 @@ async function workFor(assignmentId: string, family: StudioFamily): Promise<Clon
       -- The simple version keeps its configuration in one snapshot per save,
       -- so its counts come from the newest one rather than from rows. Zero on
       -- a full clone, and the caller picks which pair to read.
+      -- Saves and applies counted apart: the facilitator wants to know both
+      -- how much iterating is going on and whether any of it is committed.
       (SELECT count(*)::int FROM simple_config_versions
-        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL) AS simple_saves,
+        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL AND kind = 'save') AS simple_saves,
+      (SELECT count(*)::int FROM simple_config_versions
+        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL AND kind = 'apply') AS simple_applies,
       (SELECT max(created_at) FROM simple_config_versions
-        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL) AS simple_last_save,
+        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL AND kind = 'save') AS simple_last_save,
       (SELECT jsonb_array_length(coalesce(snapshot->'intents', '[]'::jsonb))
         FROM simple_config_versions
         WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL
@@ -229,7 +242,8 @@ async function workFor(assignmentId: string, family: StudioFamily): Promise<Clon
       corrections: 0,
       filters: 0,
       rulesChars: row?.simple_prompt_chars ?? 0,
-      ruleEdits: saves,
+      // Applies are the iterating, saves are the committing.
+      ruleEdits: (row?.simple_applies ?? 0) + saves,
       deploys: saves,
       lastDeployAt: row?.simple_last_save ? new Date(row.simple_last_save).toISOString() : null,
     };

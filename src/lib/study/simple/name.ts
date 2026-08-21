@@ -12,7 +12,6 @@
  * The smallest model available, because it is describing a diff someone
  * already knows they made.
  */
-import 'server-only';
 import { callModel, extractJsonObject } from '@/lib/score/classifier';
 import type { SimpleSnapshot } from './chain';
 

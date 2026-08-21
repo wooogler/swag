@@ -133,8 +133,14 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       seedPrompt,
     });
     // A block ends when there is a saved version to measure. There is no
-    // deploy step here — the newest version IS what a question is answered
-    // against — so "have they published anything" is "have they saved".
+    // deploy step here — a save is the whole of publishing — so "have they
+    // published anything" is "have they saved".
+    //
+    // And it has to be the LATEST thing they did: the block test reads the
+    // save, so finishing with applied-but-unsaved changes would measure a
+    // configuration they had already moved past, and nothing in the answers
+    // would look wrong. The server refuses that case too; this puts the fix
+    // in front of the click instead of behind it.
     const savedSomething = initialState.versions.length > 0;
     const simpleBlockDone =
       participant && savedSomething
@@ -173,6 +179,16 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                     compact
                     from={simpleBlockDone.phase}
                     label="I'm done"
+                    blocked={
+                      initialState.dirty
+                        ? {
+                            reason:
+                              'Some of your changes are in effect but not saved. The questions coming next are about your saved version — save them first.',
+                            actionLabel: 'Save and finish',
+                            actionUrl: `/api/instructor/assignments/${id}/score/simple/commit`,
+                          }
+                        : null
+                    }
                     waits={simpleBlockDone.waits}
                     waitLabel="Your chatbot is answering the check questions now."
                     confirm="This ends the setup for this chatbot. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it."

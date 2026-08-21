@@ -57,6 +57,7 @@ export type AdvanceRefusal =
   | 'no_next'
   | 'no_clone'
   | 'not_deployed'
+  | 'unsaved_changes'
   | 'bank_empty'
   | 'generation_failed';
 
@@ -113,15 +114,16 @@ export async function advanceParticipant(
     // too, not only the work — the console can force a phase, and a jump past
     // the work would otherwise reach generation with nothing deployed and
     // report it as something going wrong on our side.
-    const { deployed } = await deployStateFor(clone);
+    const { deployed, unsaved } = await deployStateFor(clone);
     if (!deployed) {
-      return refuse(participant, phase, 'not_deployed', {
-        // Two versions, two ways of having published: the full one deploys,
-        // the simple one just saves. Same refusal either way — there is
-        // nothing to measure — but a participant who has never seen a Deploy
-        // button cannot act on being told to press it.
-        message:
-          familyOf(participant) === 'simple'
+      return refuse(participant, phase, unsaved ? 'unsaved_changes' : 'not_deployed', {
+        // Three ways of not being ready, and each one has to name the button
+        // that fixes it. A participant who has never seen a Deploy button
+        // cannot act on being told to press it, and one who has already saved
+        // once needs to hear that it is the LATEST changes that are not in.
+        message: unsaved
+          ? 'You have changes that are not saved yet. Save them — the next step is about your saved version.'
+          : familyOf(participant) === 'simple'
             ? 'Save your chatbot first — the next step is about what you have saved.'
             : 'Deploy your chatbot first — the next step is about the version you deployed.',
         detail: { datasetKey: clone.datasetKey },

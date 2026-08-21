@@ -6,7 +6,7 @@ import { resolveDeployedChatPrompt } from '@/lib/score/deploy-store';
 import { getCloneCondition, resolveBaselineChatPrompt } from '@/lib/study/baseline-store';
 import { familyOf } from '@/lib/study/config';
 import { resolveSimpleLive } from '@/lib/study/simple/live';
-import { getSimpleTip } from '@/lib/study/simple/store';
+import { getSimpleSaved } from '@/lib/study/simple/store';
 import { eq } from 'drizzle-orm';
 
 interface ChatErrorDetails {
@@ -175,7 +175,9 @@ export async function POST(req: Request) {
       // The simple version's newest saved version is what a question is
       // answered against; there is no deploy pointer to look up and, on the
       // intent arm, no query-type call in front of the routing.
-      const tip = await getSimpleTip({
+      // The saved one: an apply is the instructor still deciding, and a
+      // student should not be answered by a configuration nobody committed to.
+      const tip = await getSimpleSaved({
         assignmentId,
         condition,
         seedPrompt: basePrompt,

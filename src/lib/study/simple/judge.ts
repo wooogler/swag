@@ -17,7 +17,6 @@
  * (§6.2): a queue of borderline cases to adjudicate is the kind of work this
  * version exists to remove.
  */
-import 'server-only';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {

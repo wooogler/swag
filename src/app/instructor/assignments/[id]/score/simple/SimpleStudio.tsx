@@ -10,9 +10,24 @@
  * "change one line, look at what it did" and every navigation charged to that
  * loop is charged to every repetition of it (docs/SCORE_SIMPLE_DESIGN.md §1).
  *
- * Two verbs: Save and Restore. No Try, no Apply, no Deploy — the newest saved
- * version IS the configuration, so there is never a state that is saved but
- * not in effect for the intermediate verbs to name.
+ * Three verbs, and they are three because the loop needs two speeds.
+ *
+ *   APPLY is the fast one, next to whatever is being edited. It takes effect —
+ *   the routing re-settles, the answers regenerate — and adds nothing to the
+ *   history, so trying six wordings costs six clicks and leaves one line.
+ *
+ *   SAVE marks the point. It is what the history lists, what a restore returns
+ *   to, and what the study measures. Nothing is measured that was not saved,
+ *   which is why the board says so plainly once the two have drifted apart and
+ *   why a block cannot end while they have.
+ *
+ *   REVERT throws away the applies since the last save. Trying things has to
+ *   be as cheap to undo as it was to do.
+ *
+ * Save and Revert sit with the history rather than in an editor, because both
+ * act on the whole configuration and a button inside one intent that quietly
+ * committed the other five would be lying about its scope. No Deploy: a save
+ * is the whole of publishing here.
  *
  * The screen states facts and does not interpret them. A question that matches
  * the intent you have open but is answered by an earlier one says "applied:
@@ -55,7 +70,11 @@ interface StatePayload {
   counts: Record<string, number>;
   judged: number;
   pending: number;
-  /** The save's own follow-up work is still running on the server. */
+  /** The newest SAVE — what the study measures. Null if they never saved. */
+  savedVersionNo: number | null;
+  /** Something took effect that the newest save does not carry. */
+  dirty: boolean;
+  /** The write's own follow-up work is still running on the server. */
   working: boolean;
   diff: { sid: number | null; entered: number[]; left: number[] }[] | null;
 }
@@ -188,8 +207,8 @@ export default function SimpleStudio({
   /* Saving                                                           */
   /* --------------------------------------------------------------- */
 
-  const save = useCallback(
-    async (next: SimpleSnapshot, focusSid: number | null) => {
+  const write = useCallback(
+    async (next: SimpleSnapshot, focusSid: number | null, kind: 'apply' | 'save') => {
       setSaving(true);
       const previousVersion = state.versions[0]?.versionNo ?? null;
       try {
@@ -197,6 +216,7 @@ export default function SimpleStudio({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            kind,
             prompt: next.prompt,
             rootRule: next.rootRule,
             intents: next.intents,
@@ -217,6 +237,44 @@ export default function SimpleStudio({
     },
     [api, load, selectedMessageId, state.versions]
   );
+
+  /** Take effect. The verb every editor carries. */
+  const apply = useCallback(
+    (next: SimpleSnapshot, focusSid: number | null) => write(next, focusSid, 'apply'),
+    [write]
+  );
+
+  /**
+   * Mark what is in effect as a version. The verb the study reads.
+   *
+   * Commits the applied state, not the editors' contents — otherwise Save
+   * would quietly apply whatever was half-typed and Apply would become the
+   * step you could skip.
+   */
+  const saveVersion = useCallback(async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(api('commit'), { method: 'POST' });
+      if (!res.ok) return;
+      await load({ versionNo: null });
+    } finally {
+      setSaving(false);
+    }
+  }, [api, load]);
+
+  /** Throw away the applies since the last save. */
+  const revert = useCallback(async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(api('revert'), { method: 'POST' });
+      if (!res.ok) return;
+      setDiffFrom(null);
+      setLocalVersionNo(null);
+      await load({ versionNo: null, diffFrom: null });
+    } finally {
+      setSaving(false);
+    }
+  }, [api, load]);
 
   const restore = useCallback(
     async (versionNo: number) => {
@@ -326,7 +384,9 @@ export default function SimpleStudio({
         setExpanded={setExpanded}
         creatingUnder={creatingUnder}
         setCreatingUnder={setCreatingUnder}
-        onSave={save}
+        onApply={apply}
+        onSaveVersion={saveVersion}
+        onRevert={revert}
         onRestore={restore}
         onView={(versionNo) => {
           setLocalVersionNo(null);
@@ -395,7 +455,9 @@ function ConfigColumn({
   setExpanded,
   creatingUnder,
   setCreatingUnder,
-  onSave,
+  onApply,
+  onSaveVersion,
+  onRevert,
   onRestore,
   onView,
   assignmentId,
@@ -414,7 +476,9 @@ function ConfigColumn({
   setExpanded: (e: number | 'root' | null) => void;
   creatingUnder: number | null | undefined;
   setCreatingUnder: (v: number | null | undefined) => void;
-  onSave: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
+  onApply: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
+  onSaveVersion: () => Promise<void>;
+  onRevert: () => Promise<void>;
   onRestore: (versionNo: number) => Promise<void>;
   onView: (versionNo: number | null) => void;
   assignmentId: string;
@@ -452,7 +516,7 @@ function ConfigColumn({
             setDraft={setDraft}
             readOnly={readOnly}
             saving={saving}
-            onSave={() => onSave(draft, null)}
+            onApply={() => onApply(draft, null)}
           />
         ) : (
           <Tree
@@ -468,7 +532,7 @@ function ConfigColumn({
             setExpanded={setExpanded}
             creatingUnder={creatingUnder}
             setCreatingUnder={setCreatingUnder}
-            onSave={onSave}
+            onApply={onApply}
             countOf={countOf}
             assignmentId={assignmentId}
           />
@@ -479,6 +543,11 @@ function ConfigColumn({
         versions={state.versions}
         viewingVersionNo={state.viewing?.versionNo ?? null}
         onView={onView}
+        dirty={state.dirty}
+        readOnly={readOnly}
+        saving={saving}
+        onSaveVersion={onSaveVersion}
+        onRevert={onRevert}
       />
     </div>
   );
@@ -490,13 +559,13 @@ function PromptEditor({
   setDraft,
   readOnly,
   saving,
-  onSave,
+  onApply,
 }: {
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
   saving: boolean;
-  onSave: () => void;
+  onApply: () => void;
 }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
@@ -518,12 +587,13 @@ function PromptEditor({
       />
       {!readOnly && (
         <button
-          onClick={onSave}
+          onClick={onApply}
           disabled={saving}
+          title="Put this into effect and see what it answers"
           className="self-end inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
         >
           {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-          Save
+          Apply
         </button>
       )}
     </div>
@@ -544,7 +614,7 @@ function Tree({
   setExpanded,
   creatingUnder,
   setCreatingUnder,
-  onSave,
+  onApply,
   countOf,
   assignmentId,
 }: {
@@ -560,7 +630,7 @@ function Tree({
   setExpanded: (e: number | 'root' | null) => void;
   creatingUnder: number | null | undefined;
   setCreatingUnder: (v: number | null | undefined) => void;
-  onSave: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
+  onApply: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
   countOf: (sid: number | null) => number;
   assignmentId: string;
 }) {
@@ -611,7 +681,7 @@ function Tree({
                 label="Answer earlier"
                 glyph="↑"
                 onClick={() =>
-                  void onSave(
+                  void onApply(
                     { ...draft, intents: moveSibling(draft.intents, intent.sid, -1) },
                     intent.sid
                   )
@@ -622,7 +692,7 @@ function Tree({
                 label="Answer later"
                 glyph="↓"
                 onClick={() =>
-                  void onSave(
+                  void onApply(
                     { ...draft, intents: moveSibling(draft.intents, intent.sid, 1) },
                     intent.sid
                   )
@@ -640,9 +710,9 @@ function Tree({
               readOnly={readOnly}
               saving={saving}
               onChange={(fields) => patch(intent.sid, fields)}
-              onSave={() => onSave(draft, intent.sid)}
+              onApply={() => onApply(draft, intent.sid)}
               onDelete={() =>
-                void onSave(
+                void onApply(
                   { ...draft, intents: removeSubtree(draft.intents, intent.sid) },
                   null
                 ).then(() => setExpanded(null))
@@ -664,7 +734,7 @@ function Tree({
               onCancel={() => setCreatingUnder(undefined)}
               onCreate={(next, sidPlaceholder) => {
                 setCreatingUnder(undefined);
-                return onSave(next, sidPlaceholder);
+                return onApply(next, sidPlaceholder);
               }}
             />
           </div>
@@ -717,7 +787,7 @@ function Tree({
           />
           {!readOnly && (
             <button
-              onClick={() => void onSave(draft, null)}
+              onClick={() => void onApply(draft, null)}
               disabled={saving}
               className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
             >
@@ -744,7 +814,7 @@ function Tree({
               // open after a save invites a second click that writes the same
               // intent again.
               setCreatingUnder(undefined);
-              await onSave(next, sid);
+              await onApply(next, sid);
             }}
           />
         </div>
@@ -810,7 +880,7 @@ function Accordion({
   readOnly,
   saving,
   onChange,
-  onSave,
+  onApply,
   onDelete,
   onNest,
   nestLabel,
@@ -820,7 +890,7 @@ function Accordion({
   readOnly: boolean;
   saving: boolean;
   onChange: (fields: Partial<SimpleIntent>) => void;
-  onSave: () => void;
+  onApply: () => void;
   onDelete: () => void;
   onNest: () => void;
   nestLabel: string;
@@ -877,12 +947,13 @@ function Accordion({
       {!readOnly && (
         <div className="flex items-center gap-2">
           <button
-            onClick={onSave}
+            onClick={onApply}
             disabled={saving}
+            title="Put this into effect and see what it answers"
             className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
           >
             {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            Save
+            Apply
           </button>
           <button
             onClick={onNest}
@@ -1002,7 +1073,7 @@ function NewIntent({
           className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
         >
           {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-          Save
+          Add
         </button>
         <button
           onClick={onCancel}
@@ -1026,23 +1097,66 @@ function VersionList({
   versions,
   viewingVersionNo,
   onView,
+  dirty,
+  readOnly,
+  saving,
+  onSaveVersion,
+  onRevert,
 }: {
   versions: SimpleVersion[];
   viewingVersionNo: number | null;
   onView: (versionNo: number | null) => void;
+  dirty: boolean;
+  readOnly: boolean;
+  saving: boolean;
+  onSaveVersion: () => Promise<void>;
+  onRevert: () => Promise<void>;
 }) {
-  if (versions.length === 0) {
-    return (
-      <section className="shrink-0 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2">
-        <p className="text-2xs text-[hsl(var(--muted-foreground))]">
+  return (
+    <section className="shrink-0 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
+      {/* Said plainly, in the one place the saved versions are listed, because
+          what is on screen and what will be measured have come apart and no
+          amount of looking at the board would show that. Not a warning — a
+          fact, and the button that resolves it is right here. */}
+      {!readOnly && (
+        <div className="flex items-center gap-2 border-b border-[hsl(var(--border))] px-3 py-2">
+          <span className="flex-1 text-2xs leading-snug text-[hsl(var(--muted-foreground))]">
+            {dirty
+              ? 'Changes are in effect but not saved.'
+              : versions.length === 0
+                ? 'Nothing saved yet.'
+                : 'Everything is saved.'}
+          </span>
+          {/* Absent, not disabled, before the first save: there is nowhere to
+              revert TO, and a greyed button is still an invitation to work out
+              why it will not do anything. */}
+          {dirty && versions.length > 0 && (
+            <button
+              onClick={() => void onRevert()}
+              disabled={saving}
+              title="Go back to the last saved version, dropping what you applied since"
+              className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40"
+            >
+              Revert
+            </button>
+          )}
+          <button
+            onClick={() => void onSaveVersion()}
+            disabled={saving || !dirty}
+            title="Keep this as a version you can come back to"
+            className="shrink-0 inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2.5 py-0.5 text-2xs font-semibold text-white disabled:opacity-40"
+          >
+            {saving && <Loader2 className="w-3 h-3 animate-spin" />}
+            Save
+          </button>
+        </div>
+      )}
+      {versions.length === 0 ? (
+        <p className="px-3 py-2 text-2xs text-[hsl(var(--muted-foreground))]">
           Saved versions will appear here.
         </p>
-      </section>
-    );
-  }
-  return (
-    <section className="shrink-0 max-h-[13rem] overflow-y-auto rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
-      <ul className="divide-y divide-[hsl(var(--border))]">
+      ) : (
+      <ul className="max-h-[11rem] overflow-y-auto divide-y divide-[hsl(var(--border))]">
         {versions.map((v) => (
           <li key={v.id}>
             <button
@@ -1072,6 +1186,7 @@ function VersionList({
           </li>
         ))}
       </ul>
+      )}
     </section>
   );
 }

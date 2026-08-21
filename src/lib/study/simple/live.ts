@@ -17,7 +17,6 @@
  * would be measuring a configuration the participant did not write. It throws,
  * and the harness retries.
  */
-import 'server-only';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import { isIncludedRating } from '@/lib/score/intents';

@@ -14,6 +14,12 @@
  * the studio header, inches from Deploy. Ending a block cannot be undone from
  * the participant's side: the phase gate shuts the board behind them.
  *
+ * `blocked` is for a different thing: not "are you sure" but "not yet, and
+ * here is the one button that fixes it". The server refuses the same case
+ * independently — this exists so the refusal arrives before the click instead
+ * of after it, with the fix attached. Its action is a URL rather than a
+ * callback because the pages that render this are server components.
+ *
  * Always lands back on /study/session and lets the server decide what comes
  * next — the destination differs per phase, and duplicating that rule here is
  * how the two would drift apart.
@@ -28,6 +34,7 @@ export default function PhaseAdvance({
   waits = false,
   waitLabel = 'Getting the next step ready.',
   confirm,
+  blocked = null,
   compact = false,
   className = '',
 }: {
@@ -39,6 +46,12 @@ export default function PhaseAdvance({
   waitLabel?: string;
   /** Ask before acting, with this as the question. */
   confirm?: string;
+  /**
+   * Something has to happen first. Shows `reason` instead of the confirmation,
+   * with a button that POSTs `actionUrl` and then moves on — so the fix and
+   * the hand-off are one click, not a trip back to find the right control.
+   */
+  blocked?: { reason: string; actionLabel: string; actionUrl: string } | null;
   /** Header sizing: small button, messages in a popover rather than in flow. */
   compact?: boolean;
   className?: string;
@@ -46,6 +59,28 @@ export default function PhaseAdvance({
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /** Do the blocking thing, then carry on into the hand-off. */
+  const resolveThenGo = async () => {
+    if (!blocked) return go();
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(blocked.actionUrl, { method: 'POST' });
+      if (!res.ok) {
+        setError('That did not go through — tell your facilitator.');
+        setBusy(false);
+        setAsking(false);
+        return;
+      }
+    } catch {
+      setError('That did not go through — tell your facilitator.');
+      setBusy(false);
+      setAsking(false);
+      return;
+    }
+    await go();
+  };
 
   const go = async () => {
     setAsking(false);
@@ -87,7 +122,7 @@ export default function PhaseAdvance({
   return (
     <div className={`relative ${compact ? 'inline-flex items-center' : 'flex flex-col'} ${className}`}>
       <button
-        onClick={confirm ? () => setAsking((v) => !v) : go}
+        onClick={confirm || blocked ? () => setAsking((v) => !v) : go}
         disabled={busy}
         className={
           compact
@@ -99,14 +134,14 @@ export default function PhaseAdvance({
         {busy ? 'Working…' : label}
       </button>
 
-      {asking && confirm && !busy && (
+      {asking && (confirm || blocked) && !busy && (
         <div
           className={`absolute top-full z-30 mt-2 w-72 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 shadow-lg ${
             compact ? 'right-0' : 'left-1/2 -translate-x-1/2'
           }`}
         >
           <p className="text-sm text-[hsl(var(--foreground))] leading-relaxed mb-3 text-left">
-            {confirm}
+            {blocked ? blocked.reason : confirm}
           </p>
           <div className="flex justify-end gap-2">
             <button
@@ -116,10 +151,10 @@ export default function PhaseAdvance({
               Not yet
             </button>
             <button
-              onClick={go}
+              onClick={blocked ? resolveThenGo : go}
               className="rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-white"
             >
-              Yes, I&apos;m done
+              {blocked ? blocked.actionLabel : "Yes, I'm done"}
             </button>
           </div>
         </div>

@@ -19,7 +19,6 @@
  * run — its snapshot is already pinned — but queues exactly one re-run, which
  * then works from the newer snapshot.
  */
-import 'server-only';
 import { armOf, type StudioView } from '../config';
 import {
   childrenOf,
@@ -43,6 +42,9 @@ interface SaveJob {
   versionId: number;
   snapshot: SimpleSnapshot;
   previous: SimpleSnapshot | null;
+  /** 'apply' skips the naming: nothing lists an apply, so a label for it is a
+   * model call spent on a string nobody reads. */
+  kind: 'apply' | 'save';
   /** What the board had selected when they saved — the best guess at what
    * they are about to look at. */
   focusSid: number | null;
@@ -87,7 +89,10 @@ function start(job: SaveJob): void {
 }
 
 async function perform(job: SaveJob): Promise<void> {
-  await Promise.allSettled([nameVersion(job), judgeAndPrefetch(job)]);
+  await Promise.allSettled([
+    job.kind === 'save' ? nameVersion(job) : Promise.resolve(),
+    judgeAndPrefetch(job),
+  ]);
 }
 
 async function nameVersion(job: SaveJob): Promise<void> {

@@ -57,7 +57,7 @@ import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { armOf, familyOf, type StudioView } from './config';
 import type { SimpleSnapshot } from './simple/chain';
 import { resolveSimpleLive } from './simple/live';
-import { getSimpleTip } from './simple/store';
+import { getSimpleSaved } from './simple/store';
 import { isChatConfigured, runChatTurn, type TurnMessage } from './chat-run';
 import { ensureStudyTables } from './store';
 
@@ -180,11 +180,15 @@ export async function generateForClone(args: {
   let simpleSnapshot: SimpleSnapshot | null = null;
 
   if (simple) {
-    // No deploy step in this version: the newest saved version IS what a
-    // question is answered against, so that is what gets pinned. Pinned all
-    // the same — a save during the questionnaire would otherwise split a batch
-    // across two configurations.
-    const tip = await getSimpleTip({ assignmentId: cloneAssignmentId, condition: view, seedPrompt: basePrompt });
+    // The newest SAVE, not whatever was applied last: a save is the
+    // participant saying this is the version, and the block test asks about
+    // the version they meant. The advance gate refuses to reach here with
+    // unsaved changes, so the two agree by the time this runs.
+    const tip = await getSimpleSaved({
+      assignmentId: cloneAssignmentId,
+      condition: view,
+      seedPrompt: basePrompt,
+    });
     if (!tip.version) throw new Error('not_deployed');
     simpleSnapshot = tip.snapshot;
     configRef = { simpleVersionNo: tip.version.versionNo };
@@ -407,7 +411,7 @@ export async function isGenerationCurrent(args: {
       .select()
       .from(assignments)
       .where(eq(assignments.id, cloneAssignmentId));
-    const tip = await getSimpleTip({
+    const tip = await getSimpleSaved({
       assignmentId: cloneAssignmentId,
       condition: clone.condition as StudioView,
       seedPrompt: assignment ? assignmentBasePrompt(assignment) : '',

@@ -365,7 +365,7 @@ export default function SessionConsole({
                         counting edits and deploys separately would print the
                         same number twice. */}
                     {p.family === 'simple'
-                      ? `${c.work.deploys} save(s)`
+                      ? `${c.work.ruleEdits} change(s) · ${c.work.deploys} save(s)`
                       : `${c.work.ruleEdits} edit(s) · ${c.work.deploys} deploy(s)`}
                   </span>
                 ))}

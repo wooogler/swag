@@ -28,7 +28,7 @@ import { getLatestChatDeploy } from '@/lib/score/deploy-store';
 import type { SnapshotConfig } from '@/components/study/SnapshotConfigView';
 import { armOf, familyOf, type StudioView } from './config';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
-import { getSimpleTip } from './simple/store';
+import { getSimpleSaved } from './simple/store';
 import { blockPlan } from './phases';
 
 /**
@@ -253,7 +253,9 @@ async function simpleConfigFor(
   view: StudioView
 ): Promise<SnapshotConfig | null> {
   const [assignment] = await db.select().from(assignments).where(eq(assignments.id, assignmentId));
-  const tip = await getSimpleTip({
+  // The saved one — the same configuration the frozen answers came from, so
+  // the panel a participant reads while predicting is the one that answered.
+  const tip = await getSimpleSaved({
     assignmentId,
     condition: view,
     seedPrompt: assignment ? assignmentBasePrompt(assignment) : '',

@@ -1,13 +1,36 @@
 /**
  * Reading and writing the simple version's configuration timeline.
  *
- * One verb writes: save. It appends a snapshot and returns — nothing waits on
- * a model, because the whole reason this version exists is that the edit →
- * check loop has to be cheap enough to repeat without thinking about it
- * (docs/SCORE_SIMPLE_DESIGN.md §6.1). The version's name and one-line summary
- * are filled in afterwards by a small model, and if that never arrives the
- * timeline reads "v3 · 14:02" forever, which is a worse label and not a
+ * Two verbs write, and they differ only in what they claim.
+ *
+ *   APPLY takes effect. The board judges and answers from it immediately, and
+ *   that is the whole of it — nothing is added to the history, because the
+ *   history is meant to be a short list of places worth coming back to and a
+ *   participant iterating for twenty minutes would bury it.
+ *
+ *   SAVE takes effect AND marks the point. It is what the history lists, what
+ *   a restore can return to, and — this is the part that has to stay true —
+ *   what the study measures. The block test reads the newest SAVE, so a
+ *   configuration nobody saved is a configuration nobody is measured on, and
+ *   the board says so rather than letting that pass quietly.
+ *
+ * Both are rows in the same timeline, so "the newest row is the current
+ * configuration" holds regardless, and the trail keeps every attempt.
+ *
+ * Neither waits on a model, because the whole reason this version exists is
+ * that the edit → check loop has to be cheap enough to repeat without thinking
+ * about it (docs/SCORE_SIMPLE_DESIGN.md §6.1). A save's name and one-line
+ * summary are filled in afterwards by a small model, and if that never arrives
+ * the timeline reads "v3 · 14:02" forever, which is a worse label and not a
  * broken one.
+ *
+ * NO `server-only` in this directory, deliberately. It is not a declared
+ * dependency — Next resolves it and nothing else does — so a module carrying it
+ * cannot be imported by a script, and these modules are reached from generate.ts
+ * and console-store.ts, which half of scripts/study/ imports. Adding it once
+ * broke six checking scripts while tsc and the build both stayed green. The
+ * protection it offered is redundant anyway: everything here imports the
+ * database, which was never going to run in a browser.
  *
  * Restore is a rollback: the versions after the restored one stop being part
  * of the timeline, so "the last version" is always the final state and there
@@ -16,12 +39,13 @@
  * back is RQ1 data, and hard-deleting it is the mistake the full version's
  * rule-version revert already makes.
  */
-import 'server-only';
 import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { simpleConfigVersions, simplePins } from '@/db/schema';
 import { armOf, type StudioView } from '../config';
 import { emptySnapshot, type SimpleSnapshot } from './chain';
+
+export type SimpleVersionKind = 'apply' | 'save';
 
 export interface SimpleVersion {
   id: number;
@@ -37,12 +61,16 @@ export interface SimpleVersion {
 export interface SimpleState {
   /** The configuration as of the version being viewed. */
   snapshot: SimpleSnapshot;
-  /** Newest first. Hidden rows are not here — see the module header. */
+  /** Saves only, newest first. Applies are not places to come back to. */
   versions: SimpleVersion[];
-  /** The version being viewed, or null when nothing has been saved yet. */
+  /** The version being viewed, or null when nothing has been written yet. */
   viewing: SimpleVersion | null;
   /** True when `viewing` is the newest version, i.e. edits are allowed. */
   atTip: boolean;
+  /** The newest SAVE — what the study measures. Null if they never saved. */
+  savedVersionNo: number | null;
+  /** Applied changes the newest save does not carry. */
+  dirty: boolean;
   pinned: number[];
 }
 
@@ -99,7 +127,11 @@ export async function getSimpleState(args: {
 }): Promise<SimpleState> {
   const { assignmentId, condition, seedPrompt } = args;
   const rows = await visibleVersions(assignmentId);
-  const versions: SimpleVersion[] = rows.map((row, i) => ({
+  // The history is the saves. Applies took effect and are kept for the trail,
+  // but they are not places to come back to and listing them would bury the
+  // ones that are.
+  const saved = rows.filter((r) => r.kind === 'save');
+  const versions: SimpleVersion[] = saved.map((row, i) => ({
     id: row.id,
     versionNo: row.versionNo,
     displayNo: i + 1,
@@ -109,6 +141,7 @@ export async function getSimpleState(args: {
   }));
 
   const tip = rows.length ? rows[rows.length - 1] : null;
+  const savedTip = saved.length ? saved[saved.length - 1] : null;
   const wanted =
     args.versionNo != null ? rows.find((r) => r.versionNo === args.versionNo) ?? tip : tip;
 
@@ -125,8 +158,53 @@ export async function getSimpleState(args: {
     versions: versions.reverse(),
     viewing: wanted ? versions.find((v) => v.versionNo === wanted.versionNo) ?? null : null,
     atTip: !wanted || !tip || wanted.versionNo === tip.versionNo,
+    savedVersionNo: savedTip?.versionNo ?? null,
+    // Something took effect that the newest save does not carry. The board
+    // says so, and the study refuses to end a block on it.
+    dirty: !!tip && tip.versionNo !== (savedTip?.versionNo ?? -1),
     pinned: pins.map((p) => p.messageId),
   };
+}
+
+/**
+ * The newest SAVE — the configuration the study measures.
+ *
+ * Separate from the tip on purpose: what the board answers from is whatever
+ * took effect last, and what the block test asks about is what the participant
+ * decided was worth keeping. Those are the same thing only when they saved,
+ * which is why nothing lets them finish a block until they have.
+ */
+export async function getSimpleSaved(args: {
+  assignmentId: string;
+  condition: StudioView;
+  seedPrompt: string;
+}): Promise<{ snapshot: SimpleSnapshot; version: { id: number; versionNo: number } | null }> {
+  const [row] = await db
+    .select()
+    .from(simpleConfigVersions)
+    .where(
+      and(
+        eq(simpleConfigVersions.assignmentId, args.assignmentId),
+        eq(simpleConfigVersions.kind, 'save'),
+        isNull(simpleConfigVersions.hiddenAt)
+      )
+    )
+    .orderBy(desc(simpleConfigVersions.versionNo))
+    .limit(1);
+  return {
+    snapshot: row
+      ? parseSnapshot(row.snapshot, args.condition, args.seedPrompt)
+      : emptySnapshot(armOf(args.condition), args.seedPrompt),
+    version: row ? { id: row.id, versionNo: row.versionNo } : null,
+  };
+}
+
+/** Whether anything has taken effect that the newest save does not carry. */
+export async function isSimpleDirty(assignmentId: string): Promise<boolean> {
+  const rows = await visibleVersions(assignmentId);
+  if (rows.length === 0) return false;
+  const tip = rows[rows.length - 1];
+  return tip.kind !== 'save';
 }
 
 /** The snapshot a question is currently answered against, tip only. */
@@ -183,6 +261,8 @@ export async function getSimpleVersion(args: {
 export async function saveSimpleVersion(args: {
   assignmentId: string;
   snapshot: SimpleSnapshot;
+  /** 'apply' takes effect; 'save' also marks the point. */
+  kind: SimpleVersionKind;
   createdBy?: string | null;
 }): Promise<{ id: number; versionNo: number }> {
   const { assignmentId, snapshot } = args;
@@ -197,6 +277,7 @@ export async function saveSimpleVersion(args: {
         .values({
           assignmentId,
           versionNo: max + 1,
+          kind: args.kind,
           snapshot,
           createdBy: args.createdBy ?? null,
           createdAt: new Date(),
@@ -259,6 +340,39 @@ export async function restoreSimpleVersion(args: {
     )
     .returning({ id: simpleConfigVersions.id });
   return { hidden: hidden.length };
+}
+
+/**
+ * Throw away what has been applied since the last save.
+ *
+ * The partner of Apply: try things, and if none of them were right, go back to
+ * the point you marked. Hidden rather than deleted, like a restore — an
+ * attempt someone abandoned is the RQ1 material, and it is only the
+ * participant's timeline it leaves.
+ *
+ * Nothing saved yet means there is no point to go back to, and this reports
+ * that rather than wiping their work.
+ */
+export async function revertSimpleWorking(assignmentId: string): Promise<{
+  to: number;
+  dropped: number;
+} | null> {
+  const rows = await visibleVersions(assignmentId);
+  const saved = rows.filter((r) => r.kind === 'save');
+  const target = saved.length ? saved[saved.length - 1] : null;
+  if (!target) return null;
+  const dropped = await db
+    .update(simpleConfigVersions)
+    .set({ hiddenAt: new Date() })
+    .where(
+      and(
+        eq(simpleConfigVersions.assignmentId, assignmentId),
+        gt(simpleConfigVersions.versionNo, target.versionNo),
+        isNull(simpleConfigVersions.hiddenAt)
+      )
+    )
+    .returning({ id: simpleConfigVersions.id });
+  return { to: target.versionNo, dropped: dropped.length };
 }
 
 /** The next unused stable id for this assignment, counting hidden versions. */

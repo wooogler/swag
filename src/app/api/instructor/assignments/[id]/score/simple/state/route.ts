@@ -98,6 +98,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     versions: state.versions,
     viewing: state.viewing,
     atTip: state.atTip,
+    // What the study measures, and whether the board has moved past it.
+    savedVersionNo: state.savedVersionNo,
+    dirty: state.dirty,
     pinned: state.pinned,
     // messageId → { sid, outcome }. The board renders "applied: X" from this
     // and nothing else, so what it shows is what would actually be sent.

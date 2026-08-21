@@ -15,7 +15,6 @@
  * No marks means an ordinary assignment — a researcher's own board, or a
  * scratch one — and then the log is the log.
  */
-import 'server-only';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { studyReviewQuestions } from '@/db/schema';

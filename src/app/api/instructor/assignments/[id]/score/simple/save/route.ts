@@ -1,11 +1,15 @@
 /**
- * Save: the only verb that writes a configuration.
+ * Writing a configuration — either kind.
  *
- * It appends a snapshot and returns. It does not judge, does not generate, and
- * does not wait for a name — all of that is started afterwards and none of it
- * can make a save slow or fail (§6.1). The response carries the new version so
- * the board can relabel its timeline immediately, and the follow-up work
- * lands on the next poll.
+ * APPLY takes effect and stops there. SAVE takes effect and marks the point:
+ * it is what the history lists and what the study measures. Both append a
+ * snapshot, so the newest row is the current configuration either way and the
+ * trail keeps every attempt.
+ *
+ * Neither judges, generates, or waits for a name — all of that is started
+ * afterwards and none of it can make a write slow or fail (§6.1). The response
+ * carries the new version so the board can relabel immediately, and the
+ * follow-up work lands on the next poll.
  *
  * New intents arrive with a temporary negative id; the server replaces it with
  * one that is stable for the life of the assignment, so a judgment, an answer
@@ -38,6 +42,9 @@ const bodySchema = z.object({
   prompt: z.string().max(STUDY_PROMPT_CHAR_LIMIT).optional(),
   rootRule: z.string().max(STUDY_PROMPT_CHAR_LIMIT).optional(),
   intents: z.array(intentSchema).max(60).optional(),
+  /** Defaulted to a save: a caller that does not know about the split is
+   * asking for the thing that counts. */
+  kind: z.enum(['apply', 'save']).default('save'),
   /** What the board had open, so the follow-up work starts where they are. */
   focusSid: z.number().int().positive().nullable().optional(),
   recentMessageIds: z.array(z.number().int()).max(40).optional(),
@@ -101,10 +108,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     intents: arm === 'score' ? intents : [],
   };
 
-  const version = await saveSimpleVersion({ assignmentId: id, snapshot });
+  const version = await saveSimpleVersion({ assignmentId: id, snapshot, kind: body.kind });
 
+  // One event either way, with the kind on it: an apply and a save are the
+  // same act with a different claim, and the analysis wants to count both and
+  // tell them apart.
   await logStudyEvent(id, 'simple_version_save', {
     condition,
+    kind: body.kind,
     versionNo: version.versionNo,
     intents: snapshot.intents.length,
     ...describeSave(snapshot, previousVersion ? previous : null),
@@ -115,6 +126,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   runAfterSave({
     assignmentId: id,
     condition,
+    kind: body.kind,
     versionId: version.id,
     snapshot,
     previous: previousVersion ? previous : null,
@@ -123,7 +135,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     recentMessageIds: body.recentMessageIds ?? [],
   });
 
-  return NextResponse.json({ versionNo: version.versionNo, id: version.id });
+  return NextResponse.json({ versionNo: version.versionNo, id: version.id, kind: body.kind });
 }
 
 /**

@@ -585,6 +585,9 @@ export const simpleConfigVersions = pgTable('simple_config_versions', {
   id: serial('id').primaryKey(),
   assignmentId: text('assignment_id').notNull(),
   versionNo: integer('version_no').notNull(),
+  // 'apply' | 'save'. Both take effect; only a save is a point the participant
+  // can come back to, appears in their history, or is measured against.
+  kind: text('kind').notNull().default('save'),
   snapshot: jsonb('snapshot').notNull(),
   // Written asynchronously after the save returns — a save never waits on a
   // model. Null until it lands, and null forever if it fails.
