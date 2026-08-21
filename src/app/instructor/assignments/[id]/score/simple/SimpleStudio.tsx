@@ -43,6 +43,7 @@ import { QuerySnippet } from '../materials';
 import type { ScoreQueryRow } from '../IntentBoard';
 import StarterPicker from './StarterPicker';
 import RulePicker, { type RuleSource } from './RulePicker';
+import { intentColor } from './colors';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
   documentOrder,
@@ -696,6 +697,13 @@ function Tree({
           ) : (
             <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
           )}
+          {/* The same dot the question rows carry, so a colour seen in the
+              list can be found here without reading anything. */}
+          <span
+            aria-hidden
+            className="w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ backgroundColor: intentColor(intent.sid) }}
+          />
           <span className="flex-1 truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
           <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
             {countOf(intent.sid)}
@@ -796,6 +804,13 @@ function Tree({
         ) : (
           <ChevronRight className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
         )}
+        {/* Grey, and the same grey the list uses for a question no intent
+            claimed — so the key is complete: every dot in the list has a row
+            here to match it to. */}
+        <span
+          aria-hidden
+          className="w-1.5 h-1.5 rounded-full shrink-0 bg-[hsl(var(--muted-foreground))]"
+        />
         <span className="flex-1 text-sm font-semibold">Everything else</span>
         <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
           {countOf(null)}
@@ -1432,17 +1447,26 @@ function QuestionRow({
             {row.participantToken} · {row.turnNumber}
           </span>
           {showOwner && owner && (
-            <span
-              className={`text-2xs px-1.5 py-0.5 rounded ${
-                // A plain statement of where the question goes. Grey when it is
-                // somewhere other than what you have open — different, not
-                // wrong; no warning colour, no icon (§5.4).
-                owner.outcome === 'pending'
-                  ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
-                  : 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
-              }`}
-            >
-              {owner.outcome === 'pending' ? 'working it out' : `applied: ${titleOf(owner.sid)}`}
+            // Where the question goes, stated and not interpreted (§5.4). The
+            // chip itself stays grey: the row already carries tinted chips for
+            // pasted material, and a second tinted chip on the same line would
+            // be two colour languages an inch apart. The dot does the colour,
+            // which also keeps it quiet enough to repeat sixty times.
+            <span className="inline-flex items-center gap-1 rounded bg-[hsl(var(--muted))] px-1.5 py-0.5 text-2xs text-[hsl(var(--muted-foreground))]">
+              {owner.outcome !== 'pending' && (
+                <span
+                  aria-hidden
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{
+                    // Grey for the else branch: "nothing claimed this" is a
+                    // different kind of answer from "I put it here", and the
+                    // difference is worth seeing down a column.
+                    backgroundColor:
+                      owner.sid == null ? 'hsl(var(--muted-foreground))' : intentColor(owner.sid),
+                  }}
+                />
+              )}
+              {owner.outcome === 'pending' ? 'working it out' : titleOf(owner.sid)}
             </span>
           )}
         </div>

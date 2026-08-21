@@ -29,6 +29,14 @@
   --ring: 221 83% 53%;
 
   --card: 0 0% 100%;
+
+  /* Intent colours for the simple board (simple/colors.ts explains why there
+     are four). Light steps, validated all-pairs against the card: worst normal
+     ΔE 22.6, worst deuteranopia 9.7, all above 3:1. */
+  --intent-1: #2563eb;
+  --intent-2: #d97706;
+  --intent-3: #0d9488;
+  --intent-4: #a21caf;
   --card-foreground: 220 13% 18%;
 
   --popover: 0 0% 100%;
@@ -63,6 +71,15 @@
     --ring: 224.3 76.3% 48%;
 
     --card: 222.2 84% 4.9%;
+
+    /* The same four hues re-stepped for the dark card — not an automatic flip.
+       Validated on that surface: all four above 3:1, worst deuteranopia 6.1,
+       the band that is legal only with a label beside the mark. Every chip
+       carries the intent's name. */
+    --intent-1: #3b82f6;
+    --intent-2: #f59e0b;
+    --intent-3: #14b8a6;
+    --intent-4: #c026d3;
     --card-foreground: 210 40% 98%;
 
     --popover: 222.2 84% 4.9%;
