@@ -36,6 +36,9 @@ export interface IntentVersion {
   name: string | null;
   summary: string | null;
   createdAt: string;
+  /** The write this pair first appeared in. Compared against the newest SAVE,
+   * it says whether this wording has been kept or is only in effect. */
+  configVersionNo: number | null;
 }
 
 /** Every (sid, definition, rule) the configuration currently holds. */
@@ -144,6 +147,7 @@ export async function recordIntentVersions(args: {
       name: row.name,
       summary: row.summary,
       createdAt: row.createdAt.toISOString(),
+      configVersionNo: row.configVersionNo,
     });
   }
   return written;
@@ -183,6 +187,7 @@ export async function listIntentVersions(
       name: row.name,
       summary: row.summary,
       createdAt: row.createdAt.toISOString(),
+      configVersionNo: row.configVersionNo,
     });
   }
   return out;
@@ -217,6 +222,7 @@ export async function previousIntentVersion(
         name: row.name,
         summary: row.summary,
         createdAt: row.createdAt.toISOString(),
+      configVersionNo: row.configVersionNo,
       }
     : null;
 }

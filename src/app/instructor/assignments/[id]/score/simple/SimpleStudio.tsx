@@ -756,6 +756,10 @@ function ConfigColumn({
             creating={creating}
             setCreating={setCreating}
             onApply={onApply}
+            onSaveVersion={onSaveVersion}
+            onRevert={onRevert}
+            dirty={state.dirty}
+            savedVersionNo={state.savedVersionNo}
             countOf={countOf}
             rankedExamples={rankedExamples}
             assignmentId={assignmentId}
@@ -763,15 +767,13 @@ function ConfigColumn({
         )}
       </section>
 
-      {/* The version number a participant reads belongs to the INTENT, and
-          lives inside it. What stays here is the one thing that is genuinely
-          about the whole configuration: whether what is in effect has been
-          saved, since that — not any single intent — is what the next step
-          measures.
-
-          The baseline arm is the exception, and only because it has one
-          intent: its whole configuration IS the document, so the document's
-          history and the configuration's are the same list, and it keeps it. */}
+      {/* Save sits beside Apply and Revert sits with the history, inside
+          whichever editor is open — the two verbs act where the thing they act
+          on is being edited. This is what is left for the moments no editor is
+          open: a deletion, or an apply whose card has since been closed. It is
+          the same act reached from the one place it is still reachable from,
+          not a second copy of it. */}
+      {(arm === 'baseline' || expanded === null) && (
       <SaveBar
         dirty={state.dirty}
         hasSave={state.savedVersionNo != null}
@@ -781,6 +783,7 @@ function ConfigColumn({
         onSaveVersion={onSaveVersion}
         onRevert={onRevert}
       />
+      )}
       {arm === 'baseline' && (
         <VersionList
           versions={state.versions}
@@ -872,6 +875,10 @@ function Tree({
   creating,
   setCreating,
   onApply,
+  onSaveVersion,
+  onRevert,
+  dirty,
+  savedVersionNo,
   countOf,
   rankedExamples,
   assignmentId,
@@ -897,6 +904,11 @@ function Tree({
     focusSid: number | null,
     seed?: { sid: number; messageId: number } | null
   ) => Promise<void>;
+  onSaveVersion: () => Promise<void>;
+  onRevert: () => Promise<void>;
+  /** Something is in effect that the newest save does not carry. */
+  dirty: boolean;
+  savedVersionNo: number | null;
   countOf: (sid: number | null) => number;
   /** The hypothetical questions the open intent's order was worked out from. */
   rankedExamples: { sid: number; examples: string[] } | null;
@@ -1094,6 +1106,10 @@ function Tree({
               intent={intent}
               readOnly={readOnly}
               saving={saving}
+              dirty={dirty}
+              savedVersionNo={savedVersionNo}
+              onSaveVersion={onSaveVersion}
+              onRevert={onRevert}
               onChange={(fields) => patch(intent.sid, fields)}
               onApply={() => onApply(draft, intent.sid)}
               onDelete={() =>
@@ -1130,7 +1146,7 @@ function Tree({
           is being created at all, and the button would never appear. */}
       {creating ? (
         creating.beforeSid == null && (
-          <div className="ml-[1.05rem] pl-2.5 pr-2 pt-1">{form('Uncategorized')}</div>
+          <div className="my-1.5 ml-[1.05rem] pl-2.5 pr-2">{form('Uncategorized')}</div>
         )
       ) : (
         !readOnly && (
@@ -1150,7 +1166,14 @@ function Tree({
               });
               setExpanded(null);
             }}
-            className="w-full flex items-center gap-1.5 pl-2 pr-2 py-1 rounded-lg text-left text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+            /* The same box as an intent row — same width, same left edge, so
+               its words line up with every title above — but dashed and
+               without a fill, so neither the row nor its hover can be taken
+               for one of them. The border is paid for out of the padding, so
+               the height still matches. Set apart from both neighbours,
+               because it is a different kind of thing standing between two
+               lists of the same kind. */
+            className="my-1.5 w-full flex items-center gap-1.5 pl-2 pr-2 py-[3px] rounded-lg border border-dashed border-[hsl(var(--border))] text-left text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
           >
             <Plus className="w-3.5 h-3.5 shrink-0" />
             <span
@@ -1166,7 +1189,7 @@ function Tree({
           here. It is a rule with no "when", because its when is what is
           left. */}
       <div
-        className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer ${
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer ${
           selection.kind === 'root' ? 'bg-[hsl(var(--primary))]/8' : 'hover:bg-[hsl(var(--muted))]'
         }`}
         onClick={() => {
@@ -1216,13 +1239,29 @@ function Tree({
               className={FIELD_BOX + ' min-h-[9rem]'}
             />
           </Field>
-          {!readOnly && <ApplyButton saving={saving} onClick={() => void onApply(draft, null)} />}
+          {!readOnly && (
+            <div className="flex items-center gap-2">
+              <ApplyButton saving={saving} onClick={() => void onApply(draft, null)} />
+              {dirty && (
+                <button
+                  onClick={() => void onSaveVersion()}
+                  disabled={saving}
+                  title="Keep the whole configuration as a version you can come back to"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                >
+                  Save
+                </button>
+              )}
+            </div>
+          )}
           <IntentHistory
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
+            savedVersionNo={savedVersionNo}
             disabled={readOnly}
             onPick={(v) => setDraft({ ...draft, rootRule: v.rule })}
+            onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
           />
         </div>
       )}
@@ -1300,8 +1339,12 @@ function Accordion({
   intent,
   readOnly,
   saving,
+  dirty,
+  savedVersionNo,
   onChange,
   onApply,
+  onSaveVersion,
+  onRevert,
   onDelete,
 }: {
   api: (path: string, query?: string) => string;
@@ -1316,8 +1359,13 @@ function Accordion({
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
+  /** Something is in effect that the newest save does not carry. */
+  dirty: boolean;
+  savedVersionNo: number | null;
   onChange: (fields: Partial<SimpleIntent>) => void;
   onApply: () => void;
+  onSaveVersion: () => Promise<void>;
+  onRevert: () => Promise<void>;
   onDelete: () => void;
 }) {
   return (
@@ -1366,6 +1414,20 @@ function Accordion({
       {!readOnly && (
         <div className="flex items-center gap-2">
           <ApplyButton saving={saving} onClick={onApply} />
+          {/* Next to the verb it follows. It still writes the WHOLE
+              configuration — a version is the whole of it — which is why it
+              says so on the way in and why the tree marks every intent the
+              save will carry. */}
+          {dirty && (
+            <button
+              onClick={() => void onSaveVersion()}
+              disabled={saving}
+              title="Keep the whole configuration as a version you can come back to"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+            >
+              Save
+            </button>
+          )}
           <span className="flex-1" />
           <button
             onClick={onDelete}
@@ -1382,8 +1444,10 @@ function Accordion({
         versions={versions}
         currentDefinition={intent.definition}
         currentRule={intent.rule}
+        savedVersionNo={savedVersionNo}
         disabled={readOnly}
         onPick={(v) => onChange({ definition: v.definition, rule: v.rule })}
+        onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
       />
     </div>
   );

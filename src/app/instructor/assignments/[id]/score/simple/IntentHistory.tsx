@@ -43,6 +43,9 @@ export interface IntentVersion {
   name: string | null;
   summary: string | null;
   createdAt: string;
+  /** The write it first appeared in — past the newest save means in effect
+   * but not kept. */
+  configVersionNo: number | null;
 }
 
 /**
@@ -64,13 +67,20 @@ export default function IntentHistory({
   versions,
   currentDefinition,
   currentRule,
+  savedVersionNo,
   onPick,
+  onRevert,
   disabled = false,
 }: {
   versions: IntentVersion[];
   currentDefinition: string;
   currentRule: string;
+  /** The newest SAVE. Anything written after it is in effect and not kept. */
+  savedVersionNo: number | null;
   onPick: (version: IntentVersion) => void;
+  /** Throw away everything applied since the last save. Absent when there is
+   * nothing to throw away, or nowhere to throw it back to. */
+  onRevert?: (() => void) | null;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -106,8 +116,26 @@ export default function IntentHistory({
       </button>
 
       {open && (
-        // Capped and scrolling: a long history must not push the boxes it is
-        // about off the screen.
+        <>
+        {/* Going back to the last saved point is a history act, so it lives
+            with the history rather than in a bar under the whole column. */}
+        {onRevert && (
+          <div className="mt-1 flex items-center gap-2">
+            <span className="flex-1 text-2xs text-[hsl(var(--muted-foreground))]">
+              Some of this is applied but not saved.
+            </span>
+            <button
+              type="button"
+              onClick={onRevert}
+              title="Go back to the last saved version, dropping what you applied since"
+              className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
+            >
+              Revert
+            </button>
+          </div>
+        )}
+        {/* Capped and scrolling: a long history must not push the boxes it is
+            about off the screen. */}
         <ul className="mt-1 max-h-[9rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
           {versions.map((version, i) => {
             const isCurrent =
@@ -144,6 +172,16 @@ export default function IntentHistory({
                   <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
                     {moved}
                   </span>
+                  {/* An apply is a version of this intent too — it took
+                      effect and the board answered under it. What it is not is
+                      kept, and the next step reads only what was kept. */}
+                  {(savedVersionNo == null ||
+                    (version.configVersionNo != null &&
+                      version.configVersionNo > savedVersionNo)) && (
+                    <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
+                      unsaved
+                    </span>
+                  )}
                   <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
                     {isCurrent ? 'current' : ago(version.createdAt, now)}
                   </span>
@@ -152,6 +190,7 @@ export default function IntentHistory({
             );
           })}
         </ul>
+        </>
       )}
     </div>
   );
