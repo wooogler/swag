@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentRatings, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { refuseSimpleClone } from '@/lib/study/simple/route-context';
 import { ensureIntentTables } from '@/lib/score/intent-store';
 import { intentDefHash } from '@/lib/score/intents';
 
@@ -38,6 +39,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
 
   let body: z.infer<typeof bodySchema>;
   try {

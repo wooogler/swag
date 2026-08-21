@@ -27,6 +27,7 @@ import {
   scoreQueryTypes,
 } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { refuseSimpleClone } from '@/lib/study/simple/route-context';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
 import { classifyMessageType } from '@/lib/score/type-classifier';
@@ -388,6 +389,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
 
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
   const state = await loadIntentState(id);
@@ -416,6 +422,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
 
   if (!isOpenAIConfigured()) {
     return NextResponse.json(

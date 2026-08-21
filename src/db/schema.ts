@@ -569,6 +569,77 @@ export const studyClones = pgTable('study_clones', {
 }));
 
 // ---------------------------------------------------------------------------
+// The simple version. See docs/SCORE_SIMPLE_DESIGN.md; created by runtime DDL
+// in src/lib/study/store.ts like everything else in this section.
+//
+// Four tables, and the shape of them is the design: one config timeline whose
+// newest row IS the configuration, judgments keyed by definition text, and
+// responses keyed by rule text. Nothing here points at score_intents — the
+// simple board has no live rows, so there is nothing to keep in step.
+// ---------------------------------------------------------------------------
+
+// One snapshot per save (SimpleSnapshot in lib/study/simple/chain.ts). The
+// newest row with hidden_at IS NULL is the current configuration; restoring
+// hides everything after the restored version rather than deleting it.
+export const simpleConfigVersions = pgTable('simple_config_versions', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  versionNo: integer('version_no').notNull(),
+  snapshot: jsonb('snapshot').notNull(),
+  // Written asynchronously after the save returns — a save never waits on a
+  // model. Null until it lands, and null forever if it fails.
+  name: text('name'),
+  summary: text('summary'),
+  hiddenAt: timestamp('hidden_at'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('simple_config_versions_unique').on(table.assignmentId, table.versionNo),
+}));
+
+// Judgment cache, keyed by definition TEXT (intentDefHash) — never by intent,
+// position or version. Editing one definition re-rates that definition alone.
+export const simpleRatings = pgTable('simple_ratings', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  defHash: text('def_hash').notNull(),
+  messageId: integer('message_id').notNull(),
+  rating: text('rating').notNull(),
+  model: text('model'),
+  ratedAt: timestamp('rated_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('simple_ratings_unique').on(table.assignmentId, table.defHash, table.messageId),
+  assignmentIdx: index('simple_ratings_assignment_idx').on(table.assignmentId),
+}));
+
+// Response cache, keyed by the rule TEXT that produced it (rulePreviewHash) —
+// so a version switch is free wherever the applied text is unchanged, and a
+// rule edit only invalidates the questions that rule answers.
+export const simplePreviews = pgTable('simple_previews', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  messageId: integer('message_id').notNull(),
+  ruleHash: text('rule_hash').notNull(),
+  response: text('response').notNull(),
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('simple_previews_unique').on(table.messageId, table.ruleHash),
+  assignmentIdx: index('simple_previews_assignment_idx').on(table.assignmentId),
+}));
+
+// A sticky bookmark with no meaning beyond the list order. Not score_intent_pins:
+// those are rulings the classifier is taught from.
+export const simplePins = pgTable('simple_pins', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  messageId: integer('message_id').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('simple_pins_unique').on(table.assignmentId, table.messageId),
+}));
+
+// ---------------------------------------------------------------------------
 // Baseline condition + shared study instrumentation. See docs/STUDY_BASELINE_SPEC.md.
 // All created by runtime DDL in src/lib/study/store.ts.
 // ---------------------------------------------------------------------------

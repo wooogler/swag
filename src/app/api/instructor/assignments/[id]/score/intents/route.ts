@@ -17,6 +17,7 @@ import { db } from '@/db/db';
 import { scoreIntentRatings, scoreIntents, scoreRuleVersions } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { refuseSimpleClone } from '@/lib/study/simple/route-context';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { generateIntentTitle } from '@/lib/score/intent-agent';
 import { SCORE_QUERY_TYPES, seedRuleVersionName } from '@/lib/score/intents';
@@ -89,6 +90,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
 
   const state = await loadIntentState(id);
   return NextResponse.json(serializeState(state));
@@ -101,6 +107,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
 
   let body: z.infer<typeof createSchema>;
   try {

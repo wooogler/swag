@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { refuseSimpleClone } from '@/lib/study/simple/route-context';
 import { SCORE_QUERY_TYPES } from '@/lib/score/intents';
 import { ensureStudyTables } from '@/lib/study/store';
 import {
@@ -36,6 +37,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
   await ensureStudyTables();
   const searches = await listBaselineSearches(id);
   return NextResponse.json({
@@ -58,6 +64,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
   await ensureStudyTables();
   try {
     const parsed = createSchema.parse(await request.json());
@@ -83,6 +94,11 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
   await ensureStudyTables();
   const searchId = new URL(request.url).searchParams.get('id');
   if (!searchId) return NextResponse.json({ error: 'missing_id' }, { status: 400 });

@@ -68,6 +68,80 @@ export async function ensureStudyTables(): Promise<void> {
         ADD COLUMN IF NOT EXISTS "condition" text NOT NULL DEFAULT 'score'
       `);
 
+      // ── The simple version (docs/SCORE_SIMPLE_DESIGN.md) ────────────────
+      // One timeline per clone. The snapshot IS the configuration — there are
+      // no live rows beside it — so the newest un-hidden row is what the board
+      // shows and what a question is answered against.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_config_versions" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL,
+          "version_no" integer NOT NULL,
+          "snapshot" jsonb NOT NULL,
+          "name" text, "summary" text,
+          -- Set when a restore steps back past this version. The participant
+          -- sees the timeline end where they restored to; the row stays,
+          -- because what someone built and then abandoned is RQ1 material.
+          "hidden_at" timestamp,
+          "created_by" text,
+          "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_config_versions_unique" ON "simple_config_versions" ("assignment_id","version_no")`
+      );
+
+      // Judgments, keyed by the DEFINITION TEXT rather than by any intent id.
+      // Editing one definition therefore re-rates that definition and nothing
+      // else, moving or reordering an intent costs no calls at all, and typing
+      // a definition back to what it was is a cache hit rather than a re-run.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_ratings" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "def_hash" text NOT NULL, "message_id" integer NOT NULL,
+          "rating" text NOT NULL, "model" text, "rated_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_ratings_unique" ON "simple_ratings" ("assignment_id","def_hash","message_id")`
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "simple_ratings_assignment_idx" ON "simple_ratings" ("assignment_id")`
+      );
+
+      // Responses, keyed by the RULE TEXT that produced them. Not by version:
+      // an intent's rule is usually untouched from one save to the next, so
+      // keying on the text means only the questions whose rule actually
+      // changed regenerate, and switching between versions is instant wherever
+      // the text is shared. The baseline arm's one document changes for every
+      // question at once, which is the manipulation and not a bug to hide.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_previews" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "message_id" integer NOT NULL,
+          "rule_hash" text NOT NULL, "response" text NOT NULL, "model" text,
+          "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_previews_unique" ON "simple_previews" ("message_id","rule_hash")`
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "simple_previews_assignment_idx" ON "simple_previews" ("assignment_id")`
+      );
+
+      // A bookmark, and only a bookmark. It is not in any hash, any prompt or
+      // any routing decision; it pins a row to the top of the list so a
+      // question outside the intent being edited stays reachable while editing
+      // it. (Nothing to do with the full version's score_intent_pins, which are
+      // rulings on membership.)
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_pins" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "message_id" integer NOT NULL,
+          "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_pins_unique" ON "simple_pins" ("assignment_id","message_id")`
+      );
+
       // ── Baseline condition + shared study instrumentation (spec §2) ──
       await db.execute(sql`
         CREATE TABLE IF NOT EXISTS "score_probe_ratings" (

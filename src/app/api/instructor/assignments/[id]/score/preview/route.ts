@@ -19,6 +19,7 @@ import { db } from '@/db/db';
 import { scoreIntents } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { refuseSimpleClone } from '@/lib/study/simple/route-context';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { getChatModel } from '@/lib/score/injection';
 import { ensureIntentTables } from '@/lib/score/intent-store';
@@ -44,6 +45,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
   if (!isOpenAIConfigured()) {
     return NextResponse.json(
       { error: 'openai_not_configured', message: 'OPENAI_API_KEY is not configured on the server.' },

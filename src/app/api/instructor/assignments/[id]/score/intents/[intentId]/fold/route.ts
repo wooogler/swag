@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { scoreIntentPins, scoreIntents } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { refuseSimpleClone } from '@/lib/study/simple/route-context';
 import { logStudyEvent } from '@/lib/study/events';
 import {
   ensureIntentTables,
@@ -62,6 +63,11 @@ export async function POST(req: Request, { params }: RouteParams) {
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
   const intentId = Number.parseInt(intentIdRaw, 10);
   if (!Number.isFinite(intentId)) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });

@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { chatMessages } from '@/db/schema';
 import { authorizeAssignment, authErrorResponse } from '@/lib/score/authz';
+import { refuseSimpleClone } from '@/lib/study/simple/route-context';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { proposeBaselineRevision } from '@/lib/study/revise-agent';
 import { logStudyEvent } from '@/lib/study/baseline-store';
@@ -40,6 +41,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const { body, status } = authErrorResponse(auth.error);
     return NextResponse.json(body, { status });
   }
+  // Not on a simple clone: that version has none of this, and letting it
+  // through would write a second, disagreeing answer to "what is this
+  // participant's configuration" (lib/study/simple/route-context).
+  const wrongVersion = await refuseSimpleClone(id);
+  if (wrongVersion) return wrongVersion;
   if (!isOpenAIConfigured()) return NextResponse.json({ error: 'openai_not_configured' }, { status: 503 });
   try {
     const body = schema.parse(await request.json());

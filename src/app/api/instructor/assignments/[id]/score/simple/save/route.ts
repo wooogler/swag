@@ -1,0 +1,166 @@
+/**
+ * Save: the only verb that writes a configuration.
+ *
+ * It appends a snapshot and returns. It does not judge, does not generate, and
+ * does not wait for a name — all of that is started afterwards and none of it
+ * can make a save slow or fail (§6.1). The response carries the new version so
+ * the board can relabel its timeline immediately, and the follow-up work
+ * lands on the next poll.
+ *
+ * New intents arrive without an id; the server allocates one that is stable
+ * for the life of the assignment, so a judgment, an answer and a logged event
+ * can all name the same intent across every later version.
+ */
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { armOf } from '@/lib/study/config';
+import { logStudyEvent } from '@/lib/study/events';
+import { runAfterSave } from '@/lib/study/simple/after-save';
+import { emptySnapshot, type SimpleIntent, type SimpleSnapshot } from '@/lib/study/simple/chain';
+import { simpleContext } from '@/lib/study/simple/route-context';
+import { getSimpleTip, nextSid, saveSimpleVersion } from '@/lib/study/simple/store';
+import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
+
+export const dynamic = 'force-dynamic';
+
+const intentSchema = z.object({
+  // Absent on a new intent; the server allocates.
+  sid: z.number().int().positive().nullable().optional(),
+  title: z.string().max(120).default(''),
+  definition: z.string().max(4000).default(''),
+  rule: z.string().max(STUDY_PROMPT_CHAR_LIMIT).default(''),
+  parentSid: z.number().int().positive().nullable().default(null),
+});
+
+const bodySchema = z.object({
+  prompt: z.string().max(STUDY_PROMPT_CHAR_LIMIT).optional(),
+  rootRule: z.string().max(STUDY_PROMPT_CHAR_LIMIT).optional(),
+  intents: z.array(intentSchema).max(60).optional(),
+  /** What the board had open, so the follow-up work starts where they are. */
+  focusSid: z.number().int().positive().nullable().optional(),
+  recentMessageIds: z.array(z.number().int()).max(40).optional(),
+});
+
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const gate = await simpleContext(id);
+  if ('error' in gate) return gate.error;
+  const { condition, seedPrompt } = gate.context;
+  const arm = armOf(condition);
+
+  let body: z.infer<typeof bodySchema>;
+  try {
+    body = bodySchema.parse(await request.json());
+  } catch {
+    return NextResponse.json({ error: 'invalid_body' }, { status: 400 });
+  }
+
+  const { snapshot: previous, version: previousVersion } = await getSimpleTip({
+    assignmentId: id,
+    condition,
+    seedPrompt,
+  });
+  const base = previousVersion ? previous : emptySnapshot(arm, seedPrompt);
+
+  let allocate = await nextSid(id);
+  const intents: SimpleIntent[] = (body.intents ?? base.intents).map((raw) => ({
+    sid: raw.sid ?? allocate++,
+    title: raw.title ?? '',
+    definition: raw.definition ?? '',
+    rule: raw.rule ?? '',
+    parentSid: raw.parentSid ?? null,
+  }));
+  // A parent that is not in this save is not a parent. Sending a child of a
+  // just-deleted intent is a client bug, and silently keeping the pointer
+  // would make the chain compiler reparent it later anyway — better to settle
+  // it here, where the snapshot is written.
+  const known = new Set(intents.map((i) => i.sid));
+  for (const intent of intents) {
+    if (intent.parentSid != null && !known.has(intent.parentSid)) intent.parentSid = null;
+  }
+
+  const snapshot: SimpleSnapshot = {
+    arm,
+    prompt: arm === 'baseline' ? body.prompt ?? base.prompt : base.prompt,
+    rootRule: arm === 'score' ? body.rootRule ?? base.rootRule : base.rootRule,
+    intents: arm === 'score' ? intents : [],
+  };
+
+  const version = await saveSimpleVersion({ assignmentId: id, snapshot });
+
+  await logStudyEvent(id, 'simple_version_save', {
+    condition,
+    versionNo: version.versionNo,
+    intents: snapshot.intents.length,
+    ...describeSave(snapshot, previousVersion ? previous : null),
+  });
+
+  // Started, not awaited: naming, judging and prefetching all happen behind
+  // the response.
+  runAfterSave({
+    assignmentId: id,
+    condition,
+    versionId: version.id,
+    snapshot,
+    previous: previousVersion ? previous : null,
+    focusSid: body.focusSid ?? null,
+    pinned: [],
+    recentMessageIds: body.recentMessageIds ?? [],
+  });
+
+  return NextResponse.json({ versionNo: version.versionNo, id: version.id });
+}
+
+/**
+ * What changed, in fields and characters — the shape RQ1 reads to tell "wrote
+ * a new intent" from "tightened one line of one rule".
+ */
+function describeSave(next: SimpleSnapshot, prev: SimpleSnapshot | null) {
+  if (next.arm === 'baseline') {
+    const before = prev?.prompt ?? '';
+    return {
+      target: 'prompt',
+      changed: before === next.prompt ? [] : ['prompt'],
+      deltaChars: next.prompt.length - before.length,
+    };
+  }
+  const prevById = new Map((prev?.intents ?? []).map((i) => [i.sid, i]));
+  const created: number[] = [];
+  const updated: { sid: number; fields: string[]; deltaChars: number }[] = [];
+  for (const intent of next.intents) {
+    const before = prevById.get(intent.sid);
+    if (!before) {
+      created.push(intent.sid);
+      continue;
+    }
+    const fields: string[] = [];
+    if (before.title !== intent.title) fields.push('title');
+    if (before.definition !== intent.definition) fields.push('definition');
+    if (before.rule !== intent.rule) fields.push('rule');
+    if (before.parentSid !== intent.parentSid) fields.push('parent');
+    if (fields.length > 0) {
+      updated.push({
+        sid: intent.sid,
+        fields,
+        deltaChars:
+          intent.definition.length +
+          intent.rule.length -
+          (before.definition.length + before.rule.length),
+      });
+    }
+  }
+  const removed = (prev?.intents ?? [])
+    .filter((i) => !next.intents.some((n) => n.sid === i.sid))
+    .map((i) => i.sid);
+  const rootChanged = (prev?.rootRule ?? '') !== next.rootRule;
+  const order = next.intents.map((i) => i.sid).join(',');
+  const prevOrder = (prev?.intents ?? []).map((i) => i.sid).join(',');
+  return {
+    target: 'tree',
+    created,
+    updated,
+    removed,
+    rootChanged,
+    reordered: created.length === 0 && removed.length === 0 && order !== prevOrder,
+  };
+}
