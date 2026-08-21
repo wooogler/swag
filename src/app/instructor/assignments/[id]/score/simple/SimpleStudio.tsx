@@ -1762,37 +1762,75 @@ function QuestionRow({
       <div className="self-start flex items-center">
         {/* Reading a question and deciding it belongs somewhere else is the
             move this board is built around, so it starts here, on the question,
-            rather than over in the configuration. The tooltip names what the
-            new intent will be read before, because that is the part of the
-            outcome that is settled before anything is written. */}
+            rather than over in the configuration. The label names what the new
+            intent will be read before, because that is the part of the outcome
+            that is settled before anything is written. */}
         {onCreateIntent && (
-          <button
-            title={`Start an intent from this question — read before “${titleOf(owner?.sid ?? null)}”`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCreateIntent(row.messageId);
-            }}
-            className="p-1 rounded opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
+          <IconButton
+            label={`Start an intent — read before “${titleOf(owner?.sid ?? null)}”`}
+            onClick={() => onCreateIntent(row.messageId)}
+            className="opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))]"
           >
             <Plus className="w-3.5 h-3.5" />
-          </button>
+          </IconButton>
         )}
-        <button
-          title={pinned ? 'Stop keeping this one here' : 'Keep this one in view'}
-          onClick={(e) => {
-            e.stopPropagation();
-            onTogglePin(row.messageId);
-          }}
-          className={`p-1 rounded ${
+        <IconButton
+          label={pinned ? 'Stop keeping this one here' : 'Keep this one in view'}
+          onClick={() => onTogglePin(row.messageId)}
+          className={
             pinned
               ? 'text-[hsl(var(--foreground))]'
               : 'opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))]'
-          } hover:bg-[hsl(var(--background))]`}
+          }
         >
           {pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
-        </button>
+        </IconButton>
       </div>
     </li>
+  );
+}
+
+/**
+ * An icon with its meaning attached.
+ *
+ * Two icons on a question row, both of them verbs nobody has met before: one
+ * carves an intent out of the question, the other keeps it on screen. A `+` on
+ * its own does not say either. The browser's own tooltip does, eventually, in
+ * whatever style the operating system prefers — long enough after the pointer
+ * lands that the answer arrives after the guess.
+ *
+ * So the label is part of the button. It opens LEFTWARDS, over the question
+ * text rather than out of the list, because the list scrolls and anything
+ * reaching past its right edge is clipped; and it is positioned rather than
+ * laid out, so sixty rows do not reflow as the pointer travels down them.
+ */
+function IconButton({
+  label,
+  onClick,
+  className = '',
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="relative group/icon flex">
+      <button
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick();
+        }}
+        className={`p-1 rounded hover:bg-[hsl(var(--background))] ${className}`}
+      >
+        {children}
+      </button>
+      <span className="pointer-events-none absolute right-full top-1/2 -translate-y-1/2 mr-1 hidden group-hover/icon:block z-10 whitespace-nowrap rounded-md bg-[hsl(var(--foreground))] px-2 py-1 text-2xs font-medium text-[hsl(var(--background))] shadow-lg">
+        {label}
+      </span>
+    </span>
   );
 }
 
