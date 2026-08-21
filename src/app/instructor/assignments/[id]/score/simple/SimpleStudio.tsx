@@ -1134,6 +1134,12 @@ function Tree({
         )
       ) : (
         !readOnly && (
+          // The same row as the intents it sits among, because it is the place
+          // one of them will go. It used to be a dashed pill at a different
+          // width, height and indent — which read as a control attached to the
+          // list rather than a position in it, and read quietly enough to be
+          // missed. The plus takes the chevron's place and the ring takes the
+          // colour dot's, so the words line up with every title above it.
           <button
             onClick={() => {
               setCreating({
@@ -1144,9 +1150,14 @@ function Tree({
               });
               setExpanded(null);
             }}
-            className="mt-1 ml-[1.05rem] flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-[hsl(var(--border))] text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+            className="w-full flex items-center gap-1.5 pl-2 pr-2 py-1 rounded-lg text-left text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
           >
-            <Plus className="w-3.5 h-3.5" /> New intent
+            <Plus className="w-3.5 h-3.5 shrink-0" />
+            <span
+              aria-hidden
+              className="w-1.5 h-1.5 rounded-full shrink-0 border border-current opacity-60"
+            />
+            <span className="flex-1 text-sm">New intent</span>
           </button>
         )
       )}
