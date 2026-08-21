@@ -284,25 +284,6 @@ export function flattenStoredIntents(
   return out;
 }
 
-/**
- * What the whole-configuration bar has to say about the last save.
- *
- * 'deletion' is the one case the tree cannot cover on its own — a deleted
- * intent has no row left to mark — so the bar says it in words. But it is only
- * a deletion once there IS a save to differ from: before the first save every
- * intent is unsaved and none of them is marked, and reading that emptiness as
- * a deletion is how the bar came to announce one after two additions.
- */
-export function unsavedNote(state: {
-  dirty: boolean;
-  savedVersionNo: number | null;
-  unsavedSids: number[];
-}): 'saved' | 'changes' | 'deletion' {
-  if (!state.dirty) return 'saved';
-  if (state.savedVersionNo != null && state.unsavedSids.length === 0) return 'deletion';
-  return 'changes';
-}
-
 /** Every definition in a snapshot, in evaluation order — what the judge needs. */
 export function definitionsOf(snapshot: SimpleSnapshot): { sid: number; definition: string }[] {
   return compileSimpleChain(snapshot)

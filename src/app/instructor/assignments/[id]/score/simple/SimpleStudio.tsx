@@ -71,7 +71,6 @@ import {
   insertBefore,
   moveIntent,
   removeIntent,
-  unsavedNote,
   type SimpleIntent,
   type SimpleSnapshot,
 } from '@/lib/study/simple/chain';
@@ -860,7 +859,12 @@ function ConfigColumn({
             setDraft={setDraft}
             readOnly={readOnly}
             saving={saving}
+            dirty={state.dirty}
+            draftChanged={draftChanged}
             onApply={() => onApply(draft, null)}
+            onSaveVersion={onSaveVersion}
+            onUndo={onUndo}
+            onRedo={onRedo}
           />
         ) : (
           <Tree
@@ -893,23 +897,6 @@ function ConfigColumn({
         )}
       </section>
 
-      {/* Save sits beside Apply and Revert sits with the history, inside
-          whichever editor is open — the two verbs act where the thing they act
-          on is being edited. This is what is left for the moments no editor is
-          open: a deletion, or an apply whose card has since been closed. It is
-          the same act reached from the one place it is still reachable from,
-          not a second copy of it. */}
-      {(arm === 'baseline' || expanded === null) && (
-      <SaveBar
-        dirty={state.dirty}
-        hasSave={state.savedVersionNo != null}
-        note={unsavedNote(state)}
-        readOnly={readOnly}
-        saving={saving}
-        onSaveVersion={onSaveVersion}
-        onRevert={onRevert}
-      />
-      )}
       {arm === 'baseline' && (
         <VersionList
           versions={state.versions}
@@ -927,13 +914,23 @@ function PromptEditor({
   setDraft,
   readOnly,
   saving,
+  dirty,
+  draftChanged,
   onApply,
+  onSaveVersion,
+  onUndo,
+  onRedo,
 }: {
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
   saving: boolean;
+  dirty: boolean;
+  draftChanged: boolean;
   onApply: () => void;
+  onSaveVersion: () => Promise<void>;
+  onUndo: (() => void) | null;
+  onRedo: (() => void) | null;
 }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
@@ -953,16 +950,30 @@ function PromptEditor({
         placeholder="What the chatbot should do, in your own words."
         className="flex-1 min-h-[24rem] w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:opacity-60"
       />
+      {/* The same row as the intent arm's, because the two arms differ in what
+          a configuration IS and not in what you do with one. */}
       {!readOnly && (
-        <button
-          onClick={onApply}
-          disabled={saving}
-          title="Put this into effect and see what it answers"
-          className="self-end inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-        >
-          {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-          Apply
-        </button>
+        <div className="flex items-center gap-2">
+          <ApplyButton saving={saving} disabled={!draftChanged} onClick={onApply} />
+          <button
+            onClick={() => void onSaveVersion()}
+            disabled={saving || (!dirty && !draftChanged)}
+            title={
+              dirty || draftChanged
+                ? 'Keep this as a version you can come back to'
+                : 'Nothing has changed since the last save'
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            Save
+          </button>
+          <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
+            <Undo2 className="w-3.5 h-3.5" />
+          </StepButton>
+          <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
+            <Redo2 className="w-3.5 h-3.5" />
+          </StepButton>
+        </div>
       )}
     </div>
   );
@@ -1917,68 +1928,6 @@ function NewIntent({
  * by that configuration, not just its text. Restoring makes it current again
  * and the versions after it leave the list.
  */
-/**
- * The two verbs that act on the whole configuration, and they only appear when
- * there is something for them to act on.
- *
- * It used to state the saved/unsaved fact as a standing sentence, which read as
- * furniture — the answer was "everything is saved" almost always, and a line
- * that is almost always the same stops being read. The tree says WHICH intents
- * are unsaved now, which is both more useful and self-explaining, so this is
- * left with the one job the rows cannot do: the buttons, and the sentence for
- * the case where the change was a deletion and there is no row to mark.
- */
-function SaveBar({
-  dirty,
-  hasSave,
-  note,
-  readOnly,
-  saving,
-  onSaveVersion,
-  onRevert,
-}: {
-  dirty: boolean;
-  hasSave: boolean;
-  note: 'saved' | 'changes' | 'deletion';
-  readOnly: boolean;
-  saving: boolean;
-  onSaveVersion: () => Promise<void>;
-  onRevert: () => Promise<void>;
-}) {
-  // Absent when there is nothing to save: a Save that can only ever be greyed
-  // out is a question the reader has to answer for themselves.
-  if (readOnly || !dirty) return null;
-  return (
-    <section className="shrink-0 flex items-center gap-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2">
-      <span className="flex-1 text-2xs leading-snug text-[hsl(var(--muted-foreground))]">
-        {note === 'deletion' ? 'A deletion is not saved yet.' : 'Not saved yet.'}
-      </span>
-      {/* Absent, not disabled, before the first save: there is nowhere to
-          revert TO, and a greyed button is still an invitation to work out
-          why it will not do anything. */}
-      {hasSave && (
-        <button
-          onClick={() => void onRevert()}
-          disabled={saving}
-          title="Go back to the last saved version, dropping what you applied since"
-          className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40"
-        >
-          Revert
-        </button>
-      )}
-      <button
-        onClick={() => void onSaveVersion()}
-        disabled={saving}
-        title="Keep this as a version you can come back to"
-        className="shrink-0 inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2.5 py-0.5 text-2xs font-semibold text-white disabled:opacity-40"
-      >
-        {saving && <Loader2 className="w-3 h-3 animate-spin" />}
-        Save
-      </button>
-    </section>
-  );
-}
-
 /** The document's history — the baseline arm only, where it is also the
  * configuration's. */
 function VersionList({

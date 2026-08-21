@@ -31,7 +31,7 @@ import {
   studyEvents,
   studyParticipants,
 } from '../../src/db/schema';
-import { flattenStoredIntents, unsavedNote } from '../../src/lib/study/simple/chain';
+import { flattenStoredIntents } from '../../src/lib/study/simple/chain';
 import { intentDefHash } from '../../src/lib/score/intents';
 
 const BASE = process.env.SWAG_URL ?? 'http://localhost:3030';
@@ -252,26 +252,6 @@ async function main() {
       'a broken tree loses its nesting and not its intents',
       orphaned.length === 3,
       orphaned.map((i) => i.sid).join(',')
-    );
-  }
-
-  // 0b. What the bar says, which is a derivation and was wrong: an apply made
-  //     before any save has nothing to differ from, so no intent is marked —
-  //     and it read that emptiness as a deletion and announced one after two
-  //     intents were ADDED.
-  {
-    check(
-      'an apply before the first save is not a deletion',
-      unsavedNote({ dirty: true, savedVersionNo: null, unsavedSids: [] }) === 'changes'
-    );
-    check(
-      'an unsaved deletion is, once there is a save to differ from',
-      unsavedNote({ dirty: true, savedVersionNo: 4, unsavedSids: [] }) === 'deletion'
-    );
-    check(
-      'and a marked intent is not, whatever else happened',
-      unsavedNote({ dirty: true, savedVersionNo: 4, unsavedSids: [2] }) === 'changes' &&
-        unsavedNote({ dirty: false, savedVersionNo: 4, unsavedSids: [] }) === 'saved'
     );
   }
 
