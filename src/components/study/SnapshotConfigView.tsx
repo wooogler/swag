@@ -170,7 +170,7 @@ export default function SnapshotConfigView({
           {root && (
             <div className="rounded-lg border border-dashed border-[hsl(var(--border))] px-3 py-2">
               <p className="text-2xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-                Everything else
+                Uncategorized
               </p>
               <RuleText rule={root.rule} />
             </div>

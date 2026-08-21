@@ -19,7 +19,7 @@
  * --participant it runs on that participant's block-1 clone, which is the real
  * thing and needs them to be in the simple family.
  */
-import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import {
   assignments,
@@ -31,6 +31,7 @@ import {
   studyEvents,
   studyParticipants,
 } from '../../src/db/schema';
+import { flattenStoredIntents, unsavedNote } from '../../src/lib/study/simple/chain';
 
 const BASE = process.env.SWAG_URL ?? 'http://localhost:3030';
 
@@ -52,7 +53,7 @@ interface StateBody {
   snapshot: {
     rootRule: string;
     prompt: string;
-    intents: { sid: number; title: string; definition: string; rule: string; parentSid: number | null }[];
+    intents: { sid: number; title: string; definition: string; rule: string }[];
   };
   versions: { versionNo: number; displayNo: number; name: string | null }[];
   atTip: boolean;
@@ -61,7 +62,7 @@ interface StateBody {
   unsavedSids: number[];
   intentVersions: Record<string, { versionNo: number; definition: string; rule: string; name: string | null }[]>;
   pinned: number[];
-  owners: Record<string, { sid: number | null; outcome: string }>;
+  owners: Record<string, { sid: number | null; outcome: string; matchedElsewhere: number[] }>;
   counts: Record<string, number>;
   pending: number;
   working: boolean;
@@ -144,11 +145,31 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  const [{ high }] = await db
+  // High-water marks for everything this run will write, so the tidy-up at
+  // the end can be about THIS run. The assignment may already hold work — a
+  // rehearsal configuration, a clone someone has been clicking through — and
+  // a check that cleans up by deleting that is worse than one that leaves a
+  // mess behind.
+  const [events0] = await db
     .select({ high: sql<number>`coalesce(max(${studyEvents.id}), 0)::int` })
     .from(studyEvents)
     .where(eq(studyEvents.assignmentId, assignmentId));
-  const eventsHighWater = high ?? 0;
+  const [versions0] = await db
+    .select({ high: sql<number>`coalesce(max(${simpleConfigVersions.id}), 0)::int` })
+    .from(simpleConfigVersions)
+    .where(eq(simpleConfigVersions.assignmentId, assignmentId));
+  const [ratings0] = await db
+    .select({ high: sql<number>`coalesce(max(${simpleRatings.id}), 0)::int` })
+    .from(simpleRatings)
+    .where(eq(simpleRatings.assignmentId, assignmentId));
+  const [pins0] = await db
+    .select({ high: sql<number>`coalesce(max(${simplePins.id}), 0)::int` })
+    .from(simplePins)
+    .where(eq(simplePins.assignmentId, assignmentId));
+  const eventsHighWater = events0?.high ?? 0;
+  const versionsHighWater = versions0?.high ?? 0;
+  const ratingsHighWater = ratings0?.high ?? 0;
+  const pinsHighWater = pins0?.high ?? 0;
 
   /**
    * Wait until every question has a verdict — the board's own loop, in a
@@ -204,6 +225,54 @@ async function main() {
   // to break silently: a reworded category drifts from the prepared text, the
   // hash stops matching, and adopting a starter quietly becomes a full pass.
   if (!startersOnly) {
+  // 0. Reading a configuration written back when intents could nest.
+  //
+  //    The trap is that a nested snapshot stored its intents parent-first and
+  //    EVALUATED them child-first, so flattening by array order reverses every
+  //    nested pair — quietly, and only in the answers.
+  {
+    const flat = flattenStoredIntents([
+      { sid: 1, title: 'outer', definition: 'a', rule: 'a', parentSid: null },
+      { sid: 2, title: 'inner', definition: 'b', rule: 'b', parentSid: 1 },
+      { sid: 3, title: 'later', definition: 'c', rule: 'c', parentSid: null },
+    ]);
+    check(
+      'a nested configuration flattens into the order it was evaluated in',
+      flat.map((i) => i.sid).join(',') === '2,1,3',
+      flat.map((i) => i.sid).join(',')
+    );
+    const orphaned = flattenStoredIntents([
+      { sid: 1, title: 'child of nobody', definition: 'a', rule: 'a', parentSid: 99 },
+      { sid: 2, title: 'in a cycle', definition: 'b', rule: 'b', parentSid: 3 },
+      { sid: 3, title: 'the other half', definition: 'c', rule: 'c', parentSid: 2 },
+    ]);
+    check(
+      'a broken tree loses its nesting and not its intents',
+      orphaned.length === 3,
+      orphaned.map((i) => i.sid).join(',')
+    );
+  }
+
+  // 0b. What the bar says, which is a derivation and was wrong: an apply made
+  //     before any save has nothing to differ from, so no intent is marked —
+  //     and it read that emptiness as a deletion and announced one after two
+  //     intents were ADDED.
+  {
+    check(
+      'an apply before the first save is not a deletion',
+      unsavedNote({ dirty: true, savedVersionNo: null, unsavedSids: [] }) === 'changes'
+    );
+    check(
+      'an unsaved deletion is, once there is a save to differ from',
+      unsavedNote({ dirty: true, savedVersionNo: 4, unsavedSids: [] }) === 'deletion'
+    );
+    check(
+      'and a marked intent is not, whatever else happened',
+      unsavedNote({ dirty: true, savedVersionNo: 4, unsavedSids: [2] }) === 'changes' &&
+        unsavedNote({ dirty: false, savedVersionNo: 4, unsavedSids: [] }) === 'saved'
+    );
+  }
+
   // 1. Save a first configuration.
   const firstSave = await call('save', {
     method: 'POST',
@@ -228,7 +297,6 @@ async function main() {
           title: 'CHECK: greetings',
           definition: 'is a greeting or small talk rather than a question about the assignment',
           rule: 'Greet them back in one line and ask what they are working on.',
-          parentSid: null,
         },
       ],
     }),
@@ -327,14 +395,12 @@ async function main() {
       title: 'CHECK: greetings',
       definition: 'is a greeting or small talk rather than a question about the assignment',
       rule: 'Greet them back in one line and ask what they are working on.',
-      parentSid: null,
     };
     const lengths = {
       sid: -2,
       title: 'CHECK: length questions',
       definition: 'asks how long the essay should be or how many words are required',
       rule: 'Point them at the assignment sheet rather than guessing a number.',
-      parentSid: null,
     };
     const body = (intents: unknown[]) =>
       JSON.stringify({
@@ -392,6 +458,62 @@ async function main() {
       touched.length
         ? `${touched.length} row(s) rewritten: ${touched.slice(0, 3).map(([k]) => k).join(', ')}`
         : `${rowsBefore.length} row(s) before, ${rowsAfter.length} after — none rewritten`
+    );
+  }
+
+  // 6b. Two intents that describe exactly the same questions.
+  //
+  //     Identical definitions make first-match testable without depending on
+  //     what the judge thinks of any particular wording: every question either
+  //     matches both or neither, so the one above must own all of them and the
+  //     one below must appear beside every one of them as a loser. That second
+  //     half is what an intent's own question list is built from — open the
+  //     lower one and it still shows the questions its words describe, with
+  //     the chip saying where they actually went.
+  if (arm === 'score') {
+    const same = 'is a greeting or small talk rather than a question about the assignment';
+    const pair = (order: [string, string]) =>
+      JSON.stringify({
+        rootRule: 'Answer briefly and never write the essay for them.',
+        prompt: 'Answer briefly and never write the essay for them.',
+        intents: order.map((title) => ({ title, definition: same, rule: `Rule for ${title}.` })),
+      });
+
+    await call('save', { method: 'POST', body: pair(['CHECK: above', 'CHECK: below']) });
+    await settle();
+    const twins = await state();
+    const above = twins.snapshot.intents.find((i) => i.title === 'CHECK: above')?.sid;
+    const below = twins.snapshot.intents.find((i) => i.title === 'CHECK: below')?.sid;
+    const owned = Object.values(twins.owners).filter((o) => o.outcome === 'intent');
+    check(
+      'the intent above takes every question the two share',
+      above != null && owned.length > 0 && owned.every((o) => o.sid === above),
+      `${owned.length} owned, ${new Set(owned.map((o) => o.sid)).size} distinct owner(s)`
+    );
+    check(
+      'and the one below is still listed beside each of them',
+      below != null && owned.length > 0 && owned.every((o) => o.matchedElsewhere.includes(below)),
+      `${owned.filter((o) => below != null && o.matchedElsewhere.includes(below)).length}/${owned.length}`
+    );
+    check(
+      'nothing counts twice',
+      twins.counts[String(below)] === undefined || twins.counts[String(below)] === 0,
+      `above=${twins.counts[String(above)] ?? 0}, below=${twins.counts[String(below)] ?? 0}`
+    );
+
+    // Carving one out ABOVE another is the whole of what the board promises
+    // when an intent is started from a question: it cannot promise the words
+    // will match, only that they are read first. Same two definitions, other
+    // way up.
+    await call('save', { method: 'POST', body: pair(['CHECK: below', 'CHECK: above']) });
+    await settle();
+    const flipped = await state();
+    const nowFirst = flipped.snapshot.intents[0]?.sid;
+    const nowOwned = Object.values(flipped.owners).filter((o) => o.outcome === 'intent');
+    check(
+      'putting the other one first hands it every one of those questions',
+      nowOwned.length > 0 && nowOwned.every((o) => o.sid === nowFirst),
+      `first=${nowFirst}, owners=${[...new Set(nowOwned.map((o) => o.sid))].join(',')}`
     );
   }
 
@@ -622,7 +744,7 @@ async function main() {
         rootRule: 'Answer briefly and never write the essay for them.',
         prompt: 'Answer briefly and never write the essay for them.',
         intents: [
-          { sid: -9, title: pick.title, definition: pick.definition, rule: '', parentSid: null },
+          { sid: -9, title: pick.title, definition: pick.definition, rule: '' },
         ],
       }),
     });
@@ -634,6 +756,25 @@ async function main() {
       sidOf != null && adopted.counts[String(sidOf)] === pick.count,
       `dropdown said ${pick.count}, board resolved ${sidOf != null ? adopted.counts[String(sidOf)] : '—'}`
     );
+
+    // The dot, and the claim behind it: a starter marked as containing a
+    // question has to be a starter the board then puts that question in. Both
+    // read the same prepared verdicts, so disagreement would mean the dropdown
+    // and the list are answering from different places.
+    const landed = Object.entries(adopted.owners).find(
+      ([, o]) => o.outcome === 'intent' && o.sid === sidOf
+    );
+    if (landed) {
+      const marked = (await call('starters', {}, `forMessageId=${landed[0]}`)).body as {
+        groups?: { whole: { title: string; contains: boolean }; items: { title: string; contains: boolean }[] }[];
+      };
+      const all = (marked.groups ?? []).flatMap((g) => [g.whole, ...g.items]);
+      check(
+        'a starter is marked as containing a question the board puts in it',
+        all.find((i) => i.title === pick.title)?.contains === true,
+        `question ${landed[0]}, ${all.filter((i) => i.contains).length}/${all.length} marked`
+      );
+    }
 
     // Copied, not re-rated: the prepared verdicts were stamped when the clone
     // was made, so a fresh rating pass would carry today's timestamp.
@@ -659,10 +800,23 @@ async function main() {
 
   if (!startersOnly) {
   // ── the record it all left ──────────────────────────────────────────
+  // Wait for the last save's follow-up work before reading the trail, so a
+  // judging pass that is still running is not counted as never having
+  // happened — and so it is inside the window this run then cleans up.
+  for (let round = 0; round < 20; round += 1) {
+    if (!(await state()).working) break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  // THIS run's trail. It used to read every event on the assignment, so a
+  // straggler that landed after a previous run's tidy-up was asserted against
+  // here — which is how a baseline run came to be told it had judged
+  // something, using a score run's event.
   const events = await db
     .select()
     .from(studyEvents)
-    .where(eq(studyEvents.assignmentId, assignmentId))
+    .where(and(eq(studyEvents.assignmentId, assignmentId), gt(studyEvents.id, eventsHighWater)))
     .orderBy(asc(studyEvents.createdAt));
   const types = new Set(events.map((e) => e.eventType));
   console.log(`\n${events.length} event(s): ${[...types].sort().join(', ')}\n`);
@@ -706,21 +860,31 @@ async function main() {
   );
 
   }
-  // ── clean up what this run made ─────────────────────────────────────
+  // ── clean up what this run made, and only that ──────────────────────
   const written = await db
     .select({ id: simpleConfigVersions.id })
     .from(simpleConfigVersions)
-    .where(eq(simpleConfigVersions.assignmentId, assignmentId));
+    .where(
+      and(
+        eq(simpleConfigVersions.assignmentId, assignmentId),
+        gt(simpleConfigVersions.id, versionsHighWater)
+      )
+    );
   if (!participantNumber) {
-    const ids = written.map((k) => k.id);
-    if (ids.length) {
-      await db.delete(simpleConfigVersions).where(inArray(simpleConfigVersions.id, ids));
-    }
-    await db.delete(simpleRatings).where(eq(simpleRatings.assignmentId, assignmentId));
-    await db.delete(simplePins).where(eq(simplePins.assignmentId, assignmentId));
-    // Only what this run wrote: an assignment may carry events from before it,
-    // and a check that tidies up by deleting someone else's data is worse than
-    // one that leaves a mess.
+    await db
+      .delete(simpleConfigVersions)
+      .where(
+        and(
+          eq(simpleConfigVersions.assignmentId, assignmentId),
+          gt(simpleConfigVersions.id, versionsHighWater)
+        )
+      );
+    await db
+      .delete(simpleRatings)
+      .where(and(eq(simpleRatings.assignmentId, assignmentId), gt(simpleRatings.id, ratingsHighWater)));
+    await db
+      .delete(simplePins)
+      .where(and(eq(simplePins.assignmentId, assignmentId), gt(simplePins.id, pinsHighWater)));
     await db
       .delete(studyEvents)
       .where(and(eq(studyEvents.assignmentId, assignmentId), gt(studyEvents.id, eventsHighWater)));

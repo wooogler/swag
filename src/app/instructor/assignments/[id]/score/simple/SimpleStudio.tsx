@@ -29,6 +29,14 @@
  * committed the other five would be lying about its scope. No Deploy: a save
  * is the whole of publishing here.
  *
+ * The configuration is a flat list in the order it is tried, and an intent is
+ * usually started FROM a question: the row's + opens the form directly above
+ * whichever intent owns that question now, and pins the question so it stays
+ * on screen. Position is therefore a promise the board can keep on its own —
+ * whatever the new words turn out to describe, they are read first. Whether
+ * they describe that question is a verdict, and the board waits for it rather
+ * than arranging for the answer it advertised.
+ *
  * The screen states facts and does not interpret them. A question that matches
  * the intent you have open but is answered by an earlier one says "applied:
  * that other one" in the same neutral chip every other row uses; it does not
@@ -36,7 +44,7 @@
  * problem, and deciding whether it is one, is the participant's work and is
  * what we are here to watch (§1-4).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Pin, PinOff, Plus, Trash2 } from 'lucide-react';
 import { ConversationThread } from '../conversation';
 import { QuerySnippet } from '../materials';
@@ -47,9 +55,10 @@ import IntentHistory, { type IntentVersion } from './IntentHistory';
 import { intentColor } from './colors';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
-  documentOrder,
-  moveSibling,
-  removeSubtree,
+  insertBefore,
+  moveIntent,
+  removeIntent,
+  unsavedNote,
   type SimpleIntent,
   type SimpleSnapshot,
 } from '@/lib/study/simple/chain';
@@ -89,6 +98,17 @@ interface StatePayload {
 /** What the middle column is showing. */
 type Selection = { kind: 'all' } | { kind: 'root' } | { kind: 'intent'; sid: number };
 
+/** An intent being written, and where it will land. */
+interface Creating {
+  /** Tried before this one; null = last, just above the uncategorized rule. */
+  beforeSid: number | null;
+  /** What the rule box starts as — the rule those questions get today. */
+  seedRule: string;
+  /** The question it was started from, when it was started from one. */
+  fromMessageId: number | null;
+  fromQuestion: string | null;
+}
+
 export default function SimpleStudio({
   assignmentId,
   rows,
@@ -115,7 +135,7 @@ export default function SimpleStudio({
   const [draft, setDraft] = useState<SimpleSnapshot>(initialState.snapshot);
   const [selection, setSelection] = useState<Selection>({ kind: 'all' });
   const [expanded, setExpanded] = useState<number | 'root' | null>(null);
-  const [creatingUnder, setCreatingUnder] = useState<number | null | undefined>(undefined);
+  const [creating, setCreating] = useState<Creating | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [judging, setJudging] = useState(false);
@@ -317,14 +337,53 @@ export default function SimpleStudio({
     [api, state.pinned]
   );
 
-  /* --------------------------------------------------------------- */
-  /* What the middle column lists                                     */
-  /* --------------------------------------------------------------- */
-
   const ownerOf = useCallback(
     (messageId: number): Owner | null => state.owners[String(messageId)] ?? null,
     [state.owners]
   );
+
+  /**
+   * Start an intent from one question.
+   *
+   * Three things happen at once and they are three parts of one promise. The
+   * question is PINNED, so it survives every later Apply and every change of
+   * selection — and since a shelf row carries the same owner chip as any other
+   * row, the pin is also the answer to "did my wording catch it". The form
+   * opens directly ABOVE whatever owns that question now, so the new words are
+   * read first. And the rule box starts as a copy of the rule that question is
+   * getting today, so applying before the rule is rewritten changes nothing.
+   *
+   * What does NOT happen is the question being put in. No verdict is
+   * overridden: if the words do not describe it, the chip does not move, and
+   * that is a fact to act on rather than a fault to be corrected (§1-4). It is
+   * also what keeps the board and the deployed chatbot saying the same thing,
+   * since the deployed one has only the words.
+   */
+  const startIntentFrom = useCallback(
+    (messageId: number) => {
+      const owner = ownerOf(messageId);
+      const beforeSid = owner?.outcome === 'intent' ? owner.sid : null;
+      const seedRule =
+        (beforeSid == null
+          ? draft.rootRule
+          : draft.intents.find((i) => i.sid === beforeSid)?.rule) ?? draft.rootRule;
+      if (!state.pinned.includes(messageId)) void togglePin(messageId);
+      setSelectedMessageId(messageId);
+      setExpanded(null);
+      setCreating({
+        beforeSid,
+        seedRule,
+        fromMessageId: messageId,
+        fromQuestion: rowById.get(messageId)?.queryText ?? null,
+      });
+      logUi(assignmentId, 'simple_intent_from_query', { messageId, beforeSid });
+    },
+    [assignmentId, draft.intents, draft.rootRule, ownerOf, rowById, state.pinned, togglePin]
+  );
+
+  /* --------------------------------------------------------------- */
+  /* What the middle column lists                                     */
+  /* --------------------------------------------------------------- */
 
   const diffFor = useCallback(
     (sid: number | null) => state.diff?.find((d) => d.sid === sid) ?? null,
@@ -369,7 +428,7 @@ export default function SimpleStudio({
 
   const title = (sid: number | null) =>
     sid == null
-      ? 'Everything else'
+      ? 'Uncategorized'
       : draft.intents.find((i) => i.sid === sid)?.title.trim() ||
         state.snapshot.intents.find((i) => i.sid === sid)?.title.trim() ||
         'Untitled';
@@ -389,8 +448,8 @@ export default function SimpleStudio({
         setSelection={setSelection}
         expanded={expanded}
         setExpanded={setExpanded}
-        creatingUnder={creatingUnder}
-        setCreatingUnder={setCreatingUnder}
+        creating={creating}
+        setCreating={setCreating}
         onApply={apply}
         onSaveVersion={saveVersion}
         onRevert={revert}
@@ -414,6 +473,7 @@ export default function SimpleStudio({
         selectedMessageId={selectedMessageId}
         onSelect={setSelectedMessageId}
         onTogglePin={togglePin}
+        onCreateIntent={readOnly || arm === 'baseline' ? null : startIntentFrom}
         pinned={state.pinned}
         ownerOf={ownerOf}
         titleOf={title}
@@ -460,8 +520,8 @@ function ConfigColumn({
   setSelection,
   expanded,
   setExpanded,
-  creatingUnder,
-  setCreatingUnder,
+  creating,
+  setCreating,
   onApply,
   onSaveVersion,
   onRevert,
@@ -481,8 +541,8 @@ function ConfigColumn({
   setSelection: (s: Selection) => void;
   expanded: number | 'root' | null;
   setExpanded: (e: number | 'root' | null) => void;
-  creatingUnder: number | null | undefined;
-  setCreatingUnder: (v: number | null | undefined) => void;
+  creating: Creating | null;
+  setCreating: (c: Creating | null) => void;
   onApply: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
@@ -540,8 +600,8 @@ function ConfigColumn({
             setSelection={setSelection}
             expanded={expanded}
             setExpanded={setExpanded}
-            creatingUnder={creatingUnder}
-            setCreatingUnder={setCreatingUnder}
+            creating={creating}
+            setCreating={setCreating}
             onApply={onApply}
             countOf={countOf}
             assignmentId={assignmentId}
@@ -561,9 +621,7 @@ function ConfigColumn({
       <SaveBar
         dirty={state.dirty}
         hasSave={state.savedVersionNo != null}
-        /* Nothing marked in the tree but still unsaved means the change was a
-           deletion — the one thing a row cannot say, because the row is gone. */
-        onlyDeletions={state.dirty && state.unsavedSids.length === 0}
+        note={unsavedNote(state)}
         readOnly={readOnly}
         saving={saving}
         onSaveVersion={onSaveVersion}
@@ -628,6 +686,22 @@ function PromptEditor({
 }
 
 /** The score arm's configuration: one root, a tree under it, editors inline. */
+/**
+ * The configuration: the intents in the order they are tried, and the rule for
+ * whatever none of them claim.
+ *
+ * Flat, and the order is the whole of the structure — a question goes to the
+ * first intent whose words describe it, reading downwards. Intents used to
+ * nest, and nesting only ever meant "tried before its parent, and only within
+ * what its parent caught": the first half is what a position in a list already
+ * says, and the second half was an AND between two texts that were judged
+ * apart and never appeared together, so a definition's own words did not say
+ * what it caught.
+ *
+ * The uncategorized rule is drawn last because that is where it is reached. It
+ * used to be drawn first, directly above a sentence explaining that the list
+ * reads downwards, so the picture contradicted the caption.
+ */
 function Tree({
   api,
   intentVersions,
@@ -641,8 +715,8 @@ function Tree({
   setSelection,
   expanded,
   setExpanded,
-  creatingUnder,
-  setCreatingUnder,
+  creating,
+  setCreating,
   onApply,
   countOf,
   assignmentId,
@@ -650,7 +724,7 @@ function Tree({
   api: (path: string, query?: string) => string;
   /** sid → that intent's own history, newest first. */
   intentVersions: Record<string, IntentVersion[]>;
-  /** Intents that differ from the last save (0 = everything else). */
+  /** Intents that differ from the last save (0 = the uncategorized rule). */
   unsaved: Set<number>;
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
@@ -661,15 +735,12 @@ function Tree({
   setSelection: (s: Selection) => void;
   expanded: number | 'root' | null;
   setExpanded: (e: number | 'root' | null) => void;
-  creatingUnder: number | null | undefined;
-  setCreatingUnder: (v: number | null | undefined) => void;
+  creating: Creating | null;
+  setCreating: (c: Creating | null) => void;
   onApply: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
   countOf: (sid: number | null) => number;
   assignmentId: string;
 }) {
-  const childrenOf = (parentSid: number | null) =>
-    draft.intents.filter((i) => i.parentSid === parentSid);
-
   /**
    * The rules written elsewhere in this configuration, for the reuse picker.
    *
@@ -682,7 +753,7 @@ function Tree({
       : [
           {
             key: 'root',
-            title: 'Everything else',
+            title: 'Uncategorized',
             rule: draft.rootRule,
             count: countOf(null),
           },
@@ -703,23 +774,44 @@ function Tree({
       intents: draft.intents.map((i) => (i.sid === sid ? { ...i, ...fields } : i)),
     });
 
-  const renderNode = (intent: SimpleIntent, depth: number) => {
+  /* The form is rendered at the position the intent will occupy, so where it
+     goes needs no explaining beyond the one line naming what it is tried
+     before. */
+  const form = (beforeTitle: string) =>
+    creating && !readOnly ? (
+      <div className="pb-2">
+        <NewIntent
+          api={api}
+          ruleSources={ruleSources(null)}
+          creating={creating}
+          beforeTitle={beforeTitle}
+          draft={draft}
+          onCancel={() => setCreating(null)}
+          onCreate={(next, sid) => {
+            // Closed on the way out, not on the way back: leaving the form
+            // open after a save invites a second click that writes the same
+            // intent again.
+            setCreating(null);
+            return onApply(next, sid);
+          }}
+        />
+      </div>
+    ) : null;
+
+  const renderIntent = (intent: SimpleIntent, at: number) => {
     const open = expanded === intent.sid;
-    const siblings = childrenOf(intent.parentSid);
-    const at = siblings.findIndex((s) => s.sid === intent.sid);
     return (
       <li key={intent.sid}>
         <div
-          className={`group flex items-center gap-1.5 pr-2 py-1 rounded-lg cursor-pointer ${
+          className={`group flex items-center gap-1.5 pl-2 pr-2 py-1 rounded-lg cursor-pointer ${
             selection.kind === 'intent' && selection.sid === intent.sid
               ? 'bg-[hsl(var(--primary))]/8'
               : 'hover:bg-[hsl(var(--muted))]'
           }`}
-          style={{ paddingLeft: `${0.5 + depth * 0.9}rem` }}
           onClick={() => {
             setSelection({ kind: 'intent', sid: intent.sid });
             setExpanded(open ? null : intent.sid);
-            setCreatingUnder(undefined);
+            setCreating(null);
             if (!open) logUi(assignmentId, 'intent_open', { sid: intent.sid });
           }}
         >
@@ -754,18 +846,18 @@ function Tree({
                 glyph="↑"
                 onClick={() =>
                   void onApply(
-                    { ...draft, intents: moveSibling(draft.intents, intent.sid, -1) },
+                    { ...draft, intents: moveIntent(draft.intents, intent.sid, -1) },
                     intent.sid
                   )
                 }
               />
               <OrderButton
-                disabled={at < 0 || at >= siblings.length - 1}
+                disabled={at >= draft.intents.length - 1}
                 label="Answer later"
                 glyph="↓"
                 onClick={() =>
                   void onApply(
-                    { ...draft, intents: moveSibling(draft.intents, intent.sid, 1) },
+                    { ...draft, intents: moveIntent(draft.intents, intent.sid, 1) },
                     intent.sid
                   )
                 }
@@ -775,7 +867,7 @@ function Tree({
         </div>
 
         {open && (
-          <div style={{ paddingLeft: `${1.4 + depth * 0.9}rem` }} className="pr-2 pb-2">
+          <div className="pl-[1.4rem] pr-2 pb-2">
             <Accordion
               api={api}
               ruleSources={ruleSources(intent.sid)}
@@ -787,36 +879,12 @@ function Tree({
               onApply={() => onApply(draft, intent.sid)}
               onDelete={() =>
                 void onApply(
-                  { ...draft, intents: removeSubtree(draft.intents, intent.sid) },
+                  { ...draft, intents: removeIntent(draft.intents, intent.sid) },
                   null
                 ).then(() => setExpanded(null))
               }
-              onNest={() => setCreatingUnder(intent.sid)}
-              nestLabel={`Make one inside “${intent.title.trim() || 'Untitled'}”`}
             />
           </div>
-        )}
-
-        {creatingUnder === intent.sid && (
-          <div style={{ paddingLeft: `${1.4 + depth * 0.9}rem` }} className="pr-2 pb-2">
-            <NewIntent
-              api={api}
-              ruleSources={ruleSources(null)}
-              parentSid={intent.sid}
-              parentTitle={intent.title.trim() || 'Untitled'}
-              seedRule={intent.rule}
-              draft={draft}
-              onCancel={() => setCreatingUnder(undefined)}
-              onCreate={(next, sidPlaceholder) => {
-                setCreatingUnder(undefined);
-                return onApply(next, sidPlaceholder);
-              }}
-            />
-          </div>
-        )}
-
-        {childrenOf(intent.sid).length > 0 && (
-          <ul>{childrenOf(intent.sid).map((child) => renderNode(child, depth + 1))}</ul>
         )}
       </li>
     );
@@ -824,16 +892,52 @@ function Tree({
 
   return (
     <div className="p-2">
-      {/* The root is the else branch: whatever no intent claims lands here. It
-          is a rule with no "when", because its when is everything left over. */}
+      <ul>
+        {draft.intents.map((intent, at) => (
+          <Fragment key={intent.sid}>
+            {creating?.beforeSid === intent.sid && (
+              <li>{form(intent.title.trim() || 'Untitled')}</li>
+            )}
+            {renderIntent(intent, at)}
+          </Fragment>
+        ))}
+      </ul>
+
+      {/* Last place in the order, which is also where the button that adds one
+          from nothing sits — so the button is standing where its intent will
+          be. */}
+      {creating?.beforeSid == null ? (
+        <div className="px-2 pt-1">{form('Uncategorized')}</div>
+      ) : (
+        !readOnly && (
+          <button
+            onClick={() => {
+              setCreating({
+                beforeSid: null,
+                seedRule: draft.rootRule,
+                fromMessageId: null,
+                fromQuestion: null,
+              });
+              setExpanded(null);
+            }}
+            className="mt-1 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-[hsl(var(--border))] text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+          >
+            <Plus className="w-3.5 h-3.5" /> New intent
+          </button>
+        )
+      )}
+
+      {/* Last, because it is last: whatever no intent above claimed lands
+          here. It is a rule with no "when", because its when is what is
+          left. */}
       <div
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer ${
+        className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer ${
           selection.kind === 'root' ? 'bg-[hsl(var(--primary))]/8' : 'hover:bg-[hsl(var(--muted))]'
         }`}
         onClick={() => {
           setSelection({ kind: 'root' });
           setExpanded(expanded === 'root' ? null : 'root');
-          setCreatingUnder(undefined);
+          setCreating(null);
         }}
       >
         {expanded === 'root' ? (
@@ -848,7 +952,7 @@ function Tree({
           aria-hidden
           className="w-1.5 h-1.5 rounded-full shrink-0 bg-[hsl(var(--muted-foreground))]"
         />
-        <span className="flex-1 text-sm font-semibold">Everything else</span>
+        <span className="flex-1 text-sm font-semibold">Uncategorized</span>
         {unsaved.has(0) && (
           <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
         )}
@@ -901,45 +1005,10 @@ function Tree({
         </div>
       )}
 
-      <ul className="mt-1">{childrenOf(null).map((intent) => renderNode(intent, 0))}</ul>
-
-      {creatingUnder === null && (
-        <div className="px-2 pt-1">
-          <NewIntent
-            api={api}
-            ruleSources={ruleSources(null)}
-            parentSid={null}
-            parentTitle="Everything else"
-            seedRule={draft.rootRule}
-            draft={draft}
-            onCancel={() => setCreatingUnder(undefined)}
-            onCreate={async (next, sid) => {
-              // Closed on the way out, not on the way back: leaving the form
-              // open after a save invites a second click that writes the same
-              // intent again.
-              setCreatingUnder(undefined);
-              await onApply(next, sid);
-            }}
-          />
-        </div>
-      )}
-
-      {!readOnly && creatingUnder !== null && (
-        <button
-          onClick={() => {
-            setCreatingUnder(null);
-            setExpanded(null);
-          }}
-          className="mt-1 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-[hsl(var(--border))] text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
-        >
-          <Plus className="w-3.5 h-3.5" /> New intent
-        </button>
-      )}
-
       <p className="px-2 pt-2 text-2xs text-[hsl(var(--muted-foreground))] leading-relaxed">
-        A question goes to the first intent that matches it, reading top to
-        bottom and inside before outside. Anything left over gets the rule
-        above.
+        A question goes to the first intent that describes it, reading top to
+        bottom. Anything none of them describe is uncategorized and gets the
+        rule at the end.
       </p>
     </div>
   );
@@ -988,8 +1057,6 @@ function Accordion({
   onChange,
   onApply,
   onDelete,
-  onNest,
-  nestLabel,
 }: {
   api: (path: string, query?: string) => string;
   /** Rules written elsewhere in this configuration, for the reuse picker. */
@@ -1002,8 +1069,6 @@ function Accordion({
   onChange: (fields: Partial<SimpleIntent>) => void;
   onApply: () => void;
   onDelete: () => void;
-  onNest: () => void;
-  nestLabel: string;
 }) {
   return (
     <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-2.5 space-y-2">
@@ -1070,16 +1135,10 @@ function Accordion({
             {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
             Apply
           </button>
-          <button
-            onClick={onNest}
-            className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
-          >
-            {nestLabel}
-          </button>
           <span className="flex-1" />
           <button
             onClick={onDelete}
-            title="Delete this intent and anything inside it"
+            title="Delete this intent"
             className="p-1 rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -1100,44 +1159,61 @@ function Accordion({
 }
 
 /**
- * Writing a new intent: the left column turns into the form, and the rest of
- * the board stays where it is. There is no dialog, because the questions are
- * the material you write a definition from and a dialog would cover them.
+ * Writing a new intent: the left column turns into the form, at the position
+ * the intent will occupy, and the rest of the board stays where it is. There
+ * is no dialog, because the questions are the material you write a definition
+ * from and a dialog would cover them.
  *
- * The rule starts as a copy of the enclosing rule — the one these questions
- * are getting today. A blank box would mean the first save silently takes a
- * chunk of the log to "no instructions at all", which is a change nobody
- * asked for. It is a copy, not an inheritance: editing it never reaches back.
+ * When it was started from a question, that question is quoted here and kept
+ * in the shelf above the list. The quote is context, not a constraint: nothing
+ * arranges for it to end up in this intent. The one thing the form can promise
+ * without asking anybody is position — this intent is read before the one that
+ * has the question now — and that is the only thing the line at the top
+ * claims.
+ *
+ * The rule starts as a copy of the rule those questions are getting today. A
+ * blank box would mean the first Apply silently takes a chunk of the log to
+ * "no instructions at all", which is a change nobody asked for. It is a copy,
+ * not an inheritance: editing it never reaches back.
  */
 function NewIntent({
   api,
   ruleSources,
-  parentSid,
-  parentTitle,
-  seedRule,
+  creating,
+  beforeTitle,
   draft,
   onCancel,
   onCreate,
 }: {
   api: (path: string, query?: string) => string;
   ruleSources: RuleSource[];
-  parentSid: number | null;
-  parentTitle: string;
-  seedRule: string;
+  creating: Creating;
+  /** What this one will be tried before. */
+  beforeTitle: string;
   draft: SimpleSnapshot;
   onCancel: () => void;
   onCreate: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
 }) {
   const [title, setTitle] = useState('');
   const [definition, setDefinition] = useState('');
-  const [rule, setRule] = useState(seedRule);
+  const [rule, setRule] = useState(creating.seedRule);
   const [busy, setBusy] = useState(false);
 
   return (
     <div className="rounded-lg border border-[hsl(var(--primary))]/40 bg-[hsl(var(--background))] p-2.5 space-y-2">
       <p className="text-2xs text-[hsl(var(--muted-foreground))]">
-        Inside “{parentTitle}”. It will be tried before that one.
+        Read before “{beforeTitle}”.
       </p>
+      {creating.fromQuestion && (
+        // Kept short and quoted: it is the question that prompted this, sitting
+        // where it can be read while the definition is written. It is also
+        // pinned above the list, which is where its answer to "did this catch
+        // it" shows up.
+        <p className="rounded border-l-2 border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1 text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+          Started from: “{creating.fromQuestion.trim().slice(0, 140)}
+          {creating.fromQuestion.trim().length > 140 ? '…' : ''}”
+        </p>
+      )}
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
@@ -1153,6 +1229,7 @@ function NewIntent({
           </label>
           <StarterPicker
             api={api}
+            forMessageId={creating.fromMessageId}
             onPick={(starter) => {
               setDefinition(starter.definition);
               if (!title.trim()) setTitle(starter.title);
@@ -1187,14 +1264,15 @@ function NewIntent({
           onClick={async () => {
             setBusy(true);
             // A temporary negative id: the server swaps it for one that
-            // outlives every later save, and rewrites any parent pointer to
-            // it in the same pass.
+            // outlives every later save. Position is decided here and nowhere
+            // else — the array the board sends IS the order.
             const next: SimpleSnapshot = {
               ...draft,
-              intents: documentOrder([
-                ...draft.intents,
-                { sid: -Date.now(), title, definition, rule, parentSid },
-              ]),
+              intents: insertBefore(
+                draft.intents,
+                { sid: -Date.now(), title, definition, rule },
+                creating.beforeSid
+              ),
             };
             await onCreate(next, null);
             setBusy(false);
@@ -1236,7 +1314,7 @@ function NewIntent({
 function SaveBar({
   dirty,
   hasSave,
-  onlyDeletions,
+  note,
   readOnly,
   saving,
   onSaveVersion,
@@ -1244,7 +1322,7 @@ function SaveBar({
 }: {
   dirty: boolean;
   hasSave: boolean;
-  onlyDeletions: boolean;
+  note: 'saved' | 'changes' | 'deletion';
   readOnly: boolean;
   saving: boolean;
   onSaveVersion: () => Promise<void>;
@@ -1256,7 +1334,7 @@ function SaveBar({
   return (
     <section className="shrink-0 flex items-center gap-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2">
       <span className="flex-1 text-2xs leading-snug text-[hsl(var(--muted-foreground))]">
-        {onlyDeletions ? 'A deletion is not saved yet.' : 'Not saved yet.'}
+        {note === 'deletion' ? 'A deletion is not saved yet.' : 'Not saved yet.'}
       </span>
       {/* Absent, not disabled, before the first save: there is nowhere to
           revert TO, and a greyed button is still an invitation to work out
@@ -1352,6 +1430,7 @@ function QuestionColumn({
   selectedMessageId,
   onSelect,
   onTogglePin,
+  onCreateIntent,
   pinned,
   ownerOf,
   titleOf,
@@ -1366,6 +1445,9 @@ function QuestionColumn({
   selectedMessageId: number | null;
   onSelect: (id: number) => void;
   onTogglePin: (id: number) => void;
+  /** Null where there is nothing to carve out of — the one-document arm, or
+   * an older version being read. */
+  onCreateIntent: ((id: number) => void) | null;
   pinned: number[];
   ownerOf: (id: number) => Owner | null;
   titleOf: (sid: number | null) => string;
@@ -1391,7 +1473,7 @@ function QuestionColumn({
     selection.kind === 'all' || arm === 'baseline'
       ? 'All questions'
       : selection.kind === 'root'
-        ? 'Everything else'
+        ? 'Uncategorized'
         : titleOf(selection.sid);
 
   return (
@@ -1427,6 +1509,7 @@ function QuestionColumn({
                 tone={null}
                 onSelect={onSelect}
                 onTogglePin={onTogglePin}
+                onCreateIntent={onCreateIntent}
               />
             ))}
           </ul>
@@ -1469,6 +1552,7 @@ function QuestionColumn({
               }
               onSelect={onSelect}
               onTogglePin={onTogglePin}
+              onCreateIntent={onCreateIntent}
             />
           ))}
           {listed.length === 0 && (
@@ -1495,6 +1579,7 @@ function QuestionRow({
   tone,
   onSelect,
   onTogglePin,
+  onCreateIntent,
 }: {
   row: ScoreQueryRow;
   selected: boolean;
@@ -1506,6 +1591,7 @@ function QuestionRow({
   tone: 'entered' | 'left' | null;
   onSelect: (id: number) => void;
   onTogglePin: (id: number) => void;
+  onCreateIntent: ((id: number) => void) | null;
 }) {
   return (
     <li
@@ -1555,20 +1641,39 @@ function QuestionRow({
           <QuerySnippet text={row.queryText} dissection={row.dissection} max={150} />
         </div>
       </div>
-      <button
-        title={pinned ? 'Stop keeping this one here' : 'Keep this one in view'}
-        onClick={(e) => {
-          e.stopPropagation();
-          onTogglePin(row.messageId);
-        }}
-        className={`self-start p-1 rounded ${
-          pinned
-            ? 'text-[hsl(var(--foreground))]'
-            : 'opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))]'
-        } hover:bg-[hsl(var(--background))]`}
-      >
-        {pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
-      </button>
+      <div className="self-start flex items-center">
+        {/* Reading a question and deciding it belongs somewhere else is the
+            move this board is built around, so it starts here, on the question,
+            rather than over in the configuration. The tooltip names what the
+            new intent will be read before, because that is the part of the
+            outcome that is settled before anything is written. */}
+        {onCreateIntent && (
+          <button
+            title={`Start an intent from this question — read before “${titleOf(owner?.sid ?? null)}”`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCreateIntent(row.messageId);
+            }}
+            className="p-1 rounded opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        )}
+        <button
+          title={pinned ? 'Stop keeping this one here' : 'Keep this one in view'}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTogglePin(row.messageId);
+          }}
+          className={`p-1 rounded ${
+            pinned
+              ? 'text-[hsl(var(--foreground))]'
+              : 'opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))]'
+          } hover:bg-[hsl(var(--background))]`}
+        >
+          {pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+        </button>
+      </div>
     </li>
   );
 }

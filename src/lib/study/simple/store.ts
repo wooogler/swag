@@ -43,7 +43,7 @@ import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { simpleConfigVersions, simplePins } from '@/db/schema';
 import { armOf, type StudioView } from '../config';
-import { emptySnapshot, type SimpleSnapshot } from './chain';
+import { emptySnapshot, flattenStoredIntents, type SimpleSnapshot } from './chain';
 
 export type SimpleVersionKind = 'apply' | 'save';
 
@@ -89,14 +89,19 @@ function parseSnapshot(value: unknown, view: StudioView, seed: string): SimpleSn
     arm,
     prompt: typeof raw.prompt === 'string' ? raw.prompt : base.prompt,
     rootRule: typeof raw.rootRule === 'string' ? raw.rootRule : base.rootRule,
+    // Snapshots written before the list was flattened still carry parent
+    // pointers; `flattenStoredIntents` turns those into the order they were
+    // actually evaluated in, so an old version restores to what it did.
     intents: Array.isArray(raw.intents)
-      ? raw.intents.map((i) => ({
-          sid: Number(i.sid),
-          title: typeof i.title === 'string' ? i.title : '',
-          definition: typeof i.definition === 'string' ? i.definition : '',
-          rule: typeof i.rule === 'string' ? i.rule : '',
-          parentSid: i.parentSid == null ? null : Number(i.parentSid),
-        }))
+      ? flattenStoredIntents(
+          (raw.intents as unknown as Record<string, unknown>[]).map((i) => ({
+            sid: Number(i.sid),
+            title: typeof i.title === 'string' ? i.title : '',
+            definition: typeof i.definition === 'string' ? i.definition : '',
+            rule: typeof i.rule === 'string' ? i.rule : '',
+            parentSid: i.parentSid == null ? null : Number(i.parentSid),
+          }))
+        )
       : [],
   };
 }
@@ -205,7 +210,6 @@ function unsavedAgainst(now: SimpleSnapshot, saved: SimpleSnapshot | null): numb
       was.title !== intent.title ||
       was.definition !== intent.definition ||
       was.rule !== intent.rule ||
-      was.parentSid !== intent.parentSid ||
       was.index !== index
     ) {
       out.push(intent.sid);

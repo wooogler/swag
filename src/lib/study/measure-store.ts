@@ -277,14 +277,14 @@ async function simpleConfigFor(
         rule: intent.rule,
         kind: 'intent',
         type: null,
-        parentId: intent.parentSid,
+        parentId: null,
         // Array position IS the order in a snapshot, so it becomes the
         // position the shared ordering helper expects.
         position: i,
       })),
       {
         id: -1,
-        title: 'Everything else',
+        title: 'Uncategorized',
         definition: '',
         rule: tip.snapshot.rootRule,
         kind: 'type_root',

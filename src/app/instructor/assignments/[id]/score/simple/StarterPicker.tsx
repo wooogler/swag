@@ -17,6 +17,13 @@
  * A count of zero is shown as readily as a count of forty. The number says what
  * this category finds in this log, which is a fact about the log — treating a
  * zero as a reason to hide the row would turn a fact into advice.
+ *
+ * When an intent is being started FROM a question, the sets that already
+ * describe that question carry a dot. Same standing: the dot is a verdict that
+ * was prepared when the clone was made, stated as a fact and stated for every
+ * set at once. It changes no order, hides nothing, and recommends nothing —
+ * a participant could reach the same information by picking each set in turn
+ * and reading the list, so it saves clicks rather than doing the thinking.
  */
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -28,6 +35,8 @@ export interface StarterItem {
   definition: string;
   description: string;
   count: number;
+  /** Whether it describes the question this intent was started from. */
+  contains: boolean;
 }
 
 export interface StarterGroup {
@@ -42,32 +51,41 @@ export default function StarterPicker({
   api,
   onPick,
   disabled = false,
+  forMessageId = null,
 }: {
   /** Builds a URL for the simple routes, carrying any preview `?view=`. */
   api: (path: string, query?: string) => string;
   onPick: (item: StarterItem) => void;
   disabled?: boolean;
+  /** The question this intent was started from, if it was started from one. */
+  forMessageId?: number | null;
 }) {
   const [groups, setGroups] = useState<StarterGroup[] | null>(null);
+  const [loadedFor, setLoadedFor] = useState<number | null | undefined>(undefined);
   const [hovered, setHovered] = useState<StarterItem | null>(null);
   const [everOpened, setEverOpened] = useState(false);
 
   // Fetched on first open, then kept: the list is the same all session, and a
   // round-trip every time the menu opens would make it feel like it is
-  // thinking about something.
+  // thinking about something. The one thing that can change it is which
+  // question the dots are about, so that is what invalidates it.
   useEffect(() => {
-    if (!everOpened || groups) return;
+    if (!everOpened || (groups && loadedFor === forMessageId)) return;
     let cancelled = false;
     (async () => {
-      const res = await fetch(api('starters'));
+      const res = await fetch(
+        api('starters', forMessageId ? `forMessageId=${forMessageId}` : undefined)
+      );
       if (!res.ok || cancelled) return;
       const body = await res.json();
-      if (!cancelled) setGroups(body.groups ?? []);
+      if (cancelled) return;
+      setGroups(body.groups ?? []);
+      setLoadedFor(forMessageId);
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, everOpened, groups]);
+  }, [api, everOpened, forMessageId, groups, loadedFor]);
 
   return (
     <div onMouseDown={() => setEverOpened(true)}>
@@ -88,6 +106,7 @@ export default function StarterPicker({
                 {hovered.count === 1
                   ? '1 question in this course matches it.'
                   : `${hovered.count} questions in this course match it.`}
+                {hovered.contains && ' The question you started from is one of them.'}
               </p>
             </>
           )
@@ -99,7 +118,16 @@ export default function StarterPicker({
               <Loader2 className="w-3 h-3 animate-spin" /> Loading…
             </p>
           ) : (
-            groups.map((group) => (
+            <>
+              {/* Says what the dots are before they are seen, so the mark is
+                  a fact with a stated meaning and not a hint to decode. */}
+              {forMessageId != null && (
+                <p className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-[hsl(var(--border))] text-2xs text-[hsl(var(--muted-foreground))]">
+                  <Dot />
+                  the question you started from is in this set
+                </p>
+              )}
+              {groups.map((group) => (
               <section key={group.key} className="border-b border-[hsl(var(--border))] last:border-b-0">
                 {/* The Type is a row, not a heading: "everything to do with
                     planning" is a thing someone might want one rule for. */}
@@ -126,7 +154,8 @@ export default function StarterPicker({
                   />
                 ))}
               </section>
-            ))
+              ))}
+            </>
           )
         }
       </PickerPopover>
@@ -162,9 +191,21 @@ function Row({
       <span className={`flex-1 truncate text-xs ${strong ? 'font-semibold' : ''}`}>
         {label ?? item.title}
       </span>
+      {item.contains && <Dot />}
       <span className="shrink-0 text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
         {item.count}
       </span>
     </button>
+  );
+}
+
+/** Neutral on purpose: a filled dot states membership, where a tick would
+ * read as approval of the choice. */
+function Dot() {
+  return (
+    <span
+      aria-label="contains the question you started from"
+      className="shrink-0 w-1.5 h-1.5 rounded-full bg-[hsl(var(--foreground))]"
+    />
   );
 }

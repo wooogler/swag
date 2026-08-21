@@ -64,7 +64,6 @@ function describeChange(next: SimpleSnapshot, prev: SimpleSnapshot | null): stri
     if (before.rule !== intent.rule) {
       changed.push(`then, was: ${clip(before.rule, 400)}\n  then, now: ${clip(intent.rule, 400)}`);
     }
-    if (before.parentSid !== intent.parentSid) changed.push('moved to a different place in the tree');
     if (changed.length > 0) lines.push(`CHANGED intent "${intent.title}"\n  ${changed.join('\n  ')}`);
   }
   for (const intent of prev?.intents ?? []) {
@@ -85,7 +84,7 @@ function describeChange(next: SimpleSnapshot, prev: SimpleSnapshot | null): stri
 }
 
 function orderOf(snapshot: SimpleSnapshot): string {
-  return snapshot.intents.map((i) => `${i.sid}<${i.parentSid ?? 'root'}`).join(',');
+  return snapshot.intents.map((i) => i.sid).join(',');
 }
 
 function clip(text: string, max = 800): string {

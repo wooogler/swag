@@ -14,6 +14,10 @@
  * New intents arrive with a temporary negative id; the server replaces it with
  * one that is stable for the life of the assignment, so a judgment, an answer
  * and a logged event can all name the same intent across every later version.
+ * Their POSITION is whatever position they arrive in: the array the board
+ * sends is the order questions are tried in, so inserting above the intent
+ * that currently owns a question is a client-side splice and nothing here
+ * needs to know it happened.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -36,7 +40,6 @@ const intentSchema = z.object({
   title: z.string().max(120).default(''),
   definition: z.string().max(4000).default(''),
   rule: z.string().max(STUDY_PROMPT_CHAR_LIMIT).default(''),
-  parentSid: z.number().int().nullable().default(null),
 });
 
 const bodySchema = z.object({
@@ -72,35 +75,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   });
   const base = previousVersion ? previous : emptySnapshot(arm, seedPrompt);
 
-  // Stable ids for anything new, and the same substitution applied to parent
-  // pointers, so an intent created inside another one in the same save keeps
-  // its place.
+  // Stable ids for anything new, in the order they were sent.
   let allocate = await nextSid(id);
   const incoming = body.intents ?? base.intents;
-  const assigned = new Map<number, number>();
-  for (const raw of incoming) {
-    const sid = raw.sid ?? -1;
-    if (sid <= 0) assigned.set(sid, allocate++);
-  }
-  const realSid = (sid: number | null | undefined) => {
-    if (sid == null) return null;
-    return sid > 0 ? sid : assigned.get(sid) ?? null;
-  };
   const intents: SimpleIntent[] = incoming.map((raw) => ({
-    sid: realSid(raw.sid ?? -1) ?? allocate++,
+    sid: raw.sid != null && raw.sid > 0 ? raw.sid : allocate++,
     title: raw.title ?? '',
     definition: raw.definition ?? '',
     rule: raw.rule ?? '',
-    parentSid: realSid(raw.parentSid),
   }));
-  // A parent that is not in this save is not a parent. Sending a child of a
-  // just-deleted intent is a client bug, and silently keeping the pointer
-  // would make the chain compiler reparent it later anyway — better to settle
-  // it here, where the snapshot is written.
-  const known = new Set(intents.map((i) => i.sid));
-  for (const intent of intents) {
-    if (intent.parentSid != null && !known.has(intent.parentSid)) intent.parentSid = null;
-  }
 
   const snapshot: SimpleSnapshot = {
     arm,
@@ -175,7 +158,6 @@ function describeSave(next: SimpleSnapshot, prev: SimpleSnapshot | null) {
     if (before.title !== intent.title) fields.push('title');
     if (before.definition !== intent.definition) fields.push('definition');
     if (before.rule !== intent.rule) fields.push('rule');
-    if (before.parentSid !== intent.parentSid) fields.push('parent');
     if (fields.length > 0) {
       updated.push({
         sid: intent.sid,

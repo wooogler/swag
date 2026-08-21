@@ -19,5 +19,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const gate = await simpleContext(id, new URL(request.url).searchParams.get('view'));
   if ('error' in gate) return gate.error;
-  return NextResponse.json({ groups: await loadStarters(id) });
+  // `forMessageId` marks the sets that already describe one question — sent
+  // when an intent is being started from a row in the list. Still a read.
+  const forMessageId = Number(new URL(request.url).searchParams.get('forMessageId'));
+  return NextResponse.json({
+    groups: await loadStarters(id, Number.isFinite(forMessageId) && forMessageId > 0 ? forMessageId : null),
+  });
 }

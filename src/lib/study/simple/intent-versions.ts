@@ -51,7 +51,7 @@ function pairsOf(snapshot: SimpleSnapshot): {
     return [{ sid: ROOT_SID, title: 'Rules', definition: '', rule: snapshot.prompt }];
   }
   return [
-    { sid: ROOT_SID, title: 'Everything else', definition: '', rule: snapshot.rootRule },
+    { sid: ROOT_SID, title: 'Uncategorized', definition: '', rule: snapshot.rootRule },
     ...snapshot.intents.map((i) => ({
       sid: i.sid,
       title: i.title,

@@ -13,6 +13,18 @@
  * compiler and lazy root creation all assume a type would have to be argued
  * out of that assumption in five places; a snapshot has no opinion.
  *
+ * A CONFIGURATION IS A FLAT, ORDERED LIST. Intents used to nest, and nesting
+ * bought exactly two things: a child was tried before its parent, and a child
+ * could only take a question its ancestors also matched. The first is what
+ * position in a list already gives you. The second is an AND between two texts
+ * that were judged independently and never appeared together on screen — so a
+ * definition's own words did not say what it caught, and the one failure it
+ * produced (a child claiming nothing because its parent excluded the question)
+ * is one the board is forbidden to warn about (§1-4). Flat costs the author a
+ * conjunction they now have to write out; that is the trade, and writing the
+ * scope down is what makes a definition mean the same thing on the board and
+ * in the deployed chatbot.
+ *
  * Client-safe: no database, no server-only imports. The board compiles the
  * chain locally to render ownership, and the server compiles the same chain
  * from the same function to route a question for real.
@@ -23,7 +35,7 @@ import type { StudioArm } from '../config';
  * One intent in a snapshot.
  *
  * `sid` is stable for the life of the assignment: it survives saves, restores
- * and re-parenting, so a judgment, a response and a logged event can all name
+ * and reordering, so a judgment, a response and a logged event can all name
  * the same intent across versions. It is not a database id — nothing else in
  * the schema points at it — and it is never reused after a delete.
  */
@@ -34,20 +46,18 @@ export interface SimpleIntent {
   /** The complete system prompt for questions this intent owns. Empty means
    * no system message at all, which is a real answer, not a missing one. */
   rule: string;
-  parentSid: number | null;
 }
 
 export interface SimpleSnapshot {
   arm: StudioArm;
   /** baseline: the single Rules document. */
   prompt: string;
-  /** score: the rule for questions no intent claims — the tree's else branch. */
+  /** score: the rule for questions no intent claims — the uncategorized ones. */
   rootRule: string;
   /**
-   * score: the tree, flattened in DOCUMENT order (a pre-order walk of what the
-   * left column shows). Sibling order in this array is evaluation order, so
-   * moving a row up in the UI is moving it earlier in the array — there is no
-   * separate position field to keep consistent with it.
+   * score: the intents, in the order they are tried. Position in this array IS
+   * evaluation order — there is no separate rank field that could disagree
+   * with it, and no structure layered over it.
    */
   intents: SimpleIntent[];
 }
@@ -61,84 +71,19 @@ export function emptySnapshot(arm: StudioArm, seed: string): SimpleSnapshot {
   return { arm, prompt: seed, rootRule: seed, intents: [] };
 }
 
-/** Children of one node, in evaluation order. */
-export function childrenOf(snapshot: SimpleSnapshot, parentSid: number | null): SimpleIntent[] {
-  return snapshot.intents.filter((i) => i.parentSid === parentSid);
-}
-
 export function findIntent(snapshot: SimpleSnapshot, sid: number): SimpleIntent | null {
   return snapshot.intents.find((i) => i.sid === sid) ?? null;
 }
 
-/** A node's ancestors, nearest first. Cycles terminate rather than hang. */
-export function ancestorsOf(snapshot: SimpleSnapshot, sid: number): SimpleIntent[] {
-  const out: SimpleIntent[] = [];
-  const seen = new Set<number>([sid]);
-  let node = findIntent(snapshot, sid);
-  while (node?.parentSid != null && !seen.has(node.parentSid)) {
-    seen.add(node.parentSid);
-    const parent = findIntent(snapshot, node.parentSid);
-    if (!parent) break;
-    out.push(parent);
-    node = parent;
-  }
-  return out;
-}
-
-/** Every descendant of a node, in document order. */
-export function descendantsOf(snapshot: SimpleSnapshot, sid: number): SimpleIntent[] {
-  const out: SimpleIntent[] = [];
-  const walk = (parentSid: number) => {
-    for (const child of childrenOf(snapshot, parentSid)) {
-      out.push(child);
-      walk(child.sid);
-    }
-  };
-  walk(sid);
-  return out;
-}
-
 /**
- * The order questions are tested in: children before their parent, siblings in
- * their own order, the root last.
+ * The order questions are tested in.
  *
- * Post-order, so an intent carved out INSIDE another one gets the question
- * first — otherwise nesting would be decoration, since the parent matches
- * everything the child does. The root is the else branch and therefore always
- * last and always matches.
- *
- * Total: a node whose parent is missing or which sits in a cycle is evaluated
- * at the top level rather than dropped, so a malformed tree loses its nesting
- * and not its intents.
+ * It is the array, and this function exists so that every caller says so by
+ * name instead of some of them reaching for `snapshot.intents` and drifting
+ * apart the day the order stops being the array.
  */
 export function compileSimpleChain(snapshot: SimpleSnapshot): SimpleIntent[] {
-  const byParent = new Map<number | null, SimpleIntent[]>();
-  const known = new Set(snapshot.intents.map((i) => i.sid));
-  for (const intent of snapshot.intents) {
-    // Reparent the unreachable to the top rather than losing them.
-    const parent =
-      intent.parentSid != null &&
-      known.has(intent.parentSid) &&
-      !ancestorsOf(snapshot, intent.sid).some((a) => a.sid === intent.sid)
-        ? intent.parentSid
-        : null;
-    const list = byParent.get(parent) ?? [];
-    list.push(intent);
-    byParent.set(parent, list);
-  }
-
-  const out: SimpleIntent[] = [];
-  const emitted = new Set<number>();
-  const walk = (parentSid: number | null) => {
-    for (const intent of byParent.get(parentSid) ?? []) {
-      if (emitted.has(intent.sid)) continue;
-      emitted.add(intent.sid);
-      walk(intent.sid);
-      out.push(intent);
-    }
-  };
-  walk(null);
-  return out;
+  return snapshot.intents;
 }
 
 export type SimpleOwnerOutcome = 'intent' | 'root' | 'pending';
@@ -150,10 +95,9 @@ export interface SimpleOwnership {
   /** The rule that will actually be sent. */
   rule: string;
   /**
-   * Intents whose definition matches this question but which do not get it —
-   * an earlier sibling took it first, or a parent's definition does not match
-   * so the child cannot be reached. Rendered as a plain fact ("applied: X")
-   * next to the question, never as a warning.
+   * Every other intent whose definition also describes this question. One of
+   * them would have answered it if the winner were not above them. Rendered as
+   * a plain fact ("applied: X") next to the question, never as a warning.
    */
   matchedElsewhere: number[];
 }
@@ -161,15 +105,16 @@ export interface SimpleOwnership {
 /**
  * Which rule answers one question, given a verdict per intent.
  *
- * First match down the chain, with one restriction: a nested intent can only
- * take a question its ancestors also match. Judgments are independent — each
- * definition is rated on its own — so without that restriction a child could
- * claim something its parent excludes, and the nesting the left column draws
- * would be a picture of nothing.
+ * First match down the list. The scan does not stop there, because the losers
+ * are what §5.4 puts in an intent's own question list: opening an intent shows
+ * everything its definition describes, including what an intent above it takes
+ * first, so the list answers "what do these words catch" and not "what do
+ * these words catch after an adjustment you cannot see".
  *
- * `pending` means an intent EARLIER in the chain has not been judged yet:
- * the answer would be a guess, so the caller waits rather than showing a rule
- * that may be about to change.
+ * `pending` means an intent that could still win has not been judged yet: the
+ * answer would be a guess, so the caller waits rather than showing a rule that
+ * may be about to change. An unjudged intent BELOW the winner cannot change
+ * the answer, only lengthen the losers, so it does not hold anything up.
  */
 export function resolveSimpleOwnership(
   snapshot: SimpleSnapshot,
@@ -177,30 +122,31 @@ export function resolveSimpleOwnership(
   /** sid → does this intent's definition match the question. Absent = unjudged. */
   matches: Map<number, boolean>
 ): SimpleOwnership {
+  let owner: SimpleIntent | null = null;
   const matchedElsewhere: number[] = [];
   for (const intent of chain) {
     const verdict = matches.get(intent.sid);
     if (verdict === undefined) {
-      return { outcome: 'pending', sid: null, rule: snapshot.rootRule, matchedElsewhere };
-    }
-    if (!verdict) continue;
-    const reachable = ancestorsOf(snapshot, intent.sid).every((a) => matches.get(a.sid) === true);
-    if (!reachable) {
-      matchedElsewhere.push(intent.sid);
+      if (!owner) {
+        return { outcome: 'pending', sid: null, rule: snapshot.rootRule, matchedElsewhere: [] };
+      }
       continue;
     }
-    return { outcome: 'intent', sid: intent.sid, rule: intent.rule, matchedElsewhere };
+    if (!verdict) continue;
+    if (owner) matchedElsewhere.push(intent.sid);
+    else owner = intent;
   }
-  return { outcome: 'root', sid: null, rule: snapshot.rootRule, matchedElsewhere };
+  if (!owner) return { outcome: 'root', sid: null, rule: snapshot.rootRule, matchedElsewhere };
+  return { outcome: 'intent', sid: owner.sid, rule: owner.rule, matchedElsewhere };
 }
 
 /**
  * Ownership for a whole question set at once, plus the counts the tree shows.
  *
- * The counts are OWNERSHIP, not matches: an intent shadowed by an earlier
- * sibling contributes to that sibling's number, because that is where the
- * question goes. Reporting matches instead would put the same question in two
- * places and make the numbers add up to more than the log.
+ * The counts are OWNERSHIP, not matches: an intent shadowed by one above it
+ * contributes to that one's number, because that is where the question goes.
+ * Reporting matches instead would put the same question in two places and make
+ * the numbers add up to more than the log.
  */
 export function resolveSimpleAll(
   snapshot: SimpleSnapshot,
@@ -233,68 +179,128 @@ export function ruleForOwner(snapshot: SimpleSnapshot, sid: number | null): stri
 }
 
 /* ------------------------------------------------------------------ */
-/* Editing the tree                                                    */
+/* Editing the list                                                    */
 /* ------------------------------------------------------------------ */
 
 /**
- * Re-flatten a set of intents into document order — a pre-order walk, using
- * the current array order for siblings.
+ * Put a new intent directly above the one named, or last when that is null.
  *
- * Every edit that changes the shape of the tree ends with this, so the array
- * the board holds and the array that gets saved always mean the same thing:
- * position in it IS the order, and there is no separate field that could
- * disagree with it.
+ * "Above whoever has this question now" is the whole positioning rule, and it
+ * is what makes the promise on the creation form true without any judging:
+ * whatever the new definition turns out to catch, it is tried before the
+ * intent it was carved out of, so if it catches the question at all it gets
+ * it. Carving out of the uncategorized pile lands last, which is the same
+ * sentence — the everything-else rule is what it is tried before.
  */
-export function documentOrder(intents: SimpleIntent[]): SimpleIntent[] {
-  const known = new Set(intents.map((i) => i.sid));
-  const byParent = new Map<number | null, SimpleIntent[]>();
-  for (const intent of intents) {
-    const parent = intent.parentSid != null && known.has(intent.parentSid) ? intent.parentSid : null;
-    byParent.set(parent, [...(byParent.get(parent) ?? []), intent]);
-  }
-  const out: SimpleIntent[] = [];
-  const seen = new Set<number>();
-  const walk = (parentSid: number | null) => {
-    for (const intent of byParent.get(parentSid) ?? []) {
-      if (seen.has(intent.sid)) continue;
-      seen.add(intent.sid);
-      out.push(intent);
-      walk(intent.sid);
-    }
-  };
-  walk(null);
-  // Anything a cycle made unreachable still belongs to the participant.
-  for (const intent of intents) if (!seen.has(intent.sid)) out.push(intent);
-  return out;
+export function insertBefore(
+  intents: SimpleIntent[],
+  intent: SimpleIntent,
+  beforeSid: number | null
+): SimpleIntent[] {
+  const at = beforeSid == null ? -1 : intents.findIndex((i) => i.sid === beforeSid);
+  if (at < 0) return [...intents, intent];
+  return [...intents.slice(0, at), intent, ...intents.slice(at)];
 }
 
-/** Swap an intent with the sibling before (-1) or after (+1) it. */
-export function moveSibling(
+/** Move an intent one place earlier (-1) or later (+1) in the order. */
+export function moveIntent(
   intents: SimpleIntent[],
   sid: number,
   direction: -1 | 1
 ): SimpleIntent[] {
-  const target = intents.find((i) => i.sid === sid);
-  if (!target) return intents;
-  const siblings = intents.filter((i) => i.parentSid === target.parentSid);
-  const at = siblings.findIndex((i) => i.sid === sid);
-  const swapWith = siblings[at + direction];
-  if (!swapWith) return intents;
-  const order = new Map(siblings.map((s, i) => [s.sid, i]));
-  order.set(sid, at + direction);
-  order.set(swapWith.sid, at);
-  const resorted = [...intents].sort((a, b) => {
-    if (a.parentSid !== b.parentSid) return 0;
-    return (order.get(a.sid) ?? 0) - (order.get(b.sid) ?? 0);
-  });
-  return documentOrder(resorted);
+  const at = intents.findIndex((i) => i.sid === sid);
+  const to = at + direction;
+  if (at < 0 || to < 0 || to >= intents.length) return intents;
+  const out = [...intents];
+  [out[at], out[to]] = [out[to], out[at]];
+  return out;
 }
 
-/** Delete an intent and everything nested inside it. */
-export function removeSubtree(intents: SimpleIntent[], sid: number): SimpleIntent[] {
-  const snapshot: SimpleSnapshot = { arm: 'score', prompt: '', rootRule: '', intents };
-  const doomed = new Set([sid, ...descendantsOf(snapshot, sid).map((i) => i.sid)]);
-  return documentOrder(intents.filter((i) => !doomed.has(i.sid)));
+/** Delete an intent. */
+export function removeIntent(intents: SimpleIntent[], sid: number): SimpleIntent[] {
+  return intents.filter((i) => i.sid !== sid);
+}
+
+/**
+ * Read intents out of a stored snapshot, flattening any nesting it still has.
+ *
+ * Order matters and is easy to get backwards. A nested snapshot stored its
+ * intents in DOCUMENT order — parent before child — while it EVALUATED them
+ * post-order, child before parent. So dropping the parent pointers and keeping
+ * the array would silently invert the priority of every nested pair. This
+ * re-emits in the old evaluation order, which is the one that decided what the
+ * chatbot did.
+ *
+ * Total: an intent whose parent is missing, or which sits in a cycle, comes
+ * out at the top level rather than being dropped.
+ */
+export function flattenStoredIntents(
+  raw: { sid: number; title: string; definition: string; rule: string; parentSid?: number | null }[]
+): SimpleIntent[] {
+  const bare = ({ sid, title, definition, rule }: (typeof raw)[number]): SimpleIntent => ({
+    sid,
+    title,
+    definition,
+    rule,
+  });
+  if (!raw.some((i) => i.parentSid != null)) return raw.map(bare);
+
+  const known = new Set(raw.map((i) => i.sid));
+  const parentOf = new Map<number, number | null>();
+  for (const intent of raw) {
+    let parent = intent.parentSid != null && known.has(intent.parentSid) ? intent.parentSid : null;
+    // Walk up; a cycle means this one has no usable parent.
+    const seen = new Set<number>([intent.sid]);
+    let cursor = parent;
+    while (cursor != null) {
+      if (seen.has(cursor)) {
+        parent = null;
+        break;
+      }
+      seen.add(cursor);
+      cursor = raw.find((i) => i.sid === cursor)?.parentSid ?? null;
+      if (cursor != null && !known.has(cursor)) cursor = null;
+    }
+    parentOf.set(intent.sid, parent);
+  }
+
+  const byParent = new Map<number | null, (typeof raw)[number][]>();
+  for (const intent of raw) {
+    const parent = parentOf.get(intent.sid) ?? null;
+    byParent.set(parent, [...(byParent.get(parent) ?? []), intent]);
+  }
+  const out: SimpleIntent[] = [];
+  const emitted = new Set<number>();
+  const walk = (parent: number | null) => {
+    for (const intent of byParent.get(parent) ?? []) {
+      if (emitted.has(intent.sid)) continue;
+      emitted.add(intent.sid);
+      walk(intent.sid);
+      out.push(bare(intent));
+    }
+  };
+  walk(null);
+  for (const intent of raw) if (!emitted.has(intent.sid)) out.push(bare(intent));
+  return out;
+}
+
+/**
+ * What the whole-configuration bar has to say about the last save.
+ *
+ * 'deletion' is the one case the tree cannot cover on its own — a deleted
+ * intent has no row left to mark — so the bar says it in words. But it is only
+ * a deletion once there IS a save to differ from: before the first save every
+ * intent is unsaved and none of them is marked, and reading that emptiness as
+ * a deletion is how the bar came to announce one after two additions.
+ */
+export function unsavedNote(state: {
+  dirty: boolean;
+  savedVersionNo: number | null;
+  unsavedSids: number[];
+}): 'saved' | 'changes' | 'deletion' {
+  if (!state.dirty) return 'saved';
+  if (state.savedVersionNo != null && state.unsavedSids.length === 0) return 'deletion';
+  return 'changes';
 }
 
 /** Every definition in a snapshot, in evaluation order — what the judge needs. */

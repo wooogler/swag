@@ -43,6 +43,9 @@ export interface StarterItem {
   /** How many of this log's questions it describes. Zero is a fine answer: it
    * is a place to start writing from, not a promise of results. */
   count: number;
+  /** Whether it describes the one question this intent is being started from.
+   * False whenever there is no such question. */
+  contains: boolean;
 }
 
 export interface StarterGroup {
@@ -150,12 +153,102 @@ async function countsByDefinition(
   return counts;
 }
 
-/** The library, grouped the way the taxonomy is. */
-export async function loadStarters(assignmentId: string): Promise<StarterGroup[]> {
+/**
+ * Which of these definitions describe ONE question.
+ *
+ * The same two sources and the same newest-wins rule as the counts above,
+ * narrowed to a single message. It exists so that starting an intent from a
+ * question can mark the sets that question is already in.
+ *
+ * This is a lookup in verdicts that were prepared when the clone was made, so
+ * it calls no model — and it tells the participant nothing they could not find
+ * by picking each set in turn and reading the list, which is what keeps it on
+ * the right side of §1-1: it saves clicks, it does not write or interpret
+ * anything on their behalf.
+ */
+async function definitionsContaining(
+  assignmentId: string,
+  messageId: number,
+  definitions: string[]
+): Promise<Set<string>> {
+  const hit = new Set<string>();
+  const scope = await reviewScope(assignmentId);
+  if (scope && !scope.has(messageId)) return hit;
+
+  const wanted = new Set(definitions.map((d) => d.trim()));
+  const templates = await db
+    .select({ id: scoreIntents.id, definition: scoreIntents.definition })
+    .from(scoreIntents)
+    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true)));
+  const byIntent = new Map<number, string>();
+  for (const template of templates) {
+    const text = template.definition.trim();
+    if (wanted.has(text)) byIntent.set(template.id, text);
+  }
+
+  if (byIntent.size > 0) {
+    const rows = await db
+      .select({
+        intentId: scoreIntentRatings.intentId,
+        rating: scoreIntentRatings.rating,
+        ratedAt: scoreIntentRatings.ratedAt,
+      })
+      .from(scoreIntentRatings)
+      .where(
+        and(
+          eq(scoreIntentRatings.assignmentId, assignmentId),
+          eq(scoreIntentRatings.messageId, messageId),
+          inArray(scoreIntentRatings.intentId, [...byIntent.keys()])
+        )
+      );
+    const newest = new Map<number, { rating: string; at: Date }>();
+    for (const row of rows) {
+      const prev = newest.get(row.intentId);
+      if (!prev || row.ratedAt > prev.at) newest.set(row.intentId, { rating: row.rating, at: row.ratedAt });
+    }
+    for (const [intentId, value] of newest) {
+      const definition = byIntent.get(intentId);
+      if (definition && isIncludedRating(value.rating as RatingLevel)) hit.add(definition);
+    }
+  }
+
+  // A starter they already adopted is answered from the simple table instead,
+  // for the same reason the counts are.
+  const hashes = new Map(definitions.map((d) => [intentDefHash(d), d.trim()]));
+  const own = await db
+    .select({ defHash: simpleRatings.defHash, rating: simpleRatings.rating })
+    .from(simpleRatings)
+    .where(
+      and(
+        eq(simpleRatings.assignmentId, assignmentId),
+        eq(simpleRatings.messageId, messageId),
+        inArray(simpleRatings.defHash, [...hashes.keys()])
+      )
+    );
+  for (const row of own) {
+    const definition = hashes.get(row.defHash);
+    if (!definition) continue;
+    if (isIncludedRating(row.rating as RatingLevel)) hit.add(definition);
+    else hit.delete(definition);
+  }
+
+  return hit;
+}
+
+/**
+ * The library, grouped the way the taxonomy is.
+ *
+ * `forMessageId` marks the sets that already describe that one question —
+ * set when an intent is being started from a question in the list.
+ */
+export async function loadStarters(
+  assignmentId: string,
+  forMessageId?: number | null
+): Promise<StarterGroup[]> {
   const config = await getScoreConfig();
   const suggestions = buildJelsonSuggestions(config);
 
-  const seeds: { group: string; item: Omit<StarterItem, 'count'>; isWhole: boolean }[] = [];
+  const seeds: { group: string; item: Omit<StarterItem, 'count' | 'contains'>; isWhole: boolean }[] = [];
   const groups = new Map<string, { label: string; description: string }>();
   for (const suggestion of suggestions) {
     if (!groups.has(suggestion.typeKey)) {
@@ -192,13 +285,23 @@ export async function loadStarters(assignmentId: string): Promise<StarterGroup[]
     });
   }
 
-  const counts = await countsByDefinition(
-    assignmentId,
-    seeds.map((s) => s.item.definition)
-  );
-  const withCount = (item: Omit<StarterItem, 'count'>): StarterItem => ({
+  const [counts, containing] = await Promise.all([
+    countsByDefinition(
+      assignmentId,
+      seeds.map((s) => s.item.definition)
+    ),
+    forMessageId == null
+      ? Promise.resolve(new Set<string>())
+      : definitionsContaining(
+          assignmentId,
+          forMessageId,
+          seeds.map((s) => s.item.definition)
+        ),
+  ]);
+  const withCount = (item: Omit<StarterItem, 'count' | 'contains'>): StarterItem => ({
     ...item,
     count: counts.get(item.definition.trim()) ?? 0,
+    contains: containing.has(item.definition.trim()),
   });
 
   return [...groups].map(([key, meta]) => ({

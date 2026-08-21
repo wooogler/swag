@@ -21,8 +21,6 @@
  */
 import { armOf, type StudioView } from '../config';
 import {
-  childrenOf,
-  compileSimpleChain,
   definitionsOf,
   resolveSimpleAll,
   ruleForOwner,
@@ -192,18 +190,10 @@ async function prefetch(job: SaveJob): Promise<void> {
   const messageIds = [...matches.keys()];
   const { owners } = resolveSimpleAll(job.snapshot, matches, messageIds);
 
-  // The intent they had open, and everything nested inside it: after a rule
-  // edit those are the answers that changed, and after a definition edit they
-  // are the list that just moved.
+  // The intent they had open: after a rule edit those are the answers that
+  // changed, and after a definition edit they are the list that just moved.
   const focus = new Set<number>();
-  if (job.focusSid != null) {
-    focus.add(job.focusSid);
-    for (const child of compileSimpleChain(job.snapshot)) {
-      if (childrenOf(job.snapshot, job.focusSid).some((c) => c.sid === child.sid)) {
-        focus.add(child.sid);
-      }
-    }
-  }
+  if (job.focusSid != null) focus.add(job.focusSid);
 
   const ranked = [
     ...messageIds.filter((id) => {
