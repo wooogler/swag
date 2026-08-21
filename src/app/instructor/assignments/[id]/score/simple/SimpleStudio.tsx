@@ -2019,7 +2019,12 @@ function ViewerColumn({
           rows={rows}
           current={row}
           isNirvana={isNirvana}
-          expandMaterials
+          // Pasted material stays folded here, unlike every other reading view
+          // in the app. Those are for reading what the student wrote; this
+          // column exists to show what the configuration ANSWERS, and a draft
+          // essay pasted into the question is often longer than the screen, so
+          // opening them by default put the reply below the fold — the one
+          // thing this column is for. Every bubble keeps its own show control.
           overrideResponse={
             answer &&
             answer.messageId === row.messageId &&
