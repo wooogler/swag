@@ -53,8 +53,10 @@ import {
   Pin,
   PinOff,
   Plus,
+  Redo2,
   Search,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-react';
 import { ConversationThread } from '../conversation';
@@ -173,7 +175,15 @@ export default function SimpleStudio({
   const [saving, setSaving] = useState(false);
   const [judging, setJudging] = useState(false);
   const [diffFrom, setDiffFrom] = useState<number | null>(null);
-  const [localVersionNo, setLocalVersionNo] = useState<number | null>(null);
+  /**
+   * What the open conversation's reply is being read under.
+   *
+   * `null` follows whatever the board is on. A number pins this one reply to a
+   * version without moving the board off the one being edited. `'original'`
+   * asks for the reply the student was actually given — a different question
+   * from any version, and the only one no configuration can answer.
+   */
+  const [localVersionNo, setLocalVersionNo] = useState<number | 'original' | null>(null);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
   // What the board is ABOUT. Every list, count and pin works off this; only
@@ -317,14 +327,87 @@ export default function SimpleStudio({
   );
 
   /** Take effect. The verb every editor carries. */
+  /**
+   * Undo and redo over what has been APPLIED this sitting.
+   *
+   * Session-local on purpose, exactly as a word processor's is: it undoes the
+   * editing being done now, while the durable way back is the history, whose
+   * saved versions survive a reload. It costs nothing to walk — every wording
+   * that was applied has its verdicts stored under its own text hash, so
+   * arriving back at one re-attaches them with no model call.
+   *
+   * Undoing APPLIES the earlier configuration rather than rewinding to its
+   * row. The newest row is the configuration here, and quietly making an older
+   * row newest would leave the trail saying something that did not happen. So
+   * an undo is a write like any other, and the history records it as one.
+   */
+  const [past, setPast] = useState<SimpleSnapshot[]>([]);
+  const [future, setFuture] = useState<SimpleSnapshot[]>([]);
+  const walkingRef = useRef(false);
+
   const apply = useCallback(
-    (
+    async (
       next: SimpleSnapshot,
       focusSid: number | null,
       seed?: { sid: number; messageId: number } | null
-    ) => write(next, focusSid, 'apply', seed),
-    [write]
+    ) => {
+      // The state being left, captured before the write replaces it. A step
+      // taken BY undo or redo is not itself an undo step.
+      if (!walkingRef.current) {
+        const from = state.snapshot;
+        setPast((p) => [...p.slice(-24), from]);
+        setFuture([]);
+      }
+      await write(next, focusSid, 'apply', seed);
+    },
+    [state.snapshot, write]
   );
+
+  const walk = useCallback(
+    async (to: SimpleSnapshot, keep: SimpleSnapshot, which: 'undo' | 'redo') => {
+      walkingRef.current = true;
+      try {
+        if (which === 'undo') {
+          setPast((p) => p.slice(0, -1));
+          setFuture((f) => [...f, keep]);
+        } else {
+          setFuture((f) => f.slice(0, -1));
+          setPast((p) => [...p, keep]);
+        }
+        await write(to, null, 'apply');
+        logUi(assignmentId, `simple_${which}`, {});
+      } finally {
+        walkingRef.current = false;
+      }
+    },
+    [assignmentId, write]
+  );
+
+  const canUndo = past.length > 0 && !saving && state.atTip;
+  const canRedo = future.length > 0 && !saving && state.atTip;
+  const undo = useCallback(() => {
+    if (!canUndo) return;
+    void walk(past[past.length - 1], state.snapshot, 'undo');
+  }, [canUndo, past, state.snapshot, walk]);
+  const redo = useCallback(() => {
+    if (!canRedo) return;
+    void walk(future[future.length - 1], state.snapshot, 'redo');
+  }, [canRedo, future, state.snapshot, walk]);
+
+  // The shortcuts everyone already has in their fingers, minus the ones that
+  // belong to whatever box the cursor is in.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) return;
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [redo, undo]);
 
   /**
    * Mark what is in effect as a version. The verb the study reads.
@@ -594,6 +677,8 @@ export default function SimpleStudio({
         creating={creating}
         setCreating={setCreating}
         rankedExamples={ranked}
+        onUndo={canUndo ? undo : null}
+        onRedo={canRedo ? redo : null}
         onApply={apply}
         onSaveVersion={saveVersion}
         onRevert={revert}
@@ -670,6 +755,8 @@ function ConfigColumn({
   creating,
   setCreating,
   rankedExamples,
+  onUndo,
+  onRedo,
   onApply,
   onSaveVersion,
   onRevert,
@@ -692,6 +779,9 @@ function ConfigColumn({
   creating: Creating | null;
   setCreating: (c: Creating | null) => void;
   rankedExamples: { sid: number; examples: string[] } | null;
+  /** Null when there is nothing to step back to, or forward to. */
+  onUndo: (() => void) | null;
+  onRedo: (() => void) | null;
   onApply: (
     next: SimpleSnapshot,
     focusSid: number | null,
@@ -728,6 +818,23 @@ function ConfigColumn({
                 Latest
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Stepping back and forward through what was applied acts on the
+            whole configuration, so it lives in the column and not inside an
+            editor. It was next to Apply until an undo removed the last intent
+            and took the buttons down with the card that held them — the
+            control that puts something back cannot live inside the thing it
+            is putting back. Sticky, so it stays reachable down a long list. */}
+        {(onUndo || onRedo) && (
+          <div className="sticky top-0 z-10 flex items-center justify-end gap-0.5 px-2 pt-2 bg-[hsl(var(--card))]">
+            <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
+              <Undo2 className="w-3.5 h-3.5" />
+            </StepButton>
+            <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
+              <Redo2 className="w-3.5 h-3.5" />
+            </StepButton>
           </div>
         )}
 
@@ -1543,6 +1650,28 @@ function Field({
   );
 }
 
+function StepButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: (() => void) | null;
+  children: React.ReactNode;
+}) {
+  if (!onClick) return null;
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="p-1.5 rounded-lg text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+    >
+      {children}
+    </button>
+  );
+}
+
 function ApplyButton({ saving, onClick }: { saving: boolean; onClick: () => void }) {
   return (
     <button
@@ -2214,8 +2343,8 @@ function ViewerColumn({
   /** Every version, newest first. */
   moments: SimpleVersion[];
   viewingVersionNo: number | null;
-  localVersionNo: number | null;
-  setLocalVersionNo: (v: number | null) => void;
+  localVersionNo: number | 'original' | null;
+  setLocalVersionNo: (v: number | 'original' | null) => void;
   onLocalVersionLog: (versionNo: number | null) => void;
   titleOf: (sid: number | null) => string;
 }) {
@@ -2228,7 +2357,10 @@ function ViewerColumn({
   } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const versionNo = localVersionNo ?? viewingVersionNo;
+  // "As delivered" is not a version, so it resolves to no version at all and
+  // short-circuits the round trip: the reply it asks for is already below.
+  const asDelivered = localVersionNo === 'original';
+  const versionNo = asDelivered ? null : localVersionNo ?? viewingVersionNo;
 
   useEffect(() => {
     if (!row) {
@@ -2239,6 +2371,11 @@ function ViewerColumn({
     const controller = new AbortController();
     abortRef.current = controller;
     const messageId = row.messageId;
+
+    if (asDelivered) {
+      setAnswer({ messageId, versionNo, text: '', state: 'original', owner: null });
+      return;
+    }
 
     (async () => {
       setAnswer({ messageId, versionNo, text: '', state: 'streaming', owner: null });
@@ -2302,7 +2439,7 @@ function ViewerColumn({
     })();
 
     return () => controller.abort();
-  }, [api, row, versionNo, titleOf]);
+  }, [api, asDelivered, row, versionNo, titleOf]);
 
   if (!row) {
     return (
@@ -2318,39 +2455,6 @@ function ViewerColumn({
     <section className="min-h-0 flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
       <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
         <span className="text-sm font-semibold">Conversation</span>
-        <span className="flex-1" />
-        {/* One conversation, under a different version — without moving the
-            rest of the board off the one being edited.
-
-            EVERY version, not only the saves. The timeline on the left is a
-            list of places to go back to, and only a save is one of those; this
-            is a list of moments to look at, and an apply is as much a moment
-            as a save. Listing only saves meant an intent's own history could
-            point at a wording this could not show — you were reading v2 and
-            being offered v1.
-
-            No "v N" here either, for the same reason: on this screen that
-            number means the intent's own version, and two numberings under one
-            name is what sent someone looking for v2 in the first place. What
-            identifies a moment is when it was and what it was called. */}
-        {moments.length > 0 && (
-          <select
-            value={String(versionNo ?? moments[0]?.versionNo ?? '')}
-            onChange={(e) => {
-              const picked = e.target.value ? Number(e.target.value) : null;
-              setLocalVersionNo(picked === moments[0]?.versionNo ? null : picked);
-              onLocalVersionLog(picked);
-            }}
-            className="text-xs rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-1.5 py-1"
-          >
-            {moments.map((v, i) => (
-              <option key={v.id} value={v.versionNo}>
-                {i === 0 ? 'now' : momentAgo(v.createdAt)}
-                {v.name ? ` · ${v.name}` : v.kind === 'save' ? ' · saved' : ''}
-              </option>
-            ))}
-          </select>
-        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3">
@@ -2373,9 +2477,21 @@ function ViewerColumn({
               : null
           }
           responseSlot={
-            <AnswerNote
+            // On the reply, not in the column header. A rule applies to ONE
+            // turn — the question that was selected — and a control at the top
+            // of the column read as a setting over the whole conversation. The
+            // full version puts the same picker on the same reply, for the
+            // same reason.
+            <ReplyVersionBar
+              moments={moments}
+              pick={localVersionNo}
+              current={versionNo}
               state={answer?.messageId === row.messageId ? answer.state : 'streaming'}
               owner={answer?.messageId === row.messageId ? answer.owner : null}
+              onPick={(next) => {
+                setLocalVersionNo(next);
+                onLocalVersionLog(typeof next === 'number' ? next : null);
+              }}
             />
           }
         />
@@ -2392,29 +2508,99 @@ function ViewerColumn({
  * but a statement of what was actually run, since a reply generated from a
  * summary of the thread is not the same object as the reply the student got.
  */
-function AnswerNote({
+/**
+ * What this one reply is, and what else it could be — on the reply itself.
+ *
+ * It replaced a note beside the reply and a picker in the column header, which
+ * between them made one claim in two places and put the control over one turn
+ * where it read as a setting over the whole conversation. A rule applies to the
+ * question that was selected; the turns around it are context, delivered as
+ * they were. The full version puts the same picker in the same place.
+ *
+ * EVERY version is offered, not only the saves. The timeline on the left is a
+ * list of places to go back to, and only a save is one of those; this is a
+ * list of moments to look at, and an apply is as much a moment as a save —
+ * most of the moments an intent's own history points at ARE applies, and
+ * listing only saves meant a wording that history offered could not be looked
+ * at.
+ *
+ * No "v N" here. On this screen that number means the intent's own version,
+ * and two numberings under one name is what sent someone looking for v2 and
+ * being offered v1. A moment is identified by when it was and what it was
+ * called, in the same relative wording the histories use, so the two line up
+ * by eye.
+ *
+ * "Original (as delivered)" is not a version and is offered as its own answer:
+ * it is the reply the student was actually given, which no configuration can
+ * produce and which is the only fixed point to compare the rest against.
+ */
+function ReplyVersionBar({
+  moments,
+  pick,
+  current,
   state,
   owner,
+  onPick,
 }: {
+  moments: SimpleVersion[];
+  /** What was chosen here: a version, the delivered reply, or nothing yet. */
+  pick: number | 'original' | null;
+  /** The version actually in force, once `pick` has been resolved. */
+  current: number | null;
   state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
   owner: string | null;
+  onPick: (next: number | 'original' | null) => void;
 }) {
-  const text =
-    state === 'pending'
-      ? 'Working out which rule applies to this question.'
-      : state === 'failed'
-        ? 'This reply could not be worked out — pick the question again to retry.'
-        : // Says which reply this is, so an unchanged rule does not read as a
-          // rule that did nothing. It is the one the student actually got.
-          state === 'original'
-          ? 'The reply this student got. Nothing here has been changed yet.'
-          : state === 'streaming'
-            ? `Answering under ${owner ? `“${owner}”` : 'your rules'} now.`
-            : `Answered under ${owner ? `“${owner}”` : 'your rules'}, as a single exchange.`;
+  if (state === 'pending') {
+    return (
+      <p className="mb-1 flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        Working out which rule applies to this question.
+      </p>
+    );
+  }
+  if (state === 'failed') {
+    return (
+      <p className="mb-1 text-2xs text-[hsl(var(--muted-foreground))]">
+        This reply could not be worked out — pick the question again to retry.
+      </p>
+    );
+  }
+
+  const asDelivered = state === 'original';
+  const value = pick === 'original' ? 'original' : String(current ?? moments[0]?.versionNo ?? '');
   return (
-    <p className="mt-1 flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
-      {state === 'streaming' && <Loader2 className="w-3 h-3 animate-spin" />}
-      {text}
-    </p>
+    <div className="mb-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs text-[hsl(var(--muted-foreground))]">
+      {state === 'streaming' && <Loader2 className="w-3 h-3 shrink-0 animate-spin" />}
+      <span>
+        {state === 'streaming'
+          ? 'Working out this reply under'
+          : asDelivered
+            ? 'This reply is'
+            : 'This reply is under'}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (next === 'original') return onPick('original');
+          const no = Number(next);
+          onPick(no === moments[0]?.versionNo ? null : no);
+        }}
+        className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5 text-2xs font-medium text-[hsl(var(--foreground))]"
+      >
+        <option value="original">Original (as delivered)</option>
+        {moments.map((v, i) => (
+          <option key={v.id} value={v.versionNo}>
+            {i === 0 ? 'now' : momentAgo(v.createdAt)}
+            {v.name ? ` · ${v.name}` : v.kind === 'save' ? ' · saved' : ''}
+          </option>
+        ))}
+      </select>
+      {/* Says which of the two kinds of "original" this is: one they chose,
+          or one that happened because nothing has been changed yet. */}
+      {asDelivered && pick !== 'original' && <span>— nothing here has been changed yet</span>}
+      {!asDelivered && state === 'ready' && owner && <span>— answered by “{owner}”</span>}
+    </div>
   );
 }

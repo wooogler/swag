@@ -75,6 +75,12 @@ const UI_EVENTS = [
    * on the intent arm it partly does what writing a definition does — so the
    * analysis has to be able to see who used it and for what. */
   'simple_search',
+  /** Walking back and forward through what was applied this sitting. Both
+   * write a version like any other apply, so the trail already holds WHAT
+   * happened; these say the participant got there by stepping rather than by
+   * editing, which is a different act. */
+  'simple_undo',
+  'simple_redo',
 ] as const;
 
 const bodySchema = z.object({
