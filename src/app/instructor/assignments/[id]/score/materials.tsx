@@ -303,16 +303,45 @@ export function snippetOverflows(text: string, dissection: Dissection | null, ma
 /** Compact one-line preview for question lists: plain text is collapsed to
  * single spaces and truncated, pasted Material shows as a small (static) tag.
  * Non-interactive — the whole row is a button, so no nested controls here. */
+/** The term picked out of a run of text, case-insensitively. */
+function Marked({ text, term }: { text: string; term?: string }) {
+  const needle = term?.trim() ?? '';
+  if (needle.length === 0) return <>{text}</>;
+  const out: React.ReactNode[] = [];
+  const hay = text.toLowerCase();
+  const lower = needle.toLowerCase();
+  let from = 0;
+  for (;;) {
+    const at = hay.indexOf(lower, from);
+    if (at === -1) break;
+    if (at > from) out.push(text.slice(from, at));
+    out.push(
+      <mark key={at} className="rounded-[2px] bg-amber-200 text-inherit dark:bg-amber-500/40">
+        {text.slice(at, at + needle.length)}
+      </mark>
+    );
+    from = at + needle.length;
+  }
+  if (out.length === 0) return <>{text}</>;
+  if (from < text.length) out.push(text.slice(from));
+  return <>{out}</>;
+}
+
 export function QuerySnippet({
   text,
   dissection,
   max = 140,
+  highlight,
 }: {
   text: string;
   dissection: Dissection | null;
   /** Plain-text budget (chars) before the preview truncates with an ellipsis.
    * Material tags are not counted against it — see planSnippet. */
   max?: number;
+  /** A search term to mark wherever it appears in the student's own words.
+   * Only the text parts: a tag stands for material that is not shown, so
+   * marking one would claim the term was found in something visible. */
+  highlight?: string;
 }) {
   const parts = useMemo(() => planSnippet(text, dissection, max).parts, [text, dissection, max]);
 
@@ -320,7 +349,13 @@ export function QuerySnippet({
     <>
       {parts.map((p, i) => {
         if (p.kind === 'cut') return <span key={i}>…</span>;
-        if (p.kind === 'text') return <span key={i}>{p.text}</span>;
+        if (p.kind === 'text') {
+          return (
+            <span key={i}>
+              <Marked text={p.text} term={highlight} />
+            </span>
+          );
+        }
         const style = materialStyle(p.mk);
         return (
           <span

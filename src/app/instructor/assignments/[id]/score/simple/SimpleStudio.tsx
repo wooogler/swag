@@ -53,7 +53,9 @@ import {
   Pin,
   PinOff,
   Plus,
+  Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import { ConversationThread } from '../conversation';
 import { QuerySnippet } from '../materials';
@@ -166,6 +168,7 @@ export default function SimpleStudio({
   const [selection, setSelection] = useState<Selection>({ kind: 'all' });
   const [expanded, setExpanded] = useState<number | 'root' | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
+  const [query, setQuery] = useState('');
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [judging, setJudging] = useState(false);
@@ -507,6 +510,46 @@ export default function SimpleStudio({
     );
   }, [arm, diffFor, material, ownerOf, ranked, selection]);
 
+  /**
+   * Whatever the middle column is showing, narrowed to the student's own
+   * words.
+   *
+   * It searches WITHIN the current selection rather than across the log,
+   * because that is what the header above it says it is showing and a box
+   * that silently changed the subject would be worse than no box. The empty
+   * state says how many the rest of the log holds, so "none here" cannot be
+   * read as "none anywhere".
+   *
+   * Only the question. Not the reply, which is generated and would make the
+   * results move when a rule changed; and not the intent titles, which are
+   * the participant's own labels and are searchable by eye in a list of six.
+   */
+  const searched = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle.length === 0) return listed;
+    return listed.filter((r) => r.queryText.toLowerCase().includes(needle));
+  }, [listed, query]);
+
+  const elsewhereCount = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle.length === 0) return 0;
+    const here = new Set(searched.map((r) => r.messageId));
+    return material.filter(
+      (r) => !here.has(r.messageId) && r.queryText.toLowerCase().includes(needle)
+    ).length;
+  }, [material, query, searched]);
+
+  // Logged once the typing settles, not per keystroke: what the analysis wants
+  // is which words someone went looking for, and "g", "gr", "gra" is not that.
+  useEffect(() => {
+    const needle = query.trim();
+    if (needle.length < 2) return;
+    const timer = setTimeout(() => {
+      logUi(assignmentId, 'simple_search', { term: needle.slice(0, 60) });
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [assignmentId, query]);
+
   const pinnedRows = useMemo(
     () => state.pinned.map((id) => rowById.get(id)).filter((r): r is ScoreQueryRow => !!r),
     [rowById, state.pinned]
@@ -567,9 +610,12 @@ export default function SimpleStudio({
       />
 
       <QuestionColumn
-        rows={listed}
+        rows={searched}
         pinnedRows={pinnedRows}
         allCount={material.length}
+        query={query}
+        setQuery={setQuery}
+        elsewhereCount={elsewhereCount}
         selection={selection}
         selectedMessageId={selectedMessageId}
         onSelect={setSelectedMessageId}
@@ -1705,6 +1751,9 @@ function QuestionColumn({
   rows,
   pinnedRows,
   allCount,
+  query,
+  setQuery,
+  elsewhereCount,
   selection,
   selectedMessageId,
   onSelect,
@@ -1720,6 +1769,10 @@ function QuestionColumn({
   rows: ScoreQueryRow[];
   pinnedRows: ScoreQueryRow[];
   allCount: number;
+  query: string;
+  setQuery: (q: string) => void;
+  /** Matches this search has, outside whatever is selected. */
+  elsewhereCount: number;
   selection: Selection;
   selectedMessageId: number | null;
   onSelect: (id: number) => void;
@@ -1813,6 +1866,33 @@ function QuestionColumn({
             <Loader2 className="w-3 h-3 animate-spin" /> working out where questions go
           </span>
         )}
+        <span className="flex-1" />
+        {/* An ordinary search box, over the students' own words. Everything
+            else on this board is about what the configuration does; this is
+            the one control for finding a question you remember. */}
+        <label className="shrink-0 relative flex items-center">
+          <Search className="pointer-events-none absolute left-1.5 w-3 h-3 text-[hsl(var(--muted-foreground))]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setQuery('');
+              e.stopPropagation();
+            }}
+            placeholder="Search questions"
+            className="w-40 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] py-1 pl-6 pr-6 text-xs focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+          />
+          {query.length > 0 && (
+            <button
+              type="button"
+              aria-label="Clear the search"
+              onClick={() => setQuery('')}
+              className="absolute right-1 p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </label>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1829,6 +1909,7 @@ function QuestionColumn({
               tone={
                 entered.has(row.messageId) ? 'entered' : left.has(row.messageId) ? 'left' : null
               }
+              highlight={query}
               onSelect={onSelect}
               onTogglePin={onTogglePin}
               onCreateIntent={onCreateIntent}
@@ -1836,9 +1917,25 @@ function QuestionColumn({
           ))}
           {listed.length === 0 && (
             <li className="px-3 py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">
-              {rows.length === 0
-                ? 'No questions here yet.'
-                : 'Every question here is kept above.'}
+              {query.trim().length > 0 ? (
+                <>
+                  {`No question here contains “${query.trim()}”.`}
+                  {/* Says where they are, so "none here" cannot be read as
+                      "none anywhere" — the box searches what the header above
+                      it says it is showing. */}
+                  {elsewhereCount > 0 && (
+                    <span className="block mt-1 text-2xs">
+                      {elsewhereCount === 1
+                        ? '1 elsewhere in the log.'
+                        : `${elsewhereCount} elsewhere in the log.`}
+                    </span>
+                  )}
+                </>
+              ) : rows.length === 0 ? (
+                'No questions here yet.'
+              ) : (
+                'Every question here is kept above.'
+              )}
             </li>
           )}
         </ul>
@@ -1856,6 +1953,7 @@ function QuestionRow({
   titleOf,
   showOwner,
   tone,
+  highlight,
   onSelect,
   onTogglePin,
   onCreateIntent,
@@ -1868,6 +1966,8 @@ function QuestionRow({
   showOwner: boolean;
   /** Whether this row moved in or out since the version being compared. */
   tone: 'entered' | 'left' | null;
+  /** The search term, marked wherever it appears in the student's words. */
+  highlight?: string;
   onSelect: (id: number) => void;
   onTogglePin: (id: number) => void;
   onCreateIntent: ((id: number) => void) | null;
@@ -1917,7 +2017,12 @@ function QuestionRow({
           )}
         </div>
         <div className="text-sm leading-snug">
-          <QuerySnippet text={row.queryText} dissection={row.dissection} max={150} />
+          <QuerySnippet
+            text={row.queryText}
+            dissection={row.dissection}
+            max={150}
+            highlight={highlight}
+          />
         </div>
       </div>
       <div className="self-start flex items-center">

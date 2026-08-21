@@ -70,6 +70,11 @@ const UI_EVENTS = [
   /** An intent begun from a question in the list rather than from the button.
    * Which of the two doors gets used is the shape of the whole session. */
   'simple_intent_from_query',
+  /** A search of the students' own words, once the typing settles. Finding a
+   * question this way is the one route to it that leaves no other trace, and
+   * on the intent arm it partly does what writing a definition does — so the
+   * analysis has to be able to see who used it and for what. */
+  'simple_search',
 ] as const;
 
 const bodySchema = z.object({
