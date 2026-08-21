@@ -20,6 +20,12 @@
  * the same rule text can be right or wrong depending on what it was scoped to,
  * so restoring one without the other would hand back a half-sentence.
  *
+ * Each row says which of the two moved, because that is what a reader is
+ * looking for: an edit to the WHEN changed which questions arrive, an edit to
+ * the THEN changed what they are answered with, and only one of those explains
+ * a response that looks different. It is read off the row before it rather
+ * than stored, so it cannot disagree with the texts it describes.
+ *
  * Picking one puts both texts back in the boxes and stops. It does not take
  * effect until Apply, like everything else on this board — an undo that
  * silently republished would be a fourth verb nobody asked for.
@@ -95,7 +101,7 @@ export default function IntentHistory({
         ) : (
           <ChevronRight className="w-3 h-3" />
         )}
-        Versions
+        Version history
         <span className="tabular-nums font-normal">{versions.length}</span>
       </button>
 
@@ -103,9 +109,19 @@ export default function IntentHistory({
         // Capped and scrolling: a long history must not push the boxes it is
         // about off the screen.
         <ul className="mt-1 max-h-[9rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
-          {versions.map((version) => {
+          {versions.map((version, i) => {
             const isCurrent =
               version.definition === currentDefinition && version.rule === currentRule;
+            // Newest first, so the one after it in the list is the one before
+            // it in time. The oldest has nothing to differ from.
+            const before = versions[i + 1] ?? null;
+            const moved = !before
+              ? 'first'
+              : version.definition !== before.definition && version.rule !== before.rule
+                ? 'when + then'
+                : version.definition !== before.definition
+                  ? 'when'
+                  : 'then';
             return (
               <li key={version.id}>
                 <button
@@ -126,6 +142,9 @@ export default function IntentHistory({
                       which version this is. */}
                   <span className="flex-1 truncate text-xs">{version.name ?? ''}</span>
                   <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
+                    {moved}
+                  </span>
+                  <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
                     {isCurrent ? 'current' : ago(version.createdAt, now)}
                   </span>
                 </button>

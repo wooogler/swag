@@ -56,6 +56,7 @@ export interface SimpleVersion {
   name: string | null;
   summary: string | null;
   createdAt: string;
+  kind: SimpleVersionKind;
 }
 
 export interface SimpleState {
@@ -63,6 +64,15 @@ export interface SimpleState {
   snapshot: SimpleSnapshot;
   /** Saves only, newest first. Applies are not places to come back to. */
   versions: SimpleVersion[];
+  /**
+   * Every version, newest first — what the conversation can be read under.
+   *
+   * A different question from the timeline's. "Where can I go back to" is
+   * answered only by a save; "what did this answer look like then" is answered
+   * by every moment the configuration passed through, and most of the moments
+   * an intent's own history points at are applies.
+   */
+  moments: SimpleVersion[];
   /** The version being viewed, or null when nothing has been written yet. */
   viewing: SimpleVersion | null;
   /** True when `viewing` is the newest version, i.e. edits are allowed. */
@@ -149,6 +159,19 @@ export async function getSimpleState(args: {
     name: row.name,
     summary: row.summary,
     createdAt: row.createdAt.toISOString(),
+    kind: 'save',
+  }));
+
+  // Every point the configuration passed through, for the one surface that
+  // asks a different question of them.
+  const moments: SimpleVersion[] = rows.map((row, i) => ({
+    id: row.id,
+    versionNo: row.versionNo,
+    displayNo: i + 1,
+    name: row.name,
+    summary: row.summary,
+    createdAt: row.createdAt.toISOString(),
+    kind: row.kind === 'save' ? 'save' : 'apply',
   }));
 
   const tip = rows.length ? rows[rows.length - 1] : null;
@@ -169,7 +192,12 @@ export async function getSimpleState(args: {
   return {
     snapshot: shown,
     versions: versions.reverse(),
-    viewing: wanted ? versions.find((v) => v.versionNo === wanted.versionNo) ?? null : null,
+    moments: moments.reverse(),
+    viewing: wanted
+      ? versions.find((v) => v.versionNo === wanted.versionNo) ??
+        moments.find((v) => v.versionNo === wanted.versionNo) ??
+        null
+      : null,
     atTip: !wanted || !tip || wanted.versionNo === tip.versionNo,
     savedVersionNo: savedTip?.versionNo ?? null,
     // Something took effect that the newest save does not carry. The board

@@ -55,7 +55,8 @@ interface StateBody {
     prompt: string;
     intents: { sid: number; title: string; definition: string; rule: string }[];
   };
-  versions: { versionNo: number; displayNo: number; name: string | null }[];
+  versions: { versionNo: number; displayNo: number; name: string | null; kind: string }[];
+  moments: { versionNo: number; displayNo: number; name: string | null; kind: string }[];
   atTip: boolean;
   savedVersionNo: number | null;
   dirty: boolean;
@@ -271,6 +272,30 @@ async function main() {
       unsavedNote({ dirty: true, savedVersionNo: 4, unsavedSids: [2] }) === 'changes' &&
         unsavedNote({ dirty: false, savedVersionNo: 4, unsavedSids: [] }) === 'saved'
     );
+  }
+
+  // 0c. An untouched configuration answers with the conversation that is
+  //     already there.
+  //
+  //     Before anything is written the rule IS the assignment's prompt, which
+  //     is what produced the logged reply. Generating a second one under it
+  //     would show a different answer and make an untouched configuration look
+  //     like it had done something — and it is the state every block opens in,
+  //     so it would also be sixty generations nobody asked for.
+  if (startingVersions === 0) {
+    const { getQueryRecords: first } = await import('../../src/lib/score/queries');
+    const someone = (await first(assignmentId))[0]?.messageId;
+    if (someone != null) {
+      const untouched = await call('respond', {
+        method: 'POST',
+        body: JSON.stringify({ messageId: someone }),
+      });
+      check(
+        'an untouched configuration keeps the reply the student got',
+        (untouched.body as { status?: string })?.status === 'original',
+        `status=${(untouched.body as { status?: string })?.status ?? untouched.status}`
+      );
+    }
   }
 
   // 1. Save a first configuration.
@@ -742,6 +767,29 @@ async function main() {
         !!anyVersion && typeof anyVersion.definition === 'string' && typeof anyVersion.rule === 'string'
       );
     }
+  }
+
+  // 8d. Two lists of versions, because they answer two questions.
+  //
+  //     The timeline asks "where can I go back to" and only a save is one.
+  //     The conversation asks "what did this answer look like then", and an
+  //     apply is as much a moment as a save — the run has made several by now,
+  //     and an intent's own history points at them. Listing only saves there
+  //     meant a wording the history offered could not be looked at.
+  {
+    const both = await state();
+    check(
+      'the timeline is the saves',
+      both.versions.every((v) => v.kind === 'save'),
+      both.versions.map((v) => v.kind).join(',') || 'none'
+    );
+    check(
+      'and the conversation can be read under every version',
+      both.moments.length > both.versions.length &&
+        both.moments.some((v) => v.kind === 'apply') &&
+        both.versions.every((v) => both.moments.some((m) => m.versionNo === v.versionNo)),
+      `${both.versions.length} save(s) of ${both.moments.length} moment(s)`
+    );
   }
 
   // 9. The starter library, and the claim that adopting one is free.

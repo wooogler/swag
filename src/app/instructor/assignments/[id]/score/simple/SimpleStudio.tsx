@@ -84,6 +84,8 @@ interface StatePayload {
   arm: 'score' | 'baseline';
   snapshot: SimpleSnapshot;
   versions: SimpleVersion[];
+  /** Every version, newest first — what the conversation can be read under. */
+  moments: SimpleVersion[];
   viewing: SimpleVersion | null;
   atTip: boolean;
   pinned: number[];
@@ -521,7 +523,7 @@ export default function SimpleStudio({
         rows={rows}
         row={selectedRow}
         isNirvana={isNirvana}
-        versions={state.versions}
+        moments={state.moments}
         viewingVersionNo={state.viewing?.versionNo ?? null}
         localVersionNo={localVersionNo}
         setLocalVersionNo={setLocalVersionNo}
@@ -1791,6 +1793,22 @@ function QuestionRow({
 }
 
 /**
+ * How long ago, in the units the intent histories use.
+ *
+ * The same wording on purpose: an intent's history says "4m ago" beside the
+ * wording it is offering to put back, and this says "4m ago" beside the answer
+ * that wording produced. Matching them by eye is the whole point of listing
+ * moments here at all.
+ */
+function momentAgo(iso: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
+}
+
+/**
  * An icon with its meaning attached.
  *
  * Two icons on a question row, both of them verbs nobody has met before: one
@@ -1843,7 +1861,7 @@ function ViewerColumn({
   rows,
   row,
   isNirvana,
-  versions,
+  moments,
   viewingVersionNo,
   localVersionNo,
   setLocalVersionNo,
@@ -1854,7 +1872,8 @@ function ViewerColumn({
   rows: ScoreQueryRow[];
   row: ScoreQueryRow | null;
   isNirvana: boolean;
-  versions: SimpleVersion[];
+  /** Every version, newest first. */
+  moments: SimpleVersion[];
   viewingVersionNo: number | null;
   localVersionNo: number | null;
   setLocalVersionNo: (v: number | null) => void;
@@ -1865,7 +1884,7 @@ function ViewerColumn({
     messageId: number;
     versionNo: number | null;
     text: string;
-    state: 'streaming' | 'ready' | 'pending' | 'failed';
+    state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
     owner: string | null;
   } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -1899,6 +1918,19 @@ function ViewerColumn({
           const data = await res.json();
           if (data.status === 'pending') {
             setAnswer({ messageId, versionNo, text: '', state: 'pending', owner: null });
+            return;
+          }
+          // The rule here is still the assignment's own prompt, which is what
+          // produced the reply already on screen. Leaving it alone is both the
+          // true answer and the fast one.
+          if (data.status === 'original') {
+            setAnswer({
+              messageId,
+              versionNo,
+              text: '',
+              state: 'original',
+              owner: data.sid == null ? null : titleOf(data.sid),
+            });
             return;
           }
           setAnswer({
@@ -1949,21 +1981,33 @@ function ViewerColumn({
         <span className="text-sm font-semibold">Conversation</span>
         <span className="flex-1" />
         {/* One conversation, under a different version — without moving the
-            rest of the board off the one being edited. */}
-        {versions.length > 0 && (
+            rest of the board off the one being edited.
+
+            EVERY version, not only the saves. The timeline on the left is a
+            list of places to go back to, and only a save is one of those; this
+            is a list of moments to look at, and an apply is as much a moment
+            as a save. Listing only saves meant an intent's own history could
+            point at a wording this could not show — you were reading v2 and
+            being offered v1.
+
+            No "v N" here either, for the same reason: on this screen that
+            number means the intent's own version, and two numberings under one
+            name is what sent someone looking for v2 in the first place. What
+            identifies a moment is when it was and what it was called. */}
+        {moments.length > 0 && (
           <select
-            value={String(versionNo ?? '')}
+            value={String(versionNo ?? moments[0]?.versionNo ?? '')}
             onChange={(e) => {
               const picked = e.target.value ? Number(e.target.value) : null;
-              setLocalVersionNo(picked);
+              setLocalVersionNo(picked === moments[0]?.versionNo ? null : picked);
               onLocalVersionLog(picked);
             }}
             className="text-xs rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-1.5 py-1"
           >
-            {versions.map((v) => (
+            {moments.map((v, i) => (
               <option key={v.id} value={v.versionNo}>
-                v{v.displayNo}
-                {v.name ? ` · ${v.name}` : ''}
+                {i === 0 ? 'now' : momentAgo(v.createdAt)}
+                {v.name ? ` · ${v.name}` : v.kind === 'save' ? ' · saved' : ''}
               </option>
             ))}
           </select>
@@ -1977,7 +2021,10 @@ function ViewerColumn({
           isNirvana={isNirvana}
           expandMaterials
           overrideResponse={
-            answer && answer.messageId === row.messageId && answer.state !== 'pending'
+            answer &&
+            answer.messageId === row.messageId &&
+            answer.state !== 'pending' &&
+            answer.state !== 'original'
               ? { messageId: row.messageId, text: answer.text || ' ', raw: false }
               : null
           }
@@ -2005,7 +2052,7 @@ function AnswerNote({
   state,
   owner,
 }: {
-  state: 'streaming' | 'ready' | 'pending' | 'failed';
+  state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
   owner: string | null;
 }) {
   const text =
@@ -2013,9 +2060,13 @@ function AnswerNote({
       ? 'Working out which rule applies to this question.'
       : state === 'failed'
         ? 'This reply could not be worked out — pick the question again to retry.'
-        : state === 'streaming'
-          ? `Answering under ${owner ? `“${owner}”` : 'your rules'} now.`
-          : `Answered under ${owner ? `“${owner}”` : 'your rules'}, as a single exchange.`;
+        : // Says which reply this is, so an unchanged rule does not read as a
+          // rule that did nothing. It is the one the student actually got.
+          state === 'original'
+          ? 'The reply this student got. Nothing here has been changed yet.'
+          : state === 'streaming'
+            ? `Answering under ${owner ? `“${owner}”` : 'your rules'} now.`
+            : `Answered under ${owner ? `“${owner}”` : 'your rules'}, as a single exchange.`;
   return (
     <p className="mt-1 flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
       {state === 'streaming' && <Loader2 className="w-3 h-3 animate-spin" />}

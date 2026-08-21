@@ -97,6 +97,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     arm: armOf(condition),
     snapshot: state.snapshot,
     versions: state.versions,
+    moments: state.moments,
     viewing: state.viewing,
     atTip: state.atTip,
     // What the study measures, and whether the board has moved past it.

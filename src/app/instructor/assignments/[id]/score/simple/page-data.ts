@@ -136,6 +136,7 @@ export async function loadSimpleBoard(args: {
       arm: armOf(condition),
       snapshot: state.snapshot,
       versions: state.versions,
+      moments: state.moments,
       viewing: state.viewing,
       atTip: state.atTip,
       savedVersionNo: state.savedVersionNo,

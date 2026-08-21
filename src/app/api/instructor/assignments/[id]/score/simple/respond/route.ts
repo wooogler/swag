@@ -9,6 +9,14 @@
  * Which rule applies is resolved HERE, from the same chain compiler the board
  * draws with, so what is shown is what would be sent. The client does not get
  * to name a rule: it names a question and a version.
+ *
+ * A rule still identical to the assignment's own prompt is answered by the
+ * conversation that is already on the screen. That prompt is what produced the
+ * logged reply, so generating a second one under it would put a different
+ * answer in front of the reader and make an untouched configuration look like
+ * it had done something. It is also the state every participant starts in and
+ * spends the first minutes of a block in, so it is the difference between the
+ * board opening instantly and the board opening sixty generations deep.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -76,6 +84,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const rule = ruleForOwner(snapshot, sid);
+  if (rule === seedPrompt) {
+    await logStudyEvent(id, 'simple_response_view', {
+      condition,
+      messageId: body.messageId,
+      versionNo: body.versionNo ?? tip.version?.versionNo ?? null,
+      sid,
+      outcome,
+      cacheHit: true,
+      original: true,
+    });
+    return NextResponse.json({ status: 'original', sid, outcome });
+  }
+
   const ruleHash = simpleRuleHash(rule);
   const cached = await readCachedResponses([{ messageId: body.messageId, ruleHash }]);
   const hit = cached.get(`${body.messageId}:${ruleHash}`);
