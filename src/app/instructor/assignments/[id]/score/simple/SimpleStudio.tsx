@@ -2587,10 +2587,14 @@ function ReplyVersionBar({
         className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5 text-2xs font-medium text-[hsl(var(--foreground))]"
       >
         <option value="original">Original (as delivered)</option>
+        {/* What it did, then when — a name is what someone is scanning for,
+            and the time only separates two that did the same thing. The time
+            alone is the brief window before a name lands, or the write that
+            changed nothing. */}
         {moments.map((v, i) => (
           <option key={v.id} value={v.versionNo}>
+            {v.name ? `${v.name} · ` : ''}
             {i === 0 ? 'now' : momentAgo(v.createdAt)}
-            {v.name ? ` · ${v.name}` : v.kind === 'save' ? ' · saved' : ''}
           </option>
         ))}
       </select>

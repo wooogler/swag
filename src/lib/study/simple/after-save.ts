@@ -100,7 +100,7 @@ function start(job: SaveJob): void {
 
 async function perform(job: SaveJob): Promise<void> {
   await Promise.allSettled([
-    job.kind === 'save' ? nameVersion(job) : Promise.resolve(),
+    nameVersion(job),
     nameIntentVersions(job),
     titleNewIntents(job),
     anchorNewDefinitions(job),
@@ -186,6 +186,19 @@ async function nameIntentVersions(job: SaveJob): Promise<void> {
   );
 }
 
+/**
+ * A label for the version this write made — either verb.
+ *
+ * It used to skip applies, on the grounds that nothing listed an apply and a
+ * label nobody reads is a model call wasted. That stopped being true when the
+ * reply's version picker began offering every moment rather than only the
+ * saves: an apply is now a row someone chooses from, and a row that says only
+ * "6h ago" beside rows that say what they did is the odd one out.
+ *
+ * The smallest model there is, in parallel with everything else here, and a
+ * failure leaves the timestamp — so the cost of naming the applies too is one
+ * cheap call that nothing waits on.
+ */
 async function nameVersion(job: SaveJob): Promise<void> {
   try {
     const named = await generateVersionName(job.snapshot, job.previous);
