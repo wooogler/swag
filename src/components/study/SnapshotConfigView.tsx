@@ -147,7 +147,7 @@ export default function SnapshotConfigView({
             <section key={type}>
               <div className="flex items-center gap-2 px-1 pb-1.5">
                 <span className={`w-1.5 h-1.5 rounded-full ${TYPE_DOT[type]}`} />
-                <span className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                <span className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   {TYPE_LABEL[type]}
                 </span>
               </div>
@@ -165,7 +165,7 @@ export default function SnapshotConfigView({
                 ))}
                 {root && (
                   <div className="rounded-lg border border-dashed border-[hsl(var(--border))] px-3 py-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+                    <p className="text-2xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
                       Anything else in {TYPE_LABEL[type]}
                     </p>
                     <RuleText rule={root.rule} />
@@ -227,7 +227,7 @@ function RulesText({
       ref={ref}
       onMouseUp={onSelect ? report : undefined}
       onKeyUp={onSelect ? report : undefined}
-      className={`whitespace-pre-wrap font-sans text-[12.5px] leading-relaxed text-[hsl(var(--foreground))] ${
+      className={`whitespace-pre-wrap font-sans text-sm leading-relaxed text-[hsl(var(--foreground))] ${
         onSelect ? 'cursor-text selection:bg-amber-200' : ''
       }`}
     >
@@ -239,10 +239,10 @@ function RulesText({
 function Header({ label, version }: { label: string; version: string }) {
   return (
     <div className="px-4 py-2 bg-[hsl(var(--muted))]/60 border-b border-[hsl(var(--border))] flex items-center justify-between">
-      <span className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+      <span className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
         {label}
       </span>
-      <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{version}</span>
+      <span className="text-2xs text-[hsl(var(--muted-foreground))]">{version}</span>
     </div>
   );
 }
@@ -260,8 +260,8 @@ function IntentCard({
 }) {
   const body = (
     <>
-      <p className="text-xs font-semibold mb-1">{intent.title}</p>
-      <p className="text-[11.5px] text-[hsl(var(--muted-foreground))] leading-snug mb-1.5">
+      <p className="text-sm font-semibold mb-1">{intent.title}</p>
+      <p className="text-xs text-[hsl(var(--muted-foreground))] leading-snug mb-1.5">
         <span className="font-semibold">When </span>
         {intent.definition}
       </p>
@@ -279,7 +279,7 @@ function IntentCard({
       <button
         type="button"
         onClick={() => onPick(intent.id)}
-        style={{ marginLeft: depth * 14 }}
+        style={{ marginLeft: `${depth * 0.875}rem` }}
         className={`w-full text-left rounded-lg border px-3 py-2 hover:border-[hsl(var(--primary))]/60 ${frame}`}
       >
         {body}
@@ -287,7 +287,7 @@ function IntentCard({
     );
   }
   return (
-    <div className={`rounded-lg border px-3 py-2 ${frame}`} style={{ marginLeft: depth * 14 }}>
+    <div className={`rounded-lg border px-3 py-2 ${frame}`} style={{ marginLeft: `${depth * 0.875}rem` }}>
       {body}
     </div>
   );
@@ -296,13 +296,13 @@ function IntentCard({
 function RuleText({ rule }: { rule: string | null }) {
   if (!rule?.trim()) {
     return (
-      <p className="text-[11.5px] italic text-[hsl(var(--muted-foreground))]">
+      <p className="text-xs italic text-[hsl(var(--muted-foreground))]">
         No instructions — the chatbot answers however it normally would.
       </p>
     );
   }
   return (
-    <pre className="whitespace-pre-wrap font-sans text-[11.5px] leading-relaxed text-[hsl(var(--foreground))]">
+    <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-[hsl(var(--foreground))]">
       {rule}
     </pre>
   );

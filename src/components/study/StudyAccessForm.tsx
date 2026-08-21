@@ -53,7 +53,7 @@ export default function StudyAccessForm({
               is the researchers' own. "Chatbot Studio" is the name the rest of
               the session already uses. */}
           <CardTitle className="text-3xl font-bold tracking-tight">Chatbot Studio</CardTitle>
-          <CardDescription>
+          <CardDescription className="text-base leading-relaxed">
             {notice === 'done'
               ? 'This study session is finished — thank you. There is nothing more to do here.'
               : notice === 'invalid'
@@ -66,7 +66,7 @@ export default function StudyAccessForm({
             <div className="space-y-2">
               <label
                 htmlFor="participant-id"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                className="text-base font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
               >
                 Participant ID
               </label>
@@ -80,6 +80,7 @@ export default function StudyAccessForm({
                 autoFocus
                 value={participantNumber}
                 onChange={(e) => setParticipantNumber(e.target.value)}
+                className="h-12"
                 placeholder="e.g. P01"
               />
             </div>
@@ -87,7 +88,7 @@ export default function StudyAccessForm({
             <div className="space-y-2">
               <label
                 htmlFor="participant-passcode"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                className="text-base font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
               >
                 Passcode
               </label>
@@ -99,23 +100,24 @@ export default function StudyAccessForm({
                 required
                 value={passcode}
                 onChange={(e) => setPasscode(e.target.value)}
+                className="h-12"
                 placeholder="••••••••"
               />
             </div>
 
             {error && (
-              <div className="p-3 rounded-md text-sm bg-destructive/10 text-destructive">
+              <div className="p-3 rounded-md text-base bg-destructive/10 text-destructive">
                 {error}
               </div>
             )}
 
-            <Button type="submit" className="w-full" disabled={isLoading}>
+            <Button type="submit" className="w-full h-12" disabled={isLoading}>
               {isLoading ? 'Opening your workspace…' : 'Enter'}
             </Button>
           </form>
         </CardContent>
         <CardFooter className="justify-center border-t border-[hsl(var(--border))] pt-6">
-          <p className="text-xs text-[hsl(var(--muted-foreground))] text-center">
+          <p className="text-sm text-[hsl(var(--muted-foreground))] text-center">
             Trouble signing in? Ask the study facilitator for your ID and passcode.
           </p>
         </CardFooter>

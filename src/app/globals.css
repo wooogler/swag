@@ -73,6 +73,38 @@
 @theme {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-heading: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
+
+  /* One step under text-xs, for the eyebrow labels and unit captions the
+     study screens are full of. It exists so those can stop being written as
+     text-[10.5px]: an arbitrary pixel size sits out the root scale below and
+     would end up the one thing on the screen that did not grow. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.45;
+}
+
+/* The study's own screens run a size larger than the product's.
+
+   Participants are practising instructors and some are well past the age the
+   product's 11-to-13-pixel chrome was drawn for. They read these screens once,
+   in front of a facilitator, on a clock — there is no second visit in which
+   the small type becomes familiar. The board itself is deliberately NOT in
+   here: it is the system under test, and both arms have to meet the same
+   surface the product ships.
+
+   One declaration rather than a sweep through every class, because Tailwind's
+   sizes and spacing are all rem-based underneath (text-sm resolves to
+   var(--text-sm) = 0.875rem, p-8 to calc(var(--spacing) * 8), max-w-md to
+   28rem), so moving the root moves type, padding, gaps and column widths
+   together and nothing drifts out of proportion. A percentage rather than a
+   pixel value, so a participant who has already raised their browser's default
+   keeps the whole of their own setting.
+
+   Scoped through a marker the participant routes render, not through /study
+   itself: the facilitator console lives under /study too, and it is a dense
+   table read over the researcher's own shoulder. */
+html:has([data-study-scale]) {
+  /* 16px → 19px on a default browser setting. */
+  font-size: 118.75%;
 }
 
 body {

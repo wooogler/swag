@@ -27,6 +27,10 @@
  * glance up and know where they are.
  *
  * Nothing is enforced. The facilitator still runs the clock (v2 delta plan §8).
+ *
+ * Set a step up from the header it sits in: the board is out of the study's
+ * root scale (globals.css), and a readout nobody can read at a glance is not a
+ * readout.
  */
 import { useEffect, useState } from 'react';
 
@@ -76,7 +80,7 @@ export default function WorkElapsed({
       // reference, available when looked at, and a screen reader interrupting
       // the work every minute would be the loud timer this is not.
       title={`This part of the session is about ${budgetMinutes} minutes. Your facilitator keeps the time — nothing stops on its own.`}
-      className="shrink-0 select-none rounded border border-[hsl(var(--border))] px-2 py-1 text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]"
+      className="shrink-0 select-none rounded border border-[hsl(var(--border))] px-2.5 py-1.5 text-xs tabular-nums text-[hsl(var(--muted-foreground))]"
     >
       {minutes} / {budgetMinutes} min
     </span>

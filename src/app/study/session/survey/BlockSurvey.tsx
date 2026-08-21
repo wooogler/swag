@@ -64,13 +64,13 @@ export default function BlockSurvey({
   return (
     <div className="min-h-screen bg-[hsl(var(--background))] py-10 px-6">
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-lg font-semibold mb-1">A few quick questions</h1>
+        <h1 className="text-xl font-semibold mb-1">A few quick questions</h1>
         {/* Design §6.4, which does the job the bare TLX stem cannot: it names
             the task and fixes its boundaries. "The task" has no referent in
             this session — a participant asked how demanding "the task" was
             would pick their own, and five people would rate five different
             things on the same scale. */}
-        <p className="text-sm text-[hsl(var(--muted-foreground))] mb-8 leading-relaxed">
+        <p className="text-base text-[hsl(var(--muted-foreground))] mb-8 leading-relaxed">
           Before we check it — five quick questions about{' '}
           <span className="font-semibold text-[hsl(var(--foreground))]">
             setting up the chatbot
@@ -86,18 +86,18 @@ export default function BlockSurvey({
               className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
             >
               {item.label && (
-                <p className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
+                <p className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
                   {item.label}
                 </p>
               )}
-              <p className={`text-sm ${item.note ? 'mb-1.5' : 'mb-4'}`}>
+              <p className={`text-base leading-relaxed ${item.note ? 'mb-1.5' : 'mb-4'}`}>
                 <span className="text-[hsl(var(--muted-foreground))] mr-2">{index + 1}.</span>
                 {item.text}
               </p>
               {/* Above the buttons, not below them: it is a condition on how to
                   answer, and one read after answering is one read too late. */}
               {item.note && (
-                <p className="mb-4 text-[11.5px] leading-snug text-[hsl(var(--muted-foreground))]">
+                <p className="mb-4 text-sm leading-snug text-[hsl(var(--muted-foreground))]">
                   {item.note}
                 </p>
               )}
@@ -106,7 +106,7 @@ export default function BlockSurvey({
                   <button
                     key={n}
                     onClick={() => setAnswers((prev) => ({ ...prev, [item.key]: n }))}
-                    className={`flex-1 rounded-lg border py-2.5 text-sm font-semibold ${
+                    className={`flex-1 rounded-lg border py-3 text-base font-semibold ${
                       answers[item.key] === n
                         ? 'bg-[hsl(var(--primary))] border-[hsl(var(--primary))] text-white'
                         : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]'
@@ -116,7 +116,7 @@ export default function BlockSurvey({
                   </button>
                 ))}
               </div>
-              <div className="flex justify-between mt-2 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+              <div className="flex justify-between mt-2 text-xs text-[hsl(var(--muted-foreground))]">
                 <span>{item.low}</span>
                 <span>{item.high}</span>
               </div>
@@ -131,7 +131,7 @@ export default function BlockSurvey({
           <button
             onClick={submit}
             disabled={busy || remaining > 0}
-            className={`rounded-lg px-5 py-2.5 text-sm font-semibold disabled:opacity-40 ${
+            className={`rounded-lg px-6 py-3 text-base font-semibold disabled:opacity-40 ${
               saved
                 ? 'border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]'
                 : 'bg-[hsl(var(--primary))] text-white'

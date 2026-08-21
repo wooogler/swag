@@ -178,13 +178,13 @@ export default function FinalSurvey({
 
         {step === 'intro' && (
           <Card>
-            <h1 className="text-lg font-semibold mb-3">Almost done — thank you</h1>
-            <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed mb-3">
+            <h1 className="text-xl font-semibold mb-3">Almost done — thank you</h1>
+            <p className="text-base text-[hsl(var(--muted-foreground))] leading-relaxed mb-3">
               You used two versions of the tool today, {columns.map((c) => c.name).join(' and ')}. In
               this last questionnaire we ask you to rate them separately, side by side. There are no
               right answers, and critical ratings are just as useful to us as positive ones.
             </p>
-            <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed mb-6">
+            <p className="text-base text-[hsl(var(--muted-foreground))] leading-relaxed mb-6">
               Both of your setups are still here — you can open either one from the column headings
               and look around while you answer.
             </p>
@@ -196,7 +196,7 @@ export default function FinalSurvey({
 
         {(step === 'experience' || step === 'context') && (
           <Card>
-            <h1 className="text-lg font-semibold mb-1">
+            <h1 className="text-xl font-semibold mb-1">
               {step === 'experience' ? 'Rating the two versions' : 'A few last ratings'}
             </h1>
             <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">
@@ -228,7 +228,7 @@ export default function FinalSurvey({
 
         {step === 'compare' && (
           <Card>
-            <h1 className="text-lg font-semibold mb-1">Comparing them directly</h1>
+            <h1 className="text-xl font-semibold mb-1">Comparing them directly</h1>
             <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">
               Now comparing {columns[0]?.name} and {columns[1]?.name} directly. Which one made it
               easier to…
@@ -239,7 +239,7 @@ export default function FinalSurvey({
                   key={item.key}
                   className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4"
                 >
-                  <p className="text-sm mb-3">
+                  <p className="text-base leading-relaxed mb-3">
                     <span className="text-[hsl(var(--muted-foreground))] mr-2">{i + 1}.</span>…
                     {item.text}
                   </p>
@@ -258,7 +258,7 @@ export default function FinalSurvey({
                       only way this item fails is a participant answering it
                       backwards, and a heading they scrolled past is exactly
                       how that happens. */}
-                  <div className="flex justify-between mt-2 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+                  <div className="flex justify-between mt-2 text-xs text-[hsl(var(--muted-foreground))]">
                     <span>Much easier with {columns[0]?.name}</span>
                     <span>No difference</span>
                     <span>Much easier with {columns[1]?.name}</span>
@@ -277,7 +277,7 @@ export default function FinalSurvey({
 
         {step === 'open' && (
           <Card>
-            <h1 className="text-lg font-semibold mb-1">In your own words</h1>
+            <h1 className="text-xl font-semibold mb-1">In your own words</h1>
             <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">
               Two short questions, and then we are done. Neither is required.
             </p>
@@ -285,7 +285,7 @@ export default function FinalSurvey({
               {columns.map((c) => (
                 <div key={c.condition}>
                   <label
-                    className="block text-sm mb-2"
+                    className="block text-base leading-relaxed mb-2"
                     htmlFor={`ft-${c.condition}`}
                   >
                     In a sentence or two: for <span className="font-semibold">{c.name}</span>, what
@@ -301,7 +301,7 @@ export default function FinalSurvey({
                         [ratingKey(OPEN_ITEM_KEY, c.condition)]: e.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-[hsl(var(--border))] px-3 py-2 text-sm leading-relaxed resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
+                    className="w-full rounded-lg border border-[hsl(var(--border))] px-3 py-2.5 text-base leading-relaxed resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
                   />
                 </div>
               ))}
@@ -318,8 +318,8 @@ export default function FinalSurvey({
 
         {step === 'done' && (
           <Card>
-            <h1 className="text-lg font-semibold mb-2">Thank you</h1>
-            <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+            <h1 className="text-xl font-semibold mb-2">Thank you</h1>
+            <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
               That is the last of the questions. Your facilitator will take it from here.
             </p>
             <PhaseAdvance from={phase} label="Continue" />
@@ -337,10 +337,10 @@ export default function FinalSurvey({
 }
 
 const primaryButton =
-  'rounded-lg bg-[hsl(var(--primary))] px-6 py-2.5 text-sm font-semibold text-white disabled:opacity-40';
+  'rounded-lg bg-[hsl(var(--primary))] px-6 py-3 text-base font-semibold text-white disabled:opacity-40';
 
 function choiceClass(on: boolean): string {
-  return `flex-1 rounded-lg border py-2 text-sm font-semibold ${
+  return `flex-1 rounded-lg border py-2.5 text-base font-semibold ${
     on
       ? 'bg-[hsl(var(--primary))] border-[hsl(var(--primary))] text-white'
       : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]'
@@ -373,7 +373,7 @@ function RatedRow({
 }) {
   return (
     <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
-      <p className="text-sm mb-3">
+      <p className="text-base leading-relaxed mb-3">
         <span className="text-[hsl(var(--muted-foreground))] mr-2">{number}.</span>
         {item.text}
       </p>
@@ -381,13 +381,13 @@ function RatedRow({
         {columns.map((c) => (
           <div key={c.condition}>
             <div className="flex items-baseline gap-2 mb-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wide">{c.name}</span>
+              <span className="text-xs font-bold uppercase tracking-wide">{c.name}</span>
               {c.cloneAssignmentId && (
                 <a
-                  href={`/instructor/assignments/${c.cloneAssignmentId}/score`}
+                  href={`/studio/${c.cloneAssignmentId}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-0.5 text-[10.5px] text-[hsl(var(--muted-foreground))] hover:underline"
+                  className="inline-flex items-center gap-0.5 text-2xs text-[hsl(var(--muted-foreground))] hover:underline"
                 >
                   open <ExternalLink className="w-2.5 h-2.5" />
                 </a>
@@ -404,7 +404,7 @@ function RatedRow({
                 </button>
               ))}
             </div>
-            <div className="flex justify-between mt-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+            <div className="flex justify-between mt-1 text-xs text-[hsl(var(--muted-foreground))]">
               <span>{AGREE_LOW}</span>
               <span>{AGREE_HIGH}</span>
             </div>
@@ -433,7 +433,7 @@ function Nav({
       <button
         onClick={onBack}
         disabled={busy}
-        className="rounded-lg border border-[hsl(var(--border))] px-4 py-2.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40"
+        className="rounded-lg border border-[hsl(var(--border))] px-5 py-3 text-base font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40"
       >
         Back
       </button>

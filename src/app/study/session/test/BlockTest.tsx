@@ -398,7 +398,7 @@ export default function BlockTest({
             per question. This says the colours out loud, and only for the kinds
             actually in this message. */}
         {kinds.length > 0 && (
-          <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10.5px] text-[hsl(var(--muted-foreground))]">
+          <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-2xs text-[hsl(var(--muted-foreground))]">
             <span className="font-semibold uppercase tracking-wide">Pasted in</span>
             {kinds.map((k) => (
               <span key={k} className="inline-flex items-center gap-1">
@@ -425,8 +425,8 @@ export default function BlockTest({
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
       <header className="shrink-0 border-b border-[hsl(var(--border))] bg-[hsl(var(--card))]">
         <div className="max-w-[1800px] mx-auto px-6 py-3 flex items-center gap-4">
-          <h1 className="text-sm font-semibold">Check your chatbot</h1>
-          <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+          <h1 className="text-base font-semibold">Check your chatbot</h1>
+          <span className="text-xs text-[hsl(var(--muted-foreground))]">
             {pass === 'predict'
               ? 'First, what you expect — all eight questions.'
               : 'Now, what it actually said.'}
@@ -439,14 +439,14 @@ export default function BlockTest({
                 style={{ width: `${(done / state.length) * 100}%` }}
               />
             </div>
-            <span className="text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]">
+            <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
               {done} / {state.length}
             </span>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 max-w-[1800px] w-full mx-auto px-6 py-4 grid grid-cols-1 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)_minmax(330px,420px)] gap-4">
+      <main className="flex-1 min-h-0 max-w-[1800px] w-full mx-auto px-6 py-4 grid grid-cols-1 lg:grid-cols-[minmax(17.5rem,22.5rem)_minmax(0,1fr)_minmax(20.625rem,26.25rem)] gap-4">
         <aside className="border border-[hsl(var(--border))] rounded-xl bg-[hsl(var(--card))] overflow-hidden min-h-0">
           {/* Pointing happens IN the configuration, on the step that asks for
               it: an intent click in SCORE, a drag in Baseline. Disarmed at
@@ -467,7 +467,7 @@ export default function BlockTest({
 
         <section className="border border-[hsl(var(--border))] rounded-xl bg-[hsl(var(--card))] min-h-0 flex flex-col overflow-hidden">
           <div className="shrink-0 border-b border-[hsl(var(--border))] px-4 py-2.5">
-            <span className="text-[10.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            <span className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
               {item ? `Question ${index + 1} of ${state.length}` : 'Done'}
             </span>
           </div>
@@ -495,8 +495,8 @@ export default function BlockTest({
         <aside className="min-h-0 overflow-y-auto pr-0.5 space-y-3">
           {finished ? (
             <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 text-center">
-              <h2 className="text-base font-semibold mb-1.5">All done</h2>
-              <p className="text-xs text-[hsl(var(--muted-foreground))] mb-5">
+              <h2 className="text-lg font-semibold mb-1.5">All done</h2>
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-5">
                 That is all the questions for this chatbot.
               </p>
               <PhaseAdvance from={phase} label="Continue" />
@@ -567,7 +567,7 @@ function Steps({ total, index, pass }: { total: number; index: number; pass: Pas
           }`}
         />
       ))}
-      <span className="ml-1.5 text-[10px] font-semibold text-[hsl(var(--muted-foreground))] tabular-nums">
+      <span className="ml-1.5 text-2xs font-semibold text-[hsl(var(--muted-foreground))] tabular-nums">
         {pass === 'predict' ? 'predict' : 'review'} {index + 1}/{total}
       </span>
     </div>
@@ -585,14 +585,14 @@ function PassBridge({ count, onClose }: { count: number; onClose: () => void }) 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-6">
       <div className="w-full max-w-md rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-7 text-center shadow-xl">
-        <h2 className="text-base font-semibold mb-2">That is all {count} predictions</h2>
-        <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+        <h2 className="text-lg font-semibold mb-2">That is all {count} predictions</h2>
+        <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
           Now you will go back through the same questions and see what your chatbot actually
           said.
         </p>
         <button
           onClick={onClose}
-          className="rounded-lg bg-[hsl(var(--primary))] px-6 py-2.5 text-sm font-semibold text-white"
+          className="rounded-lg bg-[hsl(var(--primary))] px-6 py-3 text-base font-semibold text-white"
         >
           See the answers
         </button>
@@ -643,7 +643,7 @@ function PredictCard({
 }) {
   const pointing = draft.pointing;
   const choice = (on: boolean) =>
-    `flex-1 rounded-lg border py-2 text-[11px] font-semibold disabled:opacity-50 ${
+    `flex-1 rounded-lg border py-2.5 text-xs font-semibold disabled:opacity-50 ${
       on
         ? 'bg-[hsl(var(--primary))] border-[hsl(var(--primary))] text-white'
         : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]'
@@ -652,33 +652,33 @@ function PredictCard({
   return (
     <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 space-y-4">
       <div>
-        <p className="text-[12.5px] font-semibold mb-1">
+        <p className="text-sm font-semibold mb-1">
           {condition === 'baseline'
             ? 'Which part of your Rules document do you expect to shape the response — if any? Select it in the document.'
             : 'Which intent do you expect this question to fall under — if any?'}
         </p>
-        <p className="text-[11px] text-[hsl(var(--muted-foreground))] mb-2">
+        <p className="text-2xs text-[hsl(var(--muted-foreground))] mb-2">
           {condition === 'baseline'
             ? 'Drag across that part on the left.'
             : 'Click it in your setup on the left.'}
         </p>
 
         {condition === 'score' && pointing?.kind === 'intent' && (
-          <p className="mb-2 rounded-lg border border-[hsl(var(--primary))]/40 bg-[hsl(var(--primary))]/5 px-2.5 py-1.5 text-[11.5px]">
+          <p className="mb-2 rounded-lg border border-[hsl(var(--primary))]/40 bg-[hsl(var(--primary))]/5 px-2.5 py-1.5 text-xs">
             Selected in your setup on the left.
           </p>
         )}
 
         {condition === 'baseline' && (pointing?.kind === 'span' || selection) && (
           <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
-            <p className="text-[11.5px] leading-relaxed text-amber-900">
+            <p className="text-xs leading-relaxed text-amber-900">
               “{clip(pointing?.kind === 'span' ? pointing.text : selection?.text ?? '')}”
             </p>
             {pointing?.kind !== 'span' && selection && (
               <button
                 onClick={() => onChange({ pointing: { kind: 'span', ...selection } })}
                 disabled={busy}
-                className="mt-1.5 w-full rounded bg-[hsl(var(--primary))] py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+                className="mt-1.5 w-full rounded bg-[hsl(var(--primary))] py-1.5 text-2xs font-semibold text-white disabled:opacity-50"
               >
                 Use this selection
               </button>
@@ -707,7 +707,7 @@ function PredictCard({
       </div>
 
       <div className="border-t border-[hsl(var(--border))] pt-3">
-        <label className="block text-[12.5px] font-semibold mb-1.5" htmlFor="expectation">
+        <label className="block text-sm font-semibold mb-1.5" htmlFor="expectation">
           In a phrase or a sentence — a few words are fine — how do you expect your chatbot to
           respond to this?
         </label>
@@ -717,12 +717,12 @@ function PredictCard({
           value={draft.expectation}
           onChange={(e) => onChange({ expectation: e.target.value })}
           placeholder={'e.g., "won’t write it for them; asks what they’ve tried"'}
-          className="w-full rounded-lg border border-[hsl(var(--border))] px-2.5 py-2 text-[12px] leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
+          className="w-full rounded-lg border border-[hsl(var(--border))] px-3 py-2 text-sm leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
         />
       </div>
 
       <div className="border-t border-[hsl(var(--border))] pt-3">
-        <p className="text-[12.5px] font-semibold mb-2">
+        <p className="text-sm font-semibold mb-2">
           Will your chatbot answer this the way you intend?
         </p>
         <div className="flex gap-2">
@@ -748,7 +748,7 @@ function PredictCard({
           Next
         </button>
         {!draftComplete(draft) && (
-          <p className="mt-1.5 text-[10.5px] text-center text-[hsl(var(--muted-foreground))]">
+          <p className="mt-1.5 text-2xs text-center text-[hsl(var(--muted-foreground))]">
             Answer all three to continue.
           </p>
         )}
@@ -795,20 +795,20 @@ function RateCard({
   return (
     <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 space-y-4">
       <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/60 px-3 py-2.5">
-        <p className="text-[9.5px] font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
+        <p className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
           Your prediction
         </p>
         {item.expectation && (
-          <p className="text-[12px] leading-snug mb-1.5">“{item.expectation}”</p>
+          <p className="text-sm leading-snug mb-1.5">“{item.expectation}”</p>
         )}
-        <p className="text-[11.5px] leading-snug text-[hsl(var(--muted-foreground))]">
+        <p className="text-xs leading-snug text-[hsl(var(--muted-foreground))]">
           You expected it to answer the way you intend:{' '}
           <span className="font-semibold text-[hsl(var(--foreground))]">
             {item.guess === null ? '—' : item.guess ? 'Yes' : 'No'}
           </span>
         </p>
         {item.pointing && (
-          <p className="text-[11.5px] leading-snug text-[hsl(var(--muted-foreground))]">
+          <p className="text-xs leading-snug text-[hsl(var(--muted-foreground))]">
             You pointed to:{' '}
             <span className="font-semibold text-[hsl(var(--foreground))]">
               {pointedLabel(item.pointing, intentTitles)}
@@ -827,7 +827,7 @@ function RateCard({
       ) : (
         <>
           <div className="border-t border-[hsl(var(--border))] pt-3">
-            <p className="text-[12.5px] font-semibold mb-2">
+            <p className="text-sm font-semibold mb-2">
               How well does this response match what you intended?
             </p>
             <div className="flex gap-1.5">
@@ -836,7 +836,7 @@ function RateCard({
                   key={n}
                   onClick={() => onRate(n)}
                   disabled={busy}
-                  className={`flex-1 rounded-lg border py-2 text-xs font-semibold disabled:opacity-50 ${
+                  className={`flex-1 rounded-lg border py-2.5 text-sm font-semibold disabled:opacity-50 ${
                     item.rating === n
                       ? 'bg-[hsl(var(--primary))] border-[hsl(var(--primary))] text-white'
                       : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]'
@@ -846,7 +846,7 @@ function RateCard({
                 </button>
               ))}
             </div>
-            <div className="flex justify-between mt-1.5 text-[9.5px] text-[hsl(var(--muted-foreground))]">
+            <div className="flex justify-between mt-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
               <span>Not at all what I intended</span>
               <span>Exactly what I intended</span>
             </div>
@@ -854,7 +854,7 @@ function RateCard({
 
           {item.rating !== null && item.rating <= 3 && (
             <div>
-              <label className="block text-[12.5px] font-semibold mb-1.5" htmlFor="whats-off">
+              <label className="block text-sm font-semibold mb-1.5" htmlFor="whats-off">
                 What&rsquo;s off about it? (a few words)
               </label>
               <textarea
@@ -865,7 +865,7 @@ function RateCard({
                 // Saved with the rating it belongs to, on the way out of the
                 // box, so it cannot be left behind by pressing Next quickly.
                 onBlur={() => item.rating !== null && onRate(item.rating, whatsOff)}
-                className="w-full rounded-lg border border-[hsl(var(--border))] px-2.5 py-2 text-[12px] leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
+                className="w-full rounded-lg border border-[hsl(var(--border))] px-3 py-2 text-sm leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
               />
             </div>
           )}
@@ -875,7 +875,7 @@ function RateCard({
               participant never sees. Blank is a real answer. */}
           {item.missed === true && (
             <div>
-              <label className="block text-[12.5px] font-semibold mb-1.5" htmlFor="probe">
+              <label className="block text-sm font-semibold mb-1.5" htmlFor="probe">
                 This turned out differently from what you expected — why do you think that is?
                 (a sentence is fine)
               </label>
@@ -884,7 +884,7 @@ function RateCard({
                 rows={3}
                 value={probe}
                 onChange={(e) => onProbe(e.target.value)}
-                className="w-full rounded-lg border border-[hsl(var(--border))] px-2.5 py-2 text-[12px] leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
+                className="w-full rounded-lg border border-[hsl(var(--border))] px-3 py-2 text-sm leading-snug resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
               />
             </div>
           )}

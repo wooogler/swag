@@ -16,6 +16,10 @@
  * exposes it, which is what the baseline arm already looked like.
  *
  * Researchers keep DeployControls on non-study boards.
+ *
+ * A size up from its neighbours in the header, and the same size in both arms:
+ * it is the study's own control on a board that is otherwise the product's, and
+ * finishing the block depends on finding it.
  */
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -73,16 +77,16 @@ export default function StudyDeployButton({
 
   return (
     <span className="flex items-center gap-2">
-      <span className="text-xs text-[hsl(var(--muted-foreground))]">
+      <span className="text-sm text-[hsl(var(--muted-foreground))]">
         {note ?? (deployed != null ? `Students receive v${deployed}` : 'Not deployed')}
       </span>
       <button
         onClick={deploy}
         disabled={busy}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-[hsl(var(--border))] text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
         title="Publish the current setup to the student chat"
       >
-        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />}
+        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
         Deploy
       </button>
     </span>

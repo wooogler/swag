@@ -33,9 +33,9 @@ export default function WorkStart({ href, label = 'Start' }: { href: string; lab
     <button
       onClick={() => void go()}
       disabled={busy}
-      className="inline-flex items-center justify-center gap-2 rounded-lg bg-[hsl(var(--primary))] px-6 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+      className="inline-flex items-center justify-center gap-2 rounded-lg bg-[hsl(var(--primary))] px-7 py-3 text-base font-semibold text-white disabled:opacity-60"
     >
-      {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+      {busy && <Loader2 className="w-4 h-4 animate-spin" />}
       {label}
     </button>
   );

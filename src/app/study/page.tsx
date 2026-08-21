@@ -41,5 +41,11 @@ export default async function StudyAccessPage({
     }
   }
 
-  return <StudyAccessForm notice={link === 'done' ? 'done' : link === 'invalid' ? 'invalid' : null} />;
+  // The sign-in screen is a participant's, so it carries the study's larger
+  // type scale (globals.css) the same way the session routes do.
+  return (
+    <div data-study-scale className="contents">
+      <StudyAccessForm notice={link === 'done' ? 'done' : link === 'invalid' ? 'invalid' : null} />
+    </div>
+  );
 }

@@ -91,11 +91,11 @@ export default function PhaseAdvance({
         disabled={busy}
         className={
           compact
-            ? 'inline-flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-60'
-            : 'inline-flex items-center justify-center gap-2 rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60'
+            ? 'inline-flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-3 py-2 text-sm font-semibold text-white disabled:opacity-60'
+            : 'inline-flex items-center justify-center gap-2 rounded-lg bg-[hsl(var(--primary))] px-6 py-3 text-base font-semibold text-white disabled:opacity-60'
         }
       >
-        {busy && <Loader2 className={compact ? 'w-3.5 h-3.5 animate-spin' : 'w-3.5 h-3.5 animate-spin'} />}
+        {busy && <Loader2 className={compact ? 'w-3.5 h-3.5 animate-spin' : 'w-4 h-4 animate-spin'} />}
         {busy ? 'Working…' : label}
       </button>
 
@@ -105,19 +105,19 @@ export default function PhaseAdvance({
             compact ? 'right-0' : 'left-1/2 -translate-x-1/2'
           }`}
         >
-          <p className="text-xs text-[hsl(var(--foreground))] leading-relaxed mb-3 text-left">
+          <p className="text-sm text-[hsl(var(--foreground))] leading-relaxed mb-3 text-left">
             {confirm}
           </p>
           <div className="flex justify-end gap-2">
             <button
               onClick={() => setAsking(false)}
-              className="rounded border border-[hsl(var(--border))] px-2.5 py-1 text-xs font-semibold hover:bg-[hsl(var(--muted))]"
+              className="rounded border border-[hsl(var(--border))] px-3 py-1.5 text-xs font-semibold hover:bg-[hsl(var(--muted))]"
             >
               Not yet
             </button>
             <button
               onClick={go}
-              className="rounded bg-[hsl(var(--primary))] px-2.5 py-1 text-xs font-semibold text-white"
+              className="rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-white"
             >
               Yes, I&apos;m done
             </button>
@@ -131,8 +131,8 @@ export default function PhaseAdvance({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--background))]">
           <div className="max-w-sm px-6 text-center">
             <Loader2 className="mx-auto mb-4 h-6 w-6 animate-spin text-[hsl(var(--primary))]" />
-            <p className="text-sm font-semibold mb-1">Getting the next step ready</p>
-            <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">
+            <p className="text-base font-semibold mb-1">Getting the next step ready</p>
+            <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
               {waitLabel} This takes a moment — please leave this page open.
             </p>
           </div>

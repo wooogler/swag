@@ -34,8 +34,8 @@ export default function TutorialStep({
 }) {
   return (
     <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8">
-      <h1 className="text-lg font-semibold mb-2 text-center">{title}</h1>
-      <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed text-center">
+      <h1 className="text-xl font-semibold mb-2 text-center">{title}</h1>
+      <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed text-center">
         {body}
       </p>
 
