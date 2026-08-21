@@ -21,6 +21,7 @@ const GAP = 6;
 
 export default function PickerPopover({
   label,
+  title,
   disabled = false,
   listWidth,
   tipWidth,
@@ -29,6 +30,8 @@ export default function PickerPopover({
   children,
 }: {
   label: string;
+  /** What the control is for, for anyone who hovers before clicking. */
+  title?: string;
   disabled?: boolean;
   listWidth: number;
   tipWidth: number;
@@ -94,6 +97,7 @@ export default function PickerPopover({
       <button
         ref={buttonRef}
         type="button"
+        title={title}
         disabled={disabled}
         onClick={() => (open ? close() : setOpen(true))}
         className="inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-40"

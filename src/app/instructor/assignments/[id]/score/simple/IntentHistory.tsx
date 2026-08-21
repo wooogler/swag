@@ -51,8 +51,8 @@ export default function IntentHistory({
   const [hovered, setHovered] = useState<IntentVersion | null>(null);
 
   // Absent until there is a past to look at. One version is the present, and
-  // a history containing only what is already on screen is a control that
-  // does nothing.
+  // a history containing only what is already on screen is a control that does
+  // nothing.
   if (versions.length <= 1) return null;
 
   const isCurrent = (v: IntentVersion) =>
@@ -60,7 +60,13 @@ export default function IntentHistory({
 
   return (
     <PickerPopover
-      label={`v${versions[0].versionNo}`}
+      // Named, not numbered. Its two neighbours say what they hold — "Starter
+      // sets", "Reuse a rule" — and a lone "v2" beside them reads as a status
+      // badge rather than as the way back to what this intent used to say. It
+      // was missed by the person who asked for it, which is the only test of a
+      // control that matters.
+      label={`Version ${versions[0].versionNo}`}
+      title="Earlier versions of this intent — its when and then together"
       disabled={disabled}
       listWidth={264}
       tipWidth={312}
