@@ -42,6 +42,7 @@ import { ConversationThread } from '../conversation';
 import { QuerySnippet } from '../materials';
 import type { ScoreQueryRow } from '../IntentBoard';
 import StarterPicker from './StarterPicker';
+import RulePicker, { type RuleSource } from './RulePicker';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
   documentOrder,
@@ -637,6 +638,33 @@ function Tree({
   const childrenOf = (parentSid: number | null) =>
     draft.intents.filter((i) => i.parentSid === parentSid);
 
+  /**
+   * The rules written elsewhere in this configuration, for the reuse picker.
+   *
+   * `except` keeps a rule from offering itself back — the root when editing
+   * the root, an intent when editing that intent.
+   */
+  const ruleSources = (except: number | 'root' | null): RuleSource[] => [
+    ...(except === 'root'
+      ? []
+      : [
+          {
+            key: 'root',
+            title: 'Everything else',
+            rule: draft.rootRule,
+            count: countOf(null),
+          },
+        ]),
+    ...draft.intents
+      .filter((i) => i.sid !== except)
+      .map((i) => ({
+        key: String(i.sid),
+        title: i.title.trim() || 'Untitled',
+        rule: i.rule,
+        count: countOf(i.sid),
+      })),
+  ];
+
   const patch = (sid: number, fields: Partial<SimpleIntent>) =>
     setDraft({
       ...draft,
@@ -706,6 +734,7 @@ function Tree({
           <div style={{ paddingLeft: `${1.4 + depth * 0.9}rem` }} className="pr-2 pb-2">
             <Accordion
               api={api}
+              ruleSources={ruleSources(intent.sid)}
               intent={intent}
               readOnly={readOnly}
               saving={saving}
@@ -727,6 +756,7 @@ function Tree({
           <div style={{ paddingLeft: `${1.4 + depth * 0.9}rem` }} className="pr-2 pb-2">
             <NewIntent
               api={api}
+              ruleSources={ruleSources(null)}
               parentSid={intent.sid}
               parentTitle={intent.title.trim() || 'Untitled'}
               seedRule={intent.rule}
@@ -775,9 +805,17 @@ function Tree({
 
       {expanded === 'root' && (
         <div className="px-2 pb-2 pt-1">
-          <label className="block text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-            Then
-          </label>
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+              Then
+            </label>
+            {!readOnly && (
+              <RulePicker
+                sources={ruleSources('root')}
+                onPick={(rule) => setDraft({ ...draft, rootRule: rule })}
+              />
+            )}
+          </div>
           <textarea
             value={draft.rootRule}
             readOnly={readOnly}
@@ -789,10 +827,11 @@ function Tree({
             <button
               onClick={() => void onApply(draft, null)}
               disabled={saving}
+              title="Put this into effect and see what it answers"
               className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
             >
               {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Save
+              Apply
             </button>
           )}
         </div>
@@ -804,6 +843,7 @@ function Tree({
         <div className="px-2 pt-1">
           <NewIntent
             api={api}
+            ruleSources={ruleSources(null)}
             parentSid={null}
             parentTitle="Everything else"
             seedRule={draft.rootRule}
@@ -876,6 +916,7 @@ function OrderButton({
  */
 function Accordion({
   api,
+  ruleSources,
   intent,
   readOnly,
   saving,
@@ -886,6 +927,8 @@ function Accordion({
   nestLabel,
 }: {
   api: (path: string, query?: string) => string;
+  /** Rules written elsewhere in this configuration, for the reuse picker. */
+  ruleSources: RuleSource[];
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
@@ -932,9 +975,14 @@ function Accordion({
         />
       </div>
       <div>
-        <label className="block text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-          Then
-        </label>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            Then
+          </label>
+          {!readOnly && (
+            <RulePicker sources={ruleSources} onPick={(rule) => onChange({ rule })} />
+          )}
+        </div>
         <textarea
           value={intent.rule}
           readOnly={readOnly}
@@ -987,6 +1035,7 @@ function Accordion({
  */
 function NewIntent({
   api,
+  ruleSources,
   parentSid,
   parentTitle,
   seedRule,
@@ -995,6 +1044,7 @@ function NewIntent({
   onCreate,
 }: {
   api: (path: string, query?: string) => string;
+  ruleSources: RuleSource[];
   parentSid: number | null;
   parentTitle: string;
   seedRule: string;
@@ -1042,9 +1092,12 @@ function NewIntent({
         />
       </div>
       <div>
-        <label className="block text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-          Then
-        </label>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            Then
+          </label>
+          <RulePicker sources={ruleSources} onPick={setRule} />
+        </div>
         <textarea
           value={rule}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
