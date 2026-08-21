@@ -104,6 +104,25 @@ interface StatePayload {
   diff: { sid: number | null; entered: number[]; left: number[] }[] | null;
 }
 
+/**
+ * The draft, with any title the server filled in while it was open.
+ *
+ * Returns the same object when there is nothing to take, so a poll that
+ * changed nothing does not re-render the column it is polling for.
+ */
+function withFilledTitles(draft: SimpleSnapshot, server: SimpleSnapshot): SimpleSnapshot {
+  const fromServer = new Map(server.intents.map((i) => [i.sid, i.title]));
+  let changed = false;
+  const intents = draft.intents.map((intent) => {
+    if (intent.title.trim().length > 0) return intent;
+    const title = (fromServer.get(intent.sid) ?? '').trim();
+    if (title.length === 0) return intent;
+    changed = true;
+    return { ...intent, title };
+  });
+  return changed ? { ...draft, intents } : draft;
+}
+
 /** What the middle column is showing. */
 type Selection = { kind: 'all' } | { kind: 'root' } | { kind: 'intent'; sid: number };
 
@@ -186,7 +205,13 @@ export default function SimpleStudio({
       if (!res.ok) return null;
       const next: StatePayload = await res.json();
       setState(next);
-      if (!opts?.keepDraft) setDraft(next.snapshot);
+      // `keepDraft` exists so a poll cannot overwrite what someone is in the
+      // middle of typing — but a title generated after the write lands in the
+      // server's copy and nowhere else, and the tree reads the draft. Filling
+      // only the blanks is the whole of the exception: a box being typed into
+      // is not blank, so nothing anyone wrote can be lost this way.
+      if (opts?.keepDraft) setDraft((d) => withFilledTitles(d, next.snapshot));
+      else setDraft(next.snapshot);
       return next;
     },
     [api, diffFrom, state.viewing?.versionNo]
@@ -856,11 +881,16 @@ function Tree({
                 if (e.key === 'Enter' || e.key === 'Escape') setRenaming(null);
                 e.stopPropagation();
               }}
-              className="flex-1 min-w-0 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-1.5 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+              className="min-w-0 flex-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-1.5 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
             />
           ) : (
-            <>
-              <span className="flex-1 truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
+            // Directly after the words it acts on, and holding its place
+            // whether or not it is showing, so the title does not resize under
+            // the pointer. It used to sit past the flex spacer, an inch away
+            // and touching the count, which made it look like a control for
+            // the number.
+            <span className="min-w-0 flex items-center">
+              <span className="truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
               {!readOnly && (
                 <button
                   title="Rename"
@@ -868,25 +898,29 @@ function Tree({
                     e.stopPropagation();
                     setRenaming(intent.sid);
                   }}
-                  className="hidden group-hover:block shrink-0 p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
+                  className="shrink-0 ml-1 p-0.5 rounded opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
                 >
-                  <Pencil className="w-3 h-3" />
+                  <Pencil className="w-3.5 h-3.5" />
                 </button>
               )}
-            </>
+            </span>
           )}
+          <span className="flex-1" />
           {/* Which one, not just whether. Plain and unstyled: this is a fact
               about what the next step will read, not a fault to fix. */}
           {unsaved.has(intent.sid) && (
             <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
           )}
-          <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
-            {countOf(intent.sid)}
-          </span>
           {/* Order is meaning here: the first intent that matches a question
-              answers it. So it is a control, not a preference. */}
+              answers it. So it is a control, not a preference.
+
+              It reserves its width instead of appearing into the row, and it
+              sits INSIDE the count rather than outside it: the count is the
+              one thing on this row worth comparing down the column, so it
+              stays pinned to the same edge whether or not the pointer is
+              here. What gives way is the empty space after the title. */}
           {!readOnly && (
-            <span className="hidden group-hover:flex items-center gap-0.5">
+            <span className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
               <OrderButton
                 disabled={at <= 0}
                 label="Answer earlier"
@@ -911,6 +945,7 @@ function Tree({
               />
             </span>
           )}
+          <Count value={countOf(intent.sid)} />
         </div>
 
         {open && (
@@ -1016,10 +1051,8 @@ function Tree({
         {unsaved.has(0) && (
           <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
         )}
-        <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
-          {countOf(null)}
-        </span>
         {judging && <Loader2 className="w-3 h-3 animate-spin text-[hsl(var(--muted-foreground))]" />}
+        <Count value={countOf(null)} />
       </div>
 
       {expanded === 'root' && (
@@ -1054,6 +1087,23 @@ function Tree({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * How many questions this rule answers.
+ *
+ * The number the list is read for, so it holds one column: a fixed slot at the
+ * right edge, right-aligned, in figures that are all the same width. It used
+ * to be set in the smallest muted type available and to slide left whenever
+ * the order controls appeared under the pointer, which is the one moment
+ * someone is looking at it.
+ */
+function Count({ value }: { value: number }) {
+  return (
+    <span className="shrink-0 min-w-[1.6rem] text-right text-xs font-semibold tabular-nums">
+      {value}
+    </span>
   );
 }
 
