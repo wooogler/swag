@@ -1281,6 +1281,16 @@ function QuestionColumn({
   const left = useMemo(() => new Set(diff?.left ?? []), [diff]);
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
 
+  // A kept question lives in the shelf above and nowhere else. It used to
+  // appear in both, which read as the list having lost its place — the same
+  // question twice, a few rows apart, with no way to tell which one was the
+  // "real" row.
+  const listed = useMemo(
+    () => rows.filter((r) => !pinnedSet.has(r.messageId)),
+    [pinnedSet, rows]
+  );
+  const liftedOut = rows.length - listed.length;
+
   const label =
     selection.kind === 'all' || arm === 'baseline'
       ? 'All questions'
@@ -1289,12 +1299,57 @@ function QuestionColumn({
         : titleOf(selection.sid);
 
   return (
-    <section className="min-h-0 flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
+    <div className="min-h-0 flex flex-col gap-3">
+      {/* Its own box, above the list rather than inside it.
+          Keeping a question is not a way of sorting the list — it is taking
+          the question OUT of the list so that selecting an intent, switching
+          versions or scrolling cannot lose it. A shelf sitting in the list's
+          own frame read as the top of the list, which is the one thing it is
+          not. */}
+      {pinnedRows.length > 0 && (
+        <section className="shrink-0 max-h-[13rem] flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
+          <div className="shrink-0 flex items-baseline gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
+            <span className="text-sm font-semibold">Kept in view</span>
+            <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
+              {pinnedRows.length}
+            </span>
+            <span className="flex-1" />
+            <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+              Stays here whatever you have selected
+            </span>
+          </div>
+          <ul className="flex-1 min-h-0 overflow-y-auto">
+            {pinnedRows.map((row) => (
+              <QuestionRow
+                key={`pin-${row.messageId}`}
+                row={row}
+                selected={selectedMessageId === row.messageId}
+                pinned
+                owner={ownerOf(row.messageId)}
+                titleOf={titleOf}
+                showOwner={arm === 'score'}
+                tone={null}
+                onSelect={onSelect}
+                onTogglePin={onTogglePin}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
       <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
         <span className="text-sm font-semibold truncate">{label}</span>
         <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
           {rows.length} of {allCount}
         </span>
+        {/* Says where the missing rows went, so the number above and the rows
+            below cannot look like they disagree. */}
+        {liftedOut > 0 && (
+          <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+            · {liftedOut} kept above
+          </span>
+        )}
         {judging && (
           <span className="flex items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))]">
             <Loader2 className="w-3 h-3 animate-spin" /> working out where questions go
@@ -1303,31 +1358,8 @@ function QuestionColumn({
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {pinnedRows.length > 0 && (
-          <div className="sticky top-0 z-10 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
-            <p className="px-3 pt-1.5 text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-              Kept here
-            </p>
-            <ul>
-              {pinnedRows.map((row) => (
-                <QuestionRow
-                  key={`pin-${row.messageId}`}
-                  row={row}
-                  selected={selectedMessageId === row.messageId}
-                  pinned
-                  owner={ownerOf(row.messageId)}
-                  titleOf={titleOf}
-                  showOwner={arm === 'score'}
-                  tone={null}
-                  onSelect={onSelect}
-                  onTogglePin={onTogglePin}
-                />
-              ))}
-            </ul>
-          </div>
-        )}
         <ul>
-          {rows.map((row) => (
+          {listed.map((row) => (
             <QuestionRow
               key={row.messageId}
               row={row}
@@ -1343,14 +1375,17 @@ function QuestionColumn({
               onTogglePin={onTogglePin}
             />
           ))}
-          {rows.length === 0 && (
+          {listed.length === 0 && (
             <li className="px-3 py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">
-              No questions here yet.
+              {rows.length === 0
+                ? 'No questions here yet.'
+                : 'Every question here is kept above.'}
             </li>
           )}
         </ul>
       </div>
-    </section>
+      </section>
+    </div>
   );
 }
 
