@@ -42,7 +42,11 @@ import {
   type StudyCell,
   type StudyPhase,
 } from '@/lib/study/phases';
-import { STUDY_WORK_MINUTES, STUDY_WORK_WARNING_MINUTES } from '@/lib/study/config';
+import {
+  STUDY_WORK_MINUTES,
+  STUDY_WORK_WARNING_MINUTES,
+  type StudioFamily,
+} from '@/lib/study/config';
 
 function Chip({
   children,
@@ -247,14 +251,14 @@ export default function SessionConsole({
         <NewParticipant
           existing={participants}
           busy={busy !== null}
-          onCreate={async (participantNumber, cell) => {
+          onCreate={async (participantNumber, cell, family) => {
             setBusy('create');
             setMessage(null);
             try {
               const res = await fetch('/api/study/admin/participants/create', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ participantNumber, cell }),
+                body: JSON.stringify({ participantNumber, cell, family }),
               });
               const data = await res.json().catch(() => ({}));
               if (!res.ok) {
@@ -297,9 +301,16 @@ export default function SessionConsole({
                     {p.participantNumber}
                   </span>
                 </button>
-                <Chip tone="violet" title={p.cell ? cellLabel(p.cell as StudyCell) : undefined}>
+                <Chip
+                  tone="violet"
+                  title={p.cell ? cellLabel(p.cell as StudyCell, p.family) : undefined}
+                >
                   cell {p.cell}
                 </Chip>
+                {/* Only when it is not the default: four rows saying "full" is
+                    four rows of nothing, but a simple participant in a full
+                    batch has to be obvious. */}
+                {p.family === 'simple' && <Chip>simple</Chip>}
                 <CellControl
                   participant={p}
                   busy={busy}
@@ -918,7 +929,11 @@ function NewParticipant({
 }: {
   existing: ParticipantStatus[];
   busy: boolean;
-  onCreate: (participantNumber: string, cell: StudyCell) => Promise<string | null>;
+  onCreate: (
+    participantNumber: string,
+    cell: StudyCell,
+    family: StudioFamily
+  ) => Promise<string | null>;
 }) {
   const counts = STUDY_CELLS.map((c) => existing.filter((p) => p.cell === c).length);
   const thinnest = STUDY_CELLS[counts.indexOf(Math.min(...counts))];
@@ -930,6 +945,11 @@ function NewParticipant({
   const [open, setOpen] = useState(false);
   const [number, setNumber] = useState('');
   const [cell, setCell] = useState<StudyCell>(thinnest);
+  // Full unless said otherwise. The two families are separate runs of the
+  // study, so this is set once for a batch of participants rather than
+  // balanced against anything — the cell still does the balancing, within
+  // whichever family is being run.
+  const [family, setFamily] = useState<StudioFamily>('full');
   const [made, setMade] = useState<{ number: string; token: string } | null>(null);
 
   const start = () => {
@@ -940,7 +960,7 @@ function NewParticipant({
   };
 
   const submit = async () => {
-    const token = await onCreate(number.trim(), cell);
+    const token = await onCreate(number.trim(), cell, family);
     if (token) setMade({ number: number.trim().toUpperCase(), token });
   };
 
@@ -993,6 +1013,25 @@ function NewParticipant({
               Creating clones both datasets — about 15 seconds.
             </span>
           </div>
+          <div className="flex items-center gap-2 mb-3">
+            <label className="text-[11px] font-semibold">Version</label>
+            {(['full', 'simple'] as StudioFamily[]).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFamily(f)}
+                className={`text-[11px] font-semibold px-2.5 py-1 rounded border ${
+                  family === f
+                    ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5'
+                    : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]'
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+            <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
+              Both of this participant&apos;s blocks. Cannot be changed after setup.
+            </span>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-3">
             {STUDY_CELLS.map((c, i) => (
               <button
@@ -1008,7 +1047,7 @@ function NewParticipant({
                 <span className="ml-2 text-[10.5px] text-[hsl(var(--muted-foreground))]">
                   {counts[i]} assigned
                 </span>
-                <span className="block text-[11px] mt-0.5">{cellLabel(c)}</span>
+                <span className="block text-[11px] mt-0.5">{cellLabel(c, family)}</span>
               </button>
             ))}
           </div>

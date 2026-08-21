@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { assignments, chatMessages, studyClones, studyParticipants } from '@/db/schema';
-import { STUDY_DATASETS, curationDataset, type StudioView } from './config';
+import { STUDY_DATASETS, curationDataset, familyOf, type StudioView } from './config';
 import { demoQuestionIds } from './curation';
 import { logParticipantEvent } from './events';
 import { blockPlan } from './phases';
@@ -41,9 +41,14 @@ import type { StudyParticipant } from '@/db/schema';
  */
 export const ADMIN_RETURN_COOKIE = 'study_admin_return';
 
-/** Stable, and shaped like any other participant number (PARTICIPANT_NUMBER_RE). */
+/**
+ * Stable, and shaped like any other participant number (PARTICIPANT_NUMBER_RE).
+ *
+ * One per condition, not per arm: a demo holds one clone per dataset, and the
+ * simple family's board is a different film. Four accounts, four walkthroughs.
+ */
 export function demoParticipantNumber(condition: StudioView): string {
-  return condition === 'baseline' ? 'DEMO-BASELINE' : 'DEMO-SCORE';
+  return `DEMO-${condition.toUpperCase().replace(/_/g, '-')}`;
 }
 
 export function isDemoNumber(participantNumber: string): boolean {
@@ -223,11 +228,19 @@ async function ensureDemoParticipant(
 ): Promise<StudyParticipant> {
   const number = demoParticipantNumber(condition);
   const participant = await ensureParticipantAccount(number);
-  const block = blockPlan({ participantNumber: number }).find((p) => p.datasetKey === datasetKey)?.block ?? 1;
+  // The family is stamped on the row as well as forced onto the clones below,
+  // so everything that reads the participant rather than the clone — which
+  // film the session page plays, which board the phase gate expects — agrees
+  // with what this demo is actually showing.
+  const conditionFamily = familyOf(condition);
+  const block =
+    blockPlan({ participantNumber: number, conditionFamily }).find(
+      (p) => p.datasetKey === datasetKey
+    )?.block ?? 1;
 
   await db
     .update(studyParticipants)
-    .set({ isDemo: true, phase: `block${block}_work` })
+    .set({ isDemo: true, phase: `block${block}_work`, conditionFamily })
     .where(eq(studyParticipants.id, participant.id));
 
   const [fresh] = await db

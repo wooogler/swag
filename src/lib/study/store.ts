@@ -148,6 +148,15 @@ export async function ensureStudyTables(): Promise<void> {
       await db.execute(
         sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "is_demo" boolean NOT NULL DEFAULT false`
       );
+      // Which build of the tools this participant's two blocks run in — 'full'
+      // (the product board) or 'simple' (docs/SCORE_SIMPLE_DESIGN.md). It sits
+      // on the participant rather than in the cell because it does not vary
+      // within a session: the cell still counterbalances arm × dataset, and
+      // this picks which pair of boards those arms are shown in. Defaulted so
+      // every row that predates it keeps running the full version.
+      await db.execute(
+        sql`ALTER TABLE "study_participants" ADD COLUMN IF NOT EXISTS "condition_family" text NOT NULL DEFAULT 'full'`
+      );
 
       // ── Set curation (researcher admin tool) ────────────────────────────
       // Which MASTER question sits in which curated set. Keyed by master

@@ -21,14 +21,18 @@ import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { requireAdmin } from '@/lib/study/admin-guard';
 import { ADMIN_RETURN_COOKIE, ensureDemoWorkspace } from '@/lib/study/demo';
-import { STUDY_SESSION_MAX_AGE_SECONDS } from '@/lib/study/config';
+import {
+  STUDIO_VIEWS,
+  STUDY_SESSION_MAX_AGE_SECONDS,
+  type StudioView,
+} from '@/lib/study/config';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
 
 const bodySchema = z.object({
   datasetKey: z.string().min(1),
-  condition: z.enum(['score', 'baseline']),
+  condition: z.enum(STUDIO_VIEWS as [StudioView, ...StudioView[]]),
   /**
    * Where to land. 'board' by default: a demo exists to show the studio, and
    * the session page in front of it is a click to film past. 'session' is kept

@@ -36,6 +36,7 @@ import {
   STUDY_DATASETS,
   STUDY_EMAIL_DOMAIN,
   studyMasterToken,
+  type StudioFamily,
   type StudyDataset,
 } from './config';
 import {
@@ -417,7 +418,11 @@ export async function cloneStarterSet(
 /* Account + clone lifecycle (find-or-create, race-safe)               */
 /* ------------------------------------------------------------------ */
 
-async function createAccount(number: string, cell?: StudyCell): Promise<StudyParticipant> {
+async function createAccount(
+  number: string,
+  cell?: StudyCell,
+  family?: StudioFamily
+): Promise<StudyParticipant> {
   const instructorId = randomUUID();
   const participantId = randomUUID();
   const email = `${number.toLowerCase()}@${STUDY_EMAIL_DOMAIN}`;
@@ -442,7 +447,10 @@ async function createAccount(number: string, cell?: StudyCell): Promise<StudyPar
         instructorId,
         label: `Study ${number}`,
         accessToken: newAccessToken(),
-        ...(cell ? { cell, blockOrder: planForCell(cell).map((b) => b.datasetKey).join(',') } : {}),
+        ...(family ? { conditionFamily: family } : {}),
+        ...(cell
+          ? { cell, blockOrder: planForCell(cell, family).map((b) => b.datasetKey).join(',') }
+          : {}),
         createdAt: new Date(),
       })
       .returning();
@@ -454,13 +462,14 @@ async function createAccount(number: string, cell?: StudyCell): Promise<StudyPar
  * participant_number unique index. */
 export async function ensureParticipantAccount(
   participantNumber: string,
-  cell?: StudyCell
+  cell?: StudyCell,
+  family?: StudioFamily
 ): Promise<StudyParticipant> {
   const number = normalizeParticipantNumber(participantNumber);
   const existing = await getParticipantByNumber(number);
   if (existing) return existing;
   try {
-    return await createAccount(number, cell);
+    return await createAccount(number, cell, family);
   } catch (err) {
     const after = await getParticipantByNumber(number);
     if (after) return after;
@@ -556,12 +565,14 @@ export async function ensureClone(participant: StudyParticipant, dataset: StudyD
 export async function ensureParticipantSetup(
   participantNumber: string,
   /** Only used when the participant does not exist yet; never overwrites. */
-  cell?: StudyCell
+  cell?: StudyCell,
+  /** Likewise: which build of the tools both of their blocks run in. */
+  family?: StudioFamily
 ): Promise<{ participant: StudyParticipant; clones: StudyClone[] }> {
   const number = normalizeParticipantNumber(participantNumber);
   await Promise.all([ensureScoreTable(), ensureIntentTables(), ensureStudyTables()]);
 
-  const account = await ensureParticipantAccount(number, cell);
+  const account = await ensureParticipantAccount(number, cell, family);
   const participant = await recordCounterbalancing(account);
   const clones: StudyClone[] = [];
   for (const dataset of STUDY_DATASETS) {

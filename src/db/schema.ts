@@ -535,6 +535,10 @@ export const studyParticipants = pgTable('study_participants', {
   // the identical session on the isolated demo subtypes; excluded from the
   // console and the metrics export so a demo run cannot become study data.
   isDemo: boolean('is_demo').notNull().default(false),
+  // Which build of the tools both blocks run in: 'full' | 'simple'
+  // (StudioFamily). The cell counterbalances arm × dataset; this crosses that
+  // with the toolset, and does not vary within a session.
+  conditionFamily: text('condition_family').notNull().default('full'),
   createdAt: timestamp('created_at').notNull(),
   lastLoginAt: timestamp('last_login_at'),
 }, (table) => ({
@@ -550,8 +554,10 @@ export const studyClones = pgTable('study_clones', {
   datasetKey: text('dataset_key').notNull(), // StudyDataset.key
   assignmentId: text('assignment_id').notNull().references(() => assignments.id),
   sourceAssignmentId: text('source_assignment_id').notNull(),
-  // Study condition for this clone: 'score' (intent/rule tool) | 'baseline'
-  // (monolithic prompt ablation). Drives both the studio UI and /api/chat.
+  // Study condition for this clone (StudioView): the arm — 'score' (intent/rule
+  // tool) | 'baseline' (monolithic prompt ablation) — crossed with the toolset,
+  // giving 'simple_score' | 'simple_baseline' for the stripped-down build.
+  // Drives both the studio UI and /api/chat. Read it through armOf/familyOf.
   condition: text('condition').notNull().default('score'),
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({

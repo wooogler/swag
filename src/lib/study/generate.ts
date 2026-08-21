@@ -54,6 +54,7 @@ import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { getLatestChatDeploy, resolveChatPromptFromSnapshot } from '@/lib/score/deploy-store';
 import { isScoreQueryType } from '@/lib/score/intents';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
+import { armOf, type StudioView } from './config';
 import { isChatConfigured, runChatTurn, type TurnMessage } from './chat-run';
 import { ensureStudyTables } from './store';
 
@@ -165,7 +166,7 @@ export async function generateForClone(args: {
   if (items.length === 0) throw new Error('empty_bank');
 
   const basePrompt = assignmentBasePrompt(assignment);
-  const condition = clone.condition === 'baseline' ? 'baseline' : 'score';
+  const condition = armOf(clone.condition as StudioView);
 
   // ── pin the configuration ONCE, before any answer is produced ──
   let configRef: Record<string, unknown>;

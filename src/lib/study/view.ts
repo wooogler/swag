@@ -4,11 +4,11 @@
  * "add participant isolation later" a one-line change instead of an audit of
  * every button and route. See docs/STUDY_BASELINE_SPEC.md §1.3.
  */
-import type { StudioView } from './config';
+import { isStudioView, type StudioView } from './config';
 
 export function resolveStudioView(opts: {
   storedCondition: StudioView | null; // study_clones.condition (null if not a clone)
-  viewParam: string | null; // ?view=score|baseline
+  viewParam: string | null; // ?view=score|baseline|simple_score|simple_baseline
   isParticipant: boolean; // getCurrentStudyParticipant() != null
 }): StudioView {
   // ── PHASE 2 (live): a participant sees the condition assigned to this clone
@@ -18,6 +18,9 @@ export function resolveStudioView(opts: {
   //    team checks parity, and they are never a data point.
   if (opts.isParticipant) return opts.storedCondition ?? 'score';
 
-  if (opts.viewParam === 'score' || opts.viewParam === 'baseline') return opts.viewParam;
+  // All four are previewable, including across families: checking that the
+  // simple board is the same manipulation as the full one means opening them
+  // on the same clone.
+  if (isStudioView(opts.viewParam)) return opts.viewParam;
   return opts.storedCondition ?? 'score';
 }

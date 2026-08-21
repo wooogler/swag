@@ -34,6 +34,7 @@ import {
   studyTestAnswers,
   type StudyParticipant,
 } from '@/db/schema';
+import { armOf, type StudioView } from './config';
 import { blockPlan, cellOf } from './phases';
 
 /* ------------------------------------------------------------------ */
@@ -343,7 +344,7 @@ export async function buildParticipantTrail(
     if (clone) {
       blockOf.set(clone.assignmentId, {
         block: p.block,
-        condition: clone.condition === 'baseline' ? 'baseline' : 'score',
+        condition: armOf(clone.condition as StudioView),
       });
     }
   }
@@ -702,7 +703,7 @@ export async function buildParticipantTrail(
     return {
       block: p.block,
       datasetKey: p.datasetKey,
-      condition: clone ? (clone.condition === 'baseline' ? 'baseline' : 'score') : p.condition,
+      condition: armOf(clone ? (clone.condition as StudioView) : p.condition),
       assignmentId: clone?.assignmentId ?? null,
       startedAt: tZero,
       endedAt: mine.length ? mine[mine.length - 1].at : null,

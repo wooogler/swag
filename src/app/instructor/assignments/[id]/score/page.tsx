@@ -61,7 +61,13 @@ import { getCloneCondition } from '@/lib/study/baseline-store';
 import { resolveStudioView } from '@/lib/study/view';
 import { ensureStudyTables } from '@/lib/study/store';
 import { getBaselineState, PROMPT_HOLDER_TITLE } from '@/lib/study/baseline-store';
-import { STUDY_PROMPT_CHAR_LIMIT, STUDY_WORK_MINUTES, conditionName } from '@/lib/study/config';
+import {
+  STUDY_PROMPT_CHAR_LIMIT,
+  STUDY_WORK_MINUTES,
+  armOf,
+  conditionName,
+  familyOf,
+} from '@/lib/study/config';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -121,8 +127,9 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   });
   // Baseline is the SAME board with ablations (condition prop) — not a separate
   // page. It shares the SCORE data load below; only the monolithic prompt state
-  // is baseline-specific.
-  const isBaselineView = studioView === 'baseline';
+  // is baseline-specific. Everything from here down is the FULL board, so it
+  // reads the arm: the simple family has already been handed off above.
+  const isBaselineView = armOf(studioView) === 'baseline';
   const baselineState = isBaselineView ? await getBaselineState(id) : null;
 
   await Promise.all([ensureScoreTable(), ensureIntentTables()]);
@@ -131,7 +138,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   // render the sections, and BEFORE loadIntentState so brand-new roots are in
   // the loaded state. SCORE only: a baseline clone never routes, so it must not
   // accumulate root rows (they are filtered out of every list either way).
-  if (studioView === 'score') await ensureTypeRoots(id);
+  if (armOf(studioView) === 'score') await ensureTypeRoots(id);
 
   const [
     config,
@@ -584,7 +591,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
           intents={intents}
           typeRoots={typeRoots}
           basePrompt={assignmentBasePrompt(assignment)}
-          condition={studioView}
+          condition={armOf(studioView)}
           baseline={
             isBaselineView && baselineState
               ? {

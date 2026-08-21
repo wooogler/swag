@@ -35,6 +35,10 @@ export const maxDuration = 300;
 const bodySchema = z.object({
   participantNumber: z.string().min(1),
   cell: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  // Which build of the tools both blocks run in. Defaulted rather than
+  // required so an older console — or a script — still creates the full
+  // version it was written to create.
+  family: z.enum(['full', 'simple']).default('full'),
 });
 
 export async function POST(req: Request) {
@@ -77,11 +81,16 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { participant } = await ensureParticipantSetup(number, parsed.cell as StudyCell);
+    const { participant } = await ensureParticipantSetup(
+      number,
+      parsed.cell as StudyCell,
+      parsed.family
+    );
     return NextResponse.json({
       success: true,
       participantNumber: participant.participantNumber,
       cell: participant.cell,
+      family: participant.conditionFamily,
       accessToken: participant.accessToken,
     });
   } catch (err) {

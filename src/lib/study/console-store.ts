@@ -22,9 +22,11 @@ import {
   type StudyParticipant,
 } from '@/db/schema';
 import { isGenerationCurrent, type BankKind } from './generate';
+import { armOf, type StudioArm, type StudioFamily, type StudioView } from './config';
 import {
   blockPlan,
   cellOf,
+  familyOf,
   isStudyPhase,
   phaseAccess,
   type StudyPhase,
@@ -73,6 +75,8 @@ export interface ParticipantStatus {
   id: string;
   participantNumber: string;
   cell: number | null;
+  /** Which build of the tools both blocks run in ('full' | 'simple'). */
+  family: StudioFamily;
   blockOrder: string | null;
   /** The participant's start link token; null only for rows never provisioned. */
   accessToken: string | null;
@@ -89,8 +93,15 @@ export interface ParticipantStatus {
   lastActivityAt: string | null;
 }
 
-function conditionOf(clone: { condition: string }): 'score' | 'baseline' {
-  return clone.condition === 'baseline' ? 'baseline' : 'score';
+/**
+ * The ARM a clone runs, which is what every metric on this screen keys off:
+ * whether there are intents to point at, whether coverage means anything,
+ * whether "the config" is a tree or a document. Which build of the tools the
+ * arm came in does not change any of those, so it is deliberately dropped
+ * here — read it with familyOf where it matters.
+ */
+function conditionOf(clone: { condition: string }): StudioArm {
+  return armOf(clone.condition as StudioView);
 }
 
 /** Exported because the participant's own advance checks it too (advance.ts). */
@@ -322,6 +333,7 @@ export async function getParticipantStatus(
     id: participant.id,
     participantNumber: participant.participantNumber,
     cell: cellOf(participant),
+    family: familyOf(participant),
     blockOrder: participant.blockOrder ?? plan.map((p) => p.datasetKey).join(','),
     accessToken: participant.accessToken ?? null,
     phase,
@@ -527,7 +539,7 @@ export async function getBlockPredictions(
     getTestItems(participant, clone),
     deployedConfigFor({
       assignmentId: clone.assignmentId,
-      condition: clone.condition === 'baseline' ? 'baseline' : 'score',
+      condition: conditionOf(clone),
     }),
     db
       .select({
@@ -567,7 +579,7 @@ export async function getBlockPredictions(
     }
 
     let appliedLabel: string | null = null;
-    if (clone.condition === 'score' && applied) {
+    if (conditionOf(clone) === 'score' && applied) {
       appliedLabel =
         applied.outcome === 'intent'
           ? applied.intentTitle ?? `#${applied.intentId}`
@@ -586,13 +598,13 @@ export async function getBlockPredictions(
         item.guess === null || item.rating === null ? null : item.guess !== item.rating >= 4,
       pointedLabel,
       appliedLabel,
-      pointingMissed: clone.condition === 'score' ? pointingMissed : null,
+      pointingMissed: conditionOf(clone) === 'score' ? pointingMissed : null,
       outcome:
         applied?.outcome === 'intent' || applied?.outcome === 'type_default'
           ? applied.outcome
           : null,
       ruleChars:
-        clone.condition === 'score' ? (appliedFull?.rule ?? '').trim().length : null,
+        conditionOf(clone) === 'score' ? (appliedFull?.rule ?? '').trim().length : null,
     };
   });
 }

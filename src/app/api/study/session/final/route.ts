@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { getCurrentStudyParticipant } from '@/lib/study/session';
 import { isStudyPhase, phaseAccess } from '@/lib/study/phases';
 import { saveFinalAnswers } from '@/lib/study/final-survey-store';
+import { STUDIO_VIEWS, type StudioView } from '@/lib/study/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,7 @@ const bodySchema = z.object({
     .array(
       z.object({
         itemKey: z.string().min(1).max(16),
-        condition: z.enum(['score', 'baseline']).optional(),
+        condition: z.enum(STUDIO_VIEWS as [StudioView, ...StudioView[]]).optional(),
         value: z.number().int().min(1).max(7).optional(),
         text: z.string().max(4000).optional(),
       })

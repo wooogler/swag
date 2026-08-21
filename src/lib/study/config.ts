@@ -123,8 +123,61 @@ export const STUDY_SESSION_MAX_AGE_SECONDS = 24 * 60 * 60;
 // Internal email domain for the auto-created participant accounts.
 export const STUDY_EMAIL_DOMAIN = 'study.score.local';
 
-// ── Baseline study condition ──────────────────────────────────────────────
-export type StudioView = 'score' | 'baseline';
+// ── Study conditions ──────────────────────────────────────────────────────
+/**
+ * A condition is two independent axes, and almost every branch in the codebase
+ * wants exactly one of them.
+ *
+ * ARM is the representation the study manipulates: `score` owns rules with
+ * nested intents, `baseline` has one Rules document. It decides what the left
+ * column is, how a question is pointed at in the block test, what "the final
+ * config" means to the export.
+ *
+ * FAMILY is which build of the tools the arm is dressed in. `full` is the
+ * product board — AI candidates, propose, corrections and fold, diagnostics.
+ * `simple` is the same manipulation with all of that removed, so the only
+ * thing left varying between its two arms is the representation itself
+ * (docs/SCORE_SIMPLE_DESIGN.md §0). It decides which board renders and which
+ * routes answer; it decides nothing about the arm.
+ *
+ * They are crossed, so the stored value is one of four. Read it through
+ * `armOf` / `familyOf` rather than comparing to a literal: a bare
+ * `=== 'baseline' ? … : 'score'` silently files simple_baseline under score,
+ * which is the failure mode this pair of helpers exists to make impossible.
+ */
+export type StudioArm = 'score' | 'baseline';
+export type StudioFamily = 'full' | 'simple';
+export type StudioView = 'score' | 'baseline' | 'simple_score' | 'simple_baseline';
+
+export const STUDIO_VIEWS: StudioView[] = ['score', 'baseline', 'simple_score', 'simple_baseline'];
+
+export function isStudioView(v: unknown): v is StudioView {
+  return typeof v === 'string' && (STUDIO_VIEWS as string[]).includes(v);
+}
+
+/** The representation: what the participant organizes their intent WITH. */
+export function armOf(view: StudioView): StudioArm {
+  return view === 'baseline' || view === 'simple_baseline' ? 'baseline' : 'score';
+}
+
+/** The build: which set of tools that representation is handed in. */
+export function familyOf(view: StudioView): StudioFamily {
+  return view === 'simple_score' || view === 'simple_baseline' ? 'simple' : 'full';
+}
+
+export function viewFor(family: StudioFamily, arm: StudioArm): StudioView {
+  if (family === 'full') return arm;
+  return arm === 'score' ? 'simple_score' : 'simple_baseline';
+}
+
+/** The other arm of the same family — what a participant gets in block 2. */
+export function otherArm(view: StudioView): StudioView {
+  return viewFor(familyOf(view), armOf(view) === 'score' ? 'baseline' : 'score');
+}
+
+export function isSimple(view: StudioView): boolean {
+  return familyOf(view) === 'simple';
+}
 
 // Condition assignment lives in phases.ts (planForCell). It used to be derived
 // here from the participant number's parity; keeping that copy around after the
@@ -167,10 +220,24 @@ export const STUDY_WORK_WARNING_MINUTES = 20;
  * NEXT_PUBLIC_ on purpose: the console and the curation board are client
  * components that import this module, and a server-only variable would leave
  * them rendering the default while the server rendered the override.
+ *
+ * The simple family reuses its arm's name by default. A participant is in one
+ * family for the whole session and never sees the other, so the names only
+ * ever have to tell the two ARMS apart — which is what they were chosen to do.
+ * Each still has an override of its own, for a figure that has to put all four
+ * on one page.
  */
 export const CONDITION_NAMES: Record<StudioView, string> = {
   score: process.env.NEXT_PUBLIC_STUDY_NAME_SCORE ?? 'Slate',
   baseline: process.env.NEXT_PUBLIC_STUDY_NAME_BASELINE ?? 'Clay',
+  simple_score:
+    process.env.NEXT_PUBLIC_STUDY_NAME_SIMPLE_SCORE ||
+    process.env.NEXT_PUBLIC_STUDY_NAME_SCORE ||
+    'Slate',
+  simple_baseline:
+    process.env.NEXT_PUBLIC_STUDY_NAME_SIMPLE_BASELINE ||
+    process.env.NEXT_PUBLIC_STUDY_NAME_BASELINE ||
+    'Clay',
 };
 
 export function conditionName(view: StudioView): string {
@@ -204,6 +271,11 @@ export function conditionName(view: StudioView): string {
  * board it is about to open. One id (…_COMMON) still works and is used for
  * both when the per-version ids are unset.
  *
+ * The simple family has films of its own — its boards differ, so the full
+ * version's footage would teach controls that are not there. It deliberately
+ * does not fall back to the full film: an empty slot naming its variable is a
+ * missing film, and the wrong film is a silent one.
+ *
  * Empty until the films are uploaded, and the slot says so rather than
  * rendering a broken player.
  */
@@ -219,9 +291,19 @@ export const STUDY_DEMO_VIDEOS: Record<StudioView, string> & {
       process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON_BASELINE ||
       process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON ||
       '',
+    simple_score:
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON_SIMPLE_SCORE ||
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON_SIMPLE ||
+      '',
+    simple_baseline:
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON_SIMPLE_BASELINE ||
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON_SIMPLE ||
+      '',
   },
   score: process.env.NEXT_PUBLIC_STUDY_DEMO_SCORE ?? '',
   baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_BASELINE ?? '',
+  simple_score: process.env.NEXT_PUBLIC_STUDY_DEMO_SIMPLE_SCORE ?? '',
+  simple_baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_SIMPLE_BASELINE ?? '',
 };
 
 export interface DemoSegment {

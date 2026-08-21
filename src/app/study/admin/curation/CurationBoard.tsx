@@ -39,6 +39,19 @@ import { PaneSearch, QueryTextButton } from '@/app/instructor/assignments/[id]/s
 import { sortQueryRows, type QuerySortMode } from '@/app/instructor/assignments/[id]/score/query-list';
 import StudioShell from '@/app/instructor/assignments/[id]/score/StudioShell';
 import AdminNav from '@/components/study/AdminNav';
+import { STUDIO_VIEWS, type StudioView } from '@/lib/study/config';
+
+/**
+ * What each demo button says. Not conditionName(): these are the researcher's
+ * own controls, and the participant-facing code names would make four buttons
+ * read Slate / Clay / Slate / Clay.
+ */
+const DEMO_LABEL: Record<StudioView, string> = {
+  score: 'SCORE',
+  baseline: 'Baseline',
+  simple_score: 'Simple SCORE',
+  simple_baseline: 'Simple Baseline',
+};
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
 import { TYPE_DEFINITIONS } from '@/lib/score/type-prompts';
 import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
@@ -637,7 +650,7 @@ export default function CurationBoard({
    * itself, because anything added would be in the recording.
    */
   const runDemo = useCallback(
-    async (condition: 'score' | 'baseline') => {
+    async (condition: StudioView) => {
       setBusy(`demo:${condition}`);
       setError(null);
       try {
@@ -800,32 +813,22 @@ export default function CurationBoard({
             {/* The demo runs as a participant, on a workspace built from just
                 these conversations — the same screens a participant gets, so
                 it doubles as the dev preview and the recording set-up. */}
-            <button
-              onClick={() => runDemo('score')}
-              disabled={busy !== null}
-              className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-              title="Open the SCORE studio for these subtypes, exactly as the participant sees it — go to /study/admin to come back"
-            >
-              {busy === 'demo:score' ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
-              ) : (
-                <PlayCircle className="w-3 h-3" />
-              )}
-              Run demo · SCORE
-            </button>
-            <button
-              onClick={() => runDemo('baseline')}
-              disabled={busy !== null}
-              className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-              title="Open the baseline studio for these subtypes, exactly as the participant sees it — go to /study/admin to come back"
-            >
-              {busy === 'demo:baseline' ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
-              ) : (
-                <PlayCircle className="w-3 h-3" />
-              )}
-              Run demo · Baseline
-            </button>
+            {STUDIO_VIEWS.map((view) => (
+              <button
+                key={view}
+                onClick={() => runDemo(view)}
+                disabled={busy !== null}
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
+                title={`Open the ${DEMO_LABEL[view]} studio for these subtypes, exactly as the participant sees it — go to /study/admin to come back`}
+              >
+                {busy === `demo:${view}` ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <PlayCircle className="w-3 h-3" />
+                )}
+                Run demo · {DEMO_LABEL[view]}
+              </button>
+            ))}
           </>
         )}
         <div className="flex-1" />

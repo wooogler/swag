@@ -25,6 +25,7 @@ import {
 } from '@/db/schema';
 import { getLatestChatDeploy } from '@/lib/score/deploy-store';
 import type { SnapshotConfig } from '@/components/study/SnapshotConfigView';
+import { armOf, type StudioView } from './config';
 import { blockPlan } from './phases';
 
 /**
@@ -174,7 +175,7 @@ export async function cloneForBlock(
   return {
     assignmentId: clone.assignmentId,
     datasetKey: clone.datasetKey,
-    condition: clone.condition === 'baseline' ? 'baseline' : 'score',
+    condition: armOf(clone.condition as StudioView),
   };
 }
 

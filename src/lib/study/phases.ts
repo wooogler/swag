@@ -10,7 +10,13 @@
  */
 // STUDY_DATASETS, not the curation masters: a block is over what the
 // participant actually holds a clone of.
-import { STUDY_DATASETS, type StudioView } from './config';
+import {
+  STUDY_DATASETS,
+  viewFor,
+  type StudioArm,
+  type StudioFamily,
+  type StudioView,
+} from './config';
 
 /* ------------------------------------------------------------------ */
 /* Phases                                                              */
@@ -119,28 +125,38 @@ export interface BlockPlanEntry {
   condition: StudioView;
 }
 
-/** Block 1 of each cell; block 2 is the other dataset in the other condition. */
-const CELL_FIRST: Record<StudyCell, { datasetKey: string; condition: StudioView }> = {
-  1: { datasetKey: 'swag', condition: 'baseline' },
-  2: { datasetKey: 'swag', condition: 'score' },
-  3: { datasetKey: 'nirvana', condition: 'score' },
-  4: { datasetKey: 'nirvana', condition: 'baseline' },
+/**
+ * Block 1 of each cell; block 2 is the other dataset in the other ARM.
+ *
+ * The cell carries the arm, not the whole condition. Which build of the tools
+ * those arms come in — the full board or the simple one — is a property of the
+ * participant (`condition_family`), because it does not vary within a session:
+ * a participant does both blocks in one family, and crossing it into the cells
+ * would make eight of them for a design that still counterbalances four
+ * things.
+ */
+const CELL_FIRST: Record<StudyCell, { datasetKey: string; arm: StudioArm }> = {
+  1: { datasetKey: 'swag', arm: 'baseline' },
+  2: { datasetKey: 'swag', arm: 'score' },
+  3: { datasetKey: 'nirvana', arm: 'score' },
+  4: { datasetKey: 'nirvana', arm: 'baseline' },
 };
 
-export function planForCell(cell: StudyCell): BlockPlanEntry[] {
+export function planForCell(cell: StudyCell, family: StudioFamily = 'full'): BlockPlanEntry[] {
   const first = CELL_FIRST[cell];
   const keys = STUDY_DATASETS.map((d) => d.key);
   const firstKey = keys.includes(first.datasetKey) ? first.datasetKey : keys[0] ?? first.datasetKey;
   const secondKey = keys.find((k) => k !== firstKey) ?? firstKey;
+  const secondArm: StudioArm = first.arm === 'score' ? 'baseline' : 'score';
   return [
-    { block: 1, datasetKey: firstKey, condition: first.condition },
-    { block: 2, datasetKey: secondKey, condition: first.condition === 'score' ? 'baseline' : 'score' },
+    { block: 1, datasetKey: firstKey, condition: viewFor(family, first.arm) },
+    { block: 2, datasetKey: secondKey, condition: viewFor(family, secondArm) },
   ];
 }
 
 /** What a cell reads as, for the console and the runbook. */
-export function cellLabel(cell: StudyCell): string {
-  return planForCell(cell)
+export function cellLabel(cell: StudyCell, family: StudioFamily = 'full'): string {
+  return planForCell(cell, family)
     .map((p) => `${p.condition}(${p.datasetKey})`)
     .join(' → ');
 }
@@ -168,25 +184,33 @@ export function cellFromNumber(participantNumber: string): StudyCell {
 export interface CellSource {
   participantNumber: string;
   cell?: number | null;
+  /** 'simple' puts both blocks on the stripped-down board; anything else (and
+   * every row that predates the column) runs the full one. */
+  conditionFamily?: string | null;
 }
 
 export function cellOf(p: CellSource): StudyCell {
   return isStudyCell(p.cell) ? p.cell : cellFromNumber(p.participantNumber);
 }
 
+/** Which build of the tools this participant runs — the same for both blocks. */
+export function familyOf(p: CellSource): StudioFamily {
+  return p.conditionFamily === 'simple' ? 'simple' : 'full';
+}
+
 /** Which dataset this participant works on FIRST. */
 export function firstDatasetFor(p: CellSource): string {
-  return planForCell(cellOf(p))[0].datasetKey;
+  return planForCell(cellOf(p), familyOf(p))[0].datasetKey;
 }
 
 /** Dataset order for the two blocks, and the condition each one carries. */
 export function blockPlan(p: CellSource): BlockPlanEntry[] {
-  return planForCell(cellOf(p));
+  return planForCell(cellOf(p), familyOf(p));
 }
 
 /** Human-readable cell description for the console and the runbook. */
 export function cellSummary(p: CellSource): string {
-  return cellLabel(cellOf(p));
+  return cellLabel(cellOf(p), familyOf(p));
 }
 
 /* ------------------------------------------------------------------ */
