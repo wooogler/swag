@@ -847,19 +847,10 @@ function Tree({
               Then
             </label>
             {!readOnly && (
-              <>
-                <IntentHistory
-                  versions={intentVersions['0'] ?? []}
-                  currentDefinition=""
-                  currentRule={draft.rootRule}
-                  showDefinition={false}
-                  onPick={(v) => setDraft({ ...draft, rootRule: v.rule })}
-                />
-                <RulePicker
-                  sources={ruleSources('root')}
-                  onPick={(rule) => setDraft({ ...draft, rootRule: rule })}
-                />
-              </>
+              <RulePicker
+                sources={ruleSources('root')}
+                onPick={(rule) => setDraft({ ...draft, rootRule: rule })}
+              />
             )}
           </div>
           <textarea
@@ -880,6 +871,15 @@ function Tree({
               Apply
             </button>
           )}
+          <div className="mt-2">
+            <IntentHistory
+              versions={intentVersions['0'] ?? []}
+              currentDefinition=""
+              currentRule={draft.rootRule}
+              disabled={readOnly}
+              onPick={(v) => setDraft({ ...draft, rootRule: v.rule })}
+            />
+          </div>
         </div>
       )}
 
@@ -989,26 +989,14 @@ function Accordion({
 }) {
   return (
     <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-2.5 space-y-2">
-      <div className="flex items-center gap-2">
-        <input
-          value={intent.title}
-          readOnly={readOnly}
-          maxLength={120}
-          onChange={(e) => onChange({ title: e.target.value })}
-          placeholder="Name it"
-          className="flex-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-        />
-        {/* This intent's own version number, and its history behind it. The
-            configuration has a timeline too, but by the time "what did this
-            say before" matters you are looking at one intent. */}
-        <IntentHistory
-          versions={versions}
-          currentDefinition={intent.definition}
-          currentRule={intent.rule}
-          disabled={readOnly}
-          onPick={(v) => onChange({ definition: v.definition, rule: v.rule })}
-        />
-      </div>
+      <input
+        value={intent.title}
+        readOnly={readOnly}
+        maxLength={120}
+        onChange={(e) => onChange({ title: e.target.value })}
+        placeholder="Name it"
+        className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+      />
       <div>
         <div className="flex items-center justify-between gap-2 mb-1">
           <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
@@ -1080,6 +1068,15 @@ function Accordion({
           </button>
         </div>
       )}
+      {/* Under the buttons: this intent's own history, laid out rather than
+          hidden behind a number. */}
+      <IntentHistory
+        versions={versions}
+        currentDefinition={intent.definition}
+        currentRule={intent.rule}
+        disabled={readOnly}
+        onPick={(v) => onChange({ definition: v.definition, rule: v.rule })}
+      />
     </div>
   );
 }
