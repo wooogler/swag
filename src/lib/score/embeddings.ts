@@ -162,6 +162,22 @@ export async function getQueryEmbeddings(
   return result;
 }
 
+/**
+ * Embed arbitrary short texts with the SAME model the query cache uses.
+ *
+ * Only meaningful because of that: a vector is only comparable to the query
+ * vectors if it came from the same model, and the query side is already
+ * committed to EMBEDDING_MODEL and cached under a tag that carries its name.
+ */
+export async function embedTexts(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const response = await getClient().embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: texts.map((t) => embedText(t)),
+  });
+  return response.data.map((d) => d.embedding);
+}
+
 /** Cosine similarity (embeddings are near-unit-norm; good enough for ranking). */
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;

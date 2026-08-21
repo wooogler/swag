@@ -55,6 +55,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   runAfterSave({
     assignmentId: id,
     condition,
+    seedPrompt,
     kind: 'save',
     versionId: version.id,
     snapshot: tip.snapshot,

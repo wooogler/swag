@@ -28,6 +28,7 @@ import { emptySnapshot, type SimpleIntent, type SimpleSnapshot } from '@/lib/stu
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleTip, nextSid, saveSimpleVersion } from '@/lib/study/simple/store';
 import { recordIntentVersions } from '@/lib/study/simple/intent-versions';
+import { recordIntentSeed } from '@/lib/study/simple/anchors';
 import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +41,10 @@ const intentSchema = z.object({
   title: z.string().max(120).default(''),
   definition: z.string().max(4000).default(''),
   rule: z.string().max(STUDY_PROMPT_CHAR_LIMIT).default(''),
+  /** The question this intent was carved out of, on the save that created it.
+   * Not configuration — it changes no routing and no answer — so it is kept
+   * beside the snapshot rather than in it, and only ever written once. */
+  seedMessageId: z.number().int().positive().nullable().optional(),
 });
 
 const bodySchema = z.object({
@@ -78,12 +83,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // Stable ids for anything new, in the order they were sent.
   let allocate = await nextSid(id);
   const incoming = body.intents ?? base.intents;
-  const intents: SimpleIntent[] = incoming.map((raw) => ({
-    sid: raw.sid != null && raw.sid > 0 ? raw.sid : allocate++,
-    title: raw.title ?? '',
-    definition: raw.definition ?? '',
-    rule: raw.rule ?? '',
-  }));
+  const seeds: { sid: number; messageId: number }[] = [];
+  const intents: SimpleIntent[] = incoming.map((raw) => {
+    const isNew = !(raw.sid != null && raw.sid > 0);
+    const sid = isNew ? allocate++ : (raw.sid as number);
+    const seedMessageId = 'seedMessageId' in raw ? raw.seedMessageId : null;
+    if (isNew && seedMessageId) seeds.push({ sid, messageId: seedMessageId });
+    return {
+      sid,
+      title: raw.title ?? '',
+      definition: raw.definition ?? '',
+      rule: raw.rule ?? '',
+    };
+  });
+  for (const seed of seeds) {
+    await recordIntentSeed({ assignmentId: id, sid: seed.sid, messageId: seed.messageId });
+  }
 
   const snapshot: SimpleSnapshot = {
     arm,
@@ -119,6 +134,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   runAfterSave({
     assignmentId: id,
     condition,
+    seedPrompt,
     kind: body.kind,
     versionId: version.id,
     snapshot,

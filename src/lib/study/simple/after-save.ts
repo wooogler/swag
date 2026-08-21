@@ -28,6 +28,7 @@ import {
 } from './chain';
 import { definitionTasks, judgeBatch, readMatches } from './judge';
 import { fillMissingIntentTitles } from './titles';
+import { definitionsNeedingAnchors, ensureAnchor, readIntentSeeds } from './anchors';
 import { logStudyEvent } from '../events';
 import { prefetchResponses } from './respond';
 import { generateIntentVersionName, generateVersionName } from './name';
@@ -40,6 +41,9 @@ const PREFETCH_LIMIT = 12;
 interface SaveJob {
   assignmentId: string;
   condition: StudioView;
+  /** The assignment's own prompt — context for the example questions the
+   * ordering anchors on. */
+  seedPrompt: string;
   versionId: number;
   snapshot: SimpleSnapshot;
   previous: SimpleSnapshot | null;
@@ -99,8 +103,43 @@ async function perform(job: SaveJob): Promise<void> {
     job.kind === 'save' ? nameVersion(job) : Promise.resolve(),
     nameIntentVersions(job),
     titleNewIntents(job),
+    anchorNewDefinitions(job),
     judgeAndPrefetch(job),
   ]);
+}
+
+/**
+ * What an intent's question list will be ordered by.
+ *
+ * Alongside the judging rather than after it, because the two answer different
+ * halves of the same screen — the verdicts decide which questions are in the
+ * list, this decides which of them is at the top, and a participant reads the
+ * top one first. Best-effort and bounded like every other job here: without it
+ * the list keeps the order it already had.
+ *
+ * Skipped for an intent carved out of a question — that question is the
+ * anchor, and it is a better one than anything written here.
+ */
+async function anchorNewDefinitions(job: SaveJob): Promise<void> {
+  if (armOf(job.condition) !== 'score') return;
+  try {
+    const seeded = new Set((await readIntentSeeds(job.assignmentId)).keys());
+    const wanted = job.snapshot.intents
+      .filter((i) => !seeded.has(i.sid))
+      .map((i) => i.definition);
+    const missing = await definitionsNeedingAnchors(job.assignmentId, wanted);
+    await Promise.allSettled(
+      missing.slice(0, 4).map((definition) =>
+        ensureAnchor({
+          assignmentId: job.assignmentId,
+          definition,
+          assignmentPrompt: job.seedPrompt,
+        })
+      )
+    );
+  } catch (error) {
+    console.error('simple anchors failed (list keeps its order):', error);
+  }
 }
 
 /**

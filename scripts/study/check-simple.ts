@@ -32,6 +32,7 @@ import {
   studyParticipants,
 } from '../../src/db/schema';
 import { flattenStoredIntents, unsavedNote } from '../../src/lib/study/simple/chain';
+import { intentDefHash } from '../../src/lib/score/intents';
 
 const BASE = process.env.SWAG_URL ?? 'http://localhost:3030';
 
@@ -510,9 +511,16 @@ async function main() {
     const above = twins.snapshot.intents.find((i) => i.title === 'CHECK: above')?.sid;
     const below = twins.snapshot.intents.find((i) => i.title === 'CHECK: below')?.sid;
     const owned = Object.values(twins.owners).filter((o) => o.outcome === 'intent');
+    // The claim needs the shared definition to describe at least one question
+    // in THIS log, and whether it does is a property of the dataset. Saying so
+    // beats asserting it: on a curated set with no greetings in it, every one
+    // of these would fail while nothing was wrong.
+    if (owned.length === 0) {
+      console.log('· nothing here matches the shared definition — first-match not exercised');
+    } else {
     check(
       'the intent above takes every question the two share',
-      above != null && owned.length > 0 && owned.every((o) => o.sid === above),
+      above != null && owned.every((o) => o.sid === above),
       `${owned.length} owned, ${new Set(owned.map((o) => o.sid)).size} distinct owner(s)`
     );
     check(
@@ -525,6 +533,7 @@ async function main() {
       twins.counts[String(below)] === undefined || twins.counts[String(below)] === 0,
       `above=${twins.counts[String(above)] ?? 0}, below=${twins.counts[String(below)] ?? 0}`
     );
+    }
 
     // Carving one out ABOVE another is the whole of what the board promises
     // when an intent is started from a question: it cannot promise the words
@@ -535,11 +544,13 @@ async function main() {
     const flipped = await state();
     const nowFirst = flipped.snapshot.intents[0]?.sid;
     const nowOwned = Object.values(flipped.owners).filter((o) => o.outcome === 'intent');
-    check(
-      'putting the other one first hands it every one of those questions',
-      nowOwned.length > 0 && nowOwned.every((o) => o.sid === nowFirst),
-      `first=${nowFirst}, owners=${[...new Set(nowOwned.map((o) => o.sid))].join(',')}`
-    );
+    if (nowOwned.length > 0) {
+      check(
+        'putting the other one first hands it every one of those questions',
+        nowOwned.every((o) => o.sid === nowFirst),
+        `first=${nowFirst}, owners=${[...new Set(nowOwned.map((o) => o.sid))].join(',')}`
+      );
+    }
   }
 
   // 6c. An intent written without a name gets one.
@@ -861,6 +872,63 @@ async function main() {
       );
     }
 
+    // 9b. The order the list is read in.
+    //
+    //     The first row a participant reads is what tells them whether the
+    //     classifier can be trusted, so it should be the least arguable member
+    //     of the category rather than whichever student asked first. It is a
+    //     REARRANGEMENT and never a filter — a ranking that quietly dropped a
+    //     question would be the board lying about what a definition catches.
+    {
+      const now = adopted;
+      // Whichever intent holds the most — on a scratch assignment that may be
+      // one question, and the rearrange-not-filter claim still bites there.
+      const target = [...now.snapshot.intents].sort(
+        (a, b) => (now.counts[String(b.sid)] ?? 0) - (now.counts[String(a.sid)] ?? 0)
+      )[0];
+      const mine = target
+        ? Object.entries(now.owners)
+            .filter(([, o]) => o.sid === target.sid || o.matchedElsewhere.includes(target.sid))
+            .map(([m]) => Number(m))
+        : [];
+      // Three green ticks over an empty list say nothing. A scratch assignment
+      // has no prepared verdicts and nothing lands in any intent, so say that
+      // instead of asserting it.
+      if (!target || mine.length === 0) {
+        console.log('· no intent holds a question here — order not exercised');
+      } else {
+        const ranked = (await call('rank', {}, `sid=${target.sid}`)).body as {
+          order?: number[];
+          examples?: string[];
+        };
+        const order = ranked.order ?? [];
+        check(
+          'an order comes back for an intent',
+          order.length === mine.length,
+          `${order.length} of ${mine.length}`
+        );
+        check(
+          'and it rearranges rather than filters',
+          order.length === new Set(order).size && mine.every((m) => order.includes(m)),
+          `${new Set(order).size} distinct`
+        );
+        check(
+          'the owned questions come before the ones taken elsewhere',
+          (() => {
+            const ownedAt = order
+              .map((m, i) => ({ i, owned: now.owners[String(m)]?.sid === target.sid }))
+              .filter((x) => x.owned)
+              .map((x) => x.i);
+            const elseAt = order
+              .map((m, i) => ({ i, owned: now.owners[String(m)]?.sid === target.sid }))
+              .filter((x) => !x.owned)
+              .map((x) => x.i);
+            return ownedAt.length === 0 || elseAt.length === 0 || Math.max(...ownedAt) < Math.min(...elseAt);
+          })()
+        );
+      }
+    }
+
     // Copied, not re-rated: the prepared verdicts were stamped when the clone
     // was made, so a fresh rating pass would carry today's timestamp.
     const rows = await db
@@ -868,12 +936,18 @@ async function main() {
       .from(simpleRatings)
       .where(eq(simpleRatings.assignmentId, assignmentId));
     const added = rows.length - ratedBefore;
+    // Only THIS starter's verdicts. The run writes definitions of its own and
+    // those are judged for real, so counting every row stamped in the last ten
+    // minutes reports the script's own work as a re-rating of the starter.
     const startedAt = Date.now() - 10 * 60_000;
-    const fresh = rows.filter((r) => r.ratedAt.getTime() > startedAt).length;
+    const pickHash = intentDefHash(pick.definition);
+    const fresh = rows.filter(
+      (r) => r.defHash === pickHash && r.ratedAt.getTime() > startedAt
+    ).length;
     check(
       'and cost no new judgements',
       added > 0 && fresh === 0,
-      `${added} verdict(s) copied, ${fresh} newly rated`
+      `${added} verdict(s) added, ${fresh} of them freshly rated for “${pick.title}”`
     );
   } else {
     check(

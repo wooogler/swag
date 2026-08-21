@@ -642,6 +642,34 @@ export const simpleRatings = pgTable('simple_ratings', {
   assignmentIdx: index('simple_ratings_assignment_idx').on(table.assignmentId),
 }));
 
+// Hypothetical questions written from a definition, and their mean vector.
+// Keyed by definition text like the verdicts, so a wording edited and edited
+// back costs nothing. Only `anchor` is read when ordering; `examples` is what
+// the card can show on request.
+export const simpleDefinitionAnchors = pgTable('simple_definition_anchors', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  defHash: text('def_hash').notNull(),
+  examples: jsonb('examples').notNull(), // string[]
+  anchor: jsonb('anchor').notNull(), // number[]
+  model: text('model'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('simple_definition_anchors_unique').on(table.assignmentId, table.defHash),
+}));
+
+// The question an intent was carved out of. Not configuration: it changes no
+// routing and no answer, so it does not belong in the snapshot.
+export const simpleIntentSeeds = pgTable('simple_intent_seeds', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  sid: integer('sid').notNull(),
+  messageId: integer('message_id').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('simple_intent_seeds_unique').on(table.assignmentId, table.sid),
+}));
+
 // Response cache, keyed by the rule TEXT that produced it (rulePreviewHash) —
 // so a version switch is free wherever the applied text is unchanged, and a
 // rule edit only invalidates the questions that rule answers.

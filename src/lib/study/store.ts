@@ -151,6 +151,43 @@ export async function ensureStudyTables(): Promise<void> {
         sql`CREATE INDEX IF NOT EXISTS "simple_ratings_assignment_idx" ON "simple_ratings" ("assignment_id")`
       );
 
+      // What a definition is ANCHORED to, for ordering its question list.
+      //
+      // Keyed by the definition text like the verdicts are, so editing a
+      // wording and editing it back costs nothing, and two intents that
+      // happen to describe the same thing share one anchor. `examples` are
+      // the hypothetical questions a small model wrote from the definition —
+      // a description and an instance sit in different places in embedding
+      // space, so comparing a description with real questions ranks badly and
+      // comparing invented questions with real ones ranks well. `anchor` is
+      // their mean vector, which is the only part the ordering reads.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_definition_anchors" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "def_hash" text NOT NULL,
+          "examples" jsonb NOT NULL, "anchor" jsonb NOT NULL,
+          "model" text, "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_definition_anchors_unique" ON "simple_definition_anchors" ("assignment_id","def_hash")`
+      );
+
+      // The question an intent was carved out of.
+      //
+      // Not configuration — it changes no routing and no answer — so it is
+      // not in the snapshot. It is what the ordering anchors on when there is
+      // one, which is better than anything a model could invent: the
+      // participant pointed at it themselves.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_intent_seeds" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "sid" integer NOT NULL,
+          "message_id" integer NOT NULL, "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_intent_seeds_unique" ON "simple_intent_seeds" ("assignment_id","sid")`
+      );
+
       // Responses, keyed by the RULE TEXT that produced them. Not by version:
       // an intent's rule is usually untouched from one save to the next, so
       // keying on the text means only the questions whose rule actually

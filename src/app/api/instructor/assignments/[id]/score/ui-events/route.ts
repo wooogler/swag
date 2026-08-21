@@ -61,6 +61,15 @@ const UI_EVENTS = [
    * leaves no other trace. */
   'simple_version_view',
   'simple_local_version_view',
+  /** The fold under a definition, holding the invented questions its list is
+   * ordered by. It writes nothing and changes nothing, so opening it leaves no
+   * other trace — and it is the one surface on this board where a participant
+   * can read machine-written text about their own wording, which the analysis
+   * has to be able to separate out. */
+  'simple_examples_open',
+  /** An intent begun from a question in the list rather than from the button.
+   * Which of the two doors gets used is the shape of the whole session. */
+  'simple_intent_from_query',
 ] as const;
 
 const bodySchema = z.object({

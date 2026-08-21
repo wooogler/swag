@@ -271,7 +271,15 @@ export default function SimpleStudio({
   /* --------------------------------------------------------------- */
 
   const write = useCallback(
-    async (next: SimpleSnapshot, focusSid: number | null, kind: 'apply' | 'save') => {
+    async (
+      next: SimpleSnapshot,
+      focusSid: number | null,
+      kind: 'apply' | 'save',
+      /** The question a brand-new intent was carved out of. Rides along with
+       * the write that creates it and is written once, server-side, beside
+       * the snapshot rather than in it. */
+      seed?: { sid: number; messageId: number } | null
+    ) => {
       setSaving(true);
       const previousVersion = state.versions[0]?.versionNo ?? null;
       try {
@@ -282,7 +290,11 @@ export default function SimpleStudio({
             kind,
             prompt: next.prompt,
             rootRule: next.rootRule,
-            intents: next.intents,
+            intents: seed
+              ? next.intents.map((i) =>
+                  i.sid === seed.sid ? { ...i, seedMessageId: seed.messageId } : i
+                )
+              : next.intents,
             focusSid,
             recentMessageIds: selectedMessageId ? [selectedMessageId] : [],
           }),
@@ -303,7 +315,11 @@ export default function SimpleStudio({
 
   /** Take effect. The verb every editor carries. */
   const apply = useCallback(
-    (next: SimpleSnapshot, focusSid: number | null) => write(next, focusSid, 'apply'),
+    (
+      next: SimpleSnapshot,
+      focusSid: number | null,
+      seed?: { sid: number; messageId: number } | null
+    ) => write(next, focusSid, 'apply', seed),
     [write]
   );
 
@@ -421,6 +437,41 @@ export default function SimpleStudio({
   /* What the middle column lists                                     */
   /* --------------------------------------------------------------- */
 
+  /**
+   * The order the open intent's questions are listed in, and the examples the
+   * order was worked out from.
+   *
+   * Asked for once per intent rather than folded into the poll: the poll runs
+   * every second while judging, and the answer here is worked out from a few
+   * hundred embedding vectors. Absent, late or failed, the list keeps the
+   * order it already had.
+   */
+  const [ranked, setRanked] = useState<{ sid: number; order: number[]; examples: string[] } | null>(
+    null
+  );
+  useEffect(() => {
+    if (arm !== 'score' || selection.kind !== 'intent') {
+      setRanked(null);
+      return;
+    }
+    const sid = selection.sid;
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(
+        api('rank', `sid=${sid}${state.viewing && !state.atTip ? `&versionNo=${state.viewing.versionNo}` : ''}`)
+      );
+      if (!res.ok || cancelled) return;
+      const body = await res.json();
+      if (!cancelled) {
+        setRanked({ sid, order: body.order ?? [], examples: body.examples ?? [] });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `judged` moves as verdicts land, and the list they order changes with it.
+  }, [api, arm, selection, state.atTip, state.viewing, state.judged]);
+
   const diffFor = useCallback(
     (sid: number | null) => state.diff?.find((d) => d.sid === sid) ?? null,
     [state.diff]
@@ -437,11 +488,24 @@ export default function SimpleStudio({
     // already been adjusted for something the participant cannot see.
     const sid = selection.sid;
     const left = new Set(diffFor(sid)?.left ?? []);
-    return material.filter((r) => {
+    const mine = material.filter((r) => {
       const owner = ownerOf(r.messageId);
       return owner?.sid === sid || owner?.matchedElsewhere.includes(sid) || left.has(r.messageId);
     });
-  }, [arm, diffFor, material, ownerOf, selection]);
+    // Most typical first. The first row a participant reads is what tells them
+    // whether the classifier can be trusted, so it should be the least
+    // arguable member of the category rather than whichever student happened
+    // to ask first. Anything the ranking does not name keeps its place after
+    // the ones it does — a partial answer reorders what it knows and leaves
+    // the rest alone.
+    if (ranked?.sid !== sid || ranked.order.length === 0) return mine;
+    const at = new Map(ranked.order.map((id, i) => [id, i]));
+    return [...mine].sort(
+      (a, b) =>
+        (at.get(a.messageId) ?? Number.MAX_SAFE_INTEGER) -
+        (at.get(b.messageId) ?? Number.MAX_SAFE_INTEGER)
+    );
+  }, [arm, diffFor, material, ownerOf, ranked, selection]);
 
   const pinnedRows = useMemo(
     () => state.pinned.map((id) => rowById.get(id)).filter((r): r is ScoreQueryRow => !!r),
@@ -486,6 +550,7 @@ export default function SimpleStudio({
         setExpanded={setExpanded}
         creating={creating}
         setCreating={setCreating}
+        rankedExamples={ranked}
         onApply={apply}
         onSaveVersion={saveVersion}
         onRevert={revert}
@@ -558,6 +623,7 @@ function ConfigColumn({
   setExpanded,
   creating,
   setCreating,
+  rankedExamples,
   onApply,
   onSaveVersion,
   onRevert,
@@ -579,7 +645,12 @@ function ConfigColumn({
   setExpanded: (e: number | 'root' | null) => void;
   creating: Creating | null;
   setCreating: (c: Creating | null) => void;
-  onApply: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
+  rankedExamples: { sid: number; examples: string[] } | null;
+  onApply: (
+    next: SimpleSnapshot,
+    focusSid: number | null,
+    seed?: { sid: number; messageId: number } | null
+  ) => Promise<void>;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
   onRestore: (versionNo: number) => Promise<void>;
@@ -640,6 +711,7 @@ function ConfigColumn({
             setCreating={setCreating}
             onApply={onApply}
             countOf={countOf}
+            rankedExamples={rankedExamples}
             assignmentId={assignmentId}
           />
         )}
@@ -755,6 +827,7 @@ function Tree({
   setCreating,
   onApply,
   countOf,
+  rankedExamples,
   assignmentId,
 }: {
   api: (path: string, query?: string) => string;
@@ -773,8 +846,14 @@ function Tree({
   setExpanded: (e: number | 'root' | null) => void;
   creating: Creating | null;
   setCreating: (c: Creating | null) => void;
-  onApply: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
+  onApply: (
+    next: SimpleSnapshot,
+    focusSid: number | null,
+    seed?: { sid: number; messageId: number } | null
+  ) => Promise<void>;
   countOf: (sid: number | null) => number;
+  /** The hypothetical questions the open intent's order was worked out from. */
+  rankedExamples: { sid: number; examples: string[] } | null;
   assignmentId: string;
 }) {
   /**
@@ -826,12 +905,12 @@ function Tree({
           beforeTitle={beforeTitle}
           draft={draft}
           onCancel={() => setCreating(null)}
-          onCreate={(next, sid) => {
+          onCreate={(next, sid, seed) => {
             // Closed on the way out, not on the way back: leaving the form
             // open after a save invites a second click that writes the same
             // intent again.
             setCreating(null);
-            return onApply(next, sid);
+            return onApply(next, sid, seed);
           }}
         />
       </div>
@@ -962,6 +1041,8 @@ function Tree({
           >
             <Accordion
               api={api}
+              examples={rankedExamples?.sid === intent.sid ? rankedExamples.examples : []}
+              assignmentId={assignmentId}
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
               intent={intent}
@@ -1155,6 +1236,8 @@ function OrderButton({
  */
 function Accordion({
   api,
+  examples,
+  assignmentId,
   ruleSources,
   versions,
   intent,
@@ -1165,6 +1248,10 @@ function Accordion({
   onDelete,
 }: {
   api: (path: string, query?: string) => string;
+  /** The hypothetical questions this intent's order was worked out from —
+   * empty when it was carved out of a real one, which needs no invention. */
+  examples: string[];
+  assignmentId: string;
   /** Rules written elsewhere in this configuration, for the reuse picker. */
   ruleSources: RuleSource[];
   /** This intent's own history, newest first. */
@@ -1202,6 +1289,7 @@ function Accordion({
           placeholder="asks for…"
           className={FIELD_BOX + ' min-h-[4.5rem]'}
         />
+        <ExampleFold examples={examples} assignmentId={assignmentId} sid={intent.sid} />
       </Field>
       <Field
         label="Then"
@@ -1240,6 +1328,68 @@ function Accordion({
         disabled={readOnly}
         onPick={(v) => onChange({ definition: v.definition, rule: v.rule })}
       />
+    </div>
+  );
+}
+
+/**
+ * The invented questions this intent's list was ordered by, folded away.
+ *
+ * The list has to be ordered by SOMETHING, and a definition compared against
+ * real questions ranks badly — a description and an instance sit in different
+ * places — so a small model writes a few questions the description covers and
+ * the ordering measures distance from those. Saying so is better than an
+ * unexplained order.
+ *
+ * Folded, and one click from open, because that is the whole difference
+ * between an explanation and a writing aid. A list of "questions your
+ * description covers" sitting open beside the box is read as a draft to
+ * converge on, and converging on machine-written text is the loop this
+ * version exists without (§2). Opening it is logged, so the analysis can tell
+ * a participant who leaned on it from one who never looked.
+ *
+ * Absent entirely when the intent was carved out of a real question — that
+ * question is the anchor, and it is on the screen already.
+ */
+function ExampleFold({
+  examples,
+  assignmentId,
+  sid,
+}: {
+  examples: string[];
+  assignmentId: string;
+  sid: number;
+}) {
+  const [open, setOpen] = useState(false);
+  if (examples.length === 0) return null;
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (!open) logUi(assignmentId, 'simple_examples_open', { sid });
+          setOpen((v) => !v);
+        }}
+        className="flex items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+      >
+        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        What this is being compared against
+      </button>
+      {open && (
+        <div className="mt-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1.5">
+          <p className="text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+            Made-up questions your description covers. The list above is ordered by how close each
+            real question is to these. They are not part of the configuration.
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {examples.map((example, i) => (
+              <li key={i} className="text-2xs leading-relaxed">
+                {example}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -1326,7 +1476,11 @@ function NewIntent({
   beforeTitle: string;
   draft: SimpleSnapshot;
   onCancel: () => void;
-  onCreate: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
+  onCreate: (
+    next: SimpleSnapshot,
+    focusSid: number | null,
+    seed?: { sid: number; messageId: number } | null
+  ) => Promise<void>;
 }) {
   const [title, setTitle] = useState('');
   const [definition, setDefinition] = useState('');
@@ -1386,15 +1540,20 @@ function NewIntent({
             // A temporary negative id: the server swaps it for one that
             // outlives every later save. Position is decided here and nowhere
             // else — the array the board sends IS the order.
+            const tempSid = -Date.now();
             const next: SimpleSnapshot = {
               ...draft,
               intents: insertBefore(
                 draft.intents,
-                { sid: -Date.now(), title, definition, rule },
+                { sid: tempSid, title, definition, rule },
                 creating.beforeSid
               ),
             };
-            await onCreate(next, null);
+            await onCreate(
+              next,
+              null,
+              creating.fromMessageId ? { sid: tempSid, messageId: creating.fromMessageId } : null
+            );
             setBusy(false);
           }}
           className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
