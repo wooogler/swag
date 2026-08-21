@@ -24,6 +24,7 @@ import {
   chatMessages,
   scoreChatDeploys,
   scoreConfigVersions,
+  simpleConfigVersions,
   scoreIntents,
   scoreRuleVersions,
   studyClones,
@@ -349,8 +350,17 @@ export async function buildParticipantTrail(
     }
   }
 
-  const [events, versions, ruleRows, promptRows, deployRows, testRows, surveyRows, bank] =
-    await Promise.all([
+  const [
+    events,
+    versions,
+    ruleRows,
+    promptRows,
+    deployRows,
+    testRows,
+    surveyRows,
+    bank,
+    simpleRows,
+  ] = await Promise.all([
       db
         .select()
         .from(studyEvents)
@@ -392,6 +402,16 @@ export async function buildParticipantTrail(
         .from(studySurveyAnswers)
         .where(eq(studySurveyAnswers.participantId, participant.id)),
       db.select().from(studyQuestionBank),
+      // The simple version's whole configuration history, hidden rows and all:
+      // a participant who tried something, went back and lost it from their own
+      // timeline is exactly the trace RQ1 wants, and it exists nowhere else.
+      assignmentIds.length
+        ? db
+            .select()
+            .from(simpleConfigVersions)
+            .where(inArray(simpleConfigVersions.assignmentId, assignmentIds))
+            .orderBy(asc(simpleConfigVersions.versionNo))
+        : [],
     ]);
 
   // Live names, as a last resort. A participant who only edits type-root rules
@@ -789,13 +809,24 @@ export async function buildParticipantTrail(
 
   markAdoptedSuggestions(trailEvents);
 
-  const snapshots: TrailSnapshot[] = versions.map((v) => ({
-    block: blockOf.get(v.assignmentId)?.block ?? null,
-    versionNo: v.versionNo,
-    createdAt: iso(v.createdAt)!,
-    summary: v.summary,
-    snapshot: v.snapshot,
-  }));
+  const snapshots: TrailSnapshot[] = [
+    ...versions.map((v) => ({
+      block: blockOf.get(v.assignmentId)?.block ?? null,
+      versionNo: v.versionNo,
+      createdAt: iso(v.createdAt)!,
+      summary: v.summary,
+      snapshot: v.snapshot,
+    })),
+    ...simpleRows.map((v) => ({
+      block: blockOf.get(v.assignmentId)?.block ?? null,
+      versionNo: v.versionNo,
+      createdAt: iso(v.createdAt)!,
+      // The model's own label for the save, plus whether a later restore took
+      // this version out of the participant's timeline.
+      summary: { name: v.name, summary: v.summary, hiddenAt: iso(v.hiddenAt) },
+      snapshot: v.snapshot,
+    })),
+  ];
 
   const rules: TrailRuleVersion[] = [
     ...ruleRows.map((r) => ({
@@ -825,6 +856,14 @@ export async function buildParticipantTrail(
   const final = blocks
     .filter((b) => b.assignmentId)
     .map((b) => {
+      const mineSimple = simpleRows
+        .filter((v) => v.assignmentId === b.assignmentId && !v.hiddenAt)
+        .sort((x, y) => y.versionNo - x.versionNo)[0];
+      // One timeline, and its newest surviving entry IS the final state —
+      // there is no deploy to read instead.
+      if (mineSimple) {
+        return { block: b.block, condition: b.condition, config: mineSimple.snapshot };
+      }
       if (b.condition === 'baseline') {
         const deployed = promptRows
           .filter((p) => p.assignmentId === b.assignmentId && p.deployedAt)
@@ -913,6 +952,32 @@ function describeEvent(kind: string, p: Record<string, unknown>): string | null 
     }
     case 'pin_remove':
       return `withdrew ${p.verdictWas ?? '?'}`;
+    // ── the simple version ────────────────────────────────────────────
+    case 'simple_version_save': {
+      if (p.target === 'prompt') {
+        const delta = n('deltaChars');
+        return `v${p.versionNo} · rules ${delta != null && delta >= 0 ? '+' : ''}${delta ?? 0} chars`;
+      }
+      const created = (p.created as unknown[] | undefined)?.length ?? 0;
+      const removed = (p.removed as unknown[] | undefined)?.length ?? 0;
+      const updated = (p.updated as { fields?: string[] }[] | undefined) ?? [];
+      const parts: string[] = [];
+      if (created) parts.push(`+${created} intent`);
+      if (removed) parts.push(`−${removed} intent`);
+      for (const u of updated) parts.push((u.fields ?? []).join('+'));
+      if (p.rootChanged) parts.push('everything-else rule');
+      if (p.reordered) parts.push('reordered');
+      return `v${p.versionNo}${parts.length ? ` · ${parts.join(' · ')}` : ' · no change'}`;
+    }
+    case 'simple_version_restore':
+      return `to v${p.to} · dropped ${n('hidden') ?? 0}`;
+    case 'simple_judge_run':
+      return `${n('definitions') ?? 0} definition(s) · ${n('rated') ?? 0} rated · ${n('remaining') ?? 0} left`;
+    case 'simple_response_view':
+      return `${p.cacheHit ? 'cached' : 'generated'}${p.sid != null ? ` · intent ${p.sid}` : ' · everything else'}`;
+    case 'simple_pin_add':
+    case 'simple_pin_remove':
+      return `message ${p.messageId}`;
     case 'pin_remove_all':
       return `${n('count') ?? 0} withdrawn`;
     case 'pin_retire':

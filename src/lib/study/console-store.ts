@@ -7,11 +7,12 @@
  * is the study's, not the UI's: a test phase entered without current answers
  * would measure a configuration the participant no longer has.
  */
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   baselinePromptVersions,
   scoreChatDeploys,
+  simpleConfigVersions,
   studyClones,
   studyEvents,
   studyGeneratedResponses,
@@ -22,7 +23,13 @@ import {
   type StudyParticipant,
 } from '@/db/schema';
 import { isGenerationCurrent, type BankKind } from './generate';
-import { armOf, type StudioArm, type StudioFamily, type StudioView } from './config';
+import {
+  armOf,
+  familyOf as viewFamily,
+  type StudioArm,
+  type StudioFamily,
+  type StudioView,
+} from './config';
 import {
   blockPlan,
   cellOf,
@@ -109,6 +116,23 @@ export async function deployStateFor(clone: {
   assignmentId: string;
   condition: string;
 }): Promise<{ deployed: boolean; label: string | null }> {
+  // The simple version has no deploy step — the newest saved version is what a
+  // question is answered against — so "is there something to measure" is "have
+  // they saved anything".
+  if (viewFamily(clone.condition as StudioView) === 'simple') {
+    const [tip] = await db
+      .select({ versionNo: simpleConfigVersions.versionNo })
+      .from(simpleConfigVersions)
+      .where(
+        and(
+          eq(simpleConfigVersions.assignmentId, clone.assignmentId),
+          isNull(simpleConfigVersions.hiddenAt)
+        )
+      )
+      .orderBy(desc(simpleConfigVersions.versionNo))
+      .limit(1);
+    return { deployed: !!tip, label: tip ? `v${tip.versionNo}` : null };
+  }
   if (conditionOf(clone) === 'baseline') {
     const [live] = await db
       .select({ versionNo: baselinePromptVersions.versionNo })
@@ -137,7 +161,7 @@ export async function deployStateFor(clone: {
  * SQL rather than pulling rows: a mid-session poll should not drag a whole
  * intent tree and every rule version across the wire.
  */
-async function workFor(assignmentId: string): Promise<CloneWork> {
+async function workFor(assignmentId: string, family: StudioFamily): Promise<CloneWork> {
   const [row] = await db.execute<{
     intents: number;
     nested: number;
@@ -147,6 +171,10 @@ async function workFor(assignmentId: string): Promise<CloneWork> {
     rule_edits: number;
     deploys: number;
     last_deploy: Date | null;
+    simple_saves: number;
+    simple_last_save: Date | null;
+    simple_intents: number | null;
+    simple_prompt_chars: number | null;
   }>(sql`
     SELECT
       (SELECT count(*)::int FROM score_intents
@@ -173,8 +201,39 @@ async function workFor(assignmentId: string): Promise<CloneWork> {
       GREATEST(
         (SELECT max(created_at) FROM score_chat_deploys WHERE assignment_id = ${assignmentId}),
         (SELECT max(deployed_at) FROM baseline_prompt_versions WHERE assignment_id = ${assignmentId})
-      ) AS last_deploy
+      ) AS last_deploy,
+      -- The simple version keeps its configuration in one snapshot per save,
+      -- so its counts come from the newest one rather than from rows. Zero on
+      -- a full clone, and the caller picks which pair to read.
+      (SELECT count(*)::int FROM simple_config_versions
+        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL) AS simple_saves,
+      (SELECT max(created_at) FROM simple_config_versions
+        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL) AS simple_last_save,
+      (SELECT jsonb_array_length(coalesce(snapshot->'intents', '[]'::jsonb))
+        FROM simple_config_versions
+        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL
+        ORDER BY version_no DESC LIMIT 1) AS simple_intents,
+      (SELECT length(coalesce(snapshot->>'prompt', ''))
+        FROM simple_config_versions
+        WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL
+        ORDER BY version_no DESC LIMIT 1) AS simple_prompt_chars
   `);
+  if (family === 'simple') {
+    // A save is this version's whole publishing act, so it is both the edit
+    // count and the deploy count — there is no second step to count
+    // separately, and reporting zero deploys would read as "never published".
+    const saves = row?.simple_saves ?? 0;
+    return {
+      intents: row?.simple_intents ?? 0,
+      nestedIntents: 0,
+      corrections: 0,
+      filters: 0,
+      rulesChars: row?.simple_prompt_chars ?? 0,
+      ruleEdits: saves,
+      deploys: saves,
+      lastDeployAt: row?.simple_last_save ? new Date(row.simple_last_save).toISOString() : null,
+    };
+  }
   return {
     intents: row?.intents ?? 0,
     nestedIntents: row?.nested ?? 0,
@@ -294,7 +353,7 @@ export async function getParticipantStatus(
         kind: 'test',
       }).catch(() => ({ current: false, missing: 0, stale: 0 }));
       const [work, testProgress, surveyCount] = await Promise.all([
-        workFor(clone.assignmentId),
+        workFor(clone.assignmentId, viewFamily(clone.condition as StudioView)),
         answeredFor(clone.assignmentId, clone.datasetKey),
         db
           .select({ n: sql<number>`count(*)::int` })
@@ -540,6 +599,7 @@ export async function getBlockPredictions(
     deployedConfigFor({
       assignmentId: clone.assignmentId,
       condition: conditionOf(clone),
+      view: clone.condition as StudioView,
     }),
     db
       .select({

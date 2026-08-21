@@ -54,7 +54,10 @@ import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { getLatestChatDeploy, resolveChatPromptFromSnapshot } from '@/lib/score/deploy-store';
 import { isScoreQueryType } from '@/lib/score/intents';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
-import { armOf, type StudioView } from './config';
+import { armOf, familyOf, type StudioView } from './config';
+import type { SimpleSnapshot } from './simple/chain';
+import { resolveSimpleLive } from './simple/live';
+import { getSimpleTip } from './simple/store';
 import { isChatConfigured, runChatTurn, type TurnMessage } from './chat-run';
 import { ensureStudyTables } from './store';
 
@@ -166,14 +169,26 @@ export async function generateForClone(args: {
   if (items.length === 0) throw new Error('empty_bank');
 
   const basePrompt = assignmentBasePrompt(assignment);
-  const condition = armOf(clone.condition as StudioView);
+  const view = clone.condition as StudioView;
+  const condition = armOf(view);
+  const simple = familyOf(view) === 'simple';
 
   // ── pin the configuration ONCE, before any answer is produced ──
   let configRef: Record<string, unknown>;
   let baselinePrompt: string | null = null;
   let snapshot: Awaited<ReturnType<typeof getLatestChatDeploy>> = null;
+  let simpleSnapshot: SimpleSnapshot | null = null;
 
-  if (condition === 'baseline') {
+  if (simple) {
+    // No deploy step in this version: the newest saved version IS what a
+    // question is answered against, so that is what gets pinned. Pinned all
+    // the same — a save during the questionnaire would otherwise split a batch
+    // across two configurations.
+    const tip = await getSimpleTip({ assignmentId: cloneAssignmentId, condition: view, seedPrompt: basePrompt });
+    if (!tip.version) throw new Error('not_deployed');
+    simpleSnapshot = tip.snapshot;
+    configRef = { simpleVersionNo: tip.version.versionNo };
+  } else if (condition === 'baseline') {
     // Most-recently-DEPLOYED version, resolved to an explicit versionNo:
     // resolveBaselineChatPrompt always reads "latest deployed", which would
     // drift under a redeploy mid-session.
@@ -246,7 +261,29 @@ export async function generateForClone(args: {
             let applied: unknown = null;
             let outcome: 'routed' | 'empty_config';
 
-            if (condition === 'baseline') {
+            if (simple) {
+              const { prevQueryText, prevResponseText } = priorExchange(context);
+              // Throws rather than falling back if the judge cannot answer:
+              // the assignment's own prompt is not this participant's
+              // configuration, and recording it would put a reply nobody wrote
+              // into the measurement.
+              const route = await resolveSimpleLive({
+                snapshot: simpleSnapshot!,
+                queryText: item.question,
+                prevQueryText,
+                prevResponseText,
+                callOptions: CALL_OPTIONS,
+              });
+              systemPrompt = route.systemPrompt;
+              // The same three fields the full version records, so the
+              // pointing question is scored the same way in both.
+              applied = {
+                intentId: route.sid,
+                intentTitle: route.title,
+                outcome: route.outcome === 'intent' ? 'intent' : 'type_default',
+              };
+              outcome = systemPrompt.trim() ? 'routed' : 'empty_config';
+            } else if (condition === 'baseline') {
               systemPrompt = baselinePrompt ?? '';
               // A deployed baseline prompt IS the configuration — there is no
               // classifier to fail, so the only two states are "has text" and
@@ -364,7 +401,19 @@ export async function isGenerationCurrent(args: {
   if (!clone) return { current: false, missing: items.length, stale: 0 };
 
   let liveRef: Record<string, unknown> | null = null;
-  if (clone.condition === 'baseline') {
+  if (familyOf(clone.condition as StudioView) === 'simple') {
+    // Newest saved version, which in this version is also the one in effect.
+    const [assignment] = await db
+      .select()
+      .from(assignments)
+      .where(eq(assignments.id, cloneAssignmentId));
+    const tip = await getSimpleTip({
+      assignmentId: cloneAssignmentId,
+      condition: clone.condition as StudioView,
+      seedPrompt: assignment ? assignmentBasePrompt(assignment) : '',
+    });
+    if (tip.version) liveRef = { simpleVersionNo: tip.version.versionNo };
+  } else if (armOf(clone.condition as StudioView) === 'baseline') {
     const rows = await db
       .select({ versionNo: baselinePromptVersions.versionNo, deployedAt: baselinePromptVersions.deployedAt })
       .from(baselinePromptVersions)

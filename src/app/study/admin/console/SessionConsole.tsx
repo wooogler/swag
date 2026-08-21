@@ -357,9 +357,16 @@ export default function SessionConsole({
                     </span>{' '}
                     {c.condition === 'score'
                       ? `intent ${c.work.intents}`
-                      : `${c.work.filters} filter(s) · ${c.work.rulesChars} chars`}
+                      : p.family === 'simple'
+                        ? `${c.work.rulesChars} chars`
+                        : `${c.work.filters} filter(s) · ${c.work.rulesChars} chars`}
                     {' · '}
-                    {c.work.ruleEdits} edit(s) · {c.work.deploys} deploy(s)
+                    {/* A save is the simple version's whole publishing act, so
+                        counting edits and deploys separately would print the
+                        same number twice. */}
+                    {p.family === 'simple'
+                      ? `${c.work.deploys} save(s)`
+                      : `${c.work.ruleEdits} edit(s) · ${c.work.deploys} deploy(s)`}
                   </span>
                 ))}
                 <Chip tone={measurementTone(p)}>

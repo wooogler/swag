@@ -33,6 +33,12 @@ export interface SnapshotConfig {
   intents?: SnapshotIntentView[];
   /** Baseline only: the deployed rules document. */
   rules?: string;
+  /**
+   * The simple version, whose tree has ONE root instead of one per query type.
+   * Set on both arms of it so the panel and the picker skip the type sections
+   * rather than drawing four empty ones.
+   */
+  flat?: boolean;
 }
 
 const TYPE_ORDER = ['planning', 'translating', 'reviewing', 'drafting'] as const;
@@ -65,9 +71,20 @@ export interface PickerEntry {
  * search work charged to a measurement — so both come from here rather than
  * from two hand-kept sortings that agree until someone edits one of them.
  */
-export function pickerOrder(intents: SnapshotIntentView[] | undefined): PickerEntry[] {
+export function pickerOrder(
+  intents: SnapshotIntentView[] | undefined,
+  flat = false
+): PickerEntry[] {
   const authored = (intents ?? []).filter((i) => i.kind === 'intent');
   const out: PickerEntry[] = [];
+  if (flat) {
+    // One tree, one order — the same walk the panel draws, with no type to
+    // group by.
+    orderChain(authored).forEach((intent, i) => {
+      out.push({ intent, depth: depthOf(intent, authored), type: 'all', startsType: i === 0 });
+    });
+    return out;
+  }
   for (const type of TYPE_ORDER) {
     const mine = authored.filter((i) => i.type === type);
     orderChain(mine).forEach((intent, i) => {
@@ -134,6 +151,34 @@ export default function SnapshotConfigView({
   const intents = config.intents ?? [];
   const roots = intents.filter((i) => i.kind === 'type_root');
   const authored = intents.filter((i) => i.kind === 'intent');
+
+  if (config.flat) {
+    const root = roots[0] ?? null;
+    return (
+      <div className="flex flex-col h-full">
+        <Header label="Your setup" version={config.versionLabel} />
+        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1.5">
+          {orderChain(authored).map((intent) => (
+            <IntentCard
+              key={intent.id}
+              intent={intent}
+              depth={depthOf(intent, authored)}
+              onPick={onIntentPick}
+              picked={pickedIntentId === intent.id}
+            />
+          ))}
+          {root && (
+            <div className="rounded-lg border border-dashed border-[hsl(var(--border))] px-3 py-2">
+              <p className="text-2xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+                Everything else
+              </p>
+              <RuleText rule={root.rule} />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">

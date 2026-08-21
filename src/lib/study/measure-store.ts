@@ -15,6 +15,7 @@
 import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
+  assignments,
   baselinePromptVersions,
   scoreDissections,
   studyClones,
@@ -25,7 +26,9 @@ import {
 } from '@/db/schema';
 import { getLatestChatDeploy } from '@/lib/score/deploy-store';
 import type { SnapshotConfig } from '@/components/study/SnapshotConfigView';
-import { armOf, type StudioView } from './config';
+import { armOf, familyOf, type StudioView } from './config';
+import { assignmentBasePrompt } from '@/lib/assignment-ai';
+import { getSimpleTip } from './simple/store';
 import { blockPlan } from './phases';
 
 /**
@@ -161,7 +164,15 @@ async function materialsByMessage(ids: number[]): Promise<Map<number, QuestionMa
 export async function cloneForBlock(
   participant: StudyParticipant,
   block: 1 | 2
-): Promise<{ assignmentId: string; datasetKey: string; condition: 'score' | 'baseline' } | null> {
+): Promise<{
+  assignmentId: string;
+  datasetKey: string;
+  /** The arm, which is what every measurement branches on. */
+  condition: 'score' | 'baseline';
+  /** The whole condition, for the one thing that needs the family too:
+   * where to read the configuration from. */
+  view: StudioView;
+} | null> {
   const datasetKey = blockPlan(participant).find((p) => p.block === block)
     ?.datasetKey;
   if (!datasetKey) return null;
@@ -176,6 +187,7 @@ export async function cloneForBlock(
     assignmentId: clone.assignmentId,
     datasetKey: clone.datasetKey,
     condition: armOf(clone.condition as StudioView),
+    view: clone.condition as StudioView,
   };
 }
 
@@ -183,7 +195,12 @@ export async function cloneForBlock(
 export async function deployedConfigFor(clone: {
   assignmentId: string;
   condition: 'score' | 'baseline';
+  /** The full StudioView, when the caller has it — the simple version reads a
+   * saved snapshot rather than a deploy. Optional so older callers still
+   * compile into the full version's behaviour. */
+  view?: StudioView;
 }): Promise<SnapshotConfig | null> {
+  if (clone.view && familyOf(clone.view) === 'simple') return simpleConfigFor(clone.assignmentId, clone.view);
   if (clone.condition === 'baseline') {
     const [live] = await db
       .select({
@@ -222,6 +239,58 @@ export async function deployedConfigFor(clone: {
       parentId: i.parentId ?? null,
       position: i.position ?? null,
     })),
+  };
+}
+
+/**
+ * The simple version's configuration, in the same shape the panel already
+ * reads. Its newest saved version IS what a question is answered against, so
+ * there is no deploy to look up — and its tree has one root rather than one
+ * per query type, which is what `flat` tells the panel.
+ */
+async function simpleConfigFor(
+  assignmentId: string,
+  view: StudioView
+): Promise<SnapshotConfig | null> {
+  const [assignment] = await db.select().from(assignments).where(eq(assignments.id, assignmentId));
+  const tip = await getSimpleTip({
+    assignmentId,
+    condition: view,
+    seedPrompt: assignment ? assignmentBasePrompt(assignment) : '',
+  });
+  if (!tip.version) return null;
+  const versionLabel = `v${tip.version.versionNo}`;
+  if (tip.snapshot.arm === 'baseline') {
+    return { condition: 'baseline', versionLabel, rules: tip.snapshot.prompt, flat: true };
+  }
+  return {
+    condition: 'score',
+    versionLabel,
+    flat: true,
+    intents: [
+      ...tip.snapshot.intents.map((intent, i) => ({
+        id: intent.sid,
+        title: intent.title,
+        definition: intent.definition,
+        rule: intent.rule,
+        kind: 'intent',
+        type: null,
+        parentId: intent.parentSid,
+        // Array position IS the order in a snapshot, so it becomes the
+        // position the shared ordering helper expects.
+        position: i,
+      })),
+      {
+        id: -1,
+        title: 'Everything else',
+        definition: '',
+        rule: tip.snapshot.rootRule,
+        kind: 'type_root',
+        type: null,
+        parentId: null,
+        position: null,
+      },
+    ],
   };
 }
 

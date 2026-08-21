@@ -4,6 +4,9 @@ import { assignments, chatMessages } from '@/db/schema';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import { resolveDeployedChatPrompt } from '@/lib/score/deploy-store';
 import { getCloneCondition, resolveBaselineChatPrompt } from '@/lib/study/baseline-store';
+import { familyOf } from '@/lib/study/config';
+import { resolveSimpleLive } from '@/lib/study/simple/live';
+import { getSimpleTip } from '@/lib/study/simple/store';
 import { eq } from 'drizzle-orm';
 
 interface ChatErrorDetails {
@@ -168,7 +171,46 @@ export async function POST(req: Request) {
     // SCORE clones + all non-study assignments take the intent-routing path.
     const condition = await getCloneCondition(assignmentId);
     let deployed: Awaited<ReturnType<typeof resolveDeployedChatPrompt>>;
-    if (condition === 'baseline') {
+    if (condition && familyOf(condition) === 'simple') {
+      // The simple version's newest saved version is what a question is
+      // answered against; there is no deploy pointer to look up and, on the
+      // intent arm, no query-type call in front of the routing.
+      const tip = await getSimpleTip({
+        assignmentId,
+        condition,
+        seedPrompt: basePrompt,
+      });
+      try {
+        const route = await resolveSimpleLive({
+          snapshot: tip.snapshot,
+          queryText: userMessageContent,
+          prevQueryText: prevUser?.content ?? null,
+          prevResponseText,
+          // A student is waiting: fail fast, and fall open below.
+          callOptions: { timeoutMs: 15_000, maxRetries: 0 },
+        });
+        deployed = {
+          systemPrompt: route.systemPrompt,
+          applied:
+            route.sid == null
+              ? null
+              : {
+                  intentId: route.sid,
+                  intentTitle: route.title ?? '',
+                  rule: route.systemPrompt,
+                  outcome: 'intent' as const,
+                  // No query types in this version — the field stays, empty,
+                  // so the reply metadata keeps one shape across both.
+                  type: null,
+                },
+          deployVersion: tip.version?.versionNo ?? null,
+        };
+      } catch {
+        // Same posture as the full version: a classifier that cannot answer
+        // must not stop the student's reply.
+        deployed = { systemPrompt: basePrompt, applied: null, deployVersion: null };
+      }
+    } else if (condition === 'baseline') {
       const baselinePrompt = await resolveBaselineChatPrompt(assignmentId, basePrompt);
       deployed = { systemPrompt: baselinePrompt, applied: null, deployVersion: null };
     } else {

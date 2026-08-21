@@ -54,6 +54,13 @@ const UI_EVENTS = [
    * proposal is rejected, so without this a round the instructor threw away
    * looks identical to one that never happened. */
   'proposal_dismiss',
+  /** The simple version. Its board has no workbench to open, so the reads
+   * worth keeping are which version is being looked at and, inside one
+   * conversation, which version its reply was worked out under — a comparison
+   * the participant makes without changing anything, and which therefore
+   * leaves no other trace. */
+  'simple_version_view',
+  'simple_local_version_view',
 ] as const;
 
 const bodySchema = z.object({

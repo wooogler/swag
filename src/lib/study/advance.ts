@@ -17,7 +17,7 @@ import { deployStateFor, setParticipantPhase } from './console-store';
 import { logParticipantEvent } from './events';
 import { generateForClone, type BankKind } from './generate';
 import { cloneForBlock } from './measure-store';
-import { isStudyPhase, nextPhase, type StudyPhase } from './phases';
+import { familyOf, isStudyPhase, nextPhase, type StudyPhase } from './phases';
 import { warmInFlight } from './warm';
 import type { StudyParticipant } from '@/db/schema';
 
@@ -116,7 +116,14 @@ export async function advanceParticipant(
     const { deployed } = await deployStateFor(clone);
     if (!deployed) {
       return refuse(participant, phase, 'not_deployed', {
-        message: 'Deploy your chatbot first — the next step is about the version you deployed.',
+        // Two versions, two ways of having published: the full one deploys,
+        // the simple one just saves. Same refusal either way — there is
+        // nothing to measure — but a participant who has never seen a Deploy
+        // button cannot act on being told to press it.
+        message:
+          familyOf(participant) === 'simple'
+            ? 'Save your chatbot first — the next step is about what you have saved.'
+            : 'Deploy your chatbot first — the next step is about the version you deployed.',
         detail: { datasetKey: clone.datasetKey },
       });
     }

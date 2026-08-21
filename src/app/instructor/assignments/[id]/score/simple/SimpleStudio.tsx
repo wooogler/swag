@@ -305,6 +305,9 @@ export default function SimpleStudio({
           setLocalVersionNo(null);
           void load({ versionNo, diffFrom: null });
           setDiffFrom(null);
+          // Looking back at an older version changes nothing and would
+          // otherwise leave no trace at all.
+          logUi(assignmentId, 'simple_version_view', { versionNo });
         }}
         titleOf={title}
         assignmentId={assignmentId}
@@ -335,6 +338,12 @@ export default function SimpleStudio({
         viewingVersionNo={state.viewing?.versionNo ?? null}
         localVersionNo={localVersionNo}
         setLocalVersionNo={setLocalVersionNo}
+        onLocalVersionLog={(versionNo) =>
+          logUi(assignmentId, 'simple_local_version_view', {
+            versionNo,
+            messageId: selectedMessageId,
+          })
+        }
         titleOf={title}
       />
     </div>
@@ -1217,6 +1226,7 @@ function ViewerColumn({
   viewingVersionNo,
   localVersionNo,
   setLocalVersionNo,
+  onLocalVersionLog,
   titleOf,
 }: {
   api: (path: string, query?: string) => string;
@@ -1227,6 +1237,7 @@ function ViewerColumn({
   viewingVersionNo: number | null;
   localVersionNo: number | null;
   setLocalVersionNo: (v: number | null) => void;
+  onLocalVersionLog: (versionNo: number | null) => void;
   titleOf: (sid: number | null) => string;
 }) {
   const [answer, setAnswer] = useState<{
@@ -1321,7 +1332,11 @@ function ViewerColumn({
         {versions.length > 0 && (
           <select
             value={String(versionNo ?? '')}
-            onChange={(e) => setLocalVersionNo(e.target.value ? Number(e.target.value) : null)}
+            onChange={(e) => {
+              const picked = e.target.value ? Number(e.target.value) : null;
+              setLocalVersionNo(picked);
+              onLocalVersionLog(picked);
+            }}
             className="text-xs rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-1.5 py-1"
           >
             {versions.map((v) => (
