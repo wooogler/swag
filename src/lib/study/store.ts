@@ -463,13 +463,24 @@ export async function ensureStudyTables(): Promise<void> {
         `"pointed_span_end" integer`,
         `"pointed_text" text`,
         `"pointed_at" timestamp`,
-        // The block test's three free-text answers (문항지 §3, 08-15: no
-        // spoken items). expectation = Pass 1's description, required and
-        // replayed verbatim in Pass 2; whats_off opens at a rating of 3 or
-        // less; probe opens only where the prediction missed, and may be blank.
+        // The v2 instrument's free text. Retired by BLOCK_TEST v3 §9 and never
+        // written any more, but kept so the pilot's rows stay readable.
         `"expectation" text`,
         `"whats_off" text`,
+        // BLOCK_TEST v3 §4. Pass 1 is now four answers — Q1 the Desire anchor
+        // (free text), Q2 the pointing above, Q3 confidence and Q4 expected
+        // desirability, both on the 6-point agreement scale. Pass 2 is two
+        // judgements on the same scale, Q5 against their teaching standards
+        // and Q6 against their configuration, and the two free-text boxes the
+        // negative half opens: P (the probe, at Q5 ≤ 3 OR Q6 ≤ 3) and F (the
+        // repair, at Q5 ≤ 3).
+        `"ideal" text`,
+        `"confidence" smallint`,
+        `"expect_desirable" smallint`,
+        `"desirable" smallint`,
+        `"follows_setup" smallint`,
         `"probe" text`,
+        `"repair" text`,
         // Per-step durations from the moment the question appeared (ms). The
         // three timestamps above all land in ONE write — the prediction is a
         // single Next press — so without this there is no way to tell how long

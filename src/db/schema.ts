@@ -929,18 +929,22 @@ export const studyReviewQuestions = pgTable('study_review_questions', {
   uniq: uniqueIndex('study_review_questions_unique').on(table.assignmentId, table.messageId),
 }));
 
-// Block test: the participant predicts whether their configuration will answer
-// as they intend, THEN sees the frozen answer, THEN rates the fit. The
-// prediction is stored before the answer is released, so guessed_at < rated_at
-// is also the evidence that the prediction was made blind.
+// Block test (docs/BLOCK_TEST v3.md §4): the participant answers four
+// questions about what their configuration WILL do, THEN sees the frozen
+// answer, THEN judges it twice — against their own teaching standards (Q5) and
+// against their own configuration (Q6). The predictions are stored before any
+// answer is released, so pointed_at < rated_at is also the evidence that they
+// were made blind.
 export const studyTestAnswers = pgTable('study_test_answers', {
   id: serial('id').primaryKey(),
   participantId: text('participant_id').notNull(),
   cloneAssignmentId: text('clone_assignment_id').notNull(),
   bankItemId: integer('bank_item_id').notNull(),
-  guess: boolean('guess'),
-  rating: smallint('rating'), // 1-5 fit with the instructor's intent
-  // The pointing step (design v2 §5). SCORE: 'intent' | 'none' | 'not_sure'.
+
+  // --- Pass 1 · prediction ------------------------------------------------
+  /** Q1 — the Desire anchor: how it SHOULD ideally answer, in their words. */
+  ideal: text('ideal'),
+  // Q2 — the pointing step. SCORE: 'intent' | 'none' | 'not_sure'.
   // Baseline: 'span' | 'nothing' | 'not_sure'.
   pointedKind: text('pointed_kind'),
   pointedIntentId: integer('pointed_intent_id'),
@@ -948,14 +952,35 @@ export const studyTestAnswers = pgTable('study_test_answers', {
   pointedSpanEnd: integer('pointed_span_end'),
   /** The highlighted text itself — outlives the offsets across a redeploy. */
   pointedText: text('pointed_text'),
-  // Free text, all three of them (문항지 §3, 08-15: the block test has no
-  // spoken items). `expectation` is Pass 1's description of what they think
-  // the chatbot will do — required, and replayed verbatim in Pass 2.
-  // `whatsOff` opens at a rating of 3 or less; `probe` opens only where the
-  // prediction actually missed, and may be left blank.
+  /** Q3 — "I can anticipate how the chatbot will respond", 1-6. */
+  confidence: smallint('confidence'),
+  /** Q4 — "the response WILL be educationally desirable", 1-6. */
+  expectDesirable: smallint('expect_desirable'),
+
+  // --- Pass 2 · judgement -------------------------------------------------
+  /** Q5 — "the response IS educationally desirable", 1-6. Same sentence as Q4
+   * in a different tense, so |Q4 − Q5| is a prediction error and not a
+   * comparison of two differently worded scales. */
+  desirable: smallint('desirable'),
+  /** Q6 — "the response follows what I set up", 1-6. Judged against the
+   * configuration on screen, not against a memory of the prediction. */
+  followsSetup: smallint('follows_setup'),
+  /** P — the one free-text probe, worded by the execution quadrant it lands
+   * in. Opens at Q5 ≤ 3 OR Q6 ≤ 3, and may be left blank. */
+  probe: text('probe'),
+  /** F — "what would you change in your setup to fix this", at Q5 ≤ 3. The
+   * only direct measure of repair locality. */
+  repair: text('repair'),
+
+  // --- Retired, kept so pilot rows stay readable --------------------------
+  // The v2 instrument: a yes/no prediction, a 1-5 fit rating, a written
+  // expectation of what the chatbot WOULD do (an E question, where `ideal` is
+  // a D one), and "what's off" — which P now absorbs. Never written any more.
+  guess: boolean('guess'),
+  rating: smallint('rating'),
   expectation: text('expectation'),
   whatsOff: text('whats_off'),
-  probe: text('probe'),
+
   guessedAt: timestamp('guessed_at'),
   pointedAt: timestamp('pointed_at'),
   ratedAt: timestamp('rated_at'),
@@ -963,14 +988,16 @@ export const studyTestAnswers = pgTable('study_test_answers', {
    * How long each step of the item took, in MILLISECONDS FROM THE MOMENT THE
    * QUESTION APPEARED — measured on the client and sent with the write.
    *
-   * Durations, not clocks: the three timestamps above all land in one write
-   * (the prediction is a single Next press), so they cannot say how long the
+   * Durations, not clocks: the whole prediction lands in one write (Pass 1 is
+   * a single Next press), so the timestamps cannot say how long the
    * participant spent deciding WHERE the answer comes from versus what it will
    * say. Relative ms are also immune to client clock skew.
    *
-   * Pass 1: { shown, pointFirst, point, pointChanges, expectStart, expectEnd,
-   *           guess, submit }. Pass 2: { reveal, rate, probe }, measured from
-   *           when the item's rate card appeared.
+   * Pass 1: { idealStart, idealEnd, pointFirst, point, pointChanges,
+   *           confidence, expectDesirable, submit }.
+   * Pass 2: { reveal, desirable, follows, desirableChanges, followsChanges,
+   *           probeOpened, probe, repair, probeChars, repairChars }, measured
+   *           from when the item's Pass 2 card appeared.
    */
   timing: jsonb('timing'),
 }, (table) => ({

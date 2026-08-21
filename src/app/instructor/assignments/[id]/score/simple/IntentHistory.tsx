@@ -70,12 +70,17 @@ export default function IntentHistory({
   currentDefinition,
   currentRule,
   onPick,
+  onRevert,
   disabled = false,
 }: {
   versions: IntentVersion[];
   currentDefinition: string;
   currentRule: string;
   onPick: (version: IntentVersion) => void;
+  /** Go back to the last save. Beside the history because that is where the
+   * thing it goes back TO is listed. Null when there is nothing applied, or
+   * no save to go back to. */
+  onRevert?: (() => void) | null;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -88,27 +93,43 @@ export default function IntentHistory({
     return () => clearInterval(timer);
   }, [open]);
 
-  // Nothing written here yet — a heading over an empty box is furniture.
-  if (versions.length === 0) return null;
+  // Nothing written here yet — a heading over an empty box is furniture. The
+  // one exception is a configuration with something applied and a save to go
+  // back to: the way back has to be reachable before there is a list.
+  if (versions.length === 0 && !onRevert) return null;
 
   return (
     <div className="border-t border-[hsl(var(--border))] pt-1.5">
-      <button
-        type="button"
-        onClick={() => {
-          setNow(Date.now());
-          setOpen((v) => !v);
-        }}
-        className="flex w-full items-center gap-1 text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-      >
-        {open ? (
-          <ChevronDown className="w-3 h-3" />
-        ) : (
-          <ChevronRight className="w-3 h-3" />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setNow(Date.now());
+            setOpen((v) => !v);
+          }}
+          disabled={versions.length === 0}
+          className="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
+        >
+          {versions.length > 0 &&
+            (open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}
+          Version history
+          <span className="tabular-nums font-normal">{versions.length}</span>
+        </button>
+        <span className="flex-1" />
+        {/* Beside the list, because the list is where the thing it goes back
+            TO is. It is not one of the three verbs on the row above: those act
+            on what is being written, and this discards it. */}
+        {onRevert && (
+          <button
+            type="button"
+            onClick={onRevert}
+            title="Go back to the last saved version, dropping what you applied since"
+            className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
+          >
+            Revert
+          </button>
         )}
-        Version history
-        <span className="tabular-nums font-normal">{versions.length}</span>
-      </button>
+      </div>
 
       {open && (
         // Capped and scrolling: a long history must not push the boxes it is

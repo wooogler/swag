@@ -111,6 +111,29 @@ interface StatePayload {
 }
 
 /**
+ * Whether the boxes hold anything the board is not already answering with.
+ *
+ * What Apply is for, and therefore what its being enabled should mean. It
+ * compares the draft with the snapshot IN EFFECT, which is a different
+ * question from the one the tree's "unsaved" marks answer — those compare what
+ * is in effect with the last save.
+ */
+function sameSnapshot(a: SimpleSnapshot, b: SimpleSnapshot): boolean {
+  if (a.arm === 'baseline') return a.prompt === b.prompt;
+  if (a.rootRule !== b.rootRule || a.intents.length !== b.intents.length) return false;
+  return a.intents.every((intent, i) => {
+    const other = b.intents[i];
+    return (
+      !!other &&
+      other.sid === intent.sid &&
+      other.title === intent.title &&
+      other.definition === intent.definition &&
+      other.rule === intent.rule
+    );
+  });
+}
+
+/**
  * The draft, with any title the server filled in while it was open.
  *
  * Returns the same object when there is nothing to take, so a poll that
@@ -381,6 +404,12 @@ export default function SimpleStudio({
       }
     },
     [assignmentId, write]
+  );
+
+  /** Something is written that has not taken effect. */
+  const draftChanged = useMemo(
+    () => !sameSnapshot(draft, state.snapshot),
+    [draft, state.snapshot]
   );
 
   const canUndo = past.length > 0 && !saving && state.atTip;
@@ -677,6 +706,7 @@ export default function SimpleStudio({
         creating={creating}
         setCreating={setCreating}
         rankedExamples={ranked}
+        draftChanged={draftChanged}
         onUndo={canUndo ? undo : null}
         onRedo={canRedo ? redo : null}
         onApply={apply}
@@ -755,6 +785,7 @@ function ConfigColumn({
   creating,
   setCreating,
   rankedExamples,
+  draftChanged,
   onUndo,
   onRedo,
   onApply,
@@ -779,6 +810,8 @@ function ConfigColumn({
   creating: Creating | null;
   setCreating: (c: Creating | null) => void;
   rankedExamples: { sid: number; examples: string[] } | null;
+  /** Something is written that has not taken effect. */
+  draftChanged: boolean;
   /** Null when there is nothing to step back to, or forward to. */
   onUndo: (() => void) | null;
   onRedo: (() => void) | null;
@@ -821,23 +854,6 @@ function ConfigColumn({
           </div>
         )}
 
-        {/* Stepping back and forward through what was applied acts on the
-            whole configuration, so it lives in the column and not inside an
-            editor. It was next to Apply until an undo removed the last intent
-            and took the buttons down with the card that held them — the
-            control that puts something back cannot live inside the thing it
-            is putting back. Sticky, so it stays reachable down a long list. */}
-        {(onUndo || onRedo) && (
-          <div className="sticky top-0 z-10 flex items-center justify-end gap-0.5 px-2 pt-2 bg-[hsl(var(--card))]">
-            <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
-              <Undo2 className="w-3.5 h-3.5" />
-            </StepButton>
-            <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
-              <Redo2 className="w-3.5 h-3.5" />
-            </StepButton>
-          </div>
-        )}
-
         {arm === 'baseline' ? (
           <PromptEditor
             draft={draft}
@@ -869,6 +885,9 @@ function ConfigColumn({
             savedVersionNo={state.savedVersionNo}
             countOf={countOf}
             rankedExamples={rankedExamples}
+            draftChanged={draftChanged}
+            onUndo={onUndo}
+            onRedo={onRedo}
             assignmentId={assignmentId}
           />
         )}
@@ -988,6 +1007,9 @@ function Tree({
   savedVersionNo,
   countOf,
   rankedExamples,
+  draftChanged,
+  onUndo,
+  onRedo,
   assignmentId,
 }: {
   api: (path: string, query?: string) => string;
@@ -1019,6 +1041,10 @@ function Tree({
   countOf: (sid: number | null) => number;
   /** The hypothetical questions the open intent's order was worked out from. */
   rankedExamples: { sid: number; examples: string[] } | null;
+  /** Something is written that has not taken effect. */
+  draftChanged: boolean;
+  onUndo: (() => void) | null;
+  onRedo: (() => void) | null;
   assignmentId: string;
 }) {
   /**
@@ -1217,6 +1243,9 @@ function Tree({
               savedVersionNo={savedVersionNo}
               onSaveVersion={onSaveVersion}
               onRevert={onRevert}
+              draftChanged={draftChanged}
+              onUndo={onUndo}
+              onRedo={onRedo}
               onPickVersion={(v) =>
                 void onApply(
                   {
@@ -1361,27 +1390,29 @@ function Tree({
           </Field>
           {!readOnly && (
             <div className="flex items-center gap-2">
-              <ApplyButton saving={saving} onClick={() => void onApply(draft, null)} />
-              {dirty && (
-                <button
-                  onClick={() => void onSaveVersion()}
-                  disabled={saving}
-                  title="Keep the whole configuration as a version you can come back to"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-                >
-                  Save
-                </button>
-              )}
-              {dirty && savedVersionNo != null && (
-                <button
-                  onClick={() => void onRevert()}
-                  disabled={saving}
-                  title="Go back to the last saved version, dropping what you applied since"
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
-                >
-                  Revert
-                </button>
-              )}
+              <ApplyButton
+                saving={saving}
+                disabled={!draftChanged}
+                onClick={() => void onApply(draft, null)}
+              />
+              <button
+                onClick={() => void onSaveVersion()}
+                disabled={saving || (!dirty && !draftChanged)}
+                title={
+                  dirty || draftChanged
+                    ? 'Keep the whole configuration as a version you can come back to'
+                    : 'Nothing has changed since the last save'
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                Save
+              </button>
+              <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
+                <Undo2 className="w-3.5 h-3.5" />
+              </StepButton>
+              <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
+                <Redo2 className="w-3.5 h-3.5" />
+              </StepButton>
             </div>
           )}
           <IntentHistory
@@ -1390,6 +1421,7 @@ function Tree({
             currentRule={draft.rootRule}
             disabled={readOnly}
             onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
+            onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
           />
         </div>
       )}
@@ -1473,6 +1505,9 @@ function Accordion({
   onApply,
   onSaveVersion,
   onRevert,
+  draftChanged,
+  onUndo,
+  onRedo,
   onPickVersion,
   onDelete,
 }: {
@@ -1495,6 +1530,10 @@ function Accordion({
   onApply: () => void;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
+  /** Something is written that has not taken effect. */
+  draftChanged: boolean;
+  onUndo: (() => void) | null;
+  onRedo: (() => void) | null;
   /** Put a version's pair back AND apply it, so the list beside it becomes
    * that version's list without a second click. */
   onPickVersion: (v: IntentVersion) => void;
@@ -1545,35 +1584,34 @@ function Accordion({
       </Field>
       {!readOnly && (
         <div className="flex items-center gap-2">
-          <ApplyButton saving={saving} onClick={onApply} />
-          {/* Next to the verb it follows. It still writes the WHOLE
-              configuration — a version is the whole of it — which is why it
-              says so on the way in and why the tree marks every intent the
-              save will carry. */}
-          {dirty && (
-            <button
-              onClick={() => void onSaveVersion()}
-              disabled={saving}
-              title="Keep the whole configuration as a version you can come back to"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-            >
-              Save
-            </button>
-          )}
-          {/* Beside Save, because it is the other half of the same decision —
-              keep this or drop it — and both are about what is applied right
-              now. It was down with the history, where it read as an operation
-              on the list of versions rather than on the working state. */}
-          {dirty && savedVersionNo != null && (
-            <button
-              onClick={() => void onRevert()}
-              disabled={saving}
-              title="Go back to the last saved version, dropping what you applied since"
-              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
-            >
-              Revert
-            </button>
-          )}
+          {/* All three stay put and go dim, rather than coming and going. A row
+              of controls that changes shape as you type moves the one you were
+              reaching for; and a dimmed Apply says "there is nothing to apply"
+              where an absent one says nothing at all. */}
+          <ApplyButton saving={saving} disabled={!draftChanged} onClick={onApply} />
+          {/* It writes the WHOLE configuration — a version is the whole of it —
+              which is why it says so on the way in and why the tree marks every
+              intent the save will carry. */}
+          <button
+            onClick={() => void onSaveVersion()}
+            disabled={saving || (!dirty && !draftChanged)}
+            title={
+              dirty || draftChanged
+                ? 'Keep the whole configuration as a version you can come back to'
+                : 'Nothing has changed since the last save'
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            Save
+          </button>
+          {/* Stepping through applies is about what is in effect, which is what
+              Apply and Save are about too, so it belongs on this row. */}
+          <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
+            <Undo2 className="w-3.5 h-3.5" />
+          </StepButton>
+          <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
+            <Redo2 className="w-3.5 h-3.5" />
+          </StepButton>
           <span className="flex-1" />
           <button
             onClick={onDelete}
@@ -1592,6 +1630,7 @@ function Accordion({
         currentRule={intent.rule}
         disabled={readOnly}
         onPick={onPickVersion}
+        onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
       />
     </div>
   );
@@ -1708,13 +1747,26 @@ function StepButton({
   );
 }
 
-function ApplyButton({ saving, onClick }: { saving: boolean; onClick: () => void }) {
+function ApplyButton({
+  saving,
+  disabled,
+  onClick,
+}: {
+  saving: boolean;
+  /** Nothing written that is not already in effect. */
+  disabled: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       onClick={onClick}
-      disabled={saving}
-      title="Put this into effect and see what it answers"
-      className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+      disabled={saving || disabled}
+      title={
+        disabled
+          ? 'Nothing here that is not already in effect'
+          : 'Put this into effect and see what it answers'
+      }
+      className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
     >
       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
       Apply
