@@ -102,6 +102,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // What the study measures, and whether the board has moved past it.
     savedVersionNo: state.savedVersionNo,
     dirty: state.dirty,
+    unsavedSids: state.unsavedSids,
     // sid → that intent's own history, newest first. '0' is the
     // everything-else rule, and in the baseline arm it is the whole of it.
     intentVersions: await listIntentVersions(id),

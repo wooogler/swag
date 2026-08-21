@@ -58,6 +58,7 @@ interface StateBody {
   atTip: boolean;
   savedVersionNo: number | null;
   dirty: boolean;
+  unsavedSids: number[];
   intentVersions: Record<string, { versionNo: number; definition: string; rule: string; name: string | null }[]>;
   pinned: number[];
   owners: Record<string, { sid: number | null; outcome: string }>;
@@ -456,6 +457,14 @@ async function main() {
       `${beforeApply.versions.length} → ${applied.versions.length}`);
     check('and leaves the save where it was', applied.savedVersionNo === savedBefore);
     check('and says so', applied.dirty);
+    // WHICH one, not just whether — this is what the tree marks, and after
+    // the standing "everything is saved" line went away it is the only
+    // ambient sign that the next step will not read this work.
+    check(
+      'and says which part of the configuration moved',
+      applied.unsavedSids.length > 0,
+      `sids ${applied.unsavedSids.join(',') || 'none'}`
+    );
 
     // The gate the whole split depends on.
     const gate = await deployStateFor({
@@ -469,7 +478,7 @@ async function main() {
     await call('revert', { method: 'POST' });
     const reverted = await state();
     check('revert drops the applies', !configText(reverted.snapshot).includes('Applied, not saved'));
-    check('and clears the unsaved state', !reverted.dirty);
+    check('and clears the unsaved state', !reverted.dirty && reverted.unsavedSids.length === 0);
     check('and keeps the save', reverted.savedVersionNo === savedBefore);
 
     // Apply again, then commit it — Save takes what is in EFFECT.
@@ -484,7 +493,10 @@ async function main() {
     });
     await call('commit', { method: 'POST' });
     const committed = await state();
-    check('commit marks what is in effect', !committed.dirty);
+    check(
+      'commit marks what is in effect',
+      !committed.dirty && committed.unsavedSids.length === 0
+    );
     check('and it is in the history', committed.versions.length === beforeApply.versions.length + 1,
       `${beforeApply.versions.length} → ${committed.versions.length}`);
     check(

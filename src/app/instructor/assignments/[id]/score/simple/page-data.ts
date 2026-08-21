@@ -140,6 +140,7 @@ export async function loadSimpleBoard(args: {
       atTip: state.atTip,
       savedVersionNo: state.savedVersionNo,
       dirty: state.dirty,
+      unsavedSids: state.unsavedSids,
       intentVersions: await listIntentVersions(assignmentId),
       pinned: state.pinned,
       owners: Object.fromEntries(

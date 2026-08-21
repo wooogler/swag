@@ -77,6 +77,8 @@ interface StatePayload {
   savedVersionNo: number | null;
   /** Something took effect that the newest save does not carry. */
   dirty: boolean;
+  /** Which intents differ from the last save (0 = everything else). */
+  unsavedSids: number[];
   /** sid → that intent's own history, newest first ('0' = everything else). */
   intentVersions: Record<string, IntentVersion[]>;
   /** The write's own follow-up work is still running on the server. */
@@ -489,6 +491,7 @@ function ConfigColumn({
   assignmentId: string;
 }) {
   const countOf = (sid: number | null) => state.counts[sid === null ? 'root' : String(sid)] ?? 0;
+  const unsaved = new Set(state.unsavedSids);
 
   return (
     <div className="min-h-0 flex flex-col gap-3">
@@ -527,6 +530,7 @@ function ConfigColumn({
           <Tree
             api={api}
             intentVersions={state.intentVersions}
+            unsaved={unsaved}
             draft={draft}
             setDraft={setDraft}
             readOnly={readOnly}
@@ -557,6 +561,9 @@ function ConfigColumn({
       <SaveBar
         dirty={state.dirty}
         hasSave={state.savedVersionNo != null}
+        /* Nothing marked in the tree but still unsaved means the change was a
+           deletion — the one thing a row cannot say, because the row is gone. */
+        onlyDeletions={state.dirty && state.unsavedSids.length === 0}
         readOnly={readOnly}
         saving={saving}
         onSaveVersion={onSaveVersion}
@@ -624,6 +631,7 @@ function PromptEditor({
 function Tree({
   api,
   intentVersions,
+  unsaved,
   draft,
   setDraft,
   readOnly,
@@ -642,6 +650,8 @@ function Tree({
   api: (path: string, query?: string) => string;
   /** sid → that intent's own history, newest first. */
   intentVersions: Record<string, IntentVersion[]>;
+  /** Intents that differ from the last save (0 = everything else). */
+  unsaved: Set<number>;
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
@@ -726,6 +736,11 @@ function Tree({
             style={{ backgroundColor: intentColor(intent.sid) }}
           />
           <span className="flex-1 truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
+          {/* Which one, not just whether. Plain and unstyled: this is a fact
+              about what the next step will read, not a fault to fix. */}
+          {unsaved.has(intent.sid) && (
+            <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
+          )}
           <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
             {countOf(intent.sid)}
           </span>
@@ -834,6 +849,9 @@ function Tree({
           className="w-1.5 h-1.5 rounded-full shrink-0 bg-[hsl(var(--muted-foreground))]"
         />
         <span className="flex-1 text-sm font-semibold">Everything else</span>
+        {unsaved.has(0) && (
+          <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
+        )}
         <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
           {countOf(null)}
         </span>
@@ -1205,16 +1223,20 @@ function NewIntent({
  * and the versions after it leave the list.
  */
 /**
- * Whether what is in effect has been saved — the one thing on this screen that
- * is about the whole configuration rather than about one intent.
+ * The two verbs that act on the whole configuration, and they only appear when
+ * there is something for them to act on.
  *
- * It earns the space because the answer is invisible otherwise: the board
- * looks identical either way, and the next step measures the save. Stated as a
- * fact, with the button that resolves it beside the statement.
+ * It used to state the saved/unsaved fact as a standing sentence, which read as
+ * furniture — the answer was "everything is saved" almost always, and a line
+ * that is almost always the same stops being read. The tree says WHICH intents
+ * are unsaved now, which is both more useful and self-explaining, so this is
+ * left with the one job the rows cannot do: the buttons, and the sentence for
+ * the case where the change was a deletion and there is no row to mark.
  */
 function SaveBar({
   dirty,
   hasSave,
+  onlyDeletions,
   readOnly,
   saving,
   onSaveVersion,
@@ -1222,25 +1244,24 @@ function SaveBar({
 }: {
   dirty: boolean;
   hasSave: boolean;
+  onlyDeletions: boolean;
   readOnly: boolean;
   saving: boolean;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
 }) {
-  if (readOnly) return null;
+  // Absent when there is nothing to save: a Save that can only ever be greyed
+  // out is a question the reader has to answer for themselves.
+  if (readOnly || !dirty) return null;
   return (
     <section className="shrink-0 flex items-center gap-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2">
       <span className="flex-1 text-2xs leading-snug text-[hsl(var(--muted-foreground))]">
-        {dirty
-          ? 'Changes are in effect but not saved.'
-          : hasSave
-            ? 'Everything is saved.'
-            : 'Nothing saved yet.'}
+        {onlyDeletions ? 'A deletion is not saved yet.' : 'Not saved yet.'}
       </span>
       {/* Absent, not disabled, before the first save: there is nowhere to
           revert TO, and a greyed button is still an invitation to work out
           why it will not do anything. */}
-      {dirty && hasSave && (
+      {hasSave && (
         <button
           onClick={() => void onRevert()}
           disabled={saving}
@@ -1252,7 +1273,7 @@ function SaveBar({
       )}
       <button
         onClick={() => void onSaveVersion()}
-        disabled={saving || !dirty}
+        disabled={saving}
         title="Keep this as a version you can come back to"
         className="shrink-0 inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2.5 py-0.5 text-2xs font-semibold text-white disabled:opacity-40"
       >

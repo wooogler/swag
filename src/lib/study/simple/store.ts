@@ -71,6 +71,12 @@ export interface SimpleState {
   savedVersionNo: number | null;
   /** Applied changes the newest save does not carry. */
   dirty: boolean;
+  /**
+   * Which intents differ from the last save — 0 is the everything-else rule,
+   * or the whole document on the baseline arm. What the tree marks, so that
+   * "not saved" says WHERE rather than only whether.
+   */
+  unsavedSids: number[];
   pinned: number[];
 }
 
@@ -151,10 +157,12 @@ export async function getSimpleState(args: {
     .where(eq(simplePins.assignmentId, assignmentId))
     .orderBy(desc(simplePins.createdAt));
 
+  const shown = wanted
+    ? parseSnapshot(wanted.snapshot, condition, seedPrompt)
+    : emptySnapshot(armOf(condition), seedPrompt);
+
   return {
-    snapshot: wanted
-      ? parseSnapshot(wanted.snapshot, condition, seedPrompt)
-      : emptySnapshot(armOf(condition), seedPrompt),
+    snapshot: shown,
     versions: versions.reverse(),
     viewing: wanted ? versions.find((v) => v.versionNo === wanted.versionNo) ?? null : null,
     atTip: !wanted || !tip || wanted.versionNo === tip.versionNo,
@@ -162,8 +170,48 @@ export async function getSimpleState(args: {
     // Something took effect that the newest save does not carry. The board
     // says so, and the study refuses to end a block on it.
     dirty: !!tip && tip.versionNo !== (savedTip?.versionNo ?? -1),
+    unsavedSids: unsavedAgainst(
+      shown,
+      savedTip ? parseSnapshot(savedTip.snapshot, condition, seedPrompt) : null
+    ),
     pinned: pins.map((p) => p.messageId),
   };
+}
+
+/**
+ * Which intents have moved since the last save.
+ *
+ * Position counts, not only the texts: reordering changes which intent answers
+ * a question first, so two intents swapped and not saved have changed what the
+ * chatbot does even though neither one's words did.
+ *
+ * A DELETED intent cannot be marked — it has no row left to mark it on — which
+ * is why the whole-configuration statement stays: it is the one case the tree
+ * cannot show.
+ */
+function unsavedAgainst(now: SimpleSnapshot, saved: SimpleSnapshot | null): number[] {
+  if (!saved) return [];
+  const out: number[] = [];
+  if (now.arm === 'baseline') {
+    if (now.prompt !== saved.prompt) out.push(0);
+    return out;
+  }
+  if (now.rootRule !== saved.rootRule) out.push(0);
+  const before = new Map(saved.intents.map((i, index) => [i.sid, { ...i, index }]));
+  now.intents.forEach((intent, index) => {
+    const was = before.get(intent.sid);
+    if (
+      !was ||
+      was.title !== intent.title ||
+      was.definition !== intent.definition ||
+      was.rule !== intent.rule ||
+      was.parentSid !== intent.parentSid ||
+      was.index !== index
+    ) {
+      out.push(intent.sid);
+    }
+  });
+  return out;
 }
 
 /**
