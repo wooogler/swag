@@ -29,7 +29,8 @@ import {
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
-import { getQueryRecords, type QueryRecord } from '@/lib/score/queries';
+import type { QueryRecord } from '@/lib/score/queries';
+import { reviewScope, scopedRecords } from './scope';
 import {
   intentDefHash,
   isIncludedRating,
@@ -197,7 +198,9 @@ async function seedFromPreparedSets(
     if (!prev || row.ratedAt > prev.ratedAt) newest.set(key, row);
   }
 
+  const scope = await reviewScope(assignmentId);
   const values = [...newest.values()]
+    .filter((row) => !scope || scope.has(row.messageId))
     .map((row) => ({
       assignmentId,
       defHash: hashByIntent.get(row.intentId)!,
@@ -236,7 +239,9 @@ export async function judgeBatch(args: {
     0,
     MAX_INTENTS_PER_CALL
   );
-  const records = await getQueryRecords(assignmentId);
+  // The curated set, not the whole master: rating the context turns as well
+  // would be three times the calls for questions the board never lists.
+  const records = await scopedRecords(assignmentId);
   const total = records.length * tasks.length;
   if (tasks.length === 0 || records.length === 0) {
     return { ratedByHash: {}, total, remaining: 0, ratedThisBatch: 0 };

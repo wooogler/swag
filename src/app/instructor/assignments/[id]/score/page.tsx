@@ -127,7 +127,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   // and the simple board has nowhere to put any of it.
   if (familyOf(studioView) === 'simple') {
     const seedPrompt = assignmentBasePrompt(assignment);
-    const { rows: simpleRows, initialState } = await loadSimpleBoard({
+    const { rows: simpleRows, reviewSet: simpleReviewSet, initialState } = await loadSimpleBoard({
       assignmentId: id,
       condition: studioView,
       seedPrompt,
@@ -185,6 +185,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
           <SimpleStudio
             assignmentId={id}
             rows={simpleRows}
+            reviewSet={simpleReviewSet}
             isNirvana={assignment.shareToken === 'nirvana-dataset'}
             initialState={initialState}
             // Only meaningful when this is not a clone — see simpleContext.

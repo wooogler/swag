@@ -22,6 +22,7 @@ import { armOf, type StudioView } from '@/lib/study/config';
 import { definitionsOf, resolveSimpleAll } from '@/lib/study/simple/chain';
 import { definitionTasks, readMatches } from '@/lib/study/simple/judge';
 import { getSimpleState } from '@/lib/study/simple/store';
+import { reviewScope } from '@/lib/study/simple/scope';
 
 export async function loadSimpleBoard(args: {
   assignmentId: string;
@@ -29,24 +30,31 @@ export async function loadSimpleBoard(args: {
   seedPrompt: string;
 }) {
   const { assignmentId, condition, seedPrompt } = args;
-  const [records, sessions, state] = await Promise.all([
+  const [records, sessions, state, scope] = await Promise.all([
     getQueryRecords(assignmentId),
     db
       .select({ id: studentSessions.id, participantToken: studentSessions.participantToken })
       .from(studentSessions)
       .where(eq(studentSessions.assignmentId, assignmentId)),
     getSimpleState({ assignmentId, condition, seedPrompt }),
+    // A study master holds the curated questions AND the earlier turns of
+    // their conversations, kept so each one can be read in context. Only the
+    // curated ones are the material.
+    reviewScope(assignmentId),
   ]);
 
-  const messageIds = records.map((r) => r.messageId);
-  const dissectionRows = messageIds.length
+  // `rows` below stays whole, so the viewer can still show a full
+  // conversation; everything that lists or counts works off the curated set.
+  const allMessageIds = records.map((r) => r.messageId);
+  const messageIds = scope ? allMessageIds.filter((id) => scope.has(id)) : allMessageIds;
+  const dissectionRows = allMessageIds.length
     ? await db
         .select()
         .from(scoreDissections)
         .where(
           and(
             eq(scoreDissections.assignmentId, assignmentId),
-            inArray(scoreDissections.messageId, messageIds)
+            inArray(scoreDissections.messageId, allMessageIds)
           )
         )
     : [];
@@ -121,6 +129,8 @@ export async function loadSimpleBoard(args: {
 
   return {
     rows,
+    /** The curated ids, or null when this assignment has no curated set. */
+    reviewSet: scope ? [...scope] : null,
     initialState: {
       arm: armOf(condition),
       snapshot: state.snapshot,

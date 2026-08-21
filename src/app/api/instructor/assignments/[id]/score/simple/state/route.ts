@@ -19,7 +19,7 @@ import { getSimpleState, getSimpleVersion } from '@/lib/study/simple/store';
 import { definitionsOf, resolveSimpleAll, type SimpleSnapshot } from '@/lib/study/simple/chain';
 import { definitionTasks, readMatches } from '@/lib/study/simple/judge';
 import { armOf } from '@/lib/study/config';
-import { getQueryRecords } from '@/lib/score/queries';
+import { scopedRecords } from '@/lib/study/simple/scope';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,7 +53,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     versionNo: versionParam ? Number(versionParam) : null,
   });
 
-  const records = await getQueryRecords(id);
+  const records = await scopedRecords(id);
   const messageIds = records.map((r) => r.messageId);
   const current = await ownershipFor(id, state.snapshot, messageIds);
 

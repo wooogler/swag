@@ -66,12 +66,18 @@ type Selection = { kind: 'all' } | { kind: 'root' } | { kind: 'intent'; sid: num
 export default function SimpleStudio({
   assignmentId,
   rows,
+  reviewSet,
   isNirvana,
   initialState,
   viewParam,
 }: {
   assignmentId: string;
+  /** The whole log — kept whole so a conversation can be read in full. */
   rows: ScoreQueryRow[];
+  /** The curated questions, or null when this assignment has no curated set.
+   * A study master carries the earlier turns of each thread as well, and those
+   * are context to read, not material to organize. */
+  reviewSet: number[] | null;
   isNirvana: boolean;
   initialState: StatePayload;
   /** Set only when a researcher opened this with ?view= on an assignment that
@@ -91,6 +97,13 @@ export default function SimpleStudio({
   const [localVersionNo, setLocalVersionNo] = useState<number | null>(null);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
+  // What the board is ABOUT. Every list, count and pin works off this; only
+  // the viewer reads `rows`.
+  const material = useMemo(() => {
+    if (!reviewSet) return rows;
+    const ids = new Set(reviewSet);
+    return rows.filter((r) => ids.has(r.messageId));
+  }, [reviewSet, rows]);
   const arm = state.arm;
   const readOnly = !state.atTip;
   const api = useCallback(
@@ -141,7 +154,7 @@ export default function SimpleStudio({
             // What is on screen first, so the list being read fills in before
             // the tail of the log does.
           body: JSON.stringify({
-            priorityMessageIds: [...state.pinned, ...rows.slice(0, 40).map((r) => r.messageId)],
+            priorityMessageIds: [...state.pinned, ...material.slice(0, 40).map((r) => r.messageId)],
           }),
         });
         if (!res.ok) break;
@@ -153,7 +166,7 @@ export default function SimpleStudio({
       judgeRef.current = false;
       setJudging(false);
     }
-  }, [api, arm, load, rows, state.pinned]);
+  }, [api, arm, load, material, state.pinned]);
 
   // Anything unjudged gets judged, without being asked for — a "Run" button
   // here would be handing the participant the machine to operate.
@@ -254,9 +267,9 @@ export default function SimpleStudio({
   );
 
   const listed = useMemo(() => {
-    if (selection.kind === 'all' || arm === 'baseline') return rows;
+    if (selection.kind === 'all' || arm === 'baseline') return material;
     if (selection.kind === 'root') {
-      return rows.filter((r) => ownerOf(r.messageId)?.sid === null);
+      return material.filter((r) => ownerOf(r.messageId)?.sid === null);
     }
     // Everything this intent's own definition describes — including the
     // questions an earlier intent takes first. Hiding those would mean the
@@ -264,11 +277,11 @@ export default function SimpleStudio({
     // already been adjusted for something the participant cannot see.
     const sid = selection.sid;
     const left = new Set(diffFor(sid)?.left ?? []);
-    return rows.filter((r) => {
+    return material.filter((r) => {
       const owner = ownerOf(r.messageId);
       return owner?.sid === sid || owner?.matchedElsewhere.includes(sid) || left.has(r.messageId);
     });
-  }, [arm, diffFor, ownerOf, rows, selection]);
+  }, [arm, diffFor, material, ownerOf, selection]);
 
   const pinnedRows = useMemo(
     () => state.pinned.map((id) => rowById.get(id)).filter((r): r is ScoreQueryRow => !!r),
@@ -329,7 +342,7 @@ export default function SimpleStudio({
       <QuestionColumn
         rows={listed}
         pinnedRows={pinnedRows}
-        allCount={rows.length}
+        allCount={material.length}
         selection={selection}
         selectedMessageId={selectedMessageId}
         onSelect={setSelectedMessageId}

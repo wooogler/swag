@@ -32,6 +32,7 @@ import {
   jelsonTypeToIntent,
 } from '@/lib/score/jelson-suggest';
 import { intentDefHash, isIncludedRating, type RatingLevel } from '@/lib/score/intents';
+import { reviewScope } from './scope';
 
 export interface StarterItem {
   /** Stable within a render; the taxonomy code, or the type key for a Type. */
@@ -70,6 +71,12 @@ async function countsByDefinition(
   const counts = new Map<string, number>();
   if (definitions.length === 0) return counts;
 
+  // Counted over the questions the board actually lists. A study master also
+  // holds the earlier turns of each thread, and counting those would have the
+  // dropdown promise a number the board can never show.
+  const scope = await reviewScope(assignmentId);
+  const inScope = (messageId: number) => !scope || scope.has(messageId);
+
   // The clone's own prepared categories, matched by text.
   const templates = await db
     .select({ id: scoreIntents.id, definition: scoreIntents.definition })
@@ -105,7 +112,9 @@ async function countsByDefinition(
     }
     for (const [key, value] of newest) {
       if (!isIncludedRating(value.rating as RatingLevel)) continue;
-      const definition = byIntent.get(Number(key.split(':')[0]));
+      const [intentId, messageId] = key.split(':').map(Number);
+      if (!inScope(messageId)) continue;
+      const definition = byIntent.get(intentId);
       if (definition) counts.set(definition, (counts.get(definition) ?? 0) + 1);
     }
   }
@@ -131,7 +140,7 @@ async function countsByDefinition(
   const ownSeen = new Set<string>();
   for (const row of own) {
     const definition = hashes.get(row.defHash);
-    if (!definition) continue;
+    if (!definition || !inScope(row.messageId)) continue;
     ownSeen.add(definition);
     if (isIncludedRating(row.rating as RatingLevel)) {
       ownCounts.set(definition, (ownCounts.get(definition) ?? 0) + 1);

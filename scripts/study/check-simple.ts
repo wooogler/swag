@@ -24,6 +24,7 @@ import { db } from '../../src/db/db';
 import {
   assignments,
   instructors,
+  studyReviewQuestions,
   simpleConfigVersions,
   simplePins,
   simpleRatings,
@@ -154,6 +155,26 @@ async function main() {
   // ── the acts, in order ──────────────────────────────────────────────
   const before = await state();
   check('state reads', typeof before.arm === 'string', `arm=${before.arm}`);
+
+  // The board is about the CURATED questions, not the whole master.
+  //
+  // A study master carries the earlier turns of each thread as well, so that
+  // each curated question can be read with what came before it — three times
+  // as many rows on SWAG. Listing those would hand a participant 213 questions
+  // to organize when the study gave them 60, and put every count on the screen
+  // over the wrong denominator. It went out that way once; hence this.
+  const [{ marks }] = await db
+    .select({ marks: sql<number>`count(*)::int` })
+    .from(studyReviewQuestions)
+    .where(eq(studyReviewQuestions.assignmentId, assignmentId));
+  if (marks > 0 && before.arm === 'score') {
+    const listed = Object.keys(before.owners).length;
+    check(
+      'the board is scoped to the curated set',
+      listed === marks,
+      `${marks} curated, ${listed} resolved`
+    );
+  }
   const startingVersions = before.versions.length;
   const arm = before.arm;
   const startersOnly = process.argv.includes('--starters');
