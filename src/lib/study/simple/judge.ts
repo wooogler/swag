@@ -20,7 +20,12 @@
 import 'server-only';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { scoreDissections, simpleRatings } from '@/db/schema';
+import {
+  scoreDissections,
+  scoreIntentRatings,
+  scoreIntents,
+  simpleRatings,
+} from '@/db/schema';
 import { rateMessageIntents } from '@/lib/score/intent-classifier';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
@@ -124,6 +129,90 @@ async function dissectionsFor(
 }
 
 /**
+ * Copy the prepared verdicts for any definition that matches one of the
+ * taxonomy categories this clone was provisioned with.
+ *
+ * The two tables share a keyspace — `intentDefHash(definition)` — so a match is
+ * exact text, and a copied row is the same verdict a fresh call would have
+ * produced. Not filtered to the current hash generation, for the reason
+ * starters.ts gives: a harness version bump moves every hash without moving a
+ * definition, and the prepared set is the whole point.
+ *
+ * Ordered by message id on the way in: two concurrent seeds of the same
+ * definition would otherwise take the unique index's row locks in different
+ * orders, which is a deadlock shape in Postgres.
+ */
+async function seedFromPreparedSets(
+  assignmentId: string,
+  tasks: DefinitionTask[]
+): Promise<void> {
+  if (tasks.length === 0) return;
+  const byText = new Map(tasks.map((t) => [t.definition.trim(), t]));
+  const templates = await db
+    .select({ id: scoreIntents.id, definition: scoreIntents.definition })
+    .from(scoreIntents)
+    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true)));
+  const matched = templates.filter((t) => byText.has(t.definition.trim()));
+  if (matched.length === 0) return;
+
+  const already = await db
+    .select({ defHash: simpleRatings.defHash, messageId: simpleRatings.messageId })
+    .from(simpleRatings)
+    .where(
+      and(
+        eq(simpleRatings.assignmentId, assignmentId),
+        inArray(
+          simpleRatings.defHash,
+          matched.map((t) => byText.get(t.definition.trim())!.defHash)
+        )
+      )
+    );
+  const have = new Set(already.map((r) => `${r.defHash}:${r.messageId}`));
+
+  const rows = await db
+    .select({
+      intentId: scoreIntentRatings.intentId,
+      messageId: scoreIntentRatings.messageId,
+      rating: scoreIntentRatings.rating,
+      model: scoreIntentRatings.model,
+      ratedAt: scoreIntentRatings.ratedAt,
+    })
+    .from(scoreIntentRatings)
+    .where(
+      and(
+        eq(scoreIntentRatings.assignmentId, assignmentId),
+        inArray(
+          scoreIntentRatings.intentId,
+          matched.map((t) => t.id)
+        )
+      )
+    );
+  const hashByIntent = new Map(
+    matched.map((t) => [t.id, byText.get(t.definition.trim())!.defHash])
+  );
+  const newest = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    const key = `${row.intentId}:${row.messageId}`;
+    const prev = newest.get(key);
+    if (!prev || row.ratedAt > prev.ratedAt) newest.set(key, row);
+  }
+
+  const values = [...newest.values()]
+    .map((row) => ({
+      assignmentId,
+      defHash: hashByIntent.get(row.intentId)!,
+      messageId: row.messageId,
+      rating: row.rating,
+      model: row.model,
+      ratedAt: row.ratedAt,
+    }))
+    .filter((v) => !have.has(`${v.defHash}:${v.messageId}`))
+    .sort((a, b) => a.defHash.localeCompare(b.defHash) || a.messageId - b.messageId);
+  if (values.length === 0) return;
+  await db.insert(simpleRatings).values(values).onConflictDoNothing();
+}
+
+/**
  * Rate one call-bounded batch of the work still outstanding, then report
  * progress. The client loops until `remaining` is zero, or until a batch rates
  * nothing at all — which means the calls are failing, not that the work is
@@ -152,6 +241,13 @@ export async function judgeBatch(args: {
   if (tasks.length === 0 || records.length === 0) {
     return { ratedByHash: {}, total, remaining: 0, ratedThisBatch: 0 };
   }
+
+  // A definition lifted from the starter library already has its verdicts in
+  // this clone — prepared at provisioning, keyed by the same definition text.
+  // Copying them across is what makes adopting a starter free, and it has to
+  // happen before the work is counted or the whole log would be re-rated to
+  // reach the answer that is already sitting there.
+  await seedFromPreparedSets(assignmentId, tasks);
 
   const done = await db
     .select({ defHash: simpleRatings.defHash, messageId: simpleRatings.messageId })

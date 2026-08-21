@@ -19,7 +19,7 @@
  * --participant it runs on that participant's block-1 clone, which is the real
  * thing and needs them to be in the simple family.
  */
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import {
   assignments,
@@ -124,6 +124,12 @@ async function main() {
 
   const state = async () => (await call('state')).body as unknown as StateBody;
 
+  const [{ high }] = await db
+    .select({ high: sql<number>`coalesce(max(${studyEvents.id}), 0)::int` })
+    .from(studyEvents)
+    .where(eq(studyEvents.assignmentId, assignmentId));
+  const eventsHighWater = high ?? 0;
+
   /**
    * Wait until every question has a verdict — the board's own loop, in a
    * script: defer while the save's follow-up work is still running, and drive
@@ -149,7 +155,15 @@ async function main() {
   const before = await state();
   check('state reads', typeof before.arm === 'string', `arm=${before.arm}`);
   const startingVersions = before.versions.length;
+  const arm = before.arm;
+  const startersOnly = process.argv.includes('--starters');
 
+  // Steps 1-8 drive every act a participant can perform, which on a real
+  // clone means rating a fresh definition against the whole log. --starters
+  // skips them to check the library alone, which is the assertion most likely
+  // to break silently: a reworded category drifts from the prepared text, the
+  // hash stops matching, and adopting a starter quietly becomes a full pass.
+  if (!startersOnly) {
   // 1. Save a first configuration.
   const firstSave = await call('save', {
     method: 'POST',
@@ -184,7 +198,7 @@ async function main() {
 
   const afterIntent = await state();
   const sid = afterIntent.snapshot.intents[0]?.sid;
-  if (afterIntent.arm === 'score') {
+  if (arm === 'score') {
     check('the intent came back with a stable id', typeof sid === 'number', `sid=${sid}`);
     check(
       'the id is not the temporary one the client sent',
@@ -204,7 +218,7 @@ async function main() {
 
   // 3. Judge. Exactly the way the board does it — including waiting for the
   //    save's own follow-up pass rather than racing it.
-  if (afterIntent.arm === 'score') {
+  if (arm === 'score') {
     await settle();
     const judged = await state();
     check('judging finished', judged.pending === 0, `pending=${judged.pending}`);
@@ -267,7 +281,7 @@ async function main() {
   // 6. Add a second intent, then swap the two — a save that changes no
   //    definition text at all, which is the case the text-keyed cache exists
   //    for and the one that must cost nothing.
-  if (afterIntent.arm === 'score' && typeof sid === 'number') {
+  if (arm === 'score' && typeof sid === 'number') {
     const greetings = {
       sid,
       title: 'CHECK: greetings',
@@ -375,6 +389,80 @@ async function main() {
   );
   check('and are not in the participant-facing list', afterRestore.versions.length <= kept.length);
 
+  }
+  // 9. The starter library, and the claim that adopting one is free.
+  //
+  //    Every clone is provisioned with the taxonomy's categories already rated
+  //    against its whole log, and a verdict is keyed by definition text — so a
+  //    starter's questions are a lookup. If this ever stops holding, picking a
+  //    starter silently becomes a full re-rating pass over the log, which is
+  //    minutes of waiting and a bill, and nothing would say so.
+  const starters = (await call('starters')).body as unknown as {
+    groups?: {
+      label: string;
+      whole: { title: string; definition: string; count: number };
+      items: { title: string; definition: string; description: string; count: number }[];
+    }[];
+  };
+  const groups = starters.groups ?? [];
+  check('the starter library loads', groups.length > 0, `${groups.length} group(s)`);
+  const everyItem = groups.flatMap((g) => [g.whole, ...g.items]);
+  check(
+    'every starter carries a definition and a description',
+    everyItem.length > 0 && everyItem.every((i) => i.definition.trim().length > 0),
+    `${everyItem.length} starter(s)`
+  );
+
+  // Prepared categories only exist on a clone or a master. A scratch
+  // assignment has none, and a library of zeroes is the honest answer there.
+  const prepared = everyItem.filter((i) => i.count > 0);
+  if (arm === 'score' && prepared.length > 0) {
+    const pick = prepared.sort((a, b) => b.count - a.count)[0];
+    const ratedBefore = (
+      await db.select().from(simpleRatings).where(eq(simpleRatings.assignmentId, assignmentId))
+    ).length;
+    await call('save', {
+      method: 'POST',
+      body: JSON.stringify({
+        rootRule: 'Answer briefly and never write the essay for them.',
+        prompt: 'Answer briefly and never write the essay for them.',
+        intents: [
+          { sid: -9, title: pick.title, definition: pick.definition, rule: '', parentSid: null },
+        ],
+      }),
+    });
+    await settle();
+    const adopted = await state();
+    const sidOf = adopted.snapshot.intents.find((i) => i.title === pick.title)?.sid;
+    check(
+      `adopting “${pick.title}” lands its questions`,
+      sidOf != null && adopted.counts[String(sidOf)] === pick.count,
+      `dropdown said ${pick.count}, board resolved ${sidOf != null ? adopted.counts[String(sidOf)] : '—'}`
+    );
+
+    // Copied, not re-rated: the prepared verdicts were stamped when the clone
+    // was made, so a fresh rating pass would carry today's timestamp.
+    const rows = await db
+      .select()
+      .from(simpleRatings)
+      .where(eq(simpleRatings.assignmentId, assignmentId));
+    const added = rows.length - ratedBefore;
+    const startedAt = Date.now() - 10 * 60_000;
+    const fresh = rows.filter((r) => r.ratedAt.getTime() > startedAt).length;
+    check(
+      'and cost no new judgements',
+      added > 0 && fresh === 0,
+      `${added} verdict(s) copied, ${fresh} newly rated`
+    );
+  } else {
+    check(
+      'the library reports zero where nothing is prepared',
+      everyItem.every((i) => i.count === 0),
+      `${prepared.length} starter(s) with counts`
+    );
+  }
+
+  if (!startersOnly) {
   // ── the record it all left ──────────────────────────────────────────
   const events = await db
     .select()
@@ -395,7 +483,7 @@ async function main() {
   ]) {
     check(`logged ${required}`, types.has(required));
   }
-  if (afterIntent.arm === 'score') {
+  if (arm === 'score') {
     check('logged simple_judge_run', types.has('simple_judge_run'));
   } else {
     // Nothing to decide about when one document answers everything, so a
@@ -404,7 +492,7 @@ async function main() {
   }
 
   const saves = events.filter((e) => e.eventType === 'simple_version_save');
-  if (afterIntent.arm === 'score') {
+  if (arm === 'score') {
     const withCreate = saves.find(
       (e) => ((e.payload as { created?: number[] })?.created ?? []).length
     );
@@ -418,22 +506,32 @@ async function main() {
   const reorderEvent = saves.find((e) => (e.payload as { reordered?: boolean })?.reordered);
   check(
     'a save that only reordered says so',
-    afterIntent.arm !== 'score' || !!reorderEvent,
-    afterIntent.arm === 'score' ? `${saves.length} save(s) logged` : 'baseline arm — no tree'
+    arm !== 'score' || !!reorderEvent,
+    arm === 'score' ? `${saves.length} save(s) logged` : 'baseline arm — no tree'
   );
 
+  }
   // ── clean up what this run made ─────────────────────────────────────
+  const written = await db
+    .select({ id: simpleConfigVersions.id })
+    .from(simpleConfigVersions)
+    .where(eq(simpleConfigVersions.assignmentId, assignmentId));
   if (!participantNumber) {
-    const ids = kept.map((k) => k.id);
+    const ids = written.map((k) => k.id);
     if (ids.length) {
       await db.delete(simpleConfigVersions).where(inArray(simpleConfigVersions.id, ids));
     }
     await db.delete(simpleRatings).where(eq(simpleRatings.assignmentId, assignmentId));
     await db.delete(simplePins).where(eq(simplePins.assignmentId, assignmentId));
-    await db.delete(studyEvents).where(eq(studyEvents.assignmentId, assignmentId));
+    // Only what this run wrote: an assignment may carry events from before it,
+    // and a check that tidies up by deleting someone else's data is worse than
+    // one that leaves a mess.
+    await db
+      .delete(studyEvents)
+      .where(and(eq(studyEvents.assignmentId, assignmentId), gt(studyEvents.id, eventsHighWater)));
     console.log('\ncleaned up the preview run (versions, verdicts, pins, events)');
   } else {
-    console.log(`\nleft ${kept.length} version(s) on the participant clone — clean up by hand`);
+    console.log(`\nleft ${written.length} version(s) on the participant clone — clean up by hand`);
   }
 
   console.log(`\n${pass} passed, ${fail} failed · started from ${startingVersions} version(s)`);

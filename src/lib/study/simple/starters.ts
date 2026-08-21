@@ -1,0 +1,203 @@
+/**
+ * The starter library: the taxonomy's own categories, offered as a place to
+ * start a definition from.
+ *
+ * WHERE THE COUNTS COME FROM, and why this costs nothing.
+ *
+ * Every clone is provisioned with the taxonomy's categories already sitting in
+ * it as template intents, already rated against every question in its log
+ * (provision.ts step 9 copies the verdicts with their def_hash unchanged). And
+ * a verdict is keyed by the DEFINITION TEXT — `intentDefHash(definition)` — in
+ * both the full version's table and the simple one's. So a starter's questions
+ * are a lookup, not a judgement: the dropdown opens with real numbers, picking
+ * one fills its list instantly, and no model is called at any point.
+ *
+ * That shared key is also why nothing about the classifier had to change to
+ * support this. The simple version already reads the same keyspace.
+ *
+ * Two levels, because the taxonomy has two: a Type covers a whole stage of
+ * writing, a Subtype covers one kind of request inside it. Both are offered —
+ * a Type is a real starter, not a heading — since "everything to do with
+ * planning" and "asking for examples" are both things an instructor might want
+ * one rule for.
+ */
+import 'server-only';
+import { and, eq, inArray } from 'drizzle-orm';
+import { db } from '@/db/db';
+import { scoreIntentRatings, scoreIntents, simpleRatings } from '@/db/schema';
+import { getScoreConfig } from '@/lib/score/config-store';
+import {
+  buildJelsonSuggestions,
+  jelsonToIntent,
+  jelsonTypeToIntent,
+} from '@/lib/score/jelson-suggest';
+import { intentDefHash, isIncludedRating, type RatingLevel } from '@/lib/score/intents';
+
+export interface StarterItem {
+  /** Stable within a render; the taxonomy code, or the type key for a Type. */
+  key: string;
+  title: string;
+  definition: string;
+  /** The taxonomy's own words for this category — what the tooltip shows. */
+  description: string;
+  /** How many of this log's questions it describes. Zero is a fine answer: it
+   * is a place to start writing from, not a promise of results. */
+  count: number;
+}
+
+export interface StarterGroup {
+  key: string;
+  label: string;
+  description: string;
+  /** The Type as a starter in its own right, covering the whole stage. */
+  whole: StarterItem;
+  items: StarterItem[];
+}
+
+/**
+ * Newest verdict per (definition text, message), from whichever table has it.
+ *
+ * Deliberately NOT filtered to the current hash generation. A change to the
+ * rating harness moves every hash without moving a single definition, and the
+ * prepared verdicts are the whole point of the prepared set — so this takes
+ * the most recent verdict for each message under any generation, which is what
+ * the baseline arm's probe seeding already does.
+ */
+async function countsByDefinition(
+  assignmentId: string,
+  definitions: string[]
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (definitions.length === 0) return counts;
+
+  // The clone's own prepared categories, matched by text.
+  const templates = await db
+    .select({ id: scoreIntents.id, definition: scoreIntents.definition })
+    .from(scoreIntents)
+    .where(and(eq(scoreIntents.assignmentId, assignmentId), eq(scoreIntents.isTemplate, true)));
+  const wanted = new Set(definitions.map((d) => d.trim()));
+  const byIntent = new Map<number, string>();
+  for (const template of templates) {
+    const text = template.definition.trim();
+    if (wanted.has(text)) byIntent.set(template.id, text);
+  }
+
+  if (byIntent.size > 0) {
+    const rows = await db
+      .select({
+        intentId: scoreIntentRatings.intentId,
+        messageId: scoreIntentRatings.messageId,
+        rating: scoreIntentRatings.rating,
+        ratedAt: scoreIntentRatings.ratedAt,
+      })
+      .from(scoreIntentRatings)
+      .where(
+        and(
+          eq(scoreIntentRatings.assignmentId, assignmentId),
+          inArray(scoreIntentRatings.intentId, [...byIntent.keys()])
+        )
+      );
+    const newest = new Map<string, { rating: string; at: Date }>();
+    for (const row of rows) {
+      const key = `${row.intentId}:${row.messageId}`;
+      const prev = newest.get(key);
+      if (!prev || row.ratedAt > prev.at) newest.set(key, { rating: row.rating, at: row.ratedAt });
+    }
+    for (const [key, value] of newest) {
+      if (!isIncludedRating(value.rating as RatingLevel)) continue;
+      const definition = byIntent.get(Number(key.split(':')[0]));
+      if (definition) counts.set(definition, (counts.get(definition) ?? 0) + 1);
+    }
+  }
+
+  // Anything the participant has already worked with is counted from the
+  // simple version's own table instead, so a starter they adopted and then
+  // edited back to its original wording still reads the same number.
+  const hashes = new Map(definitions.map((d) => [intentDefHash(d), d.trim()]));
+  const own = await db
+    .select({
+      defHash: simpleRatings.defHash,
+      messageId: simpleRatings.messageId,
+      rating: simpleRatings.rating,
+    })
+    .from(simpleRatings)
+    .where(
+      and(
+        eq(simpleRatings.assignmentId, assignmentId),
+        inArray(simpleRatings.defHash, [...hashes.keys()])
+      )
+    );
+  const ownCounts = new Map<string, number>();
+  const ownSeen = new Set<string>();
+  for (const row of own) {
+    const definition = hashes.get(row.defHash);
+    if (!definition) continue;
+    ownSeen.add(definition);
+    if (isIncludedRating(row.rating as RatingLevel)) {
+      ownCounts.set(definition, (ownCounts.get(definition) ?? 0) + 1);
+    }
+  }
+  for (const definition of ownSeen) counts.set(definition, ownCounts.get(definition) ?? 0);
+
+  return counts;
+}
+
+/** The library, grouped the way the taxonomy is. */
+export async function loadStarters(assignmentId: string): Promise<StarterGroup[]> {
+  const config = await getScoreConfig();
+  const suggestions = buildJelsonSuggestions(config);
+
+  const seeds: { group: string; item: Omit<StarterItem, 'count'>; isWhole: boolean }[] = [];
+  const groups = new Map<string, { label: string; description: string }>();
+  for (const suggestion of suggestions) {
+    if (!groups.has(suggestion.typeKey)) {
+      groups.set(suggestion.typeKey, {
+        label: suggestion.typeLabel,
+        description: suggestion.typeDescription,
+      });
+      const whole = jelsonTypeToIntent(
+        suggestion.typeKey,
+        suggestion.typeLabel,
+        suggestion.typeDescription
+      );
+      seeds.push({
+        group: suggestion.typeKey,
+        isWhole: true,
+        item: {
+          key: `type:${suggestion.typeKey}`,
+          title: whole.title,
+          definition: whole.definition,
+          description: suggestion.typeDescription,
+        },
+      });
+    }
+    const seed = jelsonToIntent(suggestion);
+    seeds.push({
+      group: suggestion.typeKey,
+      isWhole: false,
+      item: {
+        key: suggestion.code,
+        title: seed.title,
+        definition: seed.definition,
+        description: suggestion.description,
+      },
+    });
+  }
+
+  const counts = await countsByDefinition(
+    assignmentId,
+    seeds.map((s) => s.item.definition)
+  );
+  const withCount = (item: Omit<StarterItem, 'count'>): StarterItem => ({
+    ...item,
+    count: counts.get(item.definition.trim()) ?? 0,
+  });
+
+  return [...groups].map(([key, meta]) => ({
+    key,
+    label: meta.label,
+    description: meta.description,
+    whole: withCount(seeds.find((s) => s.group === key && s.isWhole)!.item),
+    items: seeds.filter((s) => s.group === key && !s.isWhole).map((s) => withCount(s.item)),
+  }));
+}

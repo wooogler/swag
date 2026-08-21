@@ -26,6 +26,7 @@ import { ChevronDown, ChevronRight, Loader2, Pin, PinOff, Plus, Trash2 } from 'l
 import { ConversationThread } from '../conversation';
 import { QuerySnippet } from '../materials';
 import type { ScoreQueryRow } from '../IntentBoard';
+import StarterPicker from './StarterPicker';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
   documentOrder,
@@ -298,6 +299,7 @@ export default function SimpleStudio({
   return (
     <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)_minmax(0,1.05fr)] gap-3">
       <ConfigColumn
+        api={api}
         arm={arm}
         draft={draft}
         setDraft={setDraft}
@@ -366,6 +368,7 @@ export default function SimpleStudio({
 /* =================================================================== */
 
 function ConfigColumn({
+  api,
   arm,
   draft,
   setDraft,
@@ -384,6 +387,7 @@ function ConfigColumn({
   onView,
   assignmentId,
 }: {
+  api: (path: string, query?: string) => string;
   arm: 'score' | 'baseline';
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
@@ -439,6 +443,7 @@ function ConfigColumn({
           />
         ) : (
           <Tree
+            api={api}
             draft={draft}
             setDraft={setDraft}
             readOnly={readOnly}
@@ -514,6 +519,7 @@ function PromptEditor({
 
 /** The score arm's configuration: one root, a tree under it, editors inline. */
 function Tree({
+  api,
   draft,
   setDraft,
   readOnly,
@@ -529,6 +535,7 @@ function Tree({
   countOf,
   assignmentId,
 }: {
+  api: (path: string, query?: string) => string;
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
@@ -615,6 +622,7 @@ function Tree({
         {open && (
           <div style={{ paddingLeft: `${1.4 + depth * 0.9}rem` }} className="pr-2 pb-2">
             <Accordion
+              api={api}
               intent={intent}
               readOnly={readOnly}
               saving={saving}
@@ -635,6 +643,7 @@ function Tree({
         {creatingUnder === intent.sid && (
           <div style={{ paddingLeft: `${1.4 + depth * 0.9}rem` }} className="pr-2 pb-2">
             <NewIntent
+              api={api}
               parentSid={intent.sid}
               parentTitle={intent.title.trim() || 'Untitled'}
               seedRule={intent.rule}
@@ -711,6 +720,7 @@ function Tree({
       {creatingUnder === null && (
         <div className="px-2 pt-1">
           <NewIntent
+            api={api}
             parentSid={null}
             parentTitle="Everything else"
             seedRule={draft.rootRule}
@@ -782,6 +792,7 @@ function OrderButton({
  * questions — cannot be answered by looking at either alone.
  */
 function Accordion({
+  api,
   intent,
   readOnly,
   saving,
@@ -791,6 +802,7 @@ function Accordion({
   onNest,
   nestLabel,
 }: {
+  api: (path: string, query?: string) => string;
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
@@ -811,9 +823,22 @@ function Accordion({
         className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
       />
       <div>
-        <label className="block text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-          When a question…
-        </label>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            When a question…
+          </label>
+          {/* Replaces the definition; leaves a name they chose alone. */}
+          <StarterPicker
+            api={api}
+            disabled={readOnly}
+            onPick={(starter) =>
+              onChange({
+                definition: starter.definition,
+                ...(intent.title.trim() ? {} : { title: starter.title }),
+              })
+            }
+          />
+        </div>
         <textarea
           value={intent.definition}
           readOnly={readOnly}
@@ -877,6 +902,7 @@ function Accordion({
  * asked for. It is a copy, not an inheritance: editing it never reaches back.
  */
 function NewIntent({
+  api,
   parentSid,
   parentTitle,
   seedRule,
@@ -884,6 +910,7 @@ function NewIntent({
   onCancel,
   onCreate,
 }: {
+  api: (path: string, query?: string) => string;
   parentSid: number | null;
   parentTitle: string;
   seedRule: string;
@@ -910,9 +937,18 @@ function NewIntent({
         className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
       />
       <div>
-        <label className="block text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-          When a question…
-        </label>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            When a question…
+          </label>
+          <StarterPicker
+            api={api}
+            onPick={(starter) => {
+              setDefinition(starter.definition);
+              if (!title.trim()) setTitle(starter.title);
+            }}
+          />
+        </div>
         <textarea
           value={definition}
           maxLength={4000}
