@@ -22,7 +22,7 @@
  */
 import 'server-only';
 import OpenAI from 'openai';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { simplePreviews } from '@/db/schema';
 import { getConversationDigests } from '@/lib/score/conversation-digest';

@@ -59,9 +59,13 @@ async function main() {
     .select()
     .from(studyClones)
     .where(eq(studyClones.participantId, participant.id));
-  const scoreClone = clones.find((c) => c.condition === 'score');
-  const baselineClone = clones.find((c) => c.condition === 'baseline');
-  if (!scoreClone || !baselineClone) throw new Error('need one clone of each condition');
+  // By ARM, not by the whole condition string: a participant in the simple
+  // family holds simple_score and simple_baseline, and this check is about the
+  // two arms either way.
+  const { armOf } = await import('../../src/lib/study/config');
+  const scoreClone = clones.find((c) => armOf(c.condition as never) === 'score');
+  const baselineClone = clones.find((c) => armOf(c.condition as never) === 'baseline');
+  if (!scoreClone || !baselineClone) throw new Error('need one clone of each arm');
 
   console.log(`participant ${number}`);
   console.log(`  score clone    ${scoreClone.assignmentId} (${scoreClone.datasetKey})`);

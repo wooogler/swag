@@ -34,6 +34,7 @@ import {
   type RatingLevel,
 } from '@/lib/score/intents';
 import { MAX_INTENTS_PER_CALL } from '@/lib/score/intent-prompts';
+import { logStudyEvent } from '../events';
 
 /** Same budget shape as the full version's rating route. */
 const CALLS_PER_BATCH = Math.min(400, Math.max(8, SCORE_CONCURRENCY * 8));
@@ -260,6 +261,20 @@ export async function judgeBatch(args: {
     ratedByHash[task.defHash] = n;
     ratedPairs += n;
   }
+
+  // Logged HERE rather than in the route that asked, because most passes are
+  // not asked for by a route at all: a save starts its own in the background,
+  // and if only the route logged, the judging a participant actually waited on
+  // would be the one act of the session with no record of it.
+  if (ratedThisBatch > 0) {
+    await logStudyEvent(assignmentId, 'simple_judge_run', {
+      definitions: tasks.length,
+      rated: ratedThisBatch,
+      remaining: total - ratedPairs,
+      questions: batch.length,
+    });
+  }
+
   return { ratedByHash, total, remaining: total - ratedPairs, ratedThisBatch };
 }
 

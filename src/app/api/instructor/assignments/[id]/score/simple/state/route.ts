@@ -13,6 +13,7 @@
  * paints the green and red rows after a definition is saved.
  */
 import { NextResponse } from 'next/server';
+import { afterSaveInFlight } from '@/lib/study/simple/after-save';
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleState, getSimpleVersion } from '@/lib/study/simple/store';
 import { definitionsOf, resolveSimpleAll, type SimpleSnapshot } from '@/lib/study/simple/chain';
@@ -111,6 +112,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     ),
     judged: current.judged,
     pending: current.pending,
+    // Whether the save's own follow-up work is still going. The board waits on
+    // this rather than starting a second pass over the same questions: both
+    // would read the cache, both would find the same pairs missing, and both
+    // would call the model for every one of them.
+    working: afterSaveInFlight(id) !== null,
     diff,
   });
 }

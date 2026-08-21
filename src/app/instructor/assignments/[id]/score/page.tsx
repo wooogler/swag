@@ -8,7 +8,6 @@ import {
 } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { redirect, notFound } from 'next/navigation';
-import Link from 'next/link';
 import { getInstructor, isAdministrator } from '@/lib/auth';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
 import { isOpenAIConfigured } from '@/lib/score/classifier';

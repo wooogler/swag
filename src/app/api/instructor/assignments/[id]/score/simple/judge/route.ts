@@ -14,7 +14,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
-import { logStudyEvent } from '@/lib/study/events';
 import { definitionsOf } from '@/lib/study/simple/chain';
 import { definitionTasks, judgeBatch } from '@/lib/study/simple/judge';
 import { simpleContext } from '@/lib/study/simple/route-context';
@@ -60,14 +59,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     limit: body.limit,
   });
 
-  if (progress.ratedThisBatch > 0) {
-    await logStudyEvent(id, 'simple_judge_run', {
-      condition,
-      definitions: tasks.length,
-      rated: progress.ratedThisBatch,
-      remaining: progress.remaining,
-    });
-  }
-
+  // Not logged here: judgeBatch logs its own pass, so that the background one
+  // a save starts is recorded the same way this one is.
   return NextResponse.json(progress);
 }

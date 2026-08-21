@@ -54,6 +54,8 @@ interface StatePayload {
   counts: Record<string, number>;
   judged: number;
   pending: number;
+  /** The save's own follow-up work is still running on the server. */
+  working: boolean;
   diff: { sid: number | null; entered: number[]; left: number[] }[] | null;
 }
 
@@ -118,7 +120,7 @@ export default function SimpleStudio({
       if (!opts?.keepDraft) setDraft(next.snapshot);
       return next;
     },
-    [assignmentId, diffFrom, state.viewing?.versionNo]
+    [api, diffFrom, state.viewing?.versionNo]
   );
 
   /* --------------------------------------------------------------- */
@@ -150,13 +152,23 @@ export default function SimpleStudio({
       judgeRef.current = false;
       setJudging(false);
     }
-  }, [arm, assignmentId, load, rows, state.pinned]);
+  }, [api, arm, load, rows, state.pinned]);
 
-  // Anything unjudged gets judged, without being asked for. A "Run" button
+  // Anything unjudged gets judged, without being asked for — a "Run" button
   // here would be handing the participant the machine to operate.
+  //
+  // Unless the save that caused it is already doing the same work, in which
+  // case this waits and re-reads. Two passes over the same questions would
+  // each find the cache empty and each pay for every verdict.
   useEffect(() => {
-    if (state.pending > 0 && state.atTip) void runJudge();
-  }, [state.pending, state.atTip, runJudge]);
+    if (state.pending === 0 || !state.atTip) return;
+    if (!state.working) {
+      void runJudge();
+      return;
+    }
+    const timer = setTimeout(() => void load({ keepDraft: true }), 1200);
+    return () => clearTimeout(timer);
+  }, [state.pending, state.atTip, state.working, runJudge, load]);
 
   /* --------------------------------------------------------------- */
   /* Saving                                                           */
@@ -189,7 +201,7 @@ export default function SimpleStudio({
         setSaving(false);
       }
     },
-    [assignmentId, load, selectedMessageId, state.versions]
+    [api, load, selectedMessageId, state.versions]
   );
 
   const restore = useCallback(
@@ -203,7 +215,7 @@ export default function SimpleStudio({
       setLocalVersionNo(null);
       await load({ versionNo: null, diffFrom: null });
     },
-    [assignmentId, load]
+    [api, load]
   );
 
   /* --------------------------------------------------------------- */
@@ -223,7 +235,7 @@ export default function SimpleStudio({
         body: pinned ? undefined : JSON.stringify({ messageId }),
       });
     },
-    [assignmentId, state.pinned]
+    [api, state.pinned]
   );
 
   /* --------------------------------------------------------------- */
@@ -309,7 +321,6 @@ export default function SimpleStudio({
           // otherwise leave no trace at all.
           logUi(assignmentId, 'simple_version_view', { versionNo });
         }}
-        titleOf={title}
         assignmentId={assignmentId}
       />
 
@@ -371,7 +382,6 @@ function ConfigColumn({
   onSave,
   onRestore,
   onView,
-  titleOf,
   assignmentId,
 }: {
   arm: 'score' | 'baseline';
@@ -390,7 +400,6 @@ function ConfigColumn({
   onSave: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
   onRestore: (versionNo: number) => Promise<void>;
   onView: (versionNo: number | null) => void;
-  titleOf: (sid: number | null) => string;
   assignmentId: string;
 }) {
   const countOf = (sid: number | null) => state.counts[sid === null ? 'root' : String(sid)] ?? 0;
@@ -432,7 +441,6 @@ function ConfigColumn({
           <Tree
             draft={draft}
             setDraft={setDraft}
-            state={state}
             readOnly={readOnly}
             saving={saving}
             judging={judging}
@@ -444,7 +452,6 @@ function ConfigColumn({
             setCreatingUnder={setCreatingUnder}
             onSave={onSave}
             countOf={countOf}
-            titleOf={titleOf}
             assignmentId={assignmentId}
           />
         )}
@@ -509,7 +516,6 @@ function PromptEditor({
 function Tree({
   draft,
   setDraft,
-  state,
   readOnly,
   saving,
   judging,
@@ -521,12 +527,10 @@ function Tree({
   setCreatingUnder,
   onSave,
   countOf,
-  titleOf,
   assignmentId,
 }: {
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
-  state: StatePayload;
   readOnly: boolean;
   saving: boolean;
   judging: boolean;
@@ -538,7 +542,6 @@ function Tree({
   setCreatingUnder: (v: number | null | undefined) => void;
   onSave: (next: SimpleSnapshot, focusSid: number | null) => Promise<void>;
   countOf: (sid: number | null) => number;
-  titleOf: (sid: number | null) => string;
   assignmentId: string;
 }) {
   const childrenOf = (parentSid: number | null) =>

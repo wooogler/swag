@@ -139,6 +139,8 @@ export async function loadSimpleBoard(args: {
       ),
       judged: messageIds.length - pending,
       pending,
+      // Nothing has just been saved on a first render, so nothing is running.
+      working: false,
       diff: null,
     },
   };
