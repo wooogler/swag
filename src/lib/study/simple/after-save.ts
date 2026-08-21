@@ -27,6 +27,8 @@ import {
   type SimpleSnapshot,
 } from './chain';
 import { definitionTasks, judgeBatch, readMatches } from './judge';
+import { fillMissingIntentTitles } from './titles';
+import { logStudyEvent } from '../events';
 import { prefetchResponses } from './respond';
 import { generateIntentVersionName, generateVersionName } from './name';
 import { nameIntentVersion, previousIntentVersion } from './intent-versions';
@@ -96,8 +98,31 @@ async function perform(job: SaveJob): Promise<void> {
   await Promise.allSettled([
     job.kind === 'save' ? nameVersion(job) : Promise.resolve(),
     nameIntentVersions(job),
+    titleNewIntents(job),
     judgeAndPrefetch(job),
   ]);
+}
+
+/**
+ * A handle for any intent written without one.
+ *
+ * Alongside the names rather than before them: both are labels, both are
+ * best-effort, and neither is allowed to be the slow thing behind a write that
+ * has already returned. Logged separately from a participant's own edit,
+ * because the analysis should be able to tell a name they chose from one they
+ * were handed.
+ */
+async function titleNewIntents(job: SaveJob): Promise<void> {
+  try {
+    const named = await fillMissingIntentTitles(job.assignmentId, job.snapshot);
+    if (named.length === 0) return;
+    await logStudyEvent(job.assignmentId, 'simple_intent_titled', {
+      condition: job.condition,
+      titles: named,
+    });
+  } catch (error) {
+    console.error('simple intent titles failed (leaving them untitled):', error);
+  }
 }
 
 /**

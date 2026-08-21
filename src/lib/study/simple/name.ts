@@ -123,6 +123,54 @@ function describeIntentChange(
   return `Intent "${next.title}".\n\n${parts.join('\n\n')}`;
 }
 
+const TITLE_SYSTEM = `You give a short handle to a category of student questions, for the person who wrote the description of it.
+
+You are given the description they wrote. Return "name": at most 4 words, capitalized like a sentence, no trailing period, naming the KIND of question the description picks out.
+
+Use their words where you can. Do not evaluate the description, do not broaden or narrow it, do not add anything that is not in it, and never write the word "intent".`;
+
+const TITLE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name'],
+  properties: { name: { type: 'string', description: 'at most 4 words, no trailing period' } },
+};
+
+/**
+ * A handle for an intent whose author did not give it one.
+ *
+ * Same standing as a version name and for the same reason: a title is read by
+ * a person and by nothing else. It is never sent to the judge, never sent to
+ * the chatbot, and deliberately left out of the per-intent version axis, which
+ * records the (definition, rule) pair — so it changes nothing about what the
+ * configuration does. Asking someone to name a category before they have
+ * finished describing it is asking twice for the same thing.
+ *
+ * Only ever fills a blank. A title the participant typed is never touched, and
+ * once this has filled one it is theirs to edit and is not written again.
+ */
+export async function generateIntentTitle(definition: string): Promise<string | null> {
+  const text = definition.trim();
+  if (text.length === 0) return null;
+  try {
+    const raw = await callModel(
+      TITLE_SYSTEM,
+      `The description they wrote:\n${clip(text, 900)}`,
+      NAME_MODEL,
+      'low',
+      { name: 'intent_title', schema: TITLE_SCHEMA as Record<string, unknown> },
+      { timeoutMs: 20_000, maxRetries: 1 }
+    );
+    const parsed = extractJsonObject(raw);
+    const name = typeof parsed.name === 'string' ? parsed.name.trim().replace(/\.$/, '') : '';
+    if (name.length === 0 || name.length > 60) return null;
+    return name;
+  } catch (error) {
+    console.error('simple intent title failed (leaving it untitled):', error);
+    return null;
+  }
+}
+
 export async function generateIntentVersionName(
   next: { title: string; definition: string; rule: string },
   prev: { definition: string; rule: string } | null

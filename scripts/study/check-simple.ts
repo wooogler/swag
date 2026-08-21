@@ -517,6 +517,43 @@ async function main() {
     );
   }
 
+  // 6c. An intent written without a name gets one.
+  //
+  //     The creation form asks for a description and nothing else, so this is
+  //     the path every intent takes unless a starter set brought a name with
+  //     it. It is a label — never judged, never sent to the chatbot, left out
+  //     of the per-intent version axis — so it lands after the write, and the
+  //     write is not allowed to wait for it.
+  if (arm === 'score') {
+    await call('save', {
+      method: 'POST',
+      body: JSON.stringify({
+        rootRule: 'Answer briefly and never write the essay for them.',
+        prompt: 'Answer briefly and never write the essay for them.',
+        intents: [
+          {
+            title: '',
+            definition: 'asks how many sources the essay needs',
+            rule: 'Point them at the assignment sheet.',
+          },
+        ],
+      }),
+    });
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const titled = await state();
+    const written = titled.snapshot.intents[0];
+    check(
+      'an intent written without a name is given one',
+      (written?.title ?? '').trim().length > 0,
+      `title=${JSON.stringify(written?.title ?? null)}`
+    );
+    check(
+      'and its own words are left alone',
+      written?.definition === 'asks how many sources the essay needs'
+    );
+  }
+
   // 7. Diff against an earlier version, which is what paints the rows.
   const diffed = (await call('state', {}, `diffFrom=${v1}`)).body as unknown as StateBody;
   check('a diff comes back', Array.isArray(diffed.diff), `${diffed.diff?.length ?? 0} entr(ies)`);

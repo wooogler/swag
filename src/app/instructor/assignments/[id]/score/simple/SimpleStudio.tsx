@@ -45,7 +45,16 @@
  * what we are here to watch (§1-4).
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Loader2, Pin, PinOff, Plus, Trash2 } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { ConversationThread } from '../conversation';
 import { QuerySnippet } from '../materials';
 import type { ScoreQueryRow } from '../IntentBoard';
@@ -768,6 +777,9 @@ function Tree({
       })),
   ];
 
+  /** Which title is open for editing. One at a time, like the editors. */
+  const [renaming, setRenaming] = useState<number | null>(null);
+
   const patch = (sid: number, fields: Partial<SimpleIntent>) =>
     setDraft({
       ...draft,
@@ -827,20 +839,41 @@ function Tree({
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ backgroundColor: intentColor(intent.sid) }}
           />
-          {open && !readOnly ? (
-            // One title, in the one place it is already shown. The editor used
-            // to carry a second box with the same words in it, directly under
-            // this line.
+          {/* One title, in the one place it is already shown — the editor used
+              to carry a second box with the same words in it. It reads as text
+              until asked for: a box standing open says "fill me in" about the
+              one thing here that names itself. */}
+          {renaming === intent.sid && !readOnly ? (
             <input
               value={intent.title}
               maxLength={120}
+              autoFocus
               placeholder="Name it"
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => patch(intent.sid, { title: e.target.value })}
-              className="flex-1 min-w-0 bg-transparent text-sm rounded px-1 -mx-1 focus:outline-none focus:bg-[hsl(var(--muted))] hover:bg-[hsl(var(--muted))]"
+              onBlur={() => setRenaming(null)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === 'Escape') setRenaming(null);
+                e.stopPropagation();
+              }}
+              className="flex-1 min-w-0 rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-1.5 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
             />
           ) : (
-            <span className="flex-1 truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
+            <>
+              <span className="flex-1 truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
+              {!readOnly && (
+                <button
+                  title="Rename"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRenaming(intent.sid);
+                  }}
+                  className="hidden group-hover:block shrink-0 p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              )}
+            </>
           )}
           {/* Which one, not just whether. Plain and unstyled: this is a fact
               about what the next step will read, not a fault to fix. */}
@@ -882,8 +915,13 @@ function Tree({
 
         {open && (
           <div
-            className="ml-[1.05rem] pl-2.5 pr-2 pb-3 pt-1 border-l-2"
-            style={{ borderColor: intentColor(intent.sid) }}
+            className="ml-[1.05rem] pl-2.5 pr-2 pb-3 pt-1 border-l"
+            style={{
+              // Tinted by the row rather than painted in its colour: at full
+              // strength a 2px bar competed with everything it was there to
+              // organise.
+              borderColor: `color-mix(in srgb, ${intentColor(intent.sid)} 30%, transparent)`,
+            }}
           >
             <Accordion
               api={api}
@@ -913,7 +951,9 @@ function Tree({
         {draft.intents.map((intent, at) => (
           <Fragment key={intent.sid}>
             {creating?.beforeSid === intent.sid && (
-              <li>{form(intent.title.trim() || 'Untitled')}</li>
+              <li className="ml-[1.05rem] pl-2.5 pr-2">
+                {form(intent.title.trim() || 'Untitled')}
+              </li>
             )}
             {renderIntent(intent, at)}
           </Fragment>
@@ -925,7 +965,9 @@ function Tree({
           be. Asking `creating?.beforeSid == null` would be true when nothing
           is being created at all, and the button would never appear. */}
       {creating ? (
-        creating.beforeSid == null && <div className="px-2 pt-1">{form('Uncategorized')}</div>
+        creating.beforeSid == null && (
+          <div className="ml-[1.05rem] pl-2.5 pr-2 pt-1">{form('Uncategorized')}</div>
+        )
       ) : (
         !readOnly && (
           <button
@@ -938,7 +980,7 @@ function Tree({
               });
               setExpanded(null);
             }}
-            className="mt-1 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-[hsl(var(--border))] text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+            className="mt-1 ml-[1.05rem] flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-[hsl(var(--border))] text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
           >
             <Plus className="w-3.5 h-3.5" /> New intent
           </button>
@@ -981,7 +1023,7 @@ function Tree({
       </div>
 
       {expanded === 'root' && (
-        <div className="ml-[1.05rem] pl-2.5 pr-2 pb-3 pt-1 border-l-2 border-[hsl(var(--muted-foreground))]/40 space-y-3">
+        <div className="ml-[1.05rem] pl-2.5 pr-2 pb-3 pt-1 border-l border-[hsl(var(--border))] space-y-3">
           <Field
             label="Then"
             control={
@@ -1198,6 +1240,12 @@ function ApplyButton({ saving, onClick }: { saving: boolean; onClick: () => void
  * is no dialog, because the questions are the material you write a definition
  * from and a dialog would cover them.
  *
+ * There is no name field. Naming a category before you have finished
+ * describing it is being asked twice for the same thing, so the description is
+ * the only thing to write: a starter set brings its own name, and anything
+ * else is handed one afterwards, from the words that were actually written
+ * (lib/study/simple/titles.ts). The pencil on the row renames it.
+ *
  * When it was started from a question, that question is quoted here and kept
  * in the shelf above the list. The quote is context, not a constraint: nothing
  * arranges for it to end up in this intent. The one thing the form can promise
@@ -1248,14 +1296,6 @@ function NewIntent({
           {creating.fromQuestion.trim().length > 140 ? '…' : ''}”
         </p>
       )}
-      <input
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        autoFocus
-        maxLength={120}
-        placeholder="Name it"
-        className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-      />
       <Field
         label="When a question…"
         control={
@@ -1271,6 +1311,7 @@ function NewIntent({
       >
         <textarea
           value={definition}
+          autoFocus
           maxLength={4000}
           onChange={(e) => setDefinition(e.target.value)}
           placeholder="asks for…"
