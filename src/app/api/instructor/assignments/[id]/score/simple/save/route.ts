@@ -23,6 +23,7 @@ import { runAfterSave } from '@/lib/study/simple/after-save';
 import { emptySnapshot, type SimpleIntent, type SimpleSnapshot } from '@/lib/study/simple/chain';
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleTip, nextSid, saveSimpleVersion } from '@/lib/study/simple/store';
+import { recordIntentVersions } from '@/lib/study/simple/intent-versions';
 import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
 
 export const dynamic = 'force-dynamic';
@@ -110,6 +111,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const version = await saveSimpleVersion({ assignmentId: id, snapshot, kind: body.kind });
 
+  // The per-intent timeline the board reads. Only the intents whose when/then
+  // pair actually moved get a version — editing one intent is not an event in
+  // another one's history.
+  const intentVersions = await recordIntentVersions({
+    assignmentId: id,
+    snapshot,
+    configVersionNo: version.versionNo,
+  });
+
   // One event either way, with the kind on it: an apply and a save are the
   // same act with a different claim, and the analysis wants to count both and
   // tell them apart.
@@ -130,6 +140,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     versionId: version.id,
     snapshot,
     previous: previousVersion ? previous : null,
+    intentVersions,
     focusSid: body.focusSid ?? null,
     pinned: [],
     recentMessageIds: body.recentMessageIds ?? [],

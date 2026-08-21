@@ -59,6 +59,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     versionId: version.id,
     snapshot: tip.snapshot,
     previous: saved.version ? saved.snapshot : null,
+    // Nothing new: a commit marks a state that is already in effect, so every
+    // intent's pair already has the version it is going to get.
+    intentVersions: [],
     focusSid: null,
     pinned: [],
     recentMessageIds: [],

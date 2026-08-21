@@ -600,6 +600,33 @@ export const simpleConfigVersions = pgTable('simple_config_versions', {
   uniq: uniqueIndex('simple_config_versions_unique').on(table.assignmentId, table.versionNo),
 }));
 
+// One timeline per intent, holding the (definition, rule) pair each time it
+// changes — the version axis the participant reads. sid 0 is the
+// everything-else rule. simple_config_versions above is still the
+// configuration and still what the study measures; this is the same edits,
+// seen one intent at a time, kept as rows because a version needs a number
+// that survives and a name a model wrote once.
+export const simpleIntentVersions = pgTable('simple_intent_versions', {
+  id: serial('id').primaryKey(),
+  assignmentId: text('assignment_id').notNull(),
+  sid: integer('sid').notNull(),
+  versionNo: integer('version_no').notNull(),
+  definition: text('definition').notNull().default(''),
+  rule: text('rule').notNull().default(''),
+  title: text('title').notNull().default(''),
+  name: text('name'),
+  summary: text('summary'),
+  configVersionNo: integer('config_version_no'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  uniq: uniqueIndex('simple_intent_versions_unique').on(
+    table.assignmentId,
+    table.sid,
+    table.versionNo
+  ),
+  assignmentIdx: index('simple_intent_versions_assignment_idx').on(table.assignmentId),
+}));
+
 // Judgment cache, keyed by definition TEXT (intentDefHash) — never by intent,
 // position or version. Editing one definition re-rates that definition alone.
 export const simpleRatings = pgTable('simple_ratings', {

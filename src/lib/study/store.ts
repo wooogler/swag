@@ -97,6 +97,43 @@ export async function ensureStudyTables(): Promise<void> {
         sql`ALTER TABLE "simple_config_versions" ADD COLUMN IF NOT EXISTS "kind" text NOT NULL DEFAULT 'save'`
       );
 
+      // The version axis the participant actually reads: one timeline per
+      // intent, holding the (definition, rule) PAIR each time it changes.
+      //
+      // The pair rather than the rule alone, because in this version they are
+      // one thought — "when this, do that" — and a history of Thens with no
+      // record of which When they answered is a history of half-sentences.
+      //
+      // The snapshot timeline above is still the configuration and still what
+      // gets measured; this is a per-intent view of the same edits, kept as
+      // rows because a version needs a number that survives, and a name a
+      // model wrote once rather than on every read.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_intent_versions" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL,
+          -- The intent's stable id (SimpleIntent.sid), or 0 for the
+          -- everything-else rule, which has a history like any other.
+          "sid" integer NOT NULL,
+          "version_no" integer NOT NULL,
+          "definition" text NOT NULL DEFAULT '',
+          "rule" text NOT NULL DEFAULT '',
+          "title" text NOT NULL DEFAULT '',
+          -- Written asynchronously by a small model from this intent's own
+          -- diff. Null until it lands, and null for good if it fails.
+          "name" text, "summary" text,
+          -- The snapshot this pair first appeared in, so a version can be
+          -- placed on the configuration's own timeline.
+          "config_version_no" integer,
+          "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "simple_intent_versions_unique" ON "simple_intent_versions" ("assignment_id","sid","version_no")`
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "simple_intent_versions_assignment_idx" ON "simple_intent_versions" ("assignment_id")`
+      );
+
       // Judgments, keyed by the DEFINITION TEXT rather than by any intent id.
       // Editing one definition therefore re-rates that definition and nothing
       // else, moving or reordering an intent costs no calls at all, and typing

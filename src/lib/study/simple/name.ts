@@ -94,14 +94,56 @@ function clip(text: string, max = 800): string {
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`;
 }
 
+/**
+ * The same job for ONE intent: what changed in this when/then pair.
+ *
+ * Narrower input than the configuration-wide describer above, and better for
+ * it — the model is looking at two short texts rather than a whole tree, so
+ * the label it writes is about the edit the participant just made rather than
+ * about the biggest thing on screen.
+ */
+function describeIntentChange(
+  next: { title: string; definition: string; rule: string },
+  prev: { definition: string; rule: string } | null
+): string {
+  if (!prev) {
+    return `First version of "${next.title}".\n\nwhen: ${clip(next.definition, 600)}\n\nthen: ${clip(next.rule, 900)}`;
+  }
+  const parts: string[] = [];
+  if (prev.definition !== next.definition) {
+    parts.push(
+      `The WHEN changed.\n\nBEFORE:\n${clip(prev.definition, 500)}\n\nAFTER:\n${clip(next.definition, 500)}`
+    );
+  }
+  if (prev.rule !== next.rule) {
+    parts.push(
+      `The THEN changed.\n\nBEFORE:\n${clip(prev.rule, 700)}\n\nAFTER:\n${clip(next.rule, 700)}`
+    );
+  }
+  if (parts.length === 0) return `"${next.title}" saved with no change.`;
+  return `Intent "${next.title}".\n\n${parts.join('\n\n')}`;
+}
+
+export async function generateIntentVersionName(
+  next: { title: string; definition: string; rule: string },
+  prev: { definition: string; rule: string } | null
+): Promise<{ name: string; summary: string } | null> {
+  return runNamer(describeIntentChange(next, prev));
+}
+
 export async function generateVersionName(
   next: SimpleSnapshot,
   prev: SimpleSnapshot | null
 ): Promise<{ name: string; summary: string } | null> {
+  return runNamer(describeChange(next, prev));
+}
+
+/** One call, one label, null on anything going wrong. */
+async function runNamer(input: string): Promise<{ name: string; summary: string } | null> {
   try {
     const raw = await callModel(
       SYSTEM,
-      describeChange(next, prev),
+      input,
       NAME_MODEL,
       'low',
       { name: 'version_name', schema: SCHEMA as Record<string, unknown> },

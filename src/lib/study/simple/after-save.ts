@@ -30,7 +30,8 @@ import {
 } from './chain';
 import { definitionTasks, judgeBatch, readMatches } from './judge';
 import { prefetchResponses } from './respond';
-import { generateVersionName } from './name';
+import { generateIntentVersionName, generateVersionName } from './name';
+import { nameIntentVersion, previousIntentVersion } from './intent-versions';
 import { nameSimpleVersion } from './store';
 
 /** How many questions to get answers for before the participant asks. */
@@ -42,9 +43,14 @@ interface SaveJob {
   versionId: number;
   snapshot: SimpleSnapshot;
   previous: SimpleSnapshot | null;
-  /** 'apply' skips the naming: nothing lists an apply, so a label for it is a
-   * model call spent on a string nobody reads. */
+  /** 'apply' skips the configuration-wide naming: nothing lists an apply at
+   * that level, so a label for it is a model call spent on a string nobody
+   * reads. The PER-INTENT versions it wrote are listed, and are named either
+   * way. */
   kind: 'apply' | 'save';
+  /** The intent versions this write appended, for naming. */
+  intentVersions: { id: number; sid: number; versionNo: number; title: string;
+    definition: string; rule: string }[];
   /** What the board had selected when they saved — the best guess at what
    * they are about to look at. */
   focusSid: number | null;
@@ -91,8 +97,31 @@ function start(job: SaveJob): void {
 async function perform(job: SaveJob): Promise<void> {
   await Promise.allSettled([
     job.kind === 'save' ? nameVersion(job) : Promise.resolve(),
+    nameIntentVersions(job),
     judgeAndPrefetch(job),
   ]);
+}
+
+/**
+ * A label per intent version, from that intent's own diff.
+ *
+ * In parallel and best-effort, like every other name here: a version with none
+ * reads "v3 · 14:02", which is worse and not broken. Bounded because a single
+ * write can touch several intents and this must not become the slow thing
+ * behind a save that already returned.
+ */
+async function nameIntentVersions(job: SaveJob): Promise<void> {
+  await Promise.allSettled(
+    job.intentVersions.slice(0, 8).map(async (version) => {
+      try {
+        const previous = await previousIntentVersion(job.assignmentId, version.sid, version.versionNo);
+        const named = await generateIntentVersionName(version, previous);
+        if (named) await nameIntentVersion(version.id, named.name, named.summary);
+      } catch {
+        /* the timestamp label is already on screen */
+      }
+    })
+  );
 }
 
 async function nameVersion(job: SaveJob): Promise<void> {

@@ -22,6 +22,7 @@ import { armOf, type StudioView } from '@/lib/study/config';
 import { definitionsOf, resolveSimpleAll } from '@/lib/study/simple/chain';
 import { definitionTasks, readMatches } from '@/lib/study/simple/judge';
 import { getSimpleState } from '@/lib/study/simple/store';
+import { listIntentVersions } from '@/lib/study/simple/intent-versions';
 import { reviewScope } from '@/lib/study/simple/scope';
 
 export async function loadSimpleBoard(args: {
@@ -139,6 +140,7 @@ export async function loadSimpleBoard(args: {
       atTip: state.atTip,
       savedVersionNo: state.savedVersionNo,
       dirty: state.dirty,
+      intentVersions: await listIntentVersions(assignmentId),
       pinned: state.pinned,
       owners: Object.fromEntries(
         [...owners.entries()].map(([messageId, o]) => [

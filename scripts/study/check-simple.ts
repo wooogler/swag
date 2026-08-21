@@ -49,11 +49,16 @@ function check(label: string, ok: boolean, extra = '') {
 
 interface StateBody {
   arm: string;
-  snapshot: { rootRule: string; prompt: string; intents: { sid: number; title: string }[] };
+  snapshot: {
+    rootRule: string;
+    prompt: string;
+    intents: { sid: number; title: string; definition: string; rule: string; parentSid: number | null }[];
+  };
   versions: { versionNo: number; displayNo: number; name: string | null }[];
   atTip: boolean;
   savedVersionNo: number | null;
   dirty: boolean;
+  intentVersions: Record<string, { versionNo: number; definition: string; rule: string; name: string | null }[]>;
   pinned: number[];
   owners: Record<string, { sid: number | null; outcome: string }>;
   counts: Record<string, number>;
@@ -127,6 +132,16 @@ async function main() {
 
   const { deployStateFor } = await import('../../src/lib/study/console-store');
   const state = async () => (await call('state')).body as unknown as StateBody;
+
+  // A previous run's follow-up work outlives the script that started it — it
+  // is a floating promise on a long-lived server — so its events can land
+  // after this run has taken its high-water mark and be counted as this run's.
+  // Two back-to-back runs on one assignment is exactly how this script is
+  // used, so wait for the board to go quiet before starting.
+  for (let round = 0; round < 20; round += 1) {
+    if (!(await state()).working) break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
 
   const [{ high }] = await db
     .select({ high: sql<number>`coalesce(max(${studyEvents.id}), 0)::int` })
@@ -418,6 +433,12 @@ async function main() {
   //     study measures the SAVE, so a block must not be endable while
   //     something is applied and unsaved.
   if (!startersOnly) {
+    // Each arm writes a different field — the tree's else-rule, or the one
+    // document — so an assertion on the wrong one passes vacuously. It did:
+    // these two checked rootRule on both arms, so the baseline's apply/save
+    // path was never actually being read.
+    const configText = (snap: StateBody['snapshot']) =>
+      arm === 'baseline' ? snap.prompt : snap.rootRule;
     const beforeApply = await state();
     const savedBefore = beforeApply.savedVersionNo;
     await call('save', {
@@ -430,7 +451,7 @@ async function main() {
       }),
     });
     const applied = await state();
-    check('an apply takes effect', applied.snapshot.rootRule.includes('Applied, not saved'));
+    check('an apply takes effect', configText(applied.snapshot).includes('Applied, not saved'));
     check('and is not in the history', applied.versions.length === beforeApply.versions.length,
       `${beforeApply.versions.length} → ${applied.versions.length}`);
     check('and leaves the save where it was', applied.savedVersionNo === savedBefore);
@@ -447,7 +468,7 @@ async function main() {
     // Revert: back to the point they marked.
     await call('revert', { method: 'POST' });
     const reverted = await state();
-    check('revert drops the applies', !reverted.snapshot.rootRule.includes('Applied, not saved'));
+    check('revert drops the applies', !configText(reverted.snapshot).includes('Applied, not saved'));
     check('and clears the unsaved state', !reverted.dirty);
     check('and keeps the save', reverted.savedVersionNo === savedBefore);
 
@@ -469,13 +490,87 @@ async function main() {
     check(
       'and it is what the study would measure',
       committed.savedVersionNo === committed.versions[0]?.versionNo &&
-        committed.snapshot.rootRule.includes('This one gets kept')
+        configText(committed.snapshot).includes('This one gets kept')
     );
     const gateAfter = await deployStateFor({
       assignmentId,
       condition: view ?? 'simple_score',
     });
     check('and the block can end now', gateAfter.deployed, `${gateAfter.label}`);
+  }
+
+  // 8c. The version axis the participant reads: one timeline per intent.
+  if (!startersOnly) {
+    const now = await state();
+    // sid 0 is the everything-else rule on one arm and the whole document on
+    // the other; either way it has a history, and it has been edited by now.
+    const rootHistory = now.intentVersions['0'] ?? [];
+    check('the else-rule keeps its own history', rootHistory.length > 0, `${rootHistory.length} version(s)`);
+    check(
+      'numbered from 1, newest first',
+      rootHistory[0]?.versionNo === rootHistory.length,
+      rootHistory.map((v) => `v${v.versionNo}`).join(' ')
+    );
+
+    if (arm === 'score') {
+      const sids = Object.keys(now.intentVersions).filter((k) => k !== '0');
+      check('each intent has its own timeline', sids.length > 0, `${sids.length} intent(s)`);
+      // The point of a per-intent axis, measured directly: change ONE
+      // intent's rule and nobody else's timeline moves. (Counting versions
+      // across a whole run cannot show this — the script edits the else-rule
+      // several times of its own accord.)
+      const countsBefore = Object.fromEntries(
+        Object.entries(now.intentVersions).map(([k, v]) => [k, v.length])
+      );
+      const target = now.snapshot.intents[0];
+      await call('save', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'apply',
+          rootRule: now.snapshot.rootRule,
+          prompt: now.snapshot.prompt,
+          intents: now.snapshot.intents.map((i) =>
+            i.sid === target.sid ? { ...i, rule: `${i.rule} One sentence only.` } : i
+          ),
+        }),
+      });
+      const after = await state();
+      const moved = Object.entries(after.intentVersions)
+        .filter(([k, v]) => v.length !== (countsBefore[k] ?? 0))
+        .map(([k]) => k);
+      check(
+        'changing one intent versions only that intent',
+        moved.length === 1 && moved[0] === String(target.sid),
+        `moved: ${moved.join(', ') || 'none'}`
+      );
+      // And a reorder, which changes no text at all, versions nobody.
+      const beforeReorder = Object.fromEntries(
+        Object.entries(after.intentVersions).map(([k, v]) => [k, v.length])
+      );
+      await call('save', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'apply',
+          rootRule: after.snapshot.rootRule,
+          prompt: after.snapshot.prompt,
+          intents: [...after.snapshot.intents].reverse(),
+        }),
+      });
+      const reordered = await state();
+      check(
+        'reordering versions nobody',
+        Object.entries(reordered.intentVersions).every(
+          ([k, v]) => v.length === (beforeReorder[k] ?? 0)
+        ),
+        Object.entries(reordered.intentVersions).map(([k, v]) => `${k}:${v.length}`).join(' ')
+      );
+      // A version is the pair, not the rule alone.
+      const anyVersion = now.intentVersions[sids[0]]?.[0];
+      check(
+        'a version carries the when and the then',
+        !!anyVersion && typeof anyVersion.definition === 'string' && typeof anyVersion.rule === 'string'
+      );
+    }
   }
 
   // 9. The starter library, and the claim that adopting one is free.

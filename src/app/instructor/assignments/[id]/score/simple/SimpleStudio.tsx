@@ -43,6 +43,7 @@ import { QuerySnippet } from '../materials';
 import type { ScoreQueryRow } from '../IntentBoard';
 import StarterPicker from './StarterPicker';
 import RulePicker, { type RuleSource } from './RulePicker';
+import IntentHistory, { type IntentVersion } from './IntentHistory';
 import { intentColor } from './colors';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
@@ -76,6 +77,8 @@ interface StatePayload {
   savedVersionNo: number | null;
   /** Something took effect that the newest save does not carry. */
   dirty: boolean;
+  /** sid → that intent's own history, newest first ('0' = everything else). */
+  intentVersions: Record<string, IntentVersion[]>;
   /** The write's own follow-up work is still running on the server. */
   working: boolean;
   diff: { sid: number | null; entered: number[]; left: number[] }[] | null;
@@ -523,6 +526,7 @@ function ConfigColumn({
         ) : (
           <Tree
             api={api}
+            intentVersions={state.intentVersions}
             draft={draft}
             setDraft={setDraft}
             readOnly={readOnly}
@@ -541,16 +545,30 @@ function ConfigColumn({
         )}
       </section>
 
-      <VersionList
-        versions={state.versions}
-        viewingVersionNo={state.viewing?.versionNo ?? null}
-        onView={onView}
+      {/* The version number a participant reads belongs to the INTENT, and
+          lives inside it. What stays here is the one thing that is genuinely
+          about the whole configuration: whether what is in effect has been
+          saved, since that — not any single intent — is what the next step
+          measures.
+
+          The baseline arm is the exception, and only because it has one
+          intent: its whole configuration IS the document, so the document's
+          history and the configuration's are the same list, and it keeps it. */}
+      <SaveBar
         dirty={state.dirty}
+        hasSave={state.savedVersionNo != null}
         readOnly={readOnly}
         saving={saving}
         onSaveVersion={onSaveVersion}
         onRevert={onRevert}
       />
+      {arm === 'baseline' && (
+        <VersionList
+          versions={state.versions}
+          viewingVersionNo={state.viewing?.versionNo ?? null}
+          onView={onView}
+        />
+      )}
     </div>
   );
 }
@@ -605,6 +623,7 @@ function PromptEditor({
 /** The score arm's configuration: one root, a tree under it, editors inline. */
 function Tree({
   api,
+  intentVersions,
   draft,
   setDraft,
   readOnly,
@@ -621,6 +640,8 @@ function Tree({
   assignmentId,
 }: {
   api: (path: string, query?: string) => string;
+  /** sid → that intent's own history, newest first. */
+  intentVersions: Record<string, IntentVersion[]>;
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
@@ -743,6 +764,7 @@ function Tree({
             <Accordion
               api={api}
               ruleSources={ruleSources(intent.sid)}
+              versions={intentVersions[String(intent.sid)] ?? []}
               intent={intent}
               readOnly={readOnly}
               saving={saving}
@@ -825,10 +847,19 @@ function Tree({
               Then
             </label>
             {!readOnly && (
-              <RulePicker
-                sources={ruleSources('root')}
-                onPick={(rule) => setDraft({ ...draft, rootRule: rule })}
-              />
+              <>
+                <IntentHistory
+                  versions={intentVersions['0'] ?? []}
+                  currentDefinition=""
+                  currentRule={draft.rootRule}
+                  showDefinition={false}
+                  onPick={(v) => setDraft({ ...draft, rootRule: v.rule })}
+                />
+                <RulePicker
+                  sources={ruleSources('root')}
+                  onPick={(rule) => setDraft({ ...draft, rootRule: rule })}
+                />
+              </>
             )}
           </div>
           <textarea
@@ -932,6 +963,7 @@ function OrderButton({
 function Accordion({
   api,
   ruleSources,
+  versions,
   intent,
   readOnly,
   saving,
@@ -944,6 +976,8 @@ function Accordion({
   api: (path: string, query?: string) => string;
   /** Rules written elsewhere in this configuration, for the reuse picker. */
   ruleSources: RuleSource[];
+  /** This intent's own history, newest first. */
+  versions: IntentVersion[];
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
@@ -955,14 +989,26 @@ function Accordion({
 }) {
   return (
     <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-2.5 space-y-2">
-      <input
-        value={intent.title}
-        readOnly={readOnly}
-        maxLength={120}
-        onChange={(e) => onChange({ title: e.target.value })}
-        placeholder="Name it"
-        className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-      />
+      <div className="flex items-center gap-2">
+        <input
+          value={intent.title}
+          readOnly={readOnly}
+          maxLength={120}
+          onChange={(e) => onChange({ title: e.target.value })}
+          placeholder="Name it"
+          className="flex-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+        />
+        {/* This intent's own version number, and its history behind it. The
+            configuration has a timeline too, but by the time "what did this
+            say before" matters you are looking at one intent. */}
+        <IntentHistory
+          versions={versions}
+          currentDefinition={intent.definition}
+          currentRule={intent.rule}
+          disabled={readOnly}
+          onPick={(v) => onChange({ definition: v.definition, rule: v.rule })}
+        />
+      </div>
       <div>
         <div className="flex items-center justify-between gap-2 mb-1">
           <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
@@ -1161,69 +1207,87 @@ function NewIntent({
  * by that configuration, not just its text. Restoring makes it current again
  * and the versions after it leave the list.
  */
-function VersionList({
-  versions,
-  viewingVersionNo,
-  onView,
+/**
+ * Whether what is in effect has been saved — the one thing on this screen that
+ * is about the whole configuration rather than about one intent.
+ *
+ * It earns the space because the answer is invisible otherwise: the board
+ * looks identical either way, and the next step measures the save. Stated as a
+ * fact, with the button that resolves it beside the statement.
+ */
+function SaveBar({
   dirty,
+  hasSave,
   readOnly,
   saving,
   onSaveVersion,
   onRevert,
 }: {
-  versions: SimpleVersion[];
-  viewingVersionNo: number | null;
-  onView: (versionNo: number | null) => void;
   dirty: boolean;
+  hasSave: boolean;
   readOnly: boolean;
   saving: boolean;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
 }) {
+  if (readOnly) return null;
   return (
-    <section className="shrink-0 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
-      {/* Said plainly, in the one place the saved versions are listed, because
-          what is on screen and what will be measured have come apart and no
-          amount of looking at the board would show that. Not a warning — a
-          fact, and the button that resolves it is right here. */}
-      {!readOnly && (
-        <div className="flex items-center gap-2 border-b border-[hsl(var(--border))] px-3 py-2">
-          <span className="flex-1 text-2xs leading-snug text-[hsl(var(--muted-foreground))]">
-            {dirty
-              ? 'Changes are in effect but not saved.'
-              : versions.length === 0
-                ? 'Nothing saved yet.'
-                : 'Everything is saved.'}
-          </span>
-          {/* Absent, not disabled, before the first save: there is nowhere to
-              revert TO, and a greyed button is still an invitation to work out
-              why it will not do anything. */}
-          {dirty && versions.length > 0 && (
-            <button
-              onClick={() => void onRevert()}
-              disabled={saving}
-              title="Go back to the last saved version, dropping what you applied since"
-              className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40"
-            >
-              Revert
-            </button>
-          )}
-          <button
-            onClick={() => void onSaveVersion()}
-            disabled={saving || !dirty}
-            title="Keep this as a version you can come back to"
-            className="shrink-0 inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2.5 py-0.5 text-2xs font-semibold text-white disabled:opacity-40"
-          >
-            {saving && <Loader2 className="w-3 h-3 animate-spin" />}
-            Save
-          </button>
-        </div>
+    <section className="shrink-0 flex items-center gap-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2">
+      <span className="flex-1 text-2xs leading-snug text-[hsl(var(--muted-foreground))]">
+        {dirty
+          ? 'Changes are in effect but not saved.'
+          : hasSave
+            ? 'Everything is saved.'
+            : 'Nothing saved yet.'}
+      </span>
+      {/* Absent, not disabled, before the first save: there is nowhere to
+          revert TO, and a greyed button is still an invitation to work out
+          why it will not do anything. */}
+      {dirty && hasSave && (
+        <button
+          onClick={() => void onRevert()}
+          disabled={saving}
+          title="Go back to the last saved version, dropping what you applied since"
+          className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40"
+        >
+          Revert
+        </button>
       )}
-      {versions.length === 0 ? (
-        <p className="px-3 py-2 text-2xs text-[hsl(var(--muted-foreground))]">
+      <button
+        onClick={() => void onSaveVersion()}
+        disabled={saving || !dirty}
+        title="Keep this as a version you can come back to"
+        className="shrink-0 inline-flex items-center gap-1 rounded bg-[hsl(var(--primary))] px-2.5 py-0.5 text-2xs font-semibold text-white disabled:opacity-40"
+      >
+        {saving && <Loader2 className="w-3 h-3 animate-spin" />}
+        Save
+      </button>
+    </section>
+  );
+}
+
+/** The document's history — the baseline arm only, where it is also the
+ * configuration's. */
+function VersionList({
+  versions,
+  viewingVersionNo,
+  onView,
+}: {
+  versions: SimpleVersion[];
+  viewingVersionNo: number | null;
+  onView: (versionNo: number | null) => void;
+}) {
+  if (versions.length === 0) {
+    return (
+      <section className="shrink-0 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2">
+        <p className="text-2xs text-[hsl(var(--muted-foreground))]">
           Saved versions will appear here.
         </p>
-      ) : (
+      </section>
+    );
+  }
+  return (
+    <section className="shrink-0 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
       <ul className="max-h-[11rem] overflow-y-auto divide-y divide-[hsl(var(--border))]">
         {versions.map((v) => (
           <li key={v.id}>
@@ -1254,7 +1318,6 @@ function VersionList({
           </li>
         ))}
       </ul>
-      )}
     </section>
   );
 }

@@ -14,6 +14,7 @@
  */
 import { NextResponse } from 'next/server';
 import { afterSaveInFlight } from '@/lib/study/simple/after-save';
+import { listIntentVersions } from '@/lib/study/simple/intent-versions';
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleState, getSimpleVersion } from '@/lib/study/simple/store';
 import { definitionsOf, resolveSimpleAll, type SimpleSnapshot } from '@/lib/study/simple/chain';
@@ -101,6 +102,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // What the study measures, and whether the board has moved past it.
     savedVersionNo: state.savedVersionNo,
     dirty: state.dirty,
+    // sid → that intent's own history, newest first. '0' is the
+    // everything-else rule, and in the baseline arm it is the whole of it.
+    intentVersions: await listIntentVersions(id),
     pinned: state.pinned,
     // messageId → { sid, outcome }. The board renders "applied: X" from this
     // and nothing else, so what it shows is what would actually be sent.
