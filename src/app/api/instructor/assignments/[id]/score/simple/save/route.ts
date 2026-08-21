@@ -109,14 +109,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const version = await saveSimpleVersion({ assignmentId: id, snapshot, kind: body.kind });
 
-  // The per-intent timeline the board reads. Only the intents whose when/then
-  // pair actually moved get a version — editing one intent is not an event in
-  // another one's history.
-  const intentVersions = await recordIntentVersions({
-    assignmentId: id,
-    snapshot,
-    configVersionNo: version.versionNo,
-  });
+  // The per-intent timeline the board reads. Only on a SAVE, and only for the
+  // intents whose when/then pair actually moved: editing one intent is not an
+  // event in another one's history, and trying six wordings before deciding on
+  // one is not six decisions.
+  const intentVersions =
+    body.kind === 'save'
+      ? await recordIntentVersions({
+          assignmentId: id,
+          snapshot,
+          configVersionNo: version.versionNo,
+        })
+      : [];
 
   // One event either way, with the kind on it: an apply and a save are the
   // same act with a different claim, and the analysis wants to count both and

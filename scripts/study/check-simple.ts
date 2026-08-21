@@ -726,17 +726,31 @@ async function main() {
       // intent's rule and nobody else's timeline moves. (Counting versions
       // across a whole run cannot show this — the script edits the else-rule
       // several times of its own accord.)
-      const countsBefore = Object.fromEntries(
-        Object.entries(now.intentVersions).map(([k, v]) => [k, v.length])
-      );
-      const target = now.snapshot.intents[0];
+      // Commit whatever is applied first. A save carries everything that was
+      // in effect, so without this the root rule rides along and the claim
+      // being tested — that ONE intent moved — is measured against a save that
+      // was always going to move two.
       await call('save', {
         method: 'POST',
         body: JSON.stringify({
-          kind: 'apply',
           rootRule: now.snapshot.rootRule,
           prompt: now.snapshot.prompt,
-          intents: now.snapshot.intents.map((i) =>
+          intents: now.snapshot.intents,
+        }),
+      });
+      const clean = await state();
+      const countsBefore = Object.fromEntries(
+        Object.entries(clean.intentVersions).map(([k, v]) => [k, v.length])
+      );
+      const target = clean.snapshot.intents[0];
+      // A SAVE, because an apply is not a version any more — it overwrites the
+      // working state and the per-intent history stays a list of decisions.
+      await call('save', {
+        method: 'POST',
+        body: JSON.stringify({
+          rootRule: clean.snapshot.rootRule,
+          prompt: clean.snapshot.prompt,
+          intents: clean.snapshot.intents.map((i) =>
             i.sid === target.sid ? { ...i, rule: `${i.rule} One sentence only.` } : i
           ),
         }),
@@ -757,7 +771,6 @@ async function main() {
       await call('save', {
         method: 'POST',
         body: JSON.stringify({
-          kind: 'apply',
           rootRule: after.snapshot.rootRule,
           prompt: after.snapshot.prompt,
           intents: [...after.snapshot.intents].reverse(),
@@ -788,18 +801,56 @@ async function main() {
   //     and an intent's own history points at them. Listing only saves there
   //     meant a wording the history offered could not be looked at.
   {
-    const both = await state();
+    const settled = await state();
     check(
       'the timeline is the saves',
-      both.versions.every((v) => v.kind === 'save'),
-      both.versions.map((v) => v.kind).join(',') || 'none'
+      settled.versions.every((v) => v.kind === 'save'),
+      settled.versions.map((v) => v.kind).join(',') || 'none'
+    );
+    // An apply is not a version, so the timeline must not grow — and applying
+    // twice must not grow it twice either, because the second overwrites the
+    // working state rather than stacking on it.
+    const body = (rule: string) =>
+      JSON.stringify({
+        kind: 'apply',
+        rootRule: rule,
+        prompt: rule,
+        intents: settled.snapshot.intents,
+      });
+    await call('save', { method: 'POST', body: body('Answer briefly. Applied once.') });
+    const once = await state();
+    await call('save', { method: 'POST', body: body('Answer briefly. Applied twice.') });
+    const twice = await state();
+    check(
+      'applying does not add a version',
+      once.versions.length === settled.versions.length &&
+        twice.versions.length === settled.versions.length,
+      `${settled.versions.length} → ${once.versions.length} → ${twice.versions.length}`
     );
     check(
-      'and the conversation can be read under every version',
-      both.moments.length > both.versions.length &&
-        both.moments.some((v) => v.kind === 'apply') &&
-        both.versions.every((v) => both.moments.some((m) => m.versionNo === v.versionNo)),
-      `${both.versions.length} save(s) of ${both.moments.length} moment(s)`
+      'and applying again overwrites what was applied',
+      twice.moments.length === once.moments.length &&
+        twice.moments.length === settled.moments.length + 1,
+      `${settled.moments.length} → ${once.moments.length} → ${twice.moments.length} moment(s)`
+    );
+    check(
+      'the conversation can be read under the saves and what is applied on top',
+      twice.moments.filter((v) => v.kind === 'apply').length === 1 &&
+        settled.versions.every((v) => twice.moments.some((m) => m.versionNo === v.versionNo)),
+      `${twice.versions.length} save(s) of ${twice.moments.length} moment(s)`
+    );
+    // And the working row goes away when a save takes its place.
+    await call('save', { method: 'POST', body: JSON.stringify({
+      rootRule: 'Answer briefly. Applied twice.',
+      prompt: 'Answer briefly. Applied twice.',
+      intents: twice.snapshot.intents,
+    }) });
+    const kept = await state();
+    check(
+      'and saving replaces it rather than sitting on top of it',
+      kept.moments.filter((v) => v.kind === 'apply').length === 0 &&
+        kept.moments.length === kept.versions.length,
+      `${kept.moments.length} moment(s), ${kept.versions.length} save(s)`
     );
   }
 

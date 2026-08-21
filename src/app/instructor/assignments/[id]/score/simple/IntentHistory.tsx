@@ -26,9 +26,11 @@
  * a response that looks different. It is read off the row before it rather
  * than stored, so it cannot disagree with the texts it describes.
  *
- * Picking one puts both texts back in the boxes and stops. It does not take
- * effect until Apply, like everything else on this board — an undo that
- * silently republished would be a fourth verb nobody asked for.
+ * Picking one puts both texts back in the boxes AND applies them, so the
+ * question list beside it becomes that version's list without a second click.
+ * It used to stop at the boxes, on the grounds that republishing silently
+ * would be a fourth verb nobody asked for — but there is an undo now, and a
+ * version you can read the text of but not the effect of is half a version.
  */
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -67,20 +69,13 @@ export default function IntentHistory({
   versions,
   currentDefinition,
   currentRule,
-  savedVersionNo,
   onPick,
-  onRevert,
   disabled = false,
 }: {
   versions: IntentVersion[];
   currentDefinition: string;
   currentRule: string;
-  /** The newest SAVE. Anything written after it is in effect and not kept. */
-  savedVersionNo: number | null;
   onPick: (version: IntentVersion) => void;
-  /** Throw away everything applied since the last save. Absent when there is
-   * nothing to throw away, or nowhere to throw it back to. */
-  onRevert?: (() => void) | null;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -116,26 +111,8 @@ export default function IntentHistory({
       </button>
 
       {open && (
-        <>
-        {/* Going back to the last saved point is a history act, so it lives
-            with the history rather than in a bar under the whole column. */}
-        {onRevert && (
-          <div className="mt-1 flex items-center gap-2">
-            <span className="flex-1 text-2xs text-[hsl(var(--muted-foreground))]">
-              Some of this is applied but not saved.
-            </span>
-            <button
-              type="button"
-              onClick={onRevert}
-              title="Go back to the last saved version, dropping what you applied since"
-              className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
-            >
-              Revert
-            </button>
-          </div>
-        )}
-        {/* Capped and scrolling: a long history must not push the boxes it is
-            about off the screen. */}
+        // Capped and scrolling: a long history must not push the boxes it is
+        // about off the screen.
         <ul className="mt-1 max-h-[9rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
           {versions.map((version, i) => {
             const isCurrent =
@@ -156,7 +133,7 @@ export default function IntentHistory({
                   type="button"
                   disabled={disabled}
                   onClick={() => onPick(version)}
-                  title="Put this wording back in the boxes"
+                  title="Put this wording back and apply it"
                   className={`flex w-full items-baseline gap-1.5 px-2 py-1 text-left hover:bg-[hsl(var(--muted))] disabled:opacity-50 ${
                     isCurrent ? 'bg-[hsl(var(--primary))]/5' : ''
                   }`}
@@ -172,16 +149,6 @@ export default function IntentHistory({
                   <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
                     {moved}
                   </span>
-                  {/* An apply is a version of this intent too — it took
-                      effect and the board answered under it. What it is not is
-                      kept, and the next step reads only what was kept. */}
-                  {(savedVersionNo == null ||
-                    (version.configVersionNo != null &&
-                      version.configVersionNo > savedVersionNo)) && (
-                    <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
-                      unsaved
-                    </span>
-                  )}
                   <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
                     {isCurrent ? 'current' : ago(version.createdAt, now)}
                   </span>
@@ -190,7 +157,6 @@ export default function IntentHistory({
             );
           })}
         </ul>
-        </>
       )}
     </div>
   );

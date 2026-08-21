@@ -39,7 +39,7 @@
  * back is RQ1 data, and hard-deleting it is the mistake the full version's
  * rule-version revert already makes.
  */
-import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { simpleConfigVersions, simplePins } from '@/db/schema';
 import { armOf, type StudioView } from '../config';
@@ -116,6 +116,38 @@ function parseSnapshot(value: unknown, view: StudioView, seed: string): SimpleSn
   };
 }
 
+/**
+ * The one row an apply writes to: after the newest save, and not a save.
+ *
+ * There is at most one because an apply overwrites it. A configuration that
+ * has never been saved has one too — everything applied before the first save
+ * lives there.
+ */
+async function workingRow(assignmentId: string) {
+  const rows = await visibleVersions(assignmentId);
+  const last = rows[rows.length - 1];
+  return last && last.kind !== 'save' ? last : null;
+}
+
+/** Drop the working row, keeping anything numbered above the save that just
+ * replaced it out of the way. */
+async function clearWorkingRow(assignmentId: string, upToVersionNo: number): Promise<number> {
+  const dropped = await db
+    .delete(simpleConfigVersions)
+    .where(
+      and(
+        eq(simpleConfigVersions.assignmentId, assignmentId),
+        eq(simpleConfigVersions.kind, 'apply'),
+        lt(simpleConfigVersions.versionNo, upToVersionNo),
+        // Hidden rows belong to a restore, which is a record of something that
+        // was undone rather than a working state waiting to be replaced.
+        isNull(simpleConfigVersions.hiddenAt)
+      )
+    )
+    .returning({ id: simpleConfigVersions.id });
+  return dropped.length;
+}
+
 async function visibleVersions(assignmentId: string) {
   const rows = await db
     .select()
@@ -162,12 +194,14 @@ export async function getSimpleState(args: {
     kind: 'save',
   }));
 
-  // Every point the configuration passed through, for the one surface that
-  // asks a different question of them.
-  const moments: SimpleVersion[] = rows.map((row, i) => ({
+  // The saves, plus whatever is applied on top of the newest one. An apply is
+  // not a version, but it IS a thing the reply can be read under — it is what
+  // the board is answering with right now.
+  const savedNo = new Map(saved.map((row, i) => [row.versionNo, i + 1]));
+  const moments: SimpleVersion[] = rows.map((row) => ({
     id: row.id,
     versionNo: row.versionNo,
-    displayNo: i + 1,
+    displayNo: savedNo.get(row.versionNo) ?? 0,
     name: row.name,
     summary: row.summary,
     createdAt: row.createdAt.toISOString(),
@@ -338,6 +372,21 @@ export async function getSimpleVersion(args: {
  * answer's config reference keeps pointing at the thing it pointed at even
  * after a restore has renumbered what the participant sees.
  */
+/**
+ * Write a configuration — and only a SAVE makes a version.
+ *
+ * An apply takes effect and nothing else. It writes to a single working row
+ * that sits after the newest save and is overwritten by the next apply, so
+ * trying six wordings leaves one row rather than six, and the numbers a
+ * participant reads count the points they decided were worth keeping. Saving
+ * writes a version and clears the working row, because what it held has just
+ * become the version.
+ *
+ * The applies are not lost to the record: every write logs `simple_version_save`
+ * with what it changed, field by field, which is what the analysis reads. What
+ * they no longer do is inflate a version history that is meant to be a list of
+ * decisions.
+ */
 export async function saveSimpleVersion(args: {
   assignmentId: string;
   snapshot: SimpleSnapshot;
@@ -346,6 +395,19 @@ export async function saveSimpleVersion(args: {
   createdBy?: string | null;
 }): Promise<{ id: number; versionNo: number }> {
   const { assignmentId, snapshot } = args;
+
+  if (args.kind === 'apply') {
+    const working = await workingRow(assignmentId);
+    if (working) {
+      const [row] = await db
+        .update(simpleConfigVersions)
+        .set({ snapshot, createdAt: new Date() })
+        .where(eq(simpleConfigVersions.id, working.id))
+        .returning({ id: simpleConfigVersions.id, versionNo: simpleConfigVersions.versionNo });
+      return row;
+    }
+  }
+
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const [{ max }] = await db
       .select({ max: sql<number>`coalesce(max(${simpleConfigVersions.versionNo}), 0)::int` })
@@ -363,6 +425,8 @@ export async function saveSimpleVersion(args: {
           createdAt: new Date(),
         })
         .returning({ id: simpleConfigVersions.id, versionNo: simpleConfigVersions.versionNo });
+      // The working row's content is this version now.
+      if (args.kind === 'save') await clearWorkingRow(assignmentId, row.versionNo);
       return row;
     } catch (error) {
       // Two saves at once take the same number; the loser re-reads and retries
@@ -433,6 +497,14 @@ export async function restoreSimpleVersion(args: {
  * Nothing saved yet means there is no point to go back to, and this reports
  * that rather than wiping their work.
  */
+/**
+ * Throw away what is applied and go back to the last SAVE.
+ *
+ * Only ever to a save — there is nowhere else to go. With applies overwriting
+ * one working row there is exactly one thing to drop, so this deletes it
+ * rather than hiding it: a row that was never a version has no history to
+ * preserve, and the trail of what was applied lives in the events.
+ */
 export async function revertSimpleWorking(assignmentId: string): Promise<{
   to: number;
   dropped: number;
@@ -442,13 +514,11 @@ export async function revertSimpleWorking(assignmentId: string): Promise<{
   const target = saved.length ? saved[saved.length - 1] : null;
   if (!target) return null;
   const dropped = await db
-    .update(simpleConfigVersions)
-    .set({ hiddenAt: new Date() })
+    .delete(simpleConfigVersions)
     .where(
       and(
         eq(simpleConfigVersions.assignmentId, assignmentId),
-        gt(simpleConfigVersions.versionNo, target.versionNo),
-        isNull(simpleConfigVersions.hiddenAt)
+        gt(simpleConfigVersions.versionNo, target.versionNo)
       )
     )
     .returning({ id: simpleConfigVersions.id });

@@ -1217,6 +1217,19 @@ function Tree({
               savedVersionNo={savedVersionNo}
               onSaveVersion={onSaveVersion}
               onRevert={onRevert}
+              onPickVersion={(v) =>
+                void onApply(
+                  {
+                    ...draft,
+                    intents: draft.intents.map((i) =>
+                      i.sid === intent.sid
+                        ? { ...i, definition: v.definition, rule: v.rule }
+                        : i
+                    ),
+                  },
+                  intent.sid
+                )
+              }
               onChange={(fields) => patch(intent.sid, fields)}
               onApply={() => onApply(draft, intent.sid)}
               onDelete={() =>
@@ -1359,16 +1372,24 @@ function Tree({
                   Save
                 </button>
               )}
+              {dirty && savedVersionNo != null && (
+                <button
+                  onClick={() => void onRevert()}
+                  disabled={saving}
+                  title="Go back to the last saved version, dropping what you applied since"
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
+                >
+                  Revert
+                </button>
+              )}
             </div>
           )}
           <IntentHistory
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
-            savedVersionNo={savedVersionNo}
             disabled={readOnly}
-            onPick={(v) => setDraft({ ...draft, rootRule: v.rule })}
-            onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
+            onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
           />
         </div>
       )}
@@ -1452,6 +1473,7 @@ function Accordion({
   onApply,
   onSaveVersion,
   onRevert,
+  onPickVersion,
   onDelete,
 }: {
   api: (path: string, query?: string) => string;
@@ -1473,6 +1495,9 @@ function Accordion({
   onApply: () => void;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
+  /** Put a version's pair back AND apply it, so the list beside it becomes
+   * that version's list without a second click. */
+  onPickVersion: (v: IntentVersion) => void;
   onDelete: () => void;
 }) {
   return (
@@ -1535,6 +1560,20 @@ function Accordion({
               Save
             </button>
           )}
+          {/* Beside Save, because it is the other half of the same decision —
+              keep this or drop it — and both are about what is applied right
+              now. It was down with the history, where it read as an operation
+              on the list of versions rather than on the working state. */}
+          {dirty && savedVersionNo != null && (
+            <button
+              onClick={() => void onRevert()}
+              disabled={saving}
+              title="Go back to the last saved version, dropping what you applied since"
+              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
+            >
+              Revert
+            </button>
+          )}
           <span className="flex-1" />
           <button
             onClick={onDelete}
@@ -1551,10 +1590,8 @@ function Accordion({
         versions={versions}
         currentDefinition={intent.definition}
         currentRule={intent.rule}
-        savedVersionNo={savedVersionNo}
         disabled={readOnly}
-        onPick={(v) => onChange({ definition: v.definition, rule: v.rule })}
-        onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
+        onPick={onPickVersion}
       />
     </div>
   );
@@ -1606,9 +1643,11 @@ function ExampleFold({
       </button>
       {open && (
         <div className="mt-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1.5">
-          <ul className="space-y-0.5">
+          {/* Bulleted, because five questions run together into one paragraph
+              of grey otherwise and the point is to read them one at a time. */}
+          <ul className="list-disc pl-4 space-y-1 marker:text-[hsl(var(--muted-foreground))]">
             {examples.map((example, i) => (
-              <li key={i} className="text-2xs leading-relaxed">
+              <li key={i} className="text-2xs leading-relaxed pl-0.5">
                 {example}
               </li>
             ))}
@@ -2258,22 +2297,6 @@ function QuestionRow({
 }
 
 /**
- * How long ago, in the units the intent histories use.
- *
- * The same wording on purpose: an intent's history says "4m ago" beside the
- * wording it is offering to put back, and this says "4m ago" beside the answer
- * that wording produced. Matching them by eye is the whole point of listing
- * moments here at all.
- */
-function momentAgo(iso: string): string {
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (seconds < 45) return 'just now';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.round(minutes / 60)}h ago`;
-}
-
-/**
  * An icon with its meaning attached.
  *
  * Two icons on a question row, both of them verbs nobody has met before: one
@@ -2521,11 +2544,9 @@ function ViewerColumn({
  * listing only saves meant a wording that history offered could not be looked
  * at.
  *
- * No "v N" here. On this screen that number means the intent's own version,
- * and two numberings under one name is what sent someone looking for v2 and
- * being offered v1. A moment is identified by when it was and what it was
- * called, in the same relative wording the histories use, so the two line up
- * by eye.
+ * A save reads "v3 · what it did". What is applied on top of the newest save
+ * has no number, because an apply is not a version — it reads "Now (unsaved)",
+ * which is also what the tree and the card say about it.
  *
  * "Original (as delivered)" is not a version and is offered as its own answer:
  * it is the reply the student was actually given, which no configuration can
@@ -2587,14 +2608,13 @@ function ReplyVersionBar({
         className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5 text-2xs font-medium text-[hsl(var(--foreground))]"
       >
         <option value="original">Original (as delivered)</option>
-        {/* What it did, then when — a name is what someone is scanning for,
-            and the time only separates two that did the same thing. The time
-            alone is the brief window before a name lands, or the write that
-            changed nothing. */}
-        {moments.map((v, i) => (
+        {/* A save is "v3 · what it did"; the applied-but-unsaved state has no
+            number because it is not a version. The name is what someone is
+            scanning for — the number only says where it sits. */}
+        {moments.map((v) => (
           <option key={v.id} value={v.versionNo}>
-            {v.name ? `${v.name} · ` : ''}
-            {i === 0 ? 'now' : momentAgo(v.createdAt)}
+            {v.kind === 'save' ? `v${v.displayNo}` : 'Now (unsaved)'}
+            {v.name ? ` · ${v.name}` : ''}
           </option>
         ))}
       </select>
