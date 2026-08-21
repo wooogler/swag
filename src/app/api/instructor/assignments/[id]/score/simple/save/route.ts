@@ -7,9 +7,9 @@
  * the board can relabel its timeline immediately, and the follow-up work
  * lands on the next poll.
  *
- * New intents arrive without an id; the server allocates one that is stable
- * for the life of the assignment, so a judgment, an answer and a logged event
- * can all name the same intent across every later version.
+ * New intents arrive with a temporary negative id; the server replaces it with
+ * one that is stable for the life of the assignment, so a judgment, an answer
+ * and a logged event can all name the same intent across every later version.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -24,12 +24,14 @@ import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
 export const dynamic = 'force-dynamic';
 
 const intentSchema = z.object({
-  // Absent on a new intent; the server allocates.
-  sid: z.number().int().positive().nullable().optional(),
+  // Negative (or absent) means "new" — the board mints a temporary id so a
+  // child can point at a parent created in the same save, and the server
+  // replaces both with real ones below.
+  sid: z.number().int().nullable().optional(),
   title: z.string().max(120).default(''),
   definition: z.string().max(4000).default(''),
   rule: z.string().max(STUDY_PROMPT_CHAR_LIMIT).default(''),
-  parentSid: z.number().int().positive().nullable().default(null),
+  parentSid: z.number().int().nullable().default(null),
 });
 
 const bodySchema = z.object({
@@ -62,13 +64,26 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   });
   const base = previousVersion ? previous : emptySnapshot(arm, seedPrompt);
 
+  // Stable ids for anything new, and the same substitution applied to parent
+  // pointers, so an intent created inside another one in the same save keeps
+  // its place.
   let allocate = await nextSid(id);
-  const intents: SimpleIntent[] = (body.intents ?? base.intents).map((raw) => ({
-    sid: raw.sid ?? allocate++,
+  const incoming = body.intents ?? base.intents;
+  const assigned = new Map<number, number>();
+  for (const raw of incoming) {
+    const sid = raw.sid ?? -1;
+    if (sid <= 0) assigned.set(sid, allocate++);
+  }
+  const realSid = (sid: number | null | undefined) => {
+    if (sid == null) return null;
+    return sid > 0 ? sid : assigned.get(sid) ?? null;
+  };
+  const intents: SimpleIntent[] = incoming.map((raw) => ({
+    sid: realSid(raw.sid ?? -1) ?? allocate++,
     title: raw.title ?? '',
     definition: raw.definition ?? '',
     rule: raw.rule ?? '',
-    parentSid: raw.parentSid ?? null,
+    parentSid: realSid(raw.parentSid),
   }));
   // A parent that is not in this save is not a parent. Sending a child of a
   // just-deleted intent is a client bug, and silently keeping the pointer

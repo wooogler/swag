@@ -232,6 +232,71 @@ export function ruleForOwner(snapshot: SimpleSnapshot, sid: number | null): stri
   return findIntent(snapshot, sid)?.rule ?? snapshot.rootRule;
 }
 
+/* ------------------------------------------------------------------ */
+/* Editing the tree                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Re-flatten a set of intents into document order — a pre-order walk, using
+ * the current array order for siblings.
+ *
+ * Every edit that changes the shape of the tree ends with this, so the array
+ * the board holds and the array that gets saved always mean the same thing:
+ * position in it IS the order, and there is no separate field that could
+ * disagree with it.
+ */
+export function documentOrder(intents: SimpleIntent[]): SimpleIntent[] {
+  const known = new Set(intents.map((i) => i.sid));
+  const byParent = new Map<number | null, SimpleIntent[]>();
+  for (const intent of intents) {
+    const parent = intent.parentSid != null && known.has(intent.parentSid) ? intent.parentSid : null;
+    byParent.set(parent, [...(byParent.get(parent) ?? []), intent]);
+  }
+  const out: SimpleIntent[] = [];
+  const seen = new Set<number>();
+  const walk = (parentSid: number | null) => {
+    for (const intent of byParent.get(parentSid) ?? []) {
+      if (seen.has(intent.sid)) continue;
+      seen.add(intent.sid);
+      out.push(intent);
+      walk(intent.sid);
+    }
+  };
+  walk(null);
+  // Anything a cycle made unreachable still belongs to the participant.
+  for (const intent of intents) if (!seen.has(intent.sid)) out.push(intent);
+  return out;
+}
+
+/** Swap an intent with the sibling before (-1) or after (+1) it. */
+export function moveSibling(
+  intents: SimpleIntent[],
+  sid: number,
+  direction: -1 | 1
+): SimpleIntent[] {
+  const target = intents.find((i) => i.sid === sid);
+  if (!target) return intents;
+  const siblings = intents.filter((i) => i.parentSid === target.parentSid);
+  const at = siblings.findIndex((i) => i.sid === sid);
+  const swapWith = siblings[at + direction];
+  if (!swapWith) return intents;
+  const order = new Map(siblings.map((s, i) => [s.sid, i]));
+  order.set(sid, at + direction);
+  order.set(swapWith.sid, at);
+  const resorted = [...intents].sort((a, b) => {
+    if (a.parentSid !== b.parentSid) return 0;
+    return (order.get(a.sid) ?? 0) - (order.get(b.sid) ?? 0);
+  });
+  return documentOrder(resorted);
+}
+
+/** Delete an intent and everything nested inside it. */
+export function removeSubtree(intents: SimpleIntent[], sid: number): SimpleIntent[] {
+  const snapshot: SimpleSnapshot = { arm: 'score', prompt: '', rootRule: '', intents };
+  const doomed = new Set([sid, ...descendantsOf(snapshot, sid).map((i) => i.sid)]);
+  return documentOrder(intents.filter((i) => !doomed.has(i.sid)));
+}
+
 /** Every definition in a snapshot, in evaluation order — what the judge needs. */
 export function definitionsOf(snapshot: SimpleSnapshot): { sid: number; definition: string }[] {
   return compileSimpleChain(snapshot)

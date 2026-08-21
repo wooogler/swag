@@ -9,10 +9,7 @@ import {
 import { eq, and } from 'drizzle-orm';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
-import { Button } from '@/components/ui/button';
-import { ChevronLeft } from 'lucide-react';
 import { getInstructor, isAdministrator } from '@/lib/auth';
-import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 import { ensureScoreTable, getQueryRecords } from '@/lib/score/queries';
 import { isOpenAIConfigured } from '@/lib/score/classifier';
 import { getScoreConfig } from '@/lib/score/config-store';
@@ -29,11 +26,12 @@ import {
   type VersionSummary,
 } from '@/lib/score/intent-store';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
-import AssignmentBriefing from './AssignmentBriefing';
-import WorkElapsed from '@/components/study/WorkElapsed';
 import { isLegacySnapshot, listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
 import StudioShell from './StudioShell';
+import StudioHeader from './StudioHeader';
+import SimpleStudio from './simple/SimpleStudio';
+import { loadSimpleBoard } from './simple/page-data';
 import {
   DISSECTION_VERSION,
   SCORE_QUERY_TYPES,
@@ -63,7 +61,6 @@ import { ensureStudyTables } from '@/lib/study/store';
 import { getBaselineState, PROMPT_HOLDER_TITLE } from '@/lib/study/baseline-store';
 import {
   STUDY_PROMPT_CHAR_LIMIT,
-  STUDY_WORK_MINUTES,
   armOf,
   conditionName,
   familyOf,
@@ -125,6 +122,78 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     viewParam: view ?? null,
     isParticipant: !!participant,
   });
+  // The simple version is a different board, and the hand-off is here rather
+  // than further down because everything below this line loads the full one's
+  // layers — ratings per intent, corrections, deploy snapshots, query types —
+  // and the simple board has nowhere to put any of it.
+  if (familyOf(studioView) === 'simple') {
+    const seedPrompt = assignmentBasePrompt(assignment);
+    const { rows: simpleRows, initialState } = await loadSimpleBoard({
+      assignmentId: id,
+      condition: studioView,
+      seedPrompt,
+    });
+    // A block ends when there is a saved version to measure. There is no
+    // deploy step here — the newest version IS what a question is answered
+    // against — so "have they published anything" is "have they saved".
+    const savedSomething = initialState.versions.length > 0;
+    const simpleBlockDone =
+      participant && savedSomething
+        ? { phase: currentPhase(participant), waits: advanceWaits(currentPhase(participant)) }
+        : null;
+    return (
+      <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
+        <StudioShell
+          header={
+            <StudioHeader
+              assignmentId={id}
+              assignmentTitle={assignment.title}
+              versionName={conditionName(studioView)}
+              instructions={assignment.instructions ?? ''}
+              basePrompt={seedPrompt}
+              includesInstructions={assignment.includeInstructionInPrompt ?? false}
+              showTask={!!participant}
+              backHref={participant ? null : `/instructor/assignments/${id}`}
+              phaseStartedAt={
+                participant && (currentPhase(participant) === 'block1_work' ||
+                  currentPhase(participant) === 'block2_work')
+                  ? (await currentPhaseStartedAt(participant.id))?.toISOString() ?? null
+                  : null
+              }
+              accountLabel={
+                participant
+                  ? `Participant ${displayParticipantNumber(participant)}`
+                  : instructor.email
+              }
+              showAccountControls={!participant}
+              // Nothing to publish: Save is the whole of it.
+              publish={null}
+              blockDone={
+                simpleBlockDone ? (
+                  <PhaseAdvance
+                    compact
+                    from={simpleBlockDone.phase}
+                    label="I'm done"
+                    waits={simpleBlockDone.waits}
+                    waitLabel="Your chatbot is answering the check questions now."
+                    confirm="This ends the setup for this chatbot. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it."
+                  />
+                ) : null
+              }
+            />
+          }
+        >
+          <SimpleStudio
+            assignmentId={id}
+            rows={simpleRows}
+            isNirvana={assignment.shareToken === 'nirvana-dataset'}
+            initialState={initialState}
+          />
+        </StudioShell>
+      </div>
+    );
+  }
+
   // Baseline is the SAME board with ablations (condition prop) — not a separate
   // page. It shares the SCORE data load below; only the monolithic prompt state
   // is baseline-specific. Everything from here down is the FULL board, so it
@@ -467,122 +536,67 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
       <StudioShell
         header={
-          <div className="flex items-center gap-4">
-            {/* Absent for a participant — see `backHref`. Identical to look at
-                for everyone who does get one, so the frame is unchanged. */}
-            {backHref && (
-              <Link href={backHref}>
-                <Button variant="ghost" size="icon" className="hover:bg-[hsl(var(--muted))]">
-                  <ChevronLeft className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />
-                </Button>
-              </Link>
-            )}
-            {/* The version's name, and under it the course. Design §3.1 puts
-                the name here and only here on the board — it is what the final
-                survey's two columns are labelled with, and a participant who
-                never saw it cannot tell those columns apart forty minutes
-                later.
-
-                The two descriptive straplines that used to sit under this
-                ("Organize · Revise · Evaluate — instructor intents own the
-                log" / "Customize the chatbot from real student questions")
-                are gone. They differed by condition in a header that is
-                supposed to be the same shell either way, and the SCORE one
-                said "intents" — a word §13 invariant 2 keeps off the Clay
-                surface, which meant the header was also teaching each arm a
-                different vocabulary for what it was doing. The course title
-                takes the line instead: same shape in both arms, and it is the
-                thing a participant actually needs, since the two blocks are
-                two different courses. */}
-            <div className="flex-1">
-              <h1 className="text-xl font-bold font-heading text-[hsl(var(--foreground))]">
-                Chatbot Studio ·{' '}
-                <span className="font-normal">
-                  {conditionName(isBaselineView ? 'baseline' : 'score')}
-                </span>
-              </h1>
-              <p className="text-sm text-[hsl(var(--muted-foreground))]">{assignment.title}</p>
-            </div>
-            {/* What the log is OF, and — for a participant — what they are
-                being asked to do with it. Opens by itself on a first visit and
-                sits behind this button after that. Both conditions get all of
-                it: neither the assignment, nor the prompt the chatbot started
-                from, nor the task is part of the mechanism under test. */}
-            <AssignmentBriefing
-              assignmentId={id}
-              assignmentTitle={assignment.title}
-              instructions={assignment.instructions ?? ''}
-              basePrompt={assignmentBasePrompt(assignment)}
-              includesInstructions={assignment.includeInstructionInPrompt ?? false}
-              // Participants only: a researcher opening the board is not doing
-              // the task, and the section would sit in every screenshot.
-              showTask={!!participant}
-            />
-            {phaseStartedAt && (
-              <WorkElapsed
-                startedAt={phaseStartedAt.toISOString()}
-                budgetMinutes={STUDY_WORK_MINUTES}
-              />
-            )}
-            {/* Participants get the same one-click control in both arms; the
-                version dropdown and the review modal are researcher tools, and
-                giving them to only one arm would let SCORE inspect and name
-                what it published while the baseline could not. */}
-            {isBaselineView || participant ? (
-              <StudyDeployButton
-                assignmentId={id}
-                condition={isBaselineView ? 'baseline' : 'score'}
-                deployedVersionNo={
-                  isBaselineView
-                    ? baselineState?.deployedVersionNo ?? null
-                    : chatDeploys[0]?.versionNo ?? null
-                }
-              />
-            ) : (
-              <DeployControls
-                assignmentId={id}
-                versions={deployVersions}
-                selectedVersion={deployView?.versionNo ?? null}
-              />
-            )}
-            {/* Finishing the block belongs next to Deploy, because deploying is
-                what makes it possible: it appears the moment there is a version
-                to be measured, and both deploy paths router.refresh() so it
-                arrives on its own. Hidden while browsing an older version — the
-                block does not end from a page that is only being read. The
-                phase gate above already guarantees this board is the one the
-                participant's current phase is about. */}
-            {studyBlockDone && (
-              <PhaseAdvance
-                compact
-                from={studyBlockDone.phase}
-                label="I'm done"
-                // False out of the work phase since 08-18: the answers are
-                // awaited one hand-off later, behind the questionnaire, so
-                // this click no longer stops to generate anything.
-                waits={studyBlockDone.waits}
-                waitLabel="Your chatbot is answering the check questions now."
-                confirm="This ends the setup for this chatbot. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it."
-              />
-            )}
-            {/* Settings carries Delete account, which would remove the row
-                that IS this participant. Off for them, along with log out —
-                no other study screen has either.
-
-                And a participant is shown their PARTICIPANT NUMBER, not the
-                address of the account behind it: study accounts live at
-                @study.score.local, which would have sat in the header naming
-                the treatment for the whole block. The number is also the thing
-                a facilitator actually reads off a shared screen. */}
-            <InstructorHeaderActions
-              email={
-                participant
-                  ? `Participant ${displayParticipantNumber(participant)}`
-                  : instructor.email
-              }
-              showAccountControls={!participant}
-            />
-          </div>
+          <StudioHeader
+            assignmentId={id}
+            assignmentTitle={assignment.title}
+            versionName={conditionName(studioView)}
+            instructions={assignment.instructions ?? ''}
+            basePrompt={assignmentBasePrompt(assignment)}
+            includesInstructions={assignment.includeInstructionInPrompt ?? false}
+            // Participants only: a researcher opening the board is not doing
+            // the task, and the section would sit in every screenshot.
+            showTask={!!participant}
+            backHref={backHref}
+            phaseStartedAt={phaseStartedAt ? phaseStartedAt.toISOString() : null}
+            accountLabel={
+              participant
+                ? `Participant ${displayParticipantNumber(participant)}`
+                : instructor.email
+            }
+            showAccountControls={!participant}
+            publish={
+              /* Participants get the same one-click control in both arms; the
+                 version dropdown and the review modal are researcher tools, and
+                 giving them to only one arm would let SCORE inspect and name
+                 what it published while the baseline could not. */
+              isBaselineView || participant ? (
+                <StudyDeployButton
+                  assignmentId={id}
+                  condition={isBaselineView ? 'baseline' : 'score'}
+                  deployedVersionNo={
+                    isBaselineView
+                      ? baselineState?.deployedVersionNo ?? null
+                      : chatDeploys[0]?.versionNo ?? null
+                  }
+                />
+              ) : (
+                <DeployControls
+                  assignmentId={id}
+                  versions={deployVersions}
+                  selectedVersion={deployView?.versionNo ?? null}
+                />
+              )
+            }
+            blockDone={
+              /* Hidden while browsing an older version — the block does not end
+                 from a page that is only being read. The phase gate above
+                 already guarantees this board is the one the participant's
+                 current phase is about. */
+              studyBlockDone ? (
+                <PhaseAdvance
+                  compact
+                  from={studyBlockDone.phase}
+                  label="I'm done"
+                  // False out of the work phase since 08-18: the answers are
+                  // awaited one hand-off later, behind the questionnaire, so
+                  // this click no longer stops to generate anything.
+                  waits={studyBlockDone.waits}
+                  waitLabel="Your chatbot is answering the check questions now."
+                  confirm="This ends the setup for this chatbot. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it."
+                />
+              ) : null
+            }
+          />
         }
       >
         <IntentBoard
