@@ -196,11 +196,30 @@ export function conditionName(view: StudioView): string {
  * design admits exactly one of those. Nothing here can enforce that; it is a
  * note for whoever cuts them.
  *
+ * The shared segment is shot TWICE — once on each version's board — under one
+ * narration track. Its subject is the middle and right columns, which are the
+ * same pixels in both arms, but the left column is in every frame, and a
+ * participant whose first block is Clay would otherwise spend their first
+ * minute looking at the intent tree. So block 1 plays the take shot on the
+ * board it is about to open. One id (…_COMMON) still works and is used for
+ * both when the per-version ids are unset.
+ *
  * Empty until the films are uploaded, and the slot says so rather than
  * rendering a broken player.
  */
-export const STUDY_DEMO_VIDEOS: Record<'common' | StudioView, string> = {
-  common: process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON ?? '',
+export const STUDY_DEMO_VIDEOS: Record<StudioView, string> & {
+  common: Record<StudioView, string>;
+} = {
+  common: {
+    score:
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON_SCORE ||
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON ||
+      '',
+    baseline:
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON_BASELINE ||
+      process.env.NEXT_PUBLIC_STUDY_DEMO_COMMON ||
+      '',
+  },
   score: process.env.NEXT_PUBLIC_STUDY_DEMO_SCORE ?? '',
   baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_BASELINE ?? '',
 };
@@ -208,6 +227,9 @@ export const STUDY_DEMO_VIDEOS: Record<'common' | StudioView, string> = {
 export interface DemoSegment {
   key: 'common' | StudioView;
   youtubeId: string;
+  /** The variable that would fill this slot — named by the empty-state so a
+   * missing film says which id to set, not which family of ids. */
+  envVar: string;
   /** What the segment is called on screen. */
   label: string;
   caption: string;
@@ -217,6 +239,7 @@ export function demoSegmentsFor(block: 1 | 2, condition: StudioView): DemoSegmen
   const version: DemoSegment = {
     key: condition,
     youtubeId: STUDY_DEMO_VIDEOS[condition],
+    envVar: `NEXT_PUBLIC_STUDY_DEMO_${condition.toUpperCase()}`,
     label: conditionName(condition),
     caption: 'The version you will use in this round.',
   };
@@ -224,7 +247,9 @@ export function demoSegmentsFor(block: 1 | 2, condition: StudioView): DemoSegmen
   return [
     {
       key: 'common',
-      youtubeId: STUDY_DEMO_VIDEOS.common,
+      // The take shot on this block's own board — see STUDY_DEMO_VIDEOS.
+      youtubeId: STUDY_DEMO_VIDEOS.common[condition],
+      envVar: `NEXT_PUBLIC_STUDY_DEMO_COMMON_${condition.toUpperCase()}`,
       label: 'Getting around',
       caption: 'The questions, the search, and the conversation view.',
     },

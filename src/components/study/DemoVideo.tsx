@@ -19,10 +19,10 @@ export default function DemoVideo({ segment }: { segment: DemoSegment }) {
   return (
     <div>
       <div className="flex items-baseline gap-2 mb-1.5">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-[hsl(var(--foreground))]">
+        <span className="text-xs font-bold uppercase tracking-wide text-[hsl(var(--foreground))]">
           {segment.label}
         </span>
-        <span className="text-[11px] text-[hsl(var(--muted-foreground))]">{segment.caption}</span>
+        <span className="text-xs text-[hsl(var(--muted-foreground))]">{segment.caption}</span>
       </div>
       {segment.youtubeId ? (
         <div className="relative w-full overflow-hidden rounded-lg border border-[hsl(var(--border))] bg-black aspect-video">
@@ -36,12 +36,10 @@ export default function DemoVideo({ segment }: { segment: DemoSegment }) {
         </div>
       ) : (
         <div className="flex items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--muted))] aspect-video">
-          <p className="px-6 text-center text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">
+          <p className="px-6 text-center text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
             The walkthrough video goes here.
             <br />
-            <span className="font-mono text-[10.5px]">
-              NEXT_PUBLIC_STUDY_DEMO_{segment.key.toUpperCase()}
-            </span>{' '}
+            <span className="font-mono text-2xs">{segment.envVar}</span>{' '}
             is not set yet.
           </p>
         </div>

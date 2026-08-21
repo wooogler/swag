@@ -7,7 +7,9 @@ import { ensureStudyTables } from '@/lib/study/store';
 import { cloneForBlock, getTestItems } from '@/lib/study/measure-store';
 import { blockPlan, isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/study/phases';
 import { demoSegmentsFor } from '@/lib/study/config';
+import { displayParticipantNumber } from '@/lib/study/demo';
 import TutorialStep from '@/components/study/TutorialStep';
+import TaskGoal from '@/components/study/TaskGoal';
 import WorkStart from '@/components/study/WorkStart';
 
 export const dynamic = 'force-dynamic';
@@ -79,8 +81,8 @@ export default async function StudySessionPage() {
     <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--background))] px-6 py-12">
       <div className={`w-full ${isTutorial ? 'max-w-2xl' : 'max-w-lg'}`}>
         <div className="mb-6 text-center">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-            Participant {participant.participantNumber}
+          <p className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            Participant {displayParticipantNumber(participant)}
           </p>
         </div>
 
@@ -120,17 +122,17 @@ export default async function StudySessionPage() {
                     Left-aligned below the heading: three sentences of task
                     definition centred are harder to read, and this is the one
                     screen whose whole purpose is that they are read. */}
-                <h1 className="text-lg font-semibold mb-3">Your task in this round</h1>
+                <h1 className="text-xl font-semibold mb-3">Your task in this round</h1>
                 <div className="text-left mx-auto max-w-md">
-                  <p className="text-sm text-[hsl(var(--muted-foreground))] mb-3 leading-relaxed">
-                    Look through the conversations students in this course had with the
-                    chatbot. Whenever a chatbot response is not what you would want, adjust
-                    the setup so that it responds the way you want. When you feel it&apos;s
-                    ready, deploy it.
+                  <p className="text-base text-[hsl(var(--muted-foreground))] mb-3 leading-relaxed">
+                    <TaskGoal>Look through the conversations</TaskGoal> students in this course
+                    had with the chatbot. Whenever a chatbot response is not what you would
+                    want, <TaskGoal>adjust the setup so that it responds the way you want.</TaskGoal>
+                    When you feel it&apos;s ready, <TaskGoal>deploy it.</TaskGoal>
                   </p>
-                  <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                  <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
                     There is no set amount to cover — how much you look at, and how much you
-                    change, is entirely up to you.
+                    change, is <TaskGoal>entirely up to you.</TaskGoal>
                   </p>
                 </div>
                 {/* Not a link: pressing this is when the 25 minutes start, so
@@ -145,8 +147,8 @@ export default async function StudySessionPage() {
               </>
             ) : access.testBlock ? (
               <>
-                <h1 className="text-lg font-semibold mb-2">Check your chatbot</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                <h1 className="text-xl font-semibold mb-2">Check your chatbot</h1>
+                <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
                   {testProgress && testProgress.predicted > 0
                     ? testProgress.predicted < testProgress.total
                       ? `You have said what you expect for ${testProgress.predicted} of ${testProgress.total} questions. Pick up where you left off.`
@@ -155,43 +157,43 @@ export default async function StudySessionPage() {
                 </p>
                 <a
                   href="/study/session/test"
-                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-6 py-3 text-base font-semibold text-white"
                 >
                   {testProgress && testProgress.predicted > 0 ? 'Continue' : 'Start'}
                 </a>
               </>
             ) : access.showSurvey ? (
               <>
-                <h1 className="text-lg font-semibold mb-2">A few quick questions</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                <h1 className="text-xl font-semibold mb-2">A few quick questions</h1>
+                <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
                   Five short questions about setting up the chatbot, before we check what it
                   answers.
                 </p>
                 <a
                   href="/study/session/survey"
-                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-6 py-3 text-base font-semibold text-white"
                 >
                   Start
                 </a>
               </>
             ) : access.showFinal ? (
               <>
-                <h1 className="text-lg font-semibold mb-2">One last questionnaire</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
+                <h1 className="text-xl font-semibold mb-2">One last questionnaire</h1>
+                <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
                   Both rounds are done. This last one asks you to rate the two versions side by
                   side — about five minutes.
                 </p>
                 <a
                   href="/study/session/final"
-                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white"
+                  className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-6 py-3 text-base font-semibold text-white"
                 >
                   Start
                 </a>
               </>
             ) : access.isDone ? (
               <>
-                <h1 className="text-lg font-semibold mb-2">All done — thank you</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
+                <h1 className="text-xl font-semibold mb-2">All done — thank you</h1>
+                <p className="text-base text-[hsl(var(--muted-foreground))] leading-relaxed">
                   That is the end of the session. Your facilitator will take it from here.
                 </p>
               </>
@@ -199,8 +201,8 @@ export default async function StudySessionPage() {
               // Only reachable when a work phase has no clone behind it — the
               // participant has nothing to do here and cannot fix it.
               <>
-                <h1 className="text-lg font-semibold mb-2">One moment</h1>
-                <p className="text-sm text-[hsl(var(--muted-foreground))] leading-relaxed">
+                <h1 className="text-xl font-semibold mb-2">One moment</h1>
+                <p className="text-base text-[hsl(var(--muted-foreground))] leading-relaxed">
                   This step is not ready on our side. Let your facilitator know.
                 </p>
               </>
@@ -208,7 +210,7 @@ export default async function StudySessionPage() {
           </div>
         )}
 
-        <p className="mt-6 text-center text-[11px] text-[hsl(var(--muted-foreground))]">
+        <p className="mt-6 text-center text-xs text-[hsl(var(--muted-foreground))]">
           Go at your own pace — your facilitator is watching along and can help at any point.
         </p>
       </div>

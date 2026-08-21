@@ -10,7 +10,11 @@
  *
  * The researcher's own id is stashed in a return cookie, and /study/admin
  * spends it to put them back. Nothing about the demo itself is decorated with
- * an exit control: a banner would be in the recording.
+ * an exit control — not a banner, and since 08-19 not the board's back arrow
+ * either: what the films teach has to be the frame the session actually has,
+ * and a control only the demo carries is in every one of its frames. Leaving
+ * is a navigation, which costs the researcher a typed address and costs the
+ * recording nothing.
  */
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
@@ -79,10 +83,10 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     success: true,
-    url:
-      parsed.start === 'board'
-        ? `/instructor/assignments/${workspace.assignmentId}/score`
-        : '/study/session',
+    // The neutral address, not the real one: /studio/:id is what the task
+    // screen's [Start] opens for a participant (next.config rewrites it), and
+    // the address bar is in every frame of the recording.
+    url: parsed.start === 'board' ? `/studio/${workspace.assignmentId}` : '/study/session',
     participantNumber: workspace.participant.participantNumber,
     questions: workspace.questions,
     threads: workspace.threads,

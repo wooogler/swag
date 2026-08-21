@@ -31,7 +31,6 @@ import {
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
 import AssignmentBriefing from './AssignmentBriefing';
 import WorkElapsed from '@/components/study/WorkElapsed';
-import TaskBanner from '@/components/study/TaskBanner';
 import { isLegacySnapshot, listChatDeploys, parseChatDeploySnapshot } from '@/lib/score/deploy-store';
 import DeployControls from './DeployControls';
 import StudioShell from './StudioShell';
@@ -53,6 +52,7 @@ import IntentBoard, {
   type TypeRootSummary,
 } from './IntentBoard';
 import { currentPhaseStartedAt, getCurrentStudyParticipant } from '@/lib/study/session';
+import { displayParticipantNumber } from '@/lib/study/demo';
 import { allowedAssignmentIds } from '@/lib/study/console-store';
 import { advanceWaits, currentPhase } from '@/lib/study/advance';
 import PhaseAdvance from '@/components/study/PhaseAdvance';
@@ -440,13 +440,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   // it is absent — a back button that goes somewhere pointless still invites
   // the click, and the 25 minutes are theirs.
   //
-  // A DEMO keeps its exit. That is the researcher driving, and returning to the
-  // console is the one control the recording can carry.
-  const backHref = participant
-    ? participant.isDemo
-      ? '/api/study/admin/demo/exit'
-      : null
-    : `/instructor/assignments/${id}`;
+  // A DEMO gets none either, and that is the whole point of a demo: the films
+  // participants watch have to be of the screen they will be sitting in front
+  // of, and an arrow in the corner of every frame is a control the session
+  // does not have. The researcher still leaves the same way — /study/admin
+  // spends the return cookie — it is just a navigation now rather than
+  // something the recording carries.
+  const backHref = participant ? null : `/instructor/assignments/${id}`;
 
   const studyDeployed = isBaselineView
     ? baselineState?.deployedVersionNo != null
@@ -459,9 +459,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
   return (
     <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
       <StudioShell
-        // Participants only: a researcher opening the board is not doing the
-        // task, and the banner would sit in every screenshot.
-        banner={participant ? <TaskBanner /> : null}
         header={
           <div className="flex items-center gap-4">
             {/* Absent for a participant — see `backHref`. Identical to look at
@@ -499,16 +496,20 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               </h1>
               <p className="text-sm text-[hsl(var(--muted-foreground))]">{assignment.title}</p>
             </div>
-            {/* The task the log is OF. Opens by itself on a first visit and
-                sits here after that — both conditions, since neither the
-                assignment nor the prompt the chatbot started from is part of
-                the mechanism under test. */}
+            {/* What the log is OF, and — for a participant — what they are
+                being asked to do with it. Opens by itself on a first visit and
+                sits behind this button after that. Both conditions get all of
+                it: neither the assignment, nor the prompt the chatbot started
+                from, nor the task is part of the mechanism under test. */}
             <AssignmentBriefing
               assignmentId={id}
               assignmentTitle={assignment.title}
               instructions={assignment.instructions ?? ''}
               basePrompt={assignmentBasePrompt(assignment)}
               includesInstructions={assignment.includeInstructionInPrompt ?? false}
+              // Participants only: a researcher opening the board is not doing
+              // the task, and the section would sit in every screenshot.
+              showTask={!!participant}
             />
             {phaseStartedAt && (
               <WorkElapsed
@@ -567,7 +568,11 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                 the treatment for the whole block. The number is also the thing
                 a facilitator actually reads off a shared screen. */}
             <InstructorHeaderActions
-              email={participant ? `Participant ${participant.participantNumber}` : instructor.email}
+              email={
+                participant
+                  ? `Participant ${displayParticipantNumber(participant)}`
+                  : instructor.email
+              }
               showAccountControls={!participant}
             />
           </div>

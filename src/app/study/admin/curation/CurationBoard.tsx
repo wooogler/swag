@@ -804,7 +804,7 @@ export default function CurationBoard({
               onClick={() => runDemo('score')}
               disabled={busy !== null}
               className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-              title="Open the SCORE studio for these subtypes, as the participant sees it"
+              title="Open the SCORE studio for these subtypes, exactly as the participant sees it — go to /study/admin to come back"
             >
               {busy === 'demo:score' ? (
                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -817,7 +817,7 @@ export default function CurationBoard({
               onClick={() => runDemo('baseline')}
               disabled={busy !== null}
               className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-              title="Open the baseline studio for these subtypes, as the participant sees it"
+              title="Open the baseline studio for these subtypes, exactly as the participant sees it — go to /study/admin to come back"
             >
               {busy === 'demo:baseline' ? (
                 <Loader2 className="w-3 h-3 animate-spin" />

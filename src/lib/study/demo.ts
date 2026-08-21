@@ -16,7 +16,8 @@
  * One demo participant per condition (DEMO-SCORE / DEMO-BASELINE), because a
  * participant may hold only one clone per dataset and a demo wants to show both
  * arms of the same dataset. They are flagged is_demo and kept out of the
- * console and the metrics export.
+ * console and the metrics export. That number is an internal key and is never
+ * put on screen as itself — see DEMO_DISPLAY_NUMBER.
  */
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -24,6 +25,7 @@ import { db } from '@/db/db';
 import { assignments, chatMessages, studyClones, studyParticipants } from '@/db/schema';
 import { STUDY_DATASETS, curationDataset, type StudioView } from './config';
 import { demoQuestionIds } from './curation';
+import { logParticipantEvent } from './events';
 import { blockPlan } from './phases';
 import { cloneStarterSet, ensureParticipantAccount, type CloneRestriction } from './provision';
 import { ensureStudyTables } from './store';
@@ -46,6 +48,32 @@ export function demoParticipantNumber(condition: StudioView): string {
 
 export function isDemoNumber(participantNumber: string): boolean {
   return participantNumber.toUpperCase().startsWith('DEMO-');
+}
+
+/**
+ * What a demo is called on screen, in place of its own number.
+ *
+ * The number has to say which arm it is — one account per condition — and the
+ * screens that show a participant their number are the board header and the
+ * session page, both of which are in shot for the whole walkthrough. A film
+ * every participant watches before block 1 would therefore open by captioning
+ * itself DEMO-SCORE, which is the same leak the address bar and the header
+ * were just closed against, and worse: this one is shown to everybody in both
+ * arms.
+ *
+ * One string for both conditions, so the two films differ in the board and
+ * nothing else. It stays shaped like a participant number (it IS one, as far
+ * as PARTICIPANT_NUMBER_RE is concerned) so the header reads as the same line
+ * a participant will later see with their own number in it.
+ */
+export const DEMO_DISPLAY_NUMBER = 'DEMO';
+
+/** The number to show a participant — theirs, or the demo's neutral stand-in. */
+export function displayParticipantNumber(participant: {
+  participantNumber: string;
+  isDemo: boolean;
+}): string {
+  return participant.isDemo ? DEMO_DISPLAY_NUMBER : participant.participantNumber;
 }
 
 export interface DemoWorkspace {
@@ -138,6 +166,10 @@ export async function ensureDemoWorkspace(args: {
     });
   });
 
+  // Start the clock LAST, so it reads 0 when the board opens rather than
+  // however long the rebuild above took.
+  await startDemoClock(participant);
+
   return {
     participant,
     assignmentId,
@@ -146,6 +178,35 @@ export async function ensureDemoWorkspace(args: {
     questions: questionIds.length,
     threads: restrictTo.length,
   };
+}
+
+/**
+ * Stamp the demo into the work phase it is already in, so the board's elapsed
+ * readout has something to count from.
+ *
+ * Without this the demo was missing a control every participant has: the
+ * readout renders only when there IS a phase start (session.ts reads it from
+ * events, not from a column), and the demo's phase was set by an UPDATE that
+ * logged nothing — so the one header the two arms share was a chip short in
+ * every recording, and the frame the films teach would not be the frame of the
+ * session.
+ *
+ * `phase_advance` rather than `work_started`: it is the event a participant
+ * has just after they press through into the block and before the task
+ * screen's [Start], which is exactly where a demo dropped straight onto the
+ * board stands. It also leaves markWorkStarted's guard satisfied, so walking
+ * the protocol from /study/session still logs a real [Start] over the top of
+ * it instead of being refused.
+ *
+ * Logged every run, and the readout takes the latest — so a rebuilt demo
+ * starts from zero again.
+ */
+async function startDemoClock(participant: StudyParticipant): Promise<void> {
+  await logParticipantEvent(participant.id, 'phase_advance', {
+    from: participant.phase,
+    to: participant.phase,
+    by: 'demo',
+  });
 }
 
 /**
