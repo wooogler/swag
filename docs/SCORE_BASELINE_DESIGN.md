@@ -25,7 +25,6 @@
 | Rule | intent별 + 타입별 else rule (트리 전체가 라우팅) | **하나의 Rules 문서** (모든 질문에 동일 적용) |
 | 커버리지 | 보드 상시: 트리 카운트, 스코프별 Uncategorized, shadowing/containment 진단 | 없음 (필터 카운트는 단순 검색 결과 수) |
 | 경계 교정 | correction(in/out/send-here) → **fold**로 definition에 흡수 | 없음 |
-| 검토 세트 시드 | Revise 진입 시 edge-case 3개 **자동 시드** | anchor 1개에서 시작 (수동 경로는 전부 공용 — §6) |
 | 버전 | intent config 버전 + rule 버전(minor/major) + chat deploy 스냅샷 | rule 버전(공용 기계) + coarse prompt 버전(배포 단위만) |
 
 ---
@@ -136,7 +135,7 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 - 좌: 읽기 전용 When(intent = definition; type root = `fixedWhen` "none of the sets inside {Type} capture" + 분류기 원문 접기; prompt = 없음) + Then 에디터 + **Try edit** / **Apply rule(s)**.
 - 중: 질문 탭(앵커 ★ + 끌어온 예시) + **Other questions**(모든 variant의 유일한 문 → merged Preview) + 응답 pane(+ Rewrite instead, View in context, Quote in feedback).
 - 우: **타임라인이 곧 버전 히스토리** — Starting rule/Applied 이벤트, 지시 원문, rule 블록은 전신 diff + 클릭=checkout. 피드백 입력 + 6-요소 Hint. propose → **ProposalPreviewModal**(Minimal edit / Focused rework / Full rewrite, 선택한 것만 minor 기록).
-- **auto edge-case 시드는 intent variant 전용** (`farthest=3`) — 스터디의 검토-세트 유일 차이.
+- **auto edge-case 시드는 세 variant 전부** (`farthest=3`, 2026-08-19): 탭은 그 rule이 **답하는 집합**에서 anchor + 가장 먼 2개다 — intent는 자기 질문, type root는 미claim 잔여, baseline은 전체 로그(`scopeRows`의 폴백). 검토-세트 흐름에 남은 조건 차이는 이제 **없다**(§6).
 
 ---
 
@@ -159,7 +158,7 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 
 ### 3.3 Rules 문서: prompt-holder 기제
 
-모놀리식 프롬프트는 숨은 `score_intents` 행(`kind='prompt_holder'`, definition 없음)의 **rule**로 저장된다 — 그래서 SCORE의 rule-version 기계(v1 시드, Try minor, checkout, revert, Apply)가 **그대로** 재사용된다. Revise = RuleWorkbench `variant='prompt'`: When 없음, "Rules · vN", **Apply rules**(복수형), anchor 1개에서 시작(auto-seed 없음 — 유일 차이), Other questions → "Preview across the log". propose는 공용 라우트(`scope='prompt'`: "이 프롬프트는 모든 요청에 답하는 유일한 프롬프트다" — 스코핑 언어 금지 프레이밍).
+모놀리식 프롬프트는 숨은 `score_intents` 행(`kind='prompt_holder'`, definition 없음)의 **rule**로 저장된다 — 그래서 SCORE의 rule-version 기계(v1 시드, Try minor, checkout, revert, Apply)가 **그대로** 재사용된다. Revise = RuleWorkbench `variant='prompt'`: When 없음, "Rules · vN", **Apply rules**(복수형), Other questions → "Preview across the log". 탭 시드는 SCORE와 같은 함수·같은 정의이고 스코프만 전체 로그다(2026-08-19; §2.7). propose는 공용 라우트(`scope='prompt'`: "이 프롬프트는 모든 요청에 답하는 유일한 프롬프트다" — 스코핑 언어 금지 프레이밍).
 
 ### 3.4 배포와 런타임
 
@@ -167,7 +166,9 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 
 ### 3.5 Ablation 집행 목록 (코드가 강제하는 "없음")
 
-① intent 트리/소유/체인 없음 ② 편집 가능한 타입 rule 없음(타입 인스펙터는 `!isBaseline` 게이트) ③ intent별 rule 없음 — 문서 하나 ④ pins/correction/Needs-decision/진단 칩 없음(셋째 트랙은 빈 자리) ⑤ 보드 Run 컨트롤 없음 ⑥ 검토 세트 auto-seed 없음 ⑦ 행의 intent 멤버십 칩·"Create an intent" 문구 없음 ⑧ 배포 버전 회고 보드 없음 ⑨ 등급 은닉(clearly_in 멤버십만).
+① intent 트리/소유/체인 없음 ② 편집 가능한 타입 rule 없음(타입 인스펙터는 `!isBaseline` 게이트) ③ intent별 rule 없음 — 문서 하나 ④ pins/correction/Needs-decision/진단 칩 없음(셋째 트랙은 빈 자리) ⑤ 보드 Run 컨트롤 없음 ⑥ 행의 intent 멤버십 칩·"Create an intent" 문구 없음 ⑦ 배포 버전 회고 보드 없음 ⑧ 등급 은닉(clearly_in 멤버십만).
+
+(구 ⑥ "검토 세트 auto-seed 없음"은 2026-08-19에 삭제됐다 — §9 S-6j.)
 
 참가자 표면에 "intent"라는 단어는 렌더되지 않는다 (에러 문구까지 중립화 — "Failed to draft candidates").
 
@@ -212,10 +213,10 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 | | SCORE | Baseline |
 |---|---|---|
 | **공용 (동일 코드)** | chooser + intent-suggestions + starter 랭킹 · propose(스코프 프레이밍만 다름) · rewrite-intents · 응답 프리뷰(같은 모델·같은 digest) · merged Preview(검색·Most different·pull-in) · type 분류(복사본) · embeddings · 대화 뷰어 · Try/Apply 어휘 | ← 동일 |
-| **SCORE만** | rating run(Run/Apply) · pin 유사도 정렬 · fold + 이유 후보 · edge-case auto-seed · 라이브 intent 라우팅 · auto-title | — |
+| **SCORE만** | rating run(Run/Apply) · pin 유사도 정렬 · fold + 이유 후보 · 라이브 intent 라우팅 · auto-title | — |
 | **Baseline만** | — | probe(같은 judge, 합성 intent; clearly_in만 노출) |
 
-검토-세트(Revise) 흐름의 조건 차이는 **auto-seed 하나**다. 이 경계는 두 번 잘못 그어졌다가 교정됐다: 코드 주석이 "blind picker가 ablation"이라 주장했으나 스펙 대조 결과 아니었다(S-6e). → **교훈: "ablation의 일부"라는 코드 주석은 인용이 아니라 스펙에 대조할 주장이다.**
+검토-세트(Revise) 흐름의 조건 차이는 **없다**(2026-08-19). 이 경계는 세 번 잘못 그어졌다가 교정됐다: blind picker(S-6e), 그리고 마지막까지 남아 "유일한 차이"로 *명명*만 되고 논증되지는 않았던 auto-seed(S-6j). 둘 다 같은 실수의 두 판본이다 — 조작 변인은 **rule이 적용되는 범위**이고, 쓰기 시작할 때 자기 rule의 응답을 몇 개 보고 있는가는 §0 원칙 1이 패리티로 못박은 **프리뷰 능력**이다. → **교훈 ①: "ablation의 일부"라는 코드 주석은 인용이 아니라 스펙에 대조할 주장이다. ② "남은 유일한 차이"라는 문장은 그 차이가 정당하다는 논증이 아니다.**
 
 ---
 
@@ -266,6 +267,7 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 | **S-6g** (08-17) | 보드가 "이 질문들이 **무엇에 대한** 질문인가"를 한 번도 말하지 않은 채 열렸다 — 과제 프롬프트도, 챗봇이 원래 받은 시작 프롬프트도. rule이 과한지, 질문이 과제 이탈인지, 붙여넣기의 `[ASSIGNMENT PROMPT]` 태그가 무엇을 가리키는지가 전부 그 두 가지에 대한 판단인데 근거가 화면에 없었다. 첫 진입 자동 모달 + 헤더 `ⓘ Assignment` 재열람. **양 조건 공통** — 과제는 코퍼스에 대한 사실이고 base prompt는 양쪽이 편집을 시작하는 상태이므로 측정 대상 메커니즘이 아니다. |
 | **S-6h** (08-17) | definition·rule을 폭 320-380px 컬럼의 인라인 textarea에서 쓰고 있었다. definition은 평균 253자·최대 1,127자, baseline rules 문서는 상한 8,000자 — 편지구멍으로 산문을 쓰는 셈. **읽기 전용 + `EditorModal`**(양 조건). 부수 효과 하나: 스크롤되는 컬럼 안의 textarea는 캐럿이 남아 있으면 오타 한 번에 라이브 정의가 바뀌었는데(정의 변경 = 전 로그 재판정) 그 경로가 사라졌다. RuleWorkbench의 `useLayoutEffect` 높이 측정은 textarea와 함께 삭제. |
 | **S-6i** (08-17) | 작업 블록 25분을 **참가자에게 한 번도 알려주지 않고** 있었다 — 첫 통보가 진행자의 20분 구두 경고. 설계 §5가 "무엇을 몇 개나 보고 고칠지 … 그 자체가 측정값"이라 했는데, 예산을 모르고 한 선택은 자유로운 선택이 아니라 정보 없는 선택이고 둘은 데이터에서 구분되지 않는다. **작업 카드에 "about 25 minutes" + 스튜디오 헤더에 경과 표시**(`WorkElapsed`: 경과/분 단위·muted·색 변화 없음·25 넘어도 계속 카운트). 카운트다운을 쓰지 않은 이유 둘: ① 부담(정신적 요구·좌절)이 블록 설문의 측정 변인이라 타이머가 자기 결과를 오염시킨다 ② SCORE의 루프가 앞이 무거워(intent→Apply→판정→다듬기) 조급함이 **처치의 메커니즘인 판정 루프**에서 먼저 깎일 가능성이 커 조건 간 비대칭이 생긴다. 강제 없음(진행자 운영, v2 delta §8 유지). 부수: 콘솔 경과 칩의 임계값이 구 30분 상한에 박혀 있어 진행자 신호가 5분 늦었다 → `STUDY_WORK_MINUTES`/`STUDY_WORK_WARNING_MINUTES`(25/20)에서 유도하고 **configure 블록에만** 적용(break·interview는 그 시계가 아니다). |
+| **S-6j** (08-19) | 룰 워크벤치 진입 시 SCORE는 탭 3개(anchor + 가장 먼 2개)로, baseline은 anchor 1개로 열리고 있었다 — 스펙이 "이 흐름의 유일한 조건 차이"로 부르던 것. 사용자 지적으로 재검토했고, S-6e와 **같은 종류의 오분류**로 판정했다: 이건 범위가 아니라 **저작 시작 시점에 보이는 응답 수**이고 §0 원칙 1의 프리뷰 패리티에 속한다. 남겨 두면 (a) 세 기제(간섭·누적·예측 가능성)가 전부 "쓸 때 안 본 질문"에 관한 것인데 처치군만 그런 질문 2개를 공짜로 받으므로 주 비교의 대안 설명이 되고, (b) 대조군만 클릭을 더 써서 같은 25분과 TLX에 실린다(원칙 3). **위로 맞췄다** — SCORE를 1개로 줄이는 것은 "단일 응답에 대고 쓴 rule"이라는 실패 모드를 대조군에 강요하는 것이라 다시 원칙 3. 시드 출처는 `seedExampleTabs`의 원래 정의 그대로 **그 rule이 답하는 집합**: intent면 좁고 baseline이면 전체 로그다 — 어포던스는 글자 그대로 같고 결과의 차이가 곧 조작 변인이다. **filter/type 기반은 기각**: filter는 inert하고 아무것도 소유하지 않는데(§3.1) 그것으로 시드하면 "여기 쓰는 rule은 이 질문들에 대한 것"이라는 **소유 의미론**을 대조군에 흘리게 되어, 고치려던 비대칭보다 나쁘다(그리고 filter에 안 속한 질문에서 Revise를 열면 정의되지 않는다). **가설에 보수적인 변경**임을 명시해 둔다 — 간섭 단서를 저작 시점에 대조군에게 주는 것이므로 효과 크기를 줄이는 방향이다. |
 
 ---
 

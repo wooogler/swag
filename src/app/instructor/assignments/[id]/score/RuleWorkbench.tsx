@@ -551,13 +551,9 @@ export default function RuleWorkbench({
         setChat(entries.map((e) => ({ ...e, id: ++chatIdRef.current })));
       }
     })();
-    // Seed the tab strip with the first three questions of the rule's own
-    // question set (see seedExampleTabs). Both SCORE targets have such a set —
-    // an intent's questions, a type root's unclaimed residue — and both get it;
-    // the baseline, whose set is the whole log, still starts at the anchor and
-    // builds its review set by hand. That is the one ablation difference in
-    // this flow (spec §4.1/4.2).
-    if (scopeMessageIds) void seedExampleTabs();
+    // Seed the tab strip from the rule's own question set (seedExampleTabs).
+    // Every variant has such a set, so every variant seeds.
+    void seedExampleTabs();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -674,7 +670,8 @@ export default function RuleWorkbench({
   /** The questions this rule can be tried against: the ones it ANSWERS, which
    * the board resolves with the real chain compiler and hands over as
    * `scopeMessageIds`. Only the baseline falls back to the whole log — its one
-   * prompt genuinely answers everything.
+   * prompt genuinely answers everything. That fallback is also what the tab
+   * seed reads (seedExampleTabs), which is why the arms can share it.
    *
    * It used to read membership here itself (clearly_in + pins). Under v7 that
    * is the wrong set: first-match means an intent can MATCH a question that an
@@ -1203,16 +1200,46 @@ export default function RuleWorkbench({
 
 
   /**
-   * SCORE: open on THREE examples from the rule's own question set (`scopeRows`
-   * — the questions it actually answers), not on the one question that got you
-   * here. A rule written against a single response is the failure mode this
-   * whole screen exists to prevent, and one tab was an invitation to it.
+   * Open on THREE examples from the rule's own question set (`scopeRows` — the
+   * questions it actually answers), not on the one question that got you here.
+   * A rule written against a single response is the failure mode this whole
+   * screen exists to prevent, and one tab was an invitation to it.
    *
    * The three are the anchor plus the two most different from it — which is
    * exactly what the cross-query preview lists at the top, because both call
    * `sortByAnchorDistance` over the same scope with the same scores. Opening
    * the preview therefore shows the tabs you already have, ticked, with the
    * next candidates underneath.
+   *
+   * EVERY VARIANT SEEDS, and the sentence above is why the arms can share it
+   * (2026-08-19). This used to be gated on `scopeMessageIds`, so the baseline
+   * opened on the anchor alone and was named "the one ablation difference in
+   * this flow" (spec §4.1/4.2). It is not a difference of the kind the study
+   * manipulates. What is manipulated is the SCOPE a rule applies to; how many
+   * of its own responses you are looking at when you write it is a preview
+   * affordance, which §0 principle 1 puts squarely on the parity side — the
+   * same reasoning that deleted the baseline-only blind picker in S-6e, one
+   * step earlier in the same loop. Left in, it hands one arm two free
+   * counter-examples at the exact moment the study is measuring whether rules
+   * generalize, which is the alternative explanation a reader reaches for
+   * first, and it spends the control arm's clicks out of the same 25 minutes
+   * (principle 3).
+   *
+   * The scope does the differentiating, and that is the point: an intent's set
+   * is narrow because its rule is narrow, and the baseline's set is the whole
+   * log because its one document genuinely answers all of it (`scopeRows`
+   * falls back to exactly that). Same rule, different result, because the
+   * scope differs — which is the manipulation showing through rather than
+   * being papered over.
+   *
+   * NOT the filter, and not the type. A baseline filter is inert and owns
+   * nothing; seeding a rule's examples from the filter you arrived through
+   * would quietly tell the participant "the rules I write here are about these
+   * questions", which IS the treatment's mechanism, leaked into the control —
+   * worse than the asymmetry it would fix, and undefined for the common case
+   * of revising from a question no filter collects. A type is the same
+   * mistake one level up: baseline rules are not type-scoped, and the type
+   * else-rule is ablated away.
    *
    * Responses generate lazily when a tab is selected, so opening stays fast.
    * Distances are best-effort: no embeddings → newest-first, same as the
@@ -1646,13 +1673,13 @@ export default function RuleWorkbench({
               //
               // The baseline used to get a blind picker instead, on the theory
               // that hand-building the review set was part of the ablation. It
-              // is not: spec §4.1/4.2 put exactly ONE difference in this flow —
-              // SCORE auto-seeds the tabs on open (seedExampleTabs) and the
-              // baseline starts at the anchor. Every MANUAL path is shared, so
-              // choosing from responses you can see is a preview capability
-              // (§0 principle 1 lists previews as parity), not a structuring
-              // one. Withholding it just made the control's loop worse, which
-              // is the strawman §0 principle 3 forbids.
+              // is not: choosing from responses you can see is a preview
+              // capability (§0 principle 1 lists previews as parity), not a
+              // structuring one. Withholding it just made the control's loop
+              // worse, which is the strawman §0 principle 3 forbids. The
+              // auto-seed on open was the last survivor of the same theory and
+              // went the same way on 2026-08-19 (seedExampleTabs); there is now
+              // no difference at all in this flow.
               onClick={() => setPreviewOpen(true)}
               disabled={
                 boxEdited || !viewingLatest || versions === null || versions.length === 0 || proposing || simulating || saving

@@ -133,7 +133,6 @@ Clay는 Slate의 **ablation**이다. 두 조건은 거의 모든 것을 공유�
 | Rule | intent별 + 타입별 else rule | **하나의 Rules 문서** |
 | 커버리지 | 보드 상시: 트리 카운트, 스코프별 Uncategorized, shadowing/containment 진단 | 없음 |
 | 경계 교정 | correction(in/out/send-here) → **fold**로 definition에 흡수 | 없음 |
-| 검토 세트 시드 | Revise 진입 시 edge-case 3개 **자동 시드** | anchor 1개 |
 | 버전 | intent config 버전 + rule 버전 + chat deploy 스냅샷 | rule 버전 + coarse prompt 버전 |
 
 ### 3.3 예상되는 차이의 세 기제
