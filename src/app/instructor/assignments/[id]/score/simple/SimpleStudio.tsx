@@ -1563,11 +1563,11 @@ function Accordion({
 /**
  * The invented questions this intent's list was ordered by, folded away.
  *
- * The list has to be ordered by SOMETHING, and a definition compared against
- * real questions ranks badly — a description and an instance sit in different
- * places — so a small model writes a few questions the description covers and
- * the ordering measures distance from those. Saying so is better than an
- * unexplained order.
+ * One word, because the word is enough: under "When a question…", a fold
+ * called Examples holds examples of such questions. It used to carry three
+ * sentences explaining where they came from and what they were not, which is
+ * the kind of note that gets written when the writer is nervous about a
+ * feature rather than when the reader needs it.
  *
  * Folded, and one click from open, because that is the whole difference
  * between an explanation and a writing aid. A list of "questions your
@@ -1601,15 +1601,12 @@ function ExampleFold({
         className="flex items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
       >
         {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        What this is being compared against
+        Examples
+        <span className="tabular-nums">{examples.length}</span>
       </button>
       {open && (
         <div className="mt-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1.5">
-          <p className="text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]">
-            Made-up questions your description covers. The list above is ordered by how close each
-            real question is to these. They are not part of the configuration.
-          </p>
-          <ul className="mt-1 space-y-0.5">
+          <ul className="space-y-0.5">
             {examples.map((example, i) => (
               <li key={i} className="text-2xs leading-relaxed">
                 {example}
