@@ -827,7 +827,21 @@ function Tree({
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ backgroundColor: intentColor(intent.sid) }}
           />
-          <span className="flex-1 truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
+          {open && !readOnly ? (
+            // One title, in the one place it is already shown. The editor used
+            // to carry a second box with the same words in it, directly under
+            // this line.
+            <input
+              value={intent.title}
+              maxLength={120}
+              placeholder="Name it"
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => patch(intent.sid, { title: e.target.value })}
+              className="flex-1 min-w-0 bg-transparent text-sm rounded px-1 -mx-1 focus:outline-none focus:bg-[hsl(var(--muted))] hover:bg-[hsl(var(--muted))]"
+            />
+          ) : (
+            <span className="flex-1 truncate text-sm">{intent.title.trim() || 'Untitled'}</span>
+          )}
           {/* Which one, not just whether. Plain and unstyled: this is a fact
               about what the next step will read, not a fault to fix. */}
           {unsaved.has(intent.sid) && (
@@ -867,7 +881,10 @@ function Tree({
         </div>
 
         {open && (
-          <div className="pl-[1.4rem] pr-2 pb-2">
+          <div
+            className="ml-[1.05rem] pl-2.5 pr-2 pb-3 pt-1 border-l-2"
+            style={{ borderColor: intentColor(intent.sid) }}
+          >
             <Accordion
               api={api}
               ruleSources={ruleSources(intent.sid)}
@@ -905,9 +922,10 @@ function Tree({
 
       {/* Last place in the order, which is also where the button that adds one
           from nothing sits — so the button is standing where its intent will
-          be. */}
-      {creating?.beforeSid == null ? (
-        <div className="px-2 pt-1">{form('Uncategorized')}</div>
+          be. Asking `creating?.beforeSid == null` would be true when nothing
+          is being created at all, and the button would never appear. */}
+      {creating ? (
+        creating.beforeSid == null && <div className="px-2 pt-1">{form('Uncategorized')}</div>
       ) : (
         !readOnly && (
           <button
@@ -963,53 +981,36 @@ function Tree({
       </div>
 
       {expanded === 'root' && (
-        <div className="px-2 pb-2 pt-1">
-          <div className="flex items-center justify-between gap-2 mb-1">
-            <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-              Then
-            </label>
-            {!readOnly && (
-              <RulePicker
-                sources={ruleSources('root')}
-                onPick={(rule) => setDraft({ ...draft, rootRule: rule })}
-              />
-            )}
-          </div>
-          <textarea
-            value={draft.rootRule}
-            readOnly={readOnly}
-            maxLength={STUDY_PROMPT_CHAR_LIMIT}
-            onChange={(e) => setDraft({ ...draft, rootRule: e.target.value })}
-            className="w-full min-h-[10rem] resize-y rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-          />
-          {!readOnly && (
-            <button
-              onClick={() => void onApply(draft, null)}
-              disabled={saving}
-              title="Put this into effect and see what it answers"
-              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-            >
-              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Apply
-            </button>
-          )}
-          <div className="mt-2.5">
-            <IntentHistory
-              versions={intentVersions['0'] ?? []}
-              currentDefinition=""
-              currentRule={draft.rootRule}
-              disabled={readOnly}
-              onPick={(v) => setDraft({ ...draft, rootRule: v.rule })}
+        <div className="ml-[1.05rem] pl-2.5 pr-2 pb-3 pt-1 border-l-2 border-[hsl(var(--muted-foreground))]/40 space-y-3">
+          <Field
+            label="Then"
+            control={
+              !readOnly && (
+                <RulePicker
+                  sources={ruleSources('root')}
+                  onPick={(rule) => setDraft({ ...draft, rootRule: rule })}
+                />
+              )
+            }
+          >
+            <textarea
+              value={draft.rootRule}
+              readOnly={readOnly}
+              maxLength={STUDY_PROMPT_CHAR_LIMIT}
+              onChange={(e) => setDraft({ ...draft, rootRule: e.target.value })}
+              className={FIELD_BOX + ' min-h-[9rem]'}
             />
-          </div>
+          </Field>
+          {!readOnly && <ApplyButton saving={saving} onClick={() => void onApply(draft, null)} />}
+          <IntentHistory
+            versions={intentVersions['0'] ?? []}
+            currentDefinition=""
+            currentRule={draft.rootRule}
+            disabled={readOnly}
+            onPick={(v) => setDraft({ ...draft, rootRule: v.rule })}
+          />
         </div>
       )}
-
-      <p className="px-2 pt-2 text-2xs text-[hsl(var(--muted-foreground))] leading-relaxed">
-        A question goes to the first intent that describes it, reading top to
-        bottom. Anything none of them describe is uncategorized and gets the
-        rule at the end.
-      </p>
     </div>
   );
 }
@@ -1041,11 +1042,22 @@ function OrderButton({
 }
 
 /**
- * One intent, opened: its two texts side by side, both editable, nothing else.
+ * One intent, opened: its two texts, both editable, and nothing around them.
  *
  * When and Then are the whole model, and they are shown together because the
  * question a participant is actually asking — does this rule go with these
  * questions — cannot be answered by looking at either alone.
+ *
+ * No frame. It used to sit in a bordered card, which drew a rectangle inside a
+ * rectangle inside the column and filled it with `--card` over `--background`
+ * — two tokens with the same value in both themes, so the border was the only
+ * thing it contributed. The rule at the end of the list never had one either,
+ * so the two editors did not match. What ties this to its row now is a line in
+ * the row's own colour, which is the same colour its questions carry in the
+ * list, so it identifies as well as connects.
+ *
+ * The title is not here. It is on the row above, where it was already being
+ * shown, and it became editable there rather than being repeated in a box.
  */
 function Accordion({
   api,
@@ -1071,21 +1083,11 @@ function Accordion({
   onDelete: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-2.5 space-y-2">
-      <input
-        value={intent.title}
-        readOnly={readOnly}
-        maxLength={120}
-        onChange={(e) => onChange({ title: e.target.value })}
-        placeholder="Name it"
-        className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-      />
-      <div>
-        <div className="flex items-center justify-between gap-2 mb-1">
-          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-            When a question…
-          </label>
-          {/* Replaces the definition; leaves a name they chose alone. */}
+    <div className="space-y-3">
+      <Field
+        label="When a question…"
+        control={
+          /* Replaces the definition; leaves a name they chose alone. */
           <StarterPicker
             api={api}
             disabled={readOnly}
@@ -1096,45 +1098,35 @@ function Accordion({
               })
             }
           />
-        </div>
+        }
+      >
         <textarea
           value={intent.definition}
           readOnly={readOnly}
           maxLength={4000}
           onChange={(e) => onChange({ definition: e.target.value })}
           placeholder="asks for…"
-          className="w-full min-h-[5rem] resize-y rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+          className={FIELD_BOX + ' min-h-[4.5rem]'}
         />
-      </div>
-      <div>
-        <div className="flex items-center justify-between gap-2 mb-1">
-          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-            Then
-          </label>
-          {!readOnly && (
-            <RulePicker sources={ruleSources} onPick={(rule) => onChange({ rule })} />
-          )}
-        </div>
+      </Field>
+      <Field
+        label="Then"
+        control={
+          !readOnly && <RulePicker sources={ruleSources} onPick={(rule) => onChange({ rule })} />
+        }
+      >
         <textarea
           value={intent.rule}
           readOnly={readOnly}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => onChange({ rule: e.target.value })}
           placeholder="What the chatbot should do with those questions."
-          className="w-full min-h-[8rem] resize-y rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+          className={FIELD_BOX + ' min-h-[7rem]'}
         />
-      </div>
+      </Field>
       {!readOnly && (
         <div className="flex items-center gap-2">
-          <button
-            onClick={onApply}
-            disabled={saving}
-            title="Put this into effect and see what it answers"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            Apply
-          </button>
+          <ApplyButton saving={saving} onClick={onApply} />
           <span className="flex-1" />
           <button
             onClick={onDelete}
@@ -1155,6 +1147,48 @@ function Accordion({
         onPick={(v) => onChange({ definition: v.definition, rule: v.rule })}
       />
     </div>
+  );
+}
+
+/** Every text box in this column, so they cannot drift apart one at a time. */
+const FIELD_BOX =
+  'w-full resize-y rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] ' +
+  'p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]';
+
+/** A labelled box, with whatever picker belongs to it on the same line. */
+function Field({
+  label,
+  control,
+  children,
+}: {
+  label: string;
+  control?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2 mb-1 min-h-[1.25rem]">
+        <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+          {label}
+        </label>
+        {control}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ApplyButton({ saving, onClick }: { saving: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={saving}
+      title="Put this into effect and see what it answers"
+      className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+    >
+      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+      Apply
+    </button>
   );
 }
 
@@ -1200,7 +1234,7 @@ function NewIntent({
   const [busy, setBusy] = useState(false);
 
   return (
-    <div className="rounded-lg border border-[hsl(var(--primary))]/40 bg-[hsl(var(--background))] p-2.5 space-y-2">
+    <div className="rounded-lg border border-[hsl(var(--primary))]/40 bg-[hsl(var(--background))] p-2.5 space-y-3">
       <p className="text-2xs text-[hsl(var(--muted-foreground))]">
         Read before “{beforeTitle}”.
       </p>
@@ -1220,13 +1254,11 @@ function NewIntent({
         autoFocus
         maxLength={120}
         placeholder="Name it"
-        className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+        className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
       />
-      <div>
-        <div className="flex items-center justify-between gap-2 mb-1">
-          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-            When a question…
-          </label>
+      <Field
+        label="When a question…"
+        control={
           <StarterPicker
             api={api}
             forMessageId={creating.fromMessageId}
@@ -1235,29 +1267,24 @@ function NewIntent({
               if (!title.trim()) setTitle(starter.title);
             }}
           />
-        </div>
+        }
+      >
         <textarea
           value={definition}
           maxLength={4000}
           onChange={(e) => setDefinition(e.target.value)}
           placeholder="asks for…"
-          className="w-full min-h-[5rem] resize-y rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+          className={FIELD_BOX + ' min-h-[4.5rem]'}
         />
-      </div>
-      <div>
-        <div className="flex items-center justify-between gap-2 mb-1">
-          <label className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-            Then
-          </label>
-          <RulePicker sources={ruleSources} onPick={setRule} />
-        </div>
+      </Field>
+      <Field label="Then" control={<RulePicker sources={ruleSources} onPick={setRule} />}>
         <textarea
           value={rule}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => setRule(e.target.value)}
-          className="w-full min-h-[8rem] resize-y rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+          className={FIELD_BOX + ' min-h-[7rem]'}
         />
-      </div>
+      </Field>
       <div className="flex items-center gap-2">
         <button
           disabled={busy || definition.trim().length === 0}
