@@ -19,11 +19,14 @@
  * zero as a reason to hide the row would turn a fact into advice.
  *
  * When an intent is being started FROM a question, the sets that already
- * describe that question carry a dot. Same standing: the dot is a verdict that
- * was prepared when the clone was made, stated as a fact and stated for every
- * set at once. It changes no order, hides nothing, and recommends nothing —
- * a participant could reach the same information by picking each set in turn
- * and reading the list, so it saves clicks rather than doing the thinking.
+ * describe that question are tinted and carry a dot. Same standing: it is a
+ * verdict prepared when the clone was made, stated as a fact and stated for
+ * every set at once. It changes no order, hides nothing, and recommends
+ * nothing — a participant could reach the same information by picking each set
+ * in turn and reading the list, so it saves clicks rather than doing the
+ * thinking. What the mark means is said in the tooltip, where a marked row is
+ * being pointed at, rather than in a legend explaining it across the top of
+ * the menu to everyone every time.
  */
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -106,8 +109,19 @@ export default function StarterPicker({
                 {hovered.count === 1
                   ? '1 question in this course matches it.'
                   : `${hovered.count} questions in this course match it.`}
-                {hovered.contains && ' The question you started from is one of them.'}
               </p>
+              {/* What the mark means, said where a marked row is being pointed
+                  at — rather than a legend across the top of the menu telling
+                  everyone every time, including the people who never wondered. */}
+              {hovered.contains && (
+                <p className="mt-1 flex items-start gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
+                  <span
+                    aria-hidden
+                    className="mt-1 shrink-0 w-1.5 h-1.5 rounded-full bg-[hsl(var(--primary))]"
+                  />
+                  <span>marks the sets the question you started from is in.</span>
+                </p>
+              )}
             </>
           )
         }
@@ -119,14 +133,6 @@ export default function StarterPicker({
             </p>
           ) : (
             <>
-              {/* Says what the dots are before they are seen, so the mark is
-                  a fact with a stated meaning and not a hint to decode. */}
-              {forMessageId != null && (
-                <p className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-[hsl(var(--border))] text-2xs text-[hsl(var(--muted-foreground))]">
-                  <Dot />
-                  the question you started from is in this set
-                </p>
-              )}
               {groups.map((group) => (
               <section key={group.key} className="border-b border-[hsl(var(--border))] last:border-b-0">
                 {/* The Type is a row, not a heading: "everything to do with
@@ -184,28 +190,28 @@ function Row({
       onClick={() => onPick(item)}
       onMouseEnter={() => onHover(item)}
       onFocus={() => onHover(item)}
-      className={`flex w-full items-baseline gap-2 py-1 pr-2.5 text-left hover:bg-[hsl(var(--muted))] ${
-        inset ? 'pl-6' : 'pl-2.5'
-      }`}
+      /* The whole row tinted, and a dot: thirty rows go past in a scroll, and
+         a hairline at the edge is not something you can sweep for. Still not a
+         tick — the menu is saying where the question already is, not which set
+         to pick. */
+      className={`flex w-full items-baseline gap-2 py-1 pr-2.5 text-left ${
+        item.contains
+          ? 'bg-[hsl(var(--primary))]/10 hover:bg-[hsl(var(--primary))]/20'
+          : 'hover:bg-[hsl(var(--muted))]'
+      } ${inset ? 'pl-6' : 'pl-2.5'}`}
     >
+      {item.contains && (
+        <span
+          aria-hidden
+          className="mt-1 shrink-0 w-1.5 h-1.5 rounded-full bg-[hsl(var(--primary))]"
+        />
+      )}
       <span className={`flex-1 truncate text-xs ${strong ? 'font-semibold' : ''}`}>
         {label ?? item.title}
       </span>
-      {item.contains && <Dot />}
       <span className="shrink-0 text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
         {item.count}
       </span>
     </button>
-  );
-}
-
-/** Neutral on purpose: a filled dot states membership, where a tick would
- * read as approval of the choice. */
-function Dot() {
-  return (
-    <span
-      aria-label="contains the question you started from"
-      className="shrink-0 w-1.5 h-1.5 rounded-full bg-[hsl(var(--foreground))]"
-    />
   );
 }

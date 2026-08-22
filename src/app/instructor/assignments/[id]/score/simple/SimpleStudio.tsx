@@ -72,6 +72,7 @@ import {
   insertBefore,
   moveIntent,
   removeIntent,
+  ruleForOwner,
   type SimpleIntent,
   type SimpleSnapshot,
 } from '@/lib/study/simple/chain';
@@ -166,7 +167,11 @@ interface Creating {
   seedRule: string;
   /** The question it was started from, when it was started from one. */
   fromMessageId: number | null;
-  fromQuestion: string | null;
+  /** That question's own row, so the form can draw it the way the list does.
+   * The raw text and the list's rendering of it are far enough apart — tags
+   * for pasted material, a token, a turn — that quoting one beside the other
+   * read as two different questions. */
+  fromRow: ScoreQueryRow | null;
 }
 
 export default function SimpleStudio({
@@ -175,6 +180,7 @@ export default function SimpleStudio({
   reviewSet,
   isNirvana,
   initialState,
+  seedPrompt,
   viewParam,
 }: {
   assignmentId: string;
@@ -186,6 +192,8 @@ export default function SimpleStudio({
   reviewSet: number[] | null;
   isNirvana: boolean;
   initialState: StatePayload;
+  /** The assignment's own prompt — what an untouched configuration is. */
+  seedPrompt: string;
   /** Set only when a researcher opened this with ?view= on an assignment that
    * is not a clone. It tells the routes which arm the preview is; on a real
    * clone the clone decides and this is ignored. */
@@ -198,7 +206,6 @@ export default function SimpleStudio({
   // nobody could return to. On a board with no intents the two show the same
   // sixty questions anyway.
   const [selection, setSelection] = useState<Selection>({ kind: 'root' });
-  const [expanded, setExpanded] = useState<number | 'root' | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
   const [query, setQuery] = useState('');
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
@@ -553,12 +560,11 @@ export default function SimpleStudio({
           ? draft.rootRule
           : draft.intents.find((i) => i.sid === beforeSid)?.rule) ?? draft.rootRule;
       setSelectedMessageId(messageId);
-      setExpanded(null);
       setCreating({
         beforeSid,
         seedRule,
         fromMessageId: messageId,
-        fromQuestion: rowById.get(messageId)?.queryText ?? null,
+        fromRow: rowById.get(messageId) ?? null,
       });
       logUi(assignmentId, 'simple_intent_from_query', { messageId, beforeSid });
     },
@@ -768,8 +774,6 @@ export default function SimpleStudio({
         judging={judging}
         selection={selection}
         setSelection={setSelection}
-        expanded={expanded}
-        setExpanded={setExpanded}
         creating={creating}
         setCreating={setCreating}
         draftChanged={draftChanged}
@@ -859,6 +863,12 @@ export default function SimpleStudio({
         rows={rows}
         row={selectedRow}
         isNirvana={isNirvana}
+        // Everything needed to know, without asking, whether this question is
+        // answered by the assignment's own prompt.
+        snapshot={state.snapshot}
+        owners={state.owners}
+        seedPrompt={seedPrompt}
+        atTip={state.atTip}
         moments={state.moments}
         viewingVersionNo={state.viewing?.versionNo ?? null}
         localVersionNo={localVersionNo}
@@ -890,8 +900,6 @@ function ConfigColumn({
   judging,
   selection,
   setSelection,
-  expanded,
-  setExpanded,
   creating,
   setCreating,
   draftChanged,
@@ -914,8 +922,6 @@ function ConfigColumn({
   judging: boolean;
   selection: Selection;
   setSelection: (s: Selection) => void;
-  expanded: number | 'root' | null;
-  setExpanded: (e: number | 'root' | null) => void;
   creating: Creating | null;
   setCreating: (c: Creating | null) => void;
   /** Something is written that has not taken effect. */
@@ -987,8 +993,6 @@ function ConfigColumn({
             judging={judging}
             selection={selection}
             setSelection={setSelection}
-            expanded={expanded}
-            setExpanded={setExpanded}
             creating={creating}
             setCreating={setCreating}
             onApply={onApply}
@@ -1115,8 +1119,6 @@ function Tree({
   judging,
   selection,
   setSelection,
-  expanded,
-  setExpanded,
   creating,
   setCreating,
   onApply,
@@ -1142,8 +1144,6 @@ function Tree({
   judging: boolean;
   selection: Selection;
   setSelection: (s: Selection) => void;
-  expanded: number | 'root' | null;
-  setExpanded: (e: number | 'root' | null) => void;
   creating: Creating | null;
   setCreating: (c: Creating | null) => void;
   onApply: (
@@ -1214,11 +1214,13 @@ function Tree({
           draft={draft}
           onCancel={() => setCreating(null)}
           onCreate={async (next, sid, seed) => {
-            // Closed on the way out, not on the way back: leaving the form
-            // open after a save invites a second click that writes the same
-            // intent again.
-            setCreating(null);
+            // Held open until the write comes back, and locked while it is
+            // out. It used to close on the way IN — so pressing Add emptied
+            // the column and left nothing at all on screen for the seconds the
+            // write takes. The second click that would write the same intent
+            // twice is stopped by disabling the form, not by removing it.
             const written = await onApply(next, sid, seed);
+            setCreating(null);
             // Land on what was just made. The board only learns the real id
             // here — the form sent a temporary negative one — and the next
             // thing anyone wants is the list of what those words caught.
@@ -1231,7 +1233,15 @@ function Tree({
     ) : null;
 
   const renderIntent = (intent: SimpleIntent, at: number) => {
-    const open = expanded === intent.sid;
+    // Selecting an intent IS opening it. There was a separate expanded state
+    // and a click toggled it, so choosing the thing you wanted to look at
+    // could shut it — and the second click, the one that meant "yes, this
+    // one", was the one that closed it.
+    //
+    // Except while one is being written: two editors open at once, one of them
+    // for something that does not exist yet, is a column with two answers to
+    // "what am I editing".
+    const open = !creating && selection.kind === 'intent' && selection.sid === intent.sid;
     return (
       <li key={intent.sid}>
         <div
@@ -1242,7 +1252,6 @@ function Tree({
           }`}
           onClick={() => {
             setSelection({ kind: 'intent', sid: intent.sid });
-            setExpanded(open ? null : intent.sid);
             setCreating(null);
             if (!open) logUi(assignmentId, 'intent_open', { sid: intent.sid });
           }}
@@ -1387,7 +1396,9 @@ function Tree({
                   { ...draft, intents: removeIntent(draft.intents, intent.sid) },
                   null
                 );
-                setExpanded(null);
+                // Its row is gone, so the selection that pointed at it has to
+                // land somewhere that still exists.
+                setSelection({ kind: 'root' });
               }}
             />
           </div>
@@ -1433,9 +1444,8 @@ function Tree({
                 beforeSid: null,
                 seedRule: draft.rootRule,
                 fromMessageId: null,
-                fromQuestion: null,
+                fromRow: null,
               });
-              setExpanded(null);
             }}
             /* The same box as an intent row — same width, same left edge, so
                its words line up with every title above — but dashed and
@@ -1465,11 +1475,10 @@ function Tree({
         }`}
         onClick={() => {
           setSelection({ kind: 'root' });
-          setExpanded(expanded === 'root' ? null : 'root');
           setCreating(null);
         }}
       >
-        {expanded === 'root' ? (
+        {!creating && selection.kind === 'root' ? (
           <ChevronDown className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
         ) : (
           <ChevronRight className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
@@ -1489,7 +1498,7 @@ function Tree({
         <Count value={countOf(null)} />
       </div>
 
-      {expanded === 'root' && (
+      {!creating && selection.kind === 'root' && (
         <div className="ml-[1.05rem] pl-2.5 pr-2 pb-3 pt-1 border-l border-[hsl(var(--border))] space-y-3">
           <Field
             label="Then"
@@ -1543,7 +1552,6 @@ function Tree({
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
-            savedVersionNo={savedVersionNo}
             disabled={readOnly}
             onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
             onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
@@ -1746,7 +1754,6 @@ function Accordion({
         versions={versions}
         currentDefinition={intent.definition}
         currentRule={intent.rule}
-        savedVersionNo={savedVersionNo}
         disabled={readOnly}
         onPick={onPickVersion}
         onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
@@ -1963,21 +1970,34 @@ function NewIntent({
       <p className="text-2xs text-[hsl(var(--muted-foreground))]">
         Read before “{beforeTitle}”.
       </p>
-      {creating.fromQuestion && (
-        // Kept short and quoted: it is the question that prompted this, sitting
-        // where it can be read while the definition is written. It is also
-        // pinned above the list, which is where its answer to "did this catch
-        // it" shows up.
-        <p className="rounded border-l-2 border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1 text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]">
-          Started from: “{creating.fromQuestion.trim().slice(0, 140)}
-          {creating.fromQuestion.trim().length > 140 ? '…' : ''}”
-        </p>
+      {creating.fromRow && (
+        // The question that prompted this, drawn the way the list draws it —
+        // same token, same turn, same tags for pasted material — so it reads
+        // as the row it is rather than as a quotation of something else.
+        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1.5">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+              Started from
+            </span>
+            <span className="text-2xs font-mono text-[hsl(var(--muted-foreground))]">
+              {creating.fromRow.participantToken} · {creating.fromRow.turnNumber}
+            </span>
+          </div>
+          <div className="text-sm leading-snug">
+            <QuerySnippet
+              text={creating.fromRow.queryText}
+              dissection={creating.fromRow.dissection}
+              max={150}
+            />
+          </div>
+        </div>
       )}
       <Field
         label="When a question…"
         control={
           <StarterPicker
             api={api}
+            disabled={busy}
             forMessageId={creating.fromMessageId}
             onPick={(starter) => {
               setDefinition(starter.definition);
@@ -1989,18 +2009,23 @@ function NewIntent({
         <textarea
           value={definition}
           autoFocus
+          readOnly={busy}
           maxLength={4000}
           onChange={(e) => setDefinition(e.target.value)}
           placeholder="asks for…"
-          className={FIELD_BOX + ' min-h-[7.5rem]'}
+          className={FIELD_BOX + ' min-h-[7.5rem]' + (busy ? ' opacity-60' : '')}
         />
       </Field>
-      <Field label="Then" control={<RulePicker sources={ruleSources} onPick={setRule} />}>
+      <Field
+        label="Then"
+        control={!busy && <RulePicker sources={ruleSources} onPick={setRule} />}
+      >
         <textarea
           value={rule}
+          readOnly={busy}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => setRule(e.target.value)}
-          className={FIELD_BOX + ' min-h-[9rem]'}
+          className={FIELD_BOX + ' min-h-[9rem]' + (busy ? ' opacity-60' : '')}
         />
       </Field>
       <div className="flex items-center gap-2">
@@ -2030,11 +2055,12 @@ function NewIntent({
           className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
         >
           {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-          Add
+          {busy ? 'Adding…' : 'Add'}
         </button>
         <button
           onClick={onCancel}
-          className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+          disabled={busy}
+          className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
         >
           Cancel
         </button>
@@ -2646,6 +2672,10 @@ function ViewerColumn({
   rows,
   row,
   isNirvana,
+  snapshot,
+  owners,
+  seedPrompt,
+  atTip,
   moments,
   viewingVersionNo,
   localVersionNo,
@@ -2657,6 +2687,13 @@ function ViewerColumn({
   rows: ScoreQueryRow[];
   row: ScoreQueryRow | null;
   isNirvana: boolean;
+  /** The configuration in force, and who answers what under it. Together with
+   * the assignment's own prompt they settle the commonest case on this screen
+   * without a round trip: a rule nobody has changed. */
+  snapshot: SimpleSnapshot;
+  owners: Record<string, Owner>;
+  seedPrompt: string;
+  atTip: boolean;
   /** Every version, newest first. */
   moments: SimpleVersion[];
   viewingVersionNo: number | null;
@@ -2698,10 +2735,51 @@ function ViewerColumn({
    * place the screen learns the rule from, rather than one for a cache hit and
    * another for a miss.
    */
+  /**
+   * The rule that applies here, worked out locally when it can be.
+   *
+   * At the tip the board already holds both halves — which intent owns this
+   * question, and what that intent's rule says — so asking the server is
+   * asking it something it has just been told. Older versions are a different
+   * snapshot and still have to be fetched.
+   *
+   * Null means "not known without asking", not "no rule".
+   */
+  const knownRule = useMemo(() => {
+    if (!row || !atTip || versionNo != null) return null;
+    const owner = owners[String(row.messageId)];
+    if (snapshot.arm === 'score' && (!owner || owner.outcome === 'pending')) return null;
+    return ruleForOwner(snapshot, snapshot.arm === 'score' ? owner?.sid ?? null : null);
+  }, [atTip, owners, row, snapshot, versionNo]);
+
+  /**
+   * Whether the answer here IS the delivered one.
+   *
+   * A rule still identical to the assignment's own prompt produces the reply
+   * already on the screen, and the server says so — but saying so costs a
+   * round trip, and during it the bar had nothing to show and blinked out.
+   * Untouched is the state every block opens in, so that was every question
+   * anyone clicked on their first pass.
+   */
+  const knownOriginal = knownRule != null && knownRule === seedPrompt;
+
+  /** Who answers this one, from the answer when it is this one's and from the
+   * board's own ownership map before that. */
+  const ownerSidNow =
+    answer?.messageId === row?.messageId
+      ? answer?.ownerSid ?? null
+      : row && snapshot.arm === 'score'
+        ? owners[String(row.messageId)]?.sid ?? null
+        : null;
+
   const [rule, setRule] = useState<string | null>(null);
   useEffect(() => {
     if (!row) {
       setRule(null);
+      return;
+    }
+    if (knownRule != null) {
+      setRule(knownRule);
       return;
     }
     let cancelled = false;
@@ -2719,7 +2797,7 @@ function ViewerColumn({
     return () => {
       cancelled = true;
     };
-  }, [api, row, versionNo]);
+  }, [api, knownRule, row, versionNo]);
 
   useEffect(() => {
     if (!row) {
@@ -2731,8 +2809,17 @@ function ViewerColumn({
     abortRef.current = controller;
     const messageId = row.messageId;
 
-    if (asDelivered) {
-      setAnswer({ messageId, versionNo, text: '', state: 'original', ownerSid: null });
+    if (asDelivered || knownOriginal) {
+      // Nothing to ask for and nothing to wait through: the reply this asks
+      // about is already in the thread below.
+      setAnswer({
+        messageId,
+        versionNo,
+        text: '',
+        state: 'original',
+        ownerSid:
+          snapshot.arm === 'score' ? owners[String(messageId)]?.sid ?? null : null,
+      });
       return;
     }
 
@@ -2805,7 +2892,7 @@ function ViewerColumn({
     })();
 
     return () => controller.abort();
-  }, [api, asDelivered, row, versionNo]);
+  }, [api, asDelivered, knownOriginal, owners, row, snapshot.arm, versionNo]);
 
   if (!row) {
     return (
@@ -2852,14 +2939,21 @@ function ViewerColumn({
               moments={moments}
               pick={localVersionNo}
               current={versionNo}
-              state={answer?.messageId === row.messageId ? answer.state : 'idle'}
-              owner={
-                answer?.messageId === row.messageId && answer.ownerSid != null
-                  ? titleOf(answer.ownerSid)
-                  : null
+              /* What is known at RENDER beats what an effect is about to set.
+                 The effect runs after the paint, so on the frame a new
+                 question arrives the answer still belongs to the old one and
+                 the bar drew nothing — a blink on every click, for a state the
+                 board could already work out. */
+              state={
+                answer?.messageId === row.messageId
+                  ? answer.state
+                  : knownOriginal
+                    ? 'original'
+                    : 'idle'
               }
-              ownerSid={answer?.messageId === row.messageId ? answer.ownerSid : null}
-              rule={rule}
+              owner={ownerSidNow == null ? null : titleOf(ownerSidNow)}
+              ownerSid={ownerSidNow}
+              rule={knownRule ?? (answer?.messageId === row.messageId ? rule : null)}
               onPick={(next) => {
                 setLocalVersionNo(next);
                 onLocalVersionLog(typeof next === 'number' ? next : null);

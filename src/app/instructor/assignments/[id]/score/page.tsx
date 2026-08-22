@@ -219,6 +219,10 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
             reviewSet={simpleReviewSet}
             isNirvana={assignment.shareToken === 'nirvana-dataset'}
             initialState={initialState}
+            // What an untouched configuration IS. The board compares the rule
+            // that would apply against it, and when they match it knows the
+            // answer is the delivered one without asking.
+            seedPrompt={seedPrompt}
             // Only meaningful when this is not a clone — see simpleContext.
             viewParam={storedCondition ? null : view ?? null}
           />

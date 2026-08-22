@@ -63,7 +63,10 @@ interface StateBody {
   deployedVersionNo: number | null;
   dirty: boolean;
   unsavedSids: number[];
-  intentVersions: Record<string, { versionNo: number; definition: string; rule: string; name: string | null }[]>;
+  intentVersions: Record<
+    string,
+    { versionNo: number; definition: string; rule: string; name: string | null; matches: number | null }[]
+  >;
   pinned: number[];
   owners: Record<string, { sid: number | null; outcome: string; matchedElsewhere: number[] }>;
   counts: Record<string, number>;
@@ -804,29 +807,33 @@ async function main() {
         Object.entries(clean.intentVersions).map(([k, v]) => [k, v.length])
       );
       const target = clean.snapshot.intents[0];
-      // A SAVE, because an apply is not a version any more — it overwrites the
-      // working state and the per-intent history stays a list of decisions.
-      await call('save', {
-        method: 'POST',
-        body: JSON.stringify({
-          kind: 'apply',
+      const changed = (kind: 'apply' | 'save') =>
+        JSON.stringify({
+          kind,
           rootRule: clean.snapshot.rootRule,
           prompt: clean.snapshot.prompt,
           intents: clean.snapshot.intents.map((i) =>
             i.sid === target.sid ? { ...i, rule: `${i.rule} One sentence only.` } : i
           ),
-        }),
-      });
-      const after = await state();
-      // An apply is a version of the intent it changed. The history said 0 for
-      // an intent somebody had just spent a minute writing, which is the wrong
-      // answer about it — the rows say which of them are only in effect.
+        });
+
+      await call('save', { method: 'POST', body: changed('apply') });
+      const applied = await state();
+      // Applying is meant to be cheap enough to do constantly, so it writes
+      // no version. It mattered more than tidiness: picking an old wording
+      // from the history APPLIES it, so while applies were versioned, reading
+      // your own history wrote new entries into it.
       check(
-        'an apply versions the intent it changed',
-        (after.intentVersions[String(target.sid)] ?? []).length >
+        'an apply versions nobody',
+        (applied.intentVersions[String(target.sid)] ?? []).length ===
           (clean.intentVersions[String(target.sid)] ?? []).length,
-        `${(clean.intentVersions[String(target.sid)] ?? []).length} → ${(after.intentVersions[String(target.sid)] ?? []).length}`
+        `${(clean.intentVersions[String(target.sid)] ?? []).length} → ${(applied.intentVersions[String(target.sid)] ?? []).length}`
       );
+
+      // Keeping it is what writes one, and only for the intent whose words
+      // moved.
+      await call('save', { method: 'POST', body: changed('save') });
+      const after = await state();
       const moved = Object.entries(after.intentVersions)
         .filter(([k, v]) => v.length !== (countsBefore[k] ?? 0))
         .map(([k]) => k);
@@ -835,6 +842,15 @@ async function main() {
         moved.length === 1 && moved[0] === String(target.sid),
         `moved: ${moved.join(', ') || 'none'}`
       );
+      // And a version carries what that wording caught, which a reader
+      // compares across rows: did widening this pick up more.
+      const newest = after.intentVersions[String(target.sid)]?.[0];
+      check(
+        'a version says how many questions its wording describes',
+        newest != null && typeof newest.matches === 'number',
+        `${newest?.matches ?? 'null'}`
+      );
+
       // And a reorder, which changes no text at all, versions nobody.
       const beforeReorder = Object.fromEntries(
         Object.entries(after.intentVersions).map(([k, v]) => [k, v.length])

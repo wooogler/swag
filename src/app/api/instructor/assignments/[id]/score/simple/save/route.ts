@@ -112,19 +112,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const version = await saveSimpleVersion({ assignmentId: id, snapshot, kind: body.kind });
 
-  // The per-intent timeline the board reads, on either verb. Only the intents
-  // whose when/then pair actually moved get one — editing one intent is not an
+  // The per-intent timeline the board reads. On a SAVE, and only for the
+  // intents whose when/then pair actually moved — editing one intent is not an
   // event in another one's history.
   //
-  // Applies count here, unlike at the configuration level. An intent written
-  // and not yet saved had a history of NOTHING, which is the wrong answer
-  // about the thing someone has just spent a minute writing; the rows say
-  // which of them are only in effect instead.
-  const intentVersions = await recordIntentVersions({
-    assignmentId: id,
-    snapshot,
-    configVersionNo: version.versionNo,
-  });
+  // Not on an apply. Applying is meant to be cheap enough to do constantly:
+  // change a line, look, change it back. A history that recorded all of that
+  // would be a list of keystrokes, and it made a worse mess than noise —
+  // picking an older wording from the list APPLIES it, so browsing your own
+  // history wrote new entries into it. The way back through applied states is
+  // undo, which costs nothing to walk because every wording that was applied
+  // still has its verdicts and its answers stored under its own text.
+  const intentVersions =
+    body.kind === 'save'
+      ? await recordIntentVersions({
+          assignmentId: id,
+          snapshot,
+          configVersionNo: version.versionNo,
+        })
+      : [];
 
   // One event either way, with the kind on it: an apply and a save are the
   // same act with a different claim, and the analysis wants to count both and

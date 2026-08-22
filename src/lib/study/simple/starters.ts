@@ -66,7 +66,7 @@ export interface StarterGroup {
  * the most recent verdict for each message under any generation, which is what
  * the baseline arm's probe seeding already does.
  */
-async function countsByDefinition(
+export async function countsByDefinition(
   assignmentId: string,
   definitions: string[]
 ): Promise<Map<string, number>> {

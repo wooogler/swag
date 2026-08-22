@@ -21,6 +21,7 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { simpleIntentVersions } from '@/db/schema';
 import type { SimpleSnapshot } from './chain';
+import { countsByDefinition } from './starters';
 
 /** The everything-else rule keeps a history like any other; it has no sid. */
 export const ROOT_SID = 0;
@@ -36,9 +37,18 @@ export interface IntentVersion {
   name: string | null;
   summary: string | null;
   createdAt: string;
-  /** The write this pair first appeared in. Compared against the newest SAVE,
-   * it says whether this wording has been kept or is only in effect. */
+  /** The write this pair first appeared in. */
   configVersionNo: number | null;
+  /**
+   * How many of this log's questions that WORDING describes.
+   *
+   * Matches, not ownership: what an intent ends up holding also depends on
+   * what sits above it, and the question a history answers is about the words
+   * on the row — did widening this catch more. A lookup, not a judgement, for
+   * the same reason the starter counts are: a verdict is keyed by definition
+   * text, so an old wording still has its own.
+   */
+  matches: number | null;
 }
 
 /** Every (sid, definition, rule) the configuration currently holds. */
@@ -148,6 +158,9 @@ export async function recordIntentVersions(args: {
       summary: row.summary,
       createdAt: row.createdAt.toISOString(),
       configVersionNo: row.configVersionNo,
+      // Written, not read: the count is a read-path concern and the caller
+      // here is naming what it just wrote.
+      matches: null,
     });
   }
   return written;
@@ -174,6 +187,15 @@ export async function listIntentVersions(
     .from(simpleIntentVersions)
     .where(eq(simpleIntentVersions.assignmentId, assignmentId))
     .orderBy(desc(simpleIntentVersions.versionNo));
+
+  // One lookup for every distinct wording in the whole history: a verdict is
+  // keyed by definition text, so an old one still has its own and nothing has
+  // to be judged again to say how many questions it described.
+  const matches = await countsByDefinition(
+    assignmentId,
+    [...new Set(rows.map((r) => r.definition.trim()).filter((d) => d.length > 0))]
+  ).catch(() => new Map<string, number>());
+
   const out: Record<string, IntentVersion[]> = {};
   for (const row of rows) {
     const key = String(row.sid);
@@ -188,6 +210,7 @@ export async function listIntentVersions(
       summary: row.summary,
       createdAt: row.createdAt.toISOString(),
       configVersionNo: row.configVersionNo,
+      matches: row.definition.trim() ? matches.get(row.definition.trim()) ?? 0 : null,
     });
   }
   return out;
@@ -222,7 +245,9 @@ export async function previousIntentVersion(
         name: row.name,
         summary: row.summary,
         createdAt: row.createdAt.toISOString(),
-      configVersionNo: row.configVersionNo,
+        configVersionNo: row.configVersionNo,
+        // The namer wants the previous WORDING, not what it caught.
+        matches: null,
       }
     : null;
 }

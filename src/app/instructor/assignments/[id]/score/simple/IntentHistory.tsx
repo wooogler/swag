@@ -26,11 +26,17 @@
  * a response that looks different. It is read off the row before it rather
  * than stored, so it cannot disagree with the texts it describes.
  *
+ * Every row here is a SAVE. Applying does not write one: applying is meant to
+ * be cheap enough to do constantly, and a history of every wording tried would
+ * be a list of keystrokes. The way back through applied states is undo.
+ *
  * Picking one puts both texts back in the boxes AND applies them, so the
  * question list beside it becomes that version's list without a second click.
  * It used to stop at the boxes, on the grounds that republishing silently
  * would be a fourth verb nobody asked for — but there is an undo now, and a
  * version you can read the text of but not the effect of is half a version.
+ * That apply is also why applies must not be versioned: while they were,
+ * reading your own history wrote new entries into it.
  */
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -45,9 +51,10 @@ export interface IntentVersion {
   name: string | null;
   summary: string | null;
   createdAt: string;
-  /** The write it first appeared in — past the newest save means in effect
-   * but not kept. */
   configVersionNo: number | null;
+  /** How many of this log's questions that wording describes. Null for the
+   * everything-else rule, which has no words to match with. */
+  matches: number | null;
 }
 
 /**
@@ -69,7 +76,6 @@ export default function IntentHistory({
   versions,
   currentDefinition,
   currentRule,
-  savedVersionNo,
   onPick,
   onRevert,
   disabled = false,
@@ -77,8 +83,6 @@ export default function IntentHistory({
   versions: IntentVersion[];
   currentDefinition: string;
   currentRule: string;
-  /** The newest SAVE. Anything written after it took effect but is not kept. */
-  savedVersionNo: number | null;
   onPick: (version: IntentVersion) => void;
   /** Go back to the last save. Beside the history because that is where the
    * thing it goes back TO is listed. Null when there is nothing applied, or
@@ -176,14 +180,16 @@ export default function IntentHistory({
                   <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
                     {moved}
                   </span>
-                  {/* An apply is a version of this intent — it took effect and
-                      the board answered under it. What it is not is kept, and
-                      the next step reads only what was kept. */}
-                  {(savedVersionNo == null ||
-                    (version.configVersionNo != null &&
-                      version.configVersionNo > savedVersionNo)) && (
-                    <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
-                      unsaved
+                  {/* What that wording caught. Matches rather than ownership:
+                      what an intent ends up holding depends on what sits above
+                      it too, and the question a history answers is about the
+                      words on the row — did widening this catch more. */}
+                  {version.matches != null && (
+                    <span
+                      title={`${version.matches} question${version.matches === 1 ? '' : 's'} match this wording`}
+                      className="shrink-0 w-6 text-right text-2xs tabular-nums text-[hsl(var(--muted-foreground))]"
+                    >
+                      {version.matches}
                     </span>
                   )}
                   <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
