@@ -570,6 +570,9 @@ export default function SimpleStudio({
         fromMessageId: messageId,
         fromRow: rowById.get(messageId) ?? null,
       });
+      // Look at the set this is being carved out of, not at whatever was open
+      // when the question was clicked.
+      setSelection(beforeSid == null ? { kind: 'root' } : { kind: 'intent', sid: beforeSid });
       logUi(assignmentId, 'simple_intent_from_query', { messageId, beforeSid });
     },
     [assignmentId, draft.intents, draft.rootRule, ownerOf, rowById]
@@ -1206,10 +1209,32 @@ function Tree({
       intents: draft.intents.map((i) => (i.sid === sid ? { ...i, ...fields } : i)),
     });
 
-  /* The form is rendered at the position the intent will occupy, so where it
-     goes needs no explaining beyond the one line naming what it is tried
-     before. */
-  const form = (beforeTitle: string) =>
+  /**
+   * The questions a new intent at this position could take, counted as the
+   * two piles they are actually sitting in on screen.
+   *
+   * Everything from the row it is read before, downwards, is still unclaimed
+   * when its turn comes — but one total spanning several rows matches no
+   * number anybody can see. So: the row it is named after, and the rest below
+   * it as one figure. The intents ABOVE are tried first and keep what they
+   * have, which is the other half of the same fact and the reason neither
+   * number is the whole log.
+   */
+  const takeableFrom = (beforeSid: number | null) => {
+    const at = beforeSid == null ? -1 : draft.intents.findIndex((i) => i.sid === beforeSid);
+    if (at < 0) return { here: countOf(null), below: 0 };
+    return {
+      here: countOf(beforeSid),
+      below:
+        draft.intents.slice(at + 1).reduce((sum, i) => sum + countOf(i.sid), 0) + countOf(null),
+    };
+  };
+
+  /* The form is rendered at the position the intent will occupy — at the LIST's
+     own left edge, not inside the indent an open intent's editor uses. Indented
+     it sat under the row above and read as more settings for that intent, which
+     is the one thing it is not: it is a sibling being written. */
+  const form = (beforeSid: number | null, beforeTitle: string) =>
     creating && !readOnly ? (
       <div className="pb-2">
         <NewIntent
@@ -1217,6 +1242,7 @@ function Tree({
           ruleSources={ruleSources(null)}
           creating={creating}
           beforeTitle={beforeTitle}
+          takeable={takeableFrom(beforeSid)}
           draft={draft}
           onCancel={() => setCreating(null)}
           onCreate={async (next, sid, seed) => {
@@ -1422,9 +1448,7 @@ function Tree({
         {draft.intents.map((intent, at) => (
           <Fragment key={intent.sid}>
             {creating?.beforeSid === intent.sid && (
-              <li className="ml-[1.05rem] pl-2.5 pr-2">
-                {form(intent.title.trim() || 'Untitled')}
-              </li>
+              <li className="pt-1.5">{form(intent.sid, intent.title.trim() || 'Untitled')}</li>
             )}
             {renderIntent(intent, at)}
           </Fragment>
@@ -1437,7 +1461,7 @@ function Tree({
           is being created at all, and the button would never appear. */}
       {creating ? (
         creating.beforeSid == null && (
-          <div className="my-1.5 ml-[1.05rem] pl-2.5 pr-2">{form('Uncategorized')}</div>
+          <div className="my-1.5">{form(null, 'Uncategorized')}</div>
         )
       ) : (
         !readOnly && (
@@ -1455,6 +1479,11 @@ function Tree({
                 fromMessageId: null,
                 fromRow: null,
               });
+              // And put the pile it carves from on the screen: the middle
+              // column lists whatever is selected, so leaving the selection on
+              // some other intent meant writing a description for questions
+              // while looking at a different set of them.
+              setSelection({ kind: 'root' });
             }}
             /* The same box as an intent row — same width, same left edge, so
                its words line up with every title above — but dashed and
@@ -1952,6 +1981,7 @@ function NewIntent({
   ruleSources,
   creating,
   beforeTitle,
+  takeable,
   draft,
   onCancel,
   onCreate,
@@ -1961,6 +1991,9 @@ function NewIntent({
   creating: Creating;
   /** What this one will be tried before. */
   beforeTitle: string;
+  /** What is still unclaimed by the time its turn comes: the row it is named
+   * after, and everything under that row as one figure. */
+  takeable: { here: number; below: number };
   draft: SimpleSnapshot;
   onCancel: () => void;
   onCreate: (
@@ -1977,8 +2010,35 @@ function NewIntent({
 
   return (
     <div className="rounded-lg border border-[hsl(var(--primary))]/40 bg-[hsl(var(--background))] p-2.5 space-y-3">
-      <p className="text-2xs text-[hsl(var(--muted-foreground))]">
-        Read before “{beforeTitle}”.
+      {/* A title line in the shape of the rows above it, so the card reads as
+          one of them being written rather than as a panel hanging off the
+          intent above. */}
+      <div className="flex items-center gap-1.5">
+        <span
+          aria-hidden
+          className="w-1.5 h-1.5 rounded-full shrink-0 border border-[hsl(var(--primary))]"
+        />
+        <span className="flex-1 text-sm font-semibold">New intent</span>
+      </div>
+      {/* Where its questions come from. Position was the only thing the line
+          used to state — true, and useless to somebody who has not worked out
+          what being read first does. The consequence is the fact worth
+          stating: these are the questions still unclaimed at its turn, and the
+          intents above keep everything they already have. */}
+      <p className="text-2xs leading-snug text-[hsl(var(--muted-foreground))]">
+        Read before “{beforeTitle}”, so any of its{' '}
+        <span className="font-semibold text-[hsl(var(--foreground))]">
+          {takeable.here} question{takeable.here === 1 ? '' : 's'}
+        </span>
+        {takeable.below > 0 && (
+          <>
+            {' '}— or of the{' '}
+            <span className="font-semibold text-[hsl(var(--foreground))]">
+              {takeable.below} below it
+            </span>{' '}—
+          </>
+        )}{' '}
+        can come here. Nothing above it moves.
       </p>
       {creating.fromRow && (
         // The question that prompted this, drawn the way the list draws it —
