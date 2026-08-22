@@ -71,6 +71,7 @@ import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
   askedVersionNo,
   describeStep,
+  findIntent,
   insertBefore,
   moveIntent,
   removeIntent,
@@ -1043,6 +1044,7 @@ function ConfigColumn({
             api={api}
             intentVersions={state.intentVersions}
             unsaved={unsaved}
+            applied={state.snapshot}
             draft={draft}
             setDraft={setDraft}
             readOnly={readOnly}
@@ -1157,6 +1159,7 @@ function Tree({
   api,
   intentVersions,
   unsaved,
+  applied,
   draft,
   setDraft,
   readOnly,
@@ -1180,6 +1183,9 @@ function Tree({
   intentVersions: Record<string, IntentVersion[]>;
   /** Intents that differ from the last save (0 = the uncategorized rule). */
   unsaved: Set<number>;
+  /** What is in EFFECT — which is not what is in the boxes while something is
+   * typed and not applied. The history's pending row is about the first. */
+  applied: SimpleSnapshot;
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
@@ -1435,6 +1441,14 @@ function Tree({
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
               intent={intent}
+              pending={
+                unsaved.has(intent.sid)
+                  ? (() => {
+                      const live = findIntent(applied, intent.sid);
+                      return live ? { definition: live.definition, rule: live.rule } : null;
+                    })()
+                  : null
+              }
               readOnly={readOnly}
               saving={saving}
               dirty={dirty}
@@ -1615,6 +1629,7 @@ function Tree({
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
+            pending={unsaved.has(0) ? { definition: '', rule: applied.rootRule } : null}
             disabled={readOnly}
             onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
             onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
@@ -1691,6 +1706,7 @@ function Accordion({
   ruleSources,
   versions,
   intent,
+  pending,
   readOnly,
   saving,
   dirty,
@@ -1708,6 +1724,8 @@ function Accordion({
   ruleSources: RuleSource[];
   /** This intent's own history, newest first. */
   versions: IntentVersion[];
+  /** Applied and not saved, for the row the next Save will write. */
+  pending: { definition: string; rule: string } | null;
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
@@ -1805,6 +1823,7 @@ function Accordion({
         versions={versions}
         currentDefinition={intent.definition}
         currentRule={intent.rule}
+        pending={pending}
         disabled={readOnly}
         onPick={onPickVersion}
         onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}

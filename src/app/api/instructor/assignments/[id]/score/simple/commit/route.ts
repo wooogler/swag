@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server';
 import { logStudyEvent } from '@/lib/study/events';
 import { runAfterSave } from '@/lib/study/simple/after-save';
+import { recordIntentVersions } from '@/lib/study/simple/intent-versions';
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleSaved, getSimpleTip, saveSimpleVersion } from '@/lib/study/simple/store';
 
@@ -40,6 +41,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     kind: 'save',
   });
 
+  // The per-intent rows. THIS is where they are written, because this is the
+  // press that turns applied work into a version — applying writes none on
+  // purpose, so a save that assumed they were already there left every
+  // intent's history frozen at whatever it looked like when it was created.
+  const intentVersions = await recordIntentVersions({
+    assignmentId: id,
+    snapshot: tip.snapshot,
+    configVersionNo: version.versionNo,
+  });
+
   await logStudyEvent(id, 'simple_version_save', {
     condition,
     kind: 'save',
@@ -47,6 +58,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     intents: tip.snapshot.intents.length,
     // What this save is committing: the applies since the last one.
     committedFrom: saved.version?.versionNo ?? null,
+    intentVersions: intentVersions.map((v) => ({ sid: v.sid, versionNo: v.versionNo })),
     target: 'commit',
   });
 
@@ -60,9 +72,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     versionId: version.id,
     snapshot: tip.snapshot,
     previous: saved.version ? saved.snapshot : null,
-    // Nothing new: a commit marks a state that is already in effect, so every
-    // intent's pair already has the version it is going to get.
-    intentVersions: [],
+    intentVersions,
     focusSid: null,
     pinned: [],
     recentMessageIds: [],

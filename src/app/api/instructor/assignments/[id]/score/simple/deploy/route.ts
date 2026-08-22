@@ -18,6 +18,7 @@
 import { NextResponse } from 'next/server';
 import { logStudyEvent } from '@/lib/study/events';
 import { runAfterSave } from '@/lib/study/simple/after-save';
+import { recordIntentVersions } from '@/lib/study/simple/intent-versions';
 import { simpleContext } from '@/lib/study/simple/route-context';
 import {
   deploySimpleVersion,
@@ -51,6 +52,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     });
     target = version;
     committed = true;
+    // Deploy is the final save, so it writes the same per-intent rows a save
+    // does. Without them an intent edited and never separately saved would
+    // reach the deployed configuration with no history of having changed.
+    const intentVersions = await recordIntentVersions({
+      assignmentId: id,
+      snapshot: tip.snapshot,
+      configVersionNo: version.versionNo,
+    });
     runAfterSave({
       assignmentId: id,
       condition,
@@ -59,7 +68,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       versionId: version.id,
       snapshot: tip.snapshot,
       previous: saved.version ? saved.snapshot : null,
-      intentVersions: [],
+      intentVersions,
       focusSid: null,
       pinned: [],
       recentMessageIds: [],

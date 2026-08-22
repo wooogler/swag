@@ -994,6 +994,37 @@ async function main() {
         ),
         Object.entries(reordered.intentVersions).map(([k, v]) => `${k}:${v.length}`).join(' ')
       );
+      // The Save BUTTON posts to `commit`, not here, and it has to write the
+      // same row. It used to assume every pair "already has the version it is
+      // going to get" — true only if applies wrote them, and they deliberately
+      // do not — so an intent applied and then saved from the board kept the
+      // history it was created with and nothing else, forever.
+      const beforeCommit = (reordered.intentVersions[String(target.sid)] ?? []).length;
+      await call('save', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'apply',
+          rootRule: reordered.snapshot.rootRule,
+          prompt: reordered.snapshot.prompt,
+          intents: reordered.snapshot.intents.map((i) =>
+            i.sid === target.sid ? { ...i, rule: `${i.rule} Kept by the button.` } : i
+          ),
+        }),
+      });
+      await call('commit', { method: 'POST' });
+      const kept = await state();
+      const keptRows = kept.intentVersions[String(target.sid)] ?? [];
+      check(
+        'pressing Save writes the version the apply was holding',
+        keptRows.length === beforeCommit + 1,
+        `${beforeCommit} → ${keptRows.length}`
+      );
+      check(
+        'and it carries the wording that was in effect',
+        keptRows[0]?.rule.includes('Kept by the button.') === true,
+        keptRows[0]?.rule.slice(-30) ?? 'none'
+      );
+
       // A version is the pair, not the rule alone.
       const anyVersion = now.intentVersions[sids[0]]?.[0];
       check(
