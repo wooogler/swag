@@ -54,8 +54,6 @@ import {
   useState,
 } from 'react';
 import {
-  ChevronDown,
-  ChevronRight,
   Loader2,
   Pencil,
   Pin,
@@ -1480,18 +1478,20 @@ function Tree({
             if (!open) logUi(assignmentId, 'intent_open', { sid: intent.sid });
           }}
         >
-          {open ? (
-            <ChevronDown className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
-          ) : (
-            <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
-          )}
-          {/* The same dot the question rows carry, so a colour seen in the
-              list can be found here without reading anything. */}
-          <span
-            aria-hidden
-            className="w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ backgroundColor: intentColor(intent.sid) }}
-          />
+          {/* No chevron. Selecting a row IS opening it — there is no closed
+              state to go back to — so an arrow that looks like a fold was an
+              invitation to try to fold it, and the try does nothing. What is
+              open is said by the row being lit and the editor being under it.
+              The dot moves into the slot the arrow held, so every title still
+              starts at one place. */}
+          <span aria-hidden className="w-3.5 shrink-0 flex justify-center">
+            {/* The same dot the question rows carry, so a colour seen in the
+                list can be found here without reading anything. */}
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: intentColor(intent.sid) }}
+            />
+          </span>
           {/* One title, in the one place it is already shown — the editor used
               to carry a second box with the same words in it. It reads as text
               until asked for: a box standing open says "fill me in" about the
@@ -1713,13 +1713,12 @@ function Tree({
                the height still matches. Set apart from both neighbours,
                because it is a different kind of thing standing between two
                lists of the same kind. */
-            className="my-1.5 w-full flex items-center gap-1.5 pl-2 pr-2 py-[3px] rounded-lg border border-dashed border-[hsl(var(--border))] text-left text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+            className="my-1.5 w-full flex items-center gap-1.5 pl-[calc(0.5rem-1px)] pr-[calc(0.5rem-1px)] py-[3px] rounded-lg border border-dashed border-[hsl(var(--border))] text-left text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
           >
+            {/* In the slot the rows put their dot in, for the same reason:
+                one place every title starts. It is the only glyph left that
+                is not a dot, which is the whole of what it has to say. */}
             <Plus className="w-3.5 h-3.5 shrink-0" />
-            <span
-              aria-hidden
-              className="w-1.5 h-1.5 rounded-full shrink-0 border border-current opacity-60"
-            />
             <span className="flex-1 text-sm">New intent</span>
           </button>
         )
@@ -1737,18 +1736,12 @@ function Tree({
           setCreating(null);
         }}
       >
-        {!creating && selection.kind === 'root' ? (
-          <ChevronDown className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-        ) : (
-          <ChevronRight className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-        )}
-        {/* Grey, and the same grey the list uses for a question no intent
-            claimed — so the key is complete: every dot in the list has a row
-            here to match it to. */}
-        <span
-          aria-hidden
-          className="w-1.5 h-1.5 rounded-full shrink-0 bg-[hsl(var(--muted-foreground))]"
-        />
+        <span aria-hidden className="w-3.5 shrink-0 flex justify-center">
+          {/* Grey, and the same grey the list uses for a question no intent
+              claimed — so the key is complete: every dot in the list has a row
+              here to match it to. */}
+          <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--muted-foreground))]" />
+        </span>
         <span className="flex-1 text-sm font-semibold">Uncategorized</span>
         {unsaved.has(0) && (
           <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
