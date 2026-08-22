@@ -69,6 +69,7 @@ export default function IntentHistory({
   versions,
   currentDefinition,
   currentRule,
+  savedVersionNo,
   onPick,
   onRevert,
   disabled = false,
@@ -76,6 +77,8 @@ export default function IntentHistory({
   versions: IntentVersion[];
   currentDefinition: string;
   currentRule: string;
+  /** The newest SAVE. Anything written after it took effect but is not kept. */
+  savedVersionNo: number | null;
   onPick: (version: IntentVersion) => void;
   /** Go back to the last save. Beside the history because that is where the
    * thing it goes back TO is listed. Null when there is nothing applied, or
@@ -84,6 +87,9 @@ export default function IntentHistory({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  /** A long history buries the boxes it is about. Three is enough to see where
+   * you are; the rest is one click away. */
+  const [all, setAll] = useState(false);
   // Relative times go stale on a card left open. One tick a minute is enough
   // for a readout whose smallest unit is a minute.
   const [now, setNow] = useState(() => Date.now());
@@ -134,8 +140,8 @@ export default function IntentHistory({
       {open && (
         // Capped and scrolling: a long history must not push the boxes it is
         // about off the screen.
-        <ul className="mt-1 max-h-[9rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
-          {versions.map((version, i) => {
+        <ul className="mt-1 max-h-[12rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
+          {(all ? versions : versions.slice(0, 3)).map((version, i) => {
             const isCurrent =
               version.definition === currentDefinition && version.rule === currentRule;
             // Newest first, so the one after it in the list is the one before
@@ -170,6 +176,16 @@ export default function IntentHistory({
                   <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
                     {moved}
                   </span>
+                  {/* An apply is a version of this intent — it took effect and
+                      the board answered under it. What it is not is kept, and
+                      the next step reads only what was kept. */}
+                  {(savedVersionNo == null ||
+                    (version.configVersionNo != null &&
+                      version.configVersionNo > savedVersionNo)) && (
+                    <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
+                      unsaved
+                    </span>
+                  )}
                   <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
                     {isCurrent ? 'current' : ago(version.createdAt, now)}
                   </span>
@@ -177,6 +193,17 @@ export default function IntentHistory({
               </li>
             );
           })}
+          {versions.length > 3 && (
+            <li>
+              <button
+                type="button"
+                onClick={() => setAll((v) => !v)}
+                className="w-full px-2 py-1 text-left text-2xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+              >
+                {all ? 'Show fewer' : `Show all ${versions.length}`}
+              </button>
+            </li>
+          )}
         </ul>
       )}
     </div>

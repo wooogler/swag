@@ -1514,11 +1514,13 @@ function Tree({
               />
               <button
                 onClick={() => void onSaveVersion()}
-                disabled={saving || (!dirty && !draftChanged)}
+                disabled={saving || !dirty || draftChanged}
                 title={
-                  dirty || draftChanged
-                    ? 'Keep the whole configuration as a version you can come back to'
-                    : 'Nothing has changed since the last save'
+                  draftChanged
+                    ? 'Apply these edits first — Save keeps what is in effect'
+                    : dirty
+                      ? 'Keep the whole configuration as a version you can come back to'
+                      : 'Nothing has changed since the last save'
                 }
                 className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
               >
@@ -1536,6 +1538,7 @@ function Tree({
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
+            savedVersionNo={savedVersionNo}
             disabled={readOnly}
             onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
             onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
@@ -1674,7 +1677,7 @@ function Accordion({
           maxLength={4000}
           onChange={(e) => onChange({ definition: e.target.value })}
           placeholder="asks for…"
-          className={FIELD_BOX + ' min-h-[4.5rem]'}
+          className={FIELD_BOX + ' min-h-[7.5rem]'}
         />
       </Field>
       <Field
@@ -1689,7 +1692,7 @@ function Accordion({
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => onChange({ rule: e.target.value })}
           placeholder="What the chatbot should do with those questions."
-          className={FIELD_BOX + ' min-h-[7rem]'}
+          className={FIELD_BOX + ' min-h-[9rem]'}
         />
       </Field>
       {!readOnly && (
@@ -1704,11 +1707,17 @@ function Accordion({
               intent the save will carry. */}
           <button
             onClick={() => void onSaveVersion()}
-            disabled={saving || (!dirty && !draftChanged)}
+            /* Save keeps what is IN EFFECT, not what is in the boxes, so with
+               unapplied edits sitting there it would keep something other than
+               what is on screen. Apply, look at what it did, then decide
+               whether to keep it. */
+            disabled={saving || !dirty || draftChanged}
             title={
-              dirty || draftChanged
-                ? 'Keep the whole configuration as a version you can come back to'
-                : 'Nothing has changed since the last save'
+              draftChanged
+                ? 'Apply these edits first — Save keeps what is in effect'
+                : dirty
+                  ? 'Keep the whole configuration as a version you can come back to'
+                  : 'Nothing has changed since the last save'
             }
             className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
           >
@@ -1738,6 +1747,7 @@ function Accordion({
         versions={versions}
         currentDefinition={intent.definition}
         currentRule={intent.rule}
+        savedVersionNo={savedVersionNo}
         disabled={readOnly}
         onPick={onPickVersion}
         onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
@@ -1908,7 +1918,7 @@ function NewIntent({
           maxLength={4000}
           onChange={(e) => setDefinition(e.target.value)}
           placeholder="asks for…"
-          className={FIELD_BOX + ' min-h-[4.5rem]'}
+          className={FIELD_BOX + ' min-h-[7.5rem]'}
         />
       </Field>
       <Field label="Then" control={<RulePicker sources={ruleSources} onPick={setRule} />}>
@@ -1916,7 +1926,7 @@ function NewIntent({
           value={rule}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => setRule(e.target.value)}
-          className={FIELD_BOX + ' min-h-[7rem]'}
+          className={FIELD_BOX + ' min-h-[9rem]'}
         />
       </Field>
       <div className="flex items-center gap-2">
@@ -2586,7 +2596,16 @@ function ViewerColumn({
     versionNo: number | null;
     text: string;
     state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
-    owner: string | null;
+    /**
+     * WHICH intent answered, not what it is called.
+     *
+     * The name used to be resolved here, which put `titleOf` in this effect's
+     * dependencies — and `titleOf` reads the draft, so it was a new function on
+     * every keystroke. Typing in a rule box re-ran this effect, aborted the
+     * reply and fetched it again, letter by letter: a spinner that never
+     * settled, and a model call per keystroke on a cache miss. The id is
+     * stable; the name is looked up where it is drawn.
+     */
     ownerSid: number | null;
   } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -2639,12 +2658,12 @@ function ViewerColumn({
     const messageId = row.messageId;
 
     if (asDelivered) {
-      setAnswer({ messageId, versionNo, text: '', state: 'original', owner: null, ownerSid: null });
+      setAnswer({ messageId, versionNo, text: '', state: 'original', ownerSid: null });
       return;
     }
 
     (async () => {
-      setAnswer({ messageId, versionNo, text: '', state: 'streaming', owner: null, ownerSid: null });
+      setAnswer({ messageId, versionNo, text: '', state: 'streaming', ownerSid: null });
       try {
         const res = await fetch(api('respond'), {
           method: 'POST',
@@ -2653,13 +2672,13 @@ function ViewerColumn({
           signal: controller.signal,
         });
         if (!res.ok) {
-          setAnswer({ messageId, versionNo, text: '', state: 'failed', owner: null, ownerSid: null });
+          setAnswer({ messageId, versionNo, text: '', state: 'failed', ownerSid: null });
           return;
         }
         if (res.headers.get('content-type')?.includes('application/json')) {
           const data = await res.json();
           if (data.status === 'pending') {
-            setAnswer({ messageId, versionNo, text: '', state: 'pending', owner: null, ownerSid: null });
+            setAnswer({ messageId, versionNo, text: '', state: 'pending', ownerSid: null });
             return;
           }
           // The rule here is still the assignment's own prompt, which is what
@@ -2671,7 +2690,6 @@ function ViewerColumn({
               versionNo,
               text: '',
               state: 'original',
-              owner: data.sid == null ? null : titleOf(data.sid),
               ownerSid: data.sid ?? null,
             });
             return;
@@ -2681,7 +2699,6 @@ function ViewerColumn({
             versionNo,
             text: data.response ?? '',
             state: 'ready',
-            owner: data.sid == null ? null : titleOf(data.sid),
             ownerSid: data.sid ?? null,
           });
           return;
@@ -2689,7 +2706,6 @@ function ViewerColumn({
         // A miss: show it arriving rather than making them wait in silence.
         const ownerHeader = res.headers.get('X-Simple-Owner');
         const ownerSid = ownerHeader && ownerHeader !== 'root' ? Number(ownerHeader) : null;
-        const owner = ownerSid == null ? null : titleOf(ownerSid);
         const reader = res.body?.getReader();
         if (!reader) return;
         const decoder = new TextDecoder();
@@ -2698,17 +2714,17 @@ function ViewerColumn({
           const { done, value } = await reader.read();
           if (done) break;
           text += decoder.decode(value, { stream: true });
-          setAnswer({ messageId, versionNo, text, state: 'streaming', owner, ownerSid });
+          setAnswer({ messageId, versionNo, text, state: 'streaming', ownerSid });
         }
-        setAnswer({ messageId, versionNo, text, state: 'ready', owner, ownerSid });
+        setAnswer({ messageId, versionNo, text, state: 'ready', ownerSid });
       } catch (error) {
         if ((error as Error)?.name === 'AbortError') return;
-        setAnswer({ messageId, versionNo, text: '', state: 'failed', owner: null, ownerSid: null });
+        setAnswer({ messageId, versionNo, text: '', state: 'failed', ownerSid: null });
       }
     })();
 
     return () => controller.abort();
-  }, [api, asDelivered, row, versionNo, titleOf]);
+  }, [api, asDelivered, row, versionNo]);
 
   if (!row) {
     return (
@@ -2756,7 +2772,11 @@ function ViewerColumn({
               pick={localVersionNo}
               current={versionNo}
               state={answer?.messageId === row.messageId ? answer.state : 'streaming'}
-              owner={answer?.messageId === row.messageId ? answer.owner : null}
+              owner={
+                answer?.messageId === row.messageId && answer.ownerSid != null
+                  ? titleOf(answer.ownerSid)
+                  : null
+              }
               ownerSid={answer?.messageId === row.messageId ? answer.ownerSid : null}
               rule={rule}
               onPick={(next) => {

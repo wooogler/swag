@@ -809,6 +809,7 @@ async function main() {
       await call('save', {
         method: 'POST',
         body: JSON.stringify({
+          kind: 'apply',
           rootRule: clean.snapshot.rootRule,
           prompt: clean.snapshot.prompt,
           intents: clean.snapshot.intents.map((i) =>
@@ -817,6 +818,15 @@ async function main() {
         }),
       });
       const after = await state();
+      // An apply is a version of the intent it changed. The history said 0 for
+      // an intent somebody had just spent a minute writing, which is the wrong
+      // answer about it — the rows say which of them are only in effect.
+      check(
+        'an apply versions the intent it changed',
+        (after.intentVersions[String(target.sid)] ?? []).length >
+          (clean.intentVersions[String(target.sid)] ?? []).length,
+        `${(clean.intentVersions[String(target.sid)] ?? []).length} → ${(after.intentVersions[String(target.sid)] ?? []).length}`
+      );
       const moved = Object.entries(after.intentVersions)
         .filter(([k, v]) => v.length !== (countsBefore[k] ?? 0))
         .map(([k]) => k);
