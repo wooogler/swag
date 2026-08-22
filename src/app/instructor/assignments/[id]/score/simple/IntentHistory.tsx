@@ -48,13 +48,16 @@
  * version was v1 while the board answered from something else entirely, and
  * the only place that disagreement showed was a grey word on the row above.
  *
- * Picking one puts both texts back in the boxes AND applies them, so the
- * question list beside it becomes that version's list without a second click.
- * It used to stop at the boxes, on the grounds that republishing silently
- * would be a fourth verb nobody asked for — but there is an undo now, and a
- * version you can read the text of but not the effect of is half a version.
- * That apply is also why applies must not be versioned: while they were,
- * reading your own history wrote new entries into it.
+ * PRESSING A ROW OPENS IT. It does not put anything into effect: reading is
+ * reading, and the effect is already readable elsewhere — the reply's own
+ * picker answers every version without touching the configuration. Applying
+ * on a press cost more than it gave. It clobbered whatever was in the boxes,
+ * it made looking at v1 write a v3 that WAS v1 (the apply is a write, so the
+ * board grew a moment for it, numbered next and carrying the same words), and
+ * it needed a whole apparatus to hold the work it displaced.
+ *
+ * Going back to a version is a separate press, inside the row that was
+ * opened, and it asks first — because it drops what came after.
  */
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -117,8 +120,6 @@ export default function IntentHistory({
   currentRule,
   nextVersionNo,
   pending = null,
-  onPutBack = null,
-  onPick,
   onRevert,
   disabled = false,
 }: {
@@ -143,9 +144,8 @@ export default function IntentHistory({
     /** What this wording catches now — the same number the saved rows show. */
     matches: number | null;
   } | null;
-  /** Apply the pending wording again, after a look elsewhere. */
-  onPutBack?: (() => void) | null;
-  onPick: (version: IntentVersion) => void;
+
+
   /**
    * Go back to a saved version, dropping everything after it — across the
    * whole setup, because a version IS the whole setup.
@@ -176,8 +176,23 @@ export default function IntentHistory({
    * It takes one of the three places rather than adding a fourth, so the card
    * keeps its height whether or not something is applied.
    */
+  /**
+   * The pending row is a wording that is in no save yet.
+   *
+   * Pressing an old row APPLIES it, which is the point — and that apply is a
+   * write, so what is in effect stops being the newest save and a row appeared
+   * for it, numbered next and carrying the same words as the row just pressed.
+   * Reading v1 produced a v3 that WAS v1. What is in effect being a wording
+   * already in the list is not a new version; the "current" mark on the row it
+   * matches says where the board is, and the chip in the tree says it is not
+   * the newest save.
+   */
+  const pendingIsNew =
+    pending != null &&
+    !versions.some((v) => v.definition === pending.definition && v.rule === pending.rule);
+
   const rows: Row[] = [
-    ...(pending
+    ...(pending && pendingIsNew
       ? [
           {
             key: 'pending',
@@ -209,27 +224,12 @@ export default function IntentHistory({
   const more = rows.length > SHOWN;
   const shown = all ? rows : rows.slice(0, SHOWN);
 
-  /**
-   * Where Revert lands, and whether it is offered at all.
-   *
-   * Only after going back: the row in effect has to be a saved one that is not
-   * the top of the list — which is exactly the state you are in having pressed
-   * an older row. On the newest there is nothing to go back TO, and a live
-   * button there reads as an offer to undo something you are in the middle of.
-   * (What is applied and not saved is dropped by going back to the save under
-   * it, which is that same press from that same row.)
-   */
-  const inEffect = rows.findIndex(
-    (r) => r.definition === currentDefinition && r.rule === currentRule
-  );
-  const target = inEffect > 0 && rows[inEffect]?.version != null ? rows[inEffect] : null;
-  const dropping = target ? inEffect : 0;
-  const landsOnNewestSave = target != null && target === rows.find((r) => r.version != null);
+  /** Which row is open. One at a time — this is a comparison, not a spread. */
+  const [reading, setReading] = useState<string | null>(null);
+  const newestSaved = rows.find((r) => r.version != null) ?? null;
 
-  // Nothing written here yet — a heading over an empty box is furniture. The
-  // one exception is a configuration with something applied and a save to go
-  // back to: the way back has to be reachable before there is a list.
-  if (versions.length === 0 && !pending && !onRevert) return null;
+  // Nothing written here yet — a heading over an empty box is furniture.
+  if (versions.length === 0 && !pending) return null;
 
   return (
     <div className="border-t border-[hsl(var(--border))] pt-1.5">
@@ -257,19 +257,6 @@ export default function IntentHistory({
             {rows.length > 0 && <span className="tabular-nums font-normal">{rows.length}</span>}
           </span>
         )}
-        <span className="flex-1" />
-        {/* Beside the list, because the list is where the thing it goes back
-            TO is. It is not one of the three verbs on the row above: those act
-            on what is being written, and this discards it. */}
-        {onRevert && target && dropping > 0 && (
-          <Revert
-            to={target.versionNo}
-            dropping={dropping}
-            onRevert={() =>
-              onRevert(landsOnNewestSave ? null : target.version?.configVersionNo ?? null)
-            }
-          />
-        )}
       </div>
 
       {rows.length > 0 && (
@@ -277,40 +264,17 @@ export default function IntentHistory({
         // about off the screen.
         <ul className="mt-1 max-h-[12rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
           {shown.map((version, i) => {
-            const isCurrent =
-              version.version != null &&
-              version.definition === currentDefinition &&
-              version.rule === currentRule;
-            // The pending row, and it is what the board is answering with —
-            // as opposed to set aside while an older row is being read.
-            const isLive =
-              version.version == null &&
-              version.definition === currentDefinition &&
-              version.rule === currentRule;
-            // Newest first, so the one after it in the list is the one before
-            // it in time. The oldest has nothing to differ from.
+            // The row the board is answering with: the pending one when there
+            // is one, and otherwise the newest save.
+            const isCurrent = rows[0] === version;
+            const open = reading === version.key;
             return (
               <li key={version.key}>
                 <button
                   type="button"
-                  /* Nothing to press only when this row is what is running:
-                     applying what is applied does nothing. Set aside, the
-                     pending row is a way back to your own work. */
-                  disabled={disabled || (version.version == null && (isLive || !onPutBack))}
-                  onClick={
-                    version.version
-                      ? () => onPick(version.version!)
-                      : isLive || !onPutBack
-                        ? undefined
-                        : () => onPutBack()
-                  }
-                  title={
-                    version.version
-                      ? 'Put this wording back and apply it'
-                      : isLive
-                        ? 'This is what is in effect — Save keeps it as this version'
-                        : 'Your unsaved wording — put it back and apply it'
-                  }
+                  disabled={disabled}
+                  onClick={() => setReading((k) => (k === version.key ? null : version.key))}
+                  title={open ? 'Close' : 'Read this version'}
                   /* The row being read has to win against the row under the
                      pointer. A 5% tint lost to the hover grey, which is the
                      one thing it is next to — so it takes the accent colour
@@ -321,9 +285,11 @@ export default function IntentHistory({
                      box, and hanging it off the text's baseline sat it a
                      pixel low against everything else on the row. */
                   className={`flex w-full items-center gap-1.5 border-l-2 pl-1.5 pr-2 py-1 text-left ${
-                    isCurrent || isLive
+                    isCurrent
                       ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/15'
-                      : 'border-transparent hover:bg-[hsl(var(--muted))] disabled:hover:bg-transparent'
+                      : open
+                        ? 'border-[hsl(var(--border))] bg-[hsl(var(--muted))]'
+                        : 'border-transparent hover:bg-[hsl(var(--muted))] disabled:hover:bg-transparent'
                   } ${disabled ? 'opacity-50' : ''}`}
                 >
                   <span className="shrink-0 text-2xs font-bold tabular-nums text-[hsl(var(--muted-foreground))]">
@@ -350,20 +316,39 @@ export default function IntentHistory({
                   )}
                   <span
                     className={`shrink-0 w-[3.5rem] text-right text-2xs ${
-                      isCurrent || isLive
+                      isCurrent
                         ? 'font-semibold text-[hsl(var(--primary))]'
                         : 'text-[hsl(var(--muted-foreground))]'
                     }`}
                   >
                     {version.createdAt == null
-                      ? isLive
-                        ? 'unsaved'
-                        : 'set aside'
+                      ? 'unsaved'
                       : isCurrent
                         ? 'current'
                         : ago(version.createdAt, now)}
                   </span>
                 </button>
+                {open && (
+                  /* What this version said, where it can be read against the
+                     boxes above without either one moving. */
+                  <div className="border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-2 py-1.5 space-y-1.5">
+                    {version.definition.trim().length > 0 && (
+                      <Said label="When a question…" text={version.definition} />
+                    )}
+                    <Said label="Then" text={version.rule} />
+                    {onRevert && i > 0 && (
+                      <Revert
+                        to={version.versionNo}
+                        dropping={i}
+                        onRevert={() =>
+                          onRevert(
+                            version === newestSaved ? null : version.version?.configVersionNo ?? null
+                          )
+                        }
+                      />
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -425,5 +410,19 @@ function Revert({
         Cancel
       </button>
     </span>
+  );
+}
+
+/** One half of a version, read-only, under the row it belongs to. */
+function Said({ label, text }: { label: string; text: string }) {
+  return (
+    <div>
+      <p className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+        {label}
+      </p>
+      <p className="whitespace-pre-wrap text-2xs leading-relaxed text-[hsl(var(--foreground))]">
+        {text.trim().length > 0 ? text : 'No instructions at all.'}
+      </p>
+    </div>
   );
 }

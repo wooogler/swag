@@ -1361,78 +1361,18 @@ function Tree({
   ];
 
   /**
-   * The wording each card applied and has not saved, kept while the reader
-   * goes off to look at an older row.
+   * The wording a card has applied and not saved.
    *
-   * Picking a row APPLIES it, which is the point — a version you can read the
-   * text of but not the effect of is half a version — but it also means the
-   * work that was in effect stops being in effect, and it was being derived
-   * from what is in effect, so it vanished from the list that was supposed to
-   * be holding it. Unsaved work is still work.
-   *
-   * Set by the Apply it came from, so a pick can never overwrite it. Filled in
-   * from what is in effect when there is no entry, which is what a reload
-   * needs. Cleared by the two things that end it: a save keeps it, a revert
-   * throws it away.
+   * Read straight off what is in effect: reading an old row no longer replaces
+   * it, so there is nothing to hold on to. Holding it was a whole apparatus —
+   * set on apply, gap-filled on reload, cleared on save and revert, with the
+   * model's name copied across before it could go stale — and every line of
+   * that existed to survive a press that has stopped doing the damage.
    */
-  const [held, setHeld] = useState<
-    Record<number, { definition: string; rule: string; name: string | null }>
-  >({});
-  const hold = (sid: number, pair: { definition: string; rule: string }) =>
-    setHeld((h) => ({ ...h, [sid]: { ...pair, name: null } }));
-  const savedRef = useRef(savedVersionNo);
-  useEffect(() => {
-    if (savedRef.current === savedVersionNo) return;
-    savedRef.current = savedVersionNo;
-    setHeld({});
-  }, [savedVersionNo]);
-  useEffect(() => {
-    setHeld((prev) => {
-      const next = { ...prev };
-      let filled = false;
-      const pairs: [number, { definition: string; rule: string }][] = [
-        [0, { definition: '', rule: applied.rootRule }],
-        ...applied.intents.map(
-          (i) =>
-            [i.sid, { definition: i.definition, rule: i.rule }] as [
-              number,
-              { definition: string; rule: string },
-            ]
-        ),
-      ];
-      for (const [sid, pair] of pairs) {
-        if (unsaved.has(sid) && !next[sid]) {
-          next[sid] = { ...pair, name: null };
-          filled = true;
-        }
-      }
-      return filled ? next : prev;
-    });
-  }, [applied, unsaved]);
-  /**
-   * The name the model wrote for the apply, kept ON the held wording.
-   *
-   * It arrives a few seconds after the apply and describes the moment that was
-   * in effect then — so it has to be copied onto the row while that is still
-   * true. Read live it would be the name of whatever is in effect NOW, which
-   * after a look at an older row is a different change entirely.
-   */
-  const unsavedKey = [...unsaved].sort().join(',');
-  useEffect(() => {
-    if (!pendingName) return;
-    setHeld((prev) => {
-      const next = { ...prev };
-      let named = false;
-      for (const sid of unsavedKey ? unsavedKey.split(',').map(Number) : []) {
-        if (next[sid] && next[sid].name !== pendingName) {
-          next[sid] = { ...next[sid], name: pendingName };
-          named = true;
-        }
-      }
-      return named ? next : prev;
-    });
-  }, [pendingName, unsavedKey]);
-  const dropHeld = () => setHeld({});
+  const pendingFor = (sid: number, pair: { definition: string; rule: string }) =>
+    unsaved.has(sid)
+      ? { ...pair, name: pendingName, matches: sid === 0 ? null : matchesNow[String(sid)] ?? null }
+      : null;
 
   /** Which title is open for editing. One at a time, like the editors. */
   const [renaming, setRenaming] = useState<number | null>(null);
@@ -1650,59 +1590,22 @@ function Tree({
               nextVersionNo={nextVersionNo}
               intent={intent}
               within={takeableFrom(intent.sid)}
-              pending={
-                held[intent.sid]
-                  ? { ...held[intent.sid], matches: matchesNow[String(intent.sid)] ?? null }
-                  : null
-              }
-              onPutBack={() => {
-                const back = held[intent.sid];
-                if (!back) return;
-                void onApply(
-                  {
-                    ...draft,
-                    intents: draft.intents.map((i) =>
-                      i.sid === intent.sid ? { ...i, ...back } : i
-                    ),
-                  },
-                  intent.sid
-                );
-              }}
+              pending={(() => {
+                const live = findIntent(applied, intent.sid);
+                return live
+                  ? pendingFor(intent.sid, { definition: live.definition, rule: live.rule })
+                  : null;
+              })()}
               readOnly={readOnly}
               saving={saving}
               dirty={dirty}
               savedVersionNo={savedVersionNo}
               onSaveVersion={onSaveVersion}
-              /* Revert is the one press that says "throw the unsaved work
-                 away", so it is the one that stops holding it. */
-              onRevert={async (configVersionNo) => {
-                // After, not before: the gap-filler reads what is in effect,
-                // and until the revert lands that is still the work being
-                // thrown away — it would put it straight back.
-                await onRevert(configVersionNo);
-                dropHeld();
-              }}
+              onRevert={onRevert}
               draftChanged={draftChanged}
-              onPickVersion={(v) =>
-                void onApply(
-                  {
-                    ...draft,
-                    intents: draft.intents.map((i) =>
-                      i.sid === intent.sid
-                        ? { ...i, definition: v.definition, rule: v.rule }
-                        : i
-                    ),
-                  },
-                  intent.sid
-                )
-              }
               onChange={(fields) => patch(intent.sid, fields)}
-              onApply={() => {
-                hold(intent.sid, { definition: intent.definition, rule: intent.rule });
-                return onApply(draft, intent.sid);
-              }}
+              onApply={() => onApply(draft, intent.sid)}
               onDelete={async () => {
-                setHeld(({ [intent.sid]: _gone, ...rest }) => rest);
                 await onApply(
                   { ...draft, intents: removeIntent(draft.intents, intent.sid) },
                   null
@@ -1839,10 +1742,7 @@ function Tree({
               <ApplyButton
                 saving={saving}
                 disabled={!draftChanged}
-                onClick={() => {
-                  hold(0, { definition: '', rule: draft.rootRule });
-                  void onApply(draft, null);
-                }}
+                onClick={() => void onApply(draft, null)}
               />
               <Why
                 reason={
@@ -1870,17 +1770,12 @@ function Tree({
             currentDefinition=""
             currentRule={draft.rootRule}
             nextVersionNo={nextVersionNo}
-            pending={held[0] ? { ...held[0], matches: null } : null}
-            onPutBack={() => {
-              const back = held[0];
-              if (back) void onApply({ ...draft, rootRule: back.rule }, null);
-            }}
+            pending={pendingFor(0, { definition: '', rule: applied.rootRule })}
             disabled={readOnly}
-            onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
             onRevert={
               readOnly || savedVersionNo == null
                 ? null
-                : (configVersionNo) => void onRevert(configVersionNo).then(dropHeld)
+                : (configVersionNo) => void onRevert(configVersionNo)
             }
           />
         </div>
@@ -1950,7 +1845,6 @@ function Accordion({
   intent,
   within,
   pending,
-  onPutBack,
   readOnly,
   saving,
   dirty,
@@ -1960,7 +1854,6 @@ function Accordion({
   onSaveVersion,
   onRevert,
   draftChanged,
-  onPickVersion,
   onDelete,
 }: {
   api: (path: string, query?: string) => string;
@@ -1979,8 +1872,6 @@ function Accordion({
     name: string | null;
     matches: number | null;
   } | null;
-  /** Put that wording back after a look at an older row. */
-  onPutBack: () => void;
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
@@ -1993,9 +1884,6 @@ function Accordion({
   onRevert: (configVersionNo: number | null) => Promise<void>;
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
-  /** Put a version's pair back AND apply it, so the list beside it becomes
-   * that version's list without a second click. */
-  onPickVersion: (v: IntentVersion) => void;
   onDelete: () => Promise<void>;
 }) {
   return (
@@ -2086,9 +1974,7 @@ function Accordion({
         currentRule={intent.rule}
         nextVersionNo={nextVersionNo}
         pending={pending}
-        onPutBack={onPutBack}
         disabled={readOnly}
-        onPick={onPickVersion}
         onRevert={
           readOnly || savedVersionNo == null
             ? null
