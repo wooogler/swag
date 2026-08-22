@@ -28,7 +28,7 @@ import { emptySnapshot, type SimpleIntent, type SimpleSnapshot } from '@/lib/stu
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleTip, nextSid, saveSimpleVersion } from '@/lib/study/simple/store';
 import { recordIntentVersions } from '@/lib/study/simple/intent-versions';
-import { recordIntentSeed } from '@/lib/study/simple/anchors';
+import { addQuestionExample } from '@/lib/study/simple/anchors';
 import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
 
 export const dynamic = 'force-dynamic';
@@ -42,8 +42,9 @@ const intentSchema = z.object({
   definition: z.string().max(4000).default(''),
   rule: z.string().max(STUDY_PROMPT_CHAR_LIMIT).default(''),
   /** The question this intent was carved out of, on the save that created it.
-   * Not configuration — it changes no routing and no answer — so it is kept
-   * beside the snapshot rather than in it, and only ever written once. */
+   * It becomes the intent's first EXAMPLE — not configuration, since it
+   * changes no routing and no answer, so it is kept beside the snapshot
+   * rather than in it. */
   seedMessageId: z.number().int().positive().nullable().optional(),
 });
 
@@ -97,7 +98,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     };
   });
   for (const seed of seeds) {
-    await recordIntentSeed({ assignmentId: id, sid: seed.sid, messageId: seed.messageId });
+    await addQuestionExample({ assignmentId: id, sid: seed.sid, messageId: seed.messageId });
   }
 
   const snapshot: SimpleSnapshot = {

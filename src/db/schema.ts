@@ -661,16 +661,24 @@ export const simpleDefinitionAnchors = pgTable('simple_definition_anchors', {
   uniq: uniqueIndex('simple_definition_anchors_unique').on(table.assignmentId, table.defHash),
 }));
 
-// The question an intent was carved out of. Not configuration: it changes no
-// routing and no answer, so it does not belong in the snapshot.
-export const simpleIntentSeeds = pgTable('simple_intent_seeds', {
+// The examples that stand for an intent. Either a real question from the log
+// or a written one, and the participant's to add to, remove and regenerate.
+// Not configuration: they change no routing and no answer, only the order the
+// intent's questions are listed in.
+export const simpleIntentExamples = pgTable('simple_intent_examples', {
   id: serial('id').primaryKey(),
   assignmentId: text('assignment_id').notNull(),
   sid: integer('sid').notNull(),
-  messageId: integer('message_id').notNull(),
+  /** A question from this log. Exclusive with `text`. */
+  messageId: integer('message_id'),
+  /** A written example, with its vector beside it — there is no query cache
+   * to look one up in. Exclusive with `messageId`. */
+  text: text('text'),
+  embedding: jsonb('embedding'), // number[]
+  model: text('model'),
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({
-  uniq: uniqueIndex('simple_intent_seeds_unique').on(table.assignmentId, table.sid),
+  intentIdx: index('simple_intent_examples_intent_idx').on(table.assignmentId, table.sid),
 }));
 
 // Response cache, keyed by the rule TEXT that produced it (rulePreviewHash) —

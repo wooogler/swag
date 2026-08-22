@@ -55,6 +55,7 @@ import {
   Plus,
   Redo2,
   Search,
+  Sparkles,
   Trash2,
   Undo2,
   X,
@@ -75,6 +76,7 @@ import {
   type SimpleSnapshot,
 } from '@/lib/study/simple/chain';
 import type { SimpleVersion } from '@/lib/study/simple/store';
+import type { IntentExample } from '@/lib/study/simple/anchors';
 import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
 
 interface Owner {
@@ -514,13 +516,17 @@ export default function SimpleStudio({
   /**
    * Start an intent from one question.
    *
-   * Three things happen at once and they are three parts of one promise. The
-   * question is PINNED, so it survives every later Apply and every change of
-   * selection — and since a shelf row carries the same owner chip as any other
-   * row, the pin is also the answer to "did my wording catch it". The form
-   * opens directly ABOVE whatever owns that question now, so the new words are
-   * read first. And the rule box starts as a copy of the rule that question is
-   * getting today, so applying before the rule is rewritten changes nothing.
+   * The question becomes the new intent's first EXAMPLE, which is what the
+   * intent's own list is then ordered by — so "did my wording catch it" is
+   * answered at the top of that list, beside the ownership chip, rather than
+   * in a shelf that follows you to every other intent. It used to be pinned
+   * instead, and a pin is a global bookmark: the question a participant
+   * carved intent A out of stayed on screen while they worked on B.
+   *
+   * The form opens directly ABOVE whatever owns that question now, so the new
+   * words are read first. And the rule box starts as a copy of the rule that
+   * question is getting today, so applying before the rule is rewritten
+   * changes nothing.
    *
    * What does NOT happen is the question being put in. No verdict is
    * overridden: if the words do not describe it, the chip does not move, and
@@ -536,7 +542,6 @@ export default function SimpleStudio({
         (beforeSid == null
           ? draft.rootRule
           : draft.intents.find((i) => i.sid === beforeSid)?.rule) ?? draft.rootRule;
-      if (!state.pinned.includes(messageId)) void togglePin(messageId);
       setSelectedMessageId(messageId);
       setExpanded(null);
       setCreating({
@@ -547,7 +552,7 @@ export default function SimpleStudio({
       });
       logUi(assignmentId, 'simple_intent_from_query', { messageId, beforeSid });
     },
-    [assignmentId, draft.intents, draft.rootRule, ownerOf, rowById, state.pinned, togglePin]
+    [assignmentId, draft.intents, draft.rootRule, ownerOf, rowById]
   );
 
   /* --------------------------------------------------------------- */
@@ -563,9 +568,16 @@ export default function SimpleStudio({
    * hundred embedding vectors. Absent, late or failed, the list keeps the
    * order it already had.
    */
-  const [ranked, setRanked] = useState<{ sid: number; order: number[]; examples: string[] } | null>(
-    null
-  );
+  const [ranked, setRanked] = useState<{
+    sid: number;
+    order: number[];
+    examples: IntentExample[];
+  } | null>(null);
+  /** Which end of the order is being read. Resets with the selection, because
+   * it is a way of looking at one intent rather than a setting. */
+  const [furthest, setFurthest] = useState(false);
+  const [rankNonce, setRankNonce] = useState(0);
+  useEffect(() => setFurthest(false), [selection]);
   useEffect(() => {
     if (arm !== 'score' || selection.kind !== 'intent') {
       setRanked(null);
@@ -575,7 +587,12 @@ export default function SimpleStudio({
     let cancelled = false;
     (async () => {
       const res = await fetch(
-        api('rank', `sid=${sid}${state.viewing && !state.atTip ? `&versionNo=${state.viewing.versionNo}` : ''}`)
+        api(
+          'rank',
+          `sid=${sid}${furthest ? '&order=furthest' : ''}${
+            state.viewing && !state.atTip ? `&versionNo=${state.viewing.versionNo}` : ''
+          }`
+        )
       );
       if (!res.ok || cancelled) return;
       const body = await res.json();
@@ -587,7 +604,25 @@ export default function SimpleStudio({
       cancelled = true;
     };
     // `judged` moves as verdicts land, and the list they order changes with it.
-  }, [api, arm, selection, state.atTip, state.viewing, state.judged]);
+  }, [api, arm, furthest, rankNonce, selection, state.atTip, state.viewing, state.judged]);
+
+  /**
+   * Add, drop or rewrite the examples an intent stands for.
+   *
+   * None of this writes a configuration: an example changes the ORDER of the
+   * list and nothing else, which is why adding one leaves the row's ownership
+   * chip saying wherever the question actually went.
+   */
+  const editExamples = useCallback(
+    async (init: RequestInit, query = '') => {
+      const res = await fetch(api('examples', query), init);
+      if (!res.ok) return;
+      const body = await res.json();
+      setRanked((r) => (r ? { ...r, examples: body.examples ?? [] } : r));
+      setRankNonce((n) => n + 1);
+    },
+    [api]
+  );
 
   const diffFor = useCallback(
     (sid: number | null) => state.diff?.find((d) => d.sid === sid) ?? null,
@@ -616,8 +651,14 @@ export default function SimpleStudio({
     // the ones it does — a partial answer reorders what it knows and leaves
     // the rest alone.
     if (ranked?.sid !== sid || ranked.order.length === 0) return mine;
+    // An example is shown above the list, so showing it again inside would be
+    // the same question twice a few rows apart.
+    const shown = new Set(
+      ranked.examples.map((e) => e.messageId).filter((m): m is number => m != null)
+    );
+    const rest = mine.filter((r) => !shown.has(r.messageId));
     const at = new Map(ranked.order.map((id, i) => [id, i]));
-    return [...mine].sort(
+    return [...rest].sort(
       (a, b) =>
         (at.get(a.messageId) ?? Number.MAX_SAFE_INTEGER) -
         (at.get(b.messageId) ?? Number.MAX_SAFE_INTEGER)
@@ -664,6 +705,26 @@ export default function SimpleStudio({
     return () => clearTimeout(timer);
   }, [assignmentId, query]);
 
+  /**
+   * The examples this intent stands for, as rows.
+   *
+   * A question from the log becomes the row it already is — same snippet, same
+   * ownership chip — so an example that went somewhere else says so from
+   * inside the list it was added to. A written one has no row and is rendered
+   * as its text.
+   */
+  const exampleRows = useMemo(
+    () =>
+      selection.kind === 'intent' && ranked?.sid === selection.sid
+        ? ranked.examples.map((e) => ({
+            id: e.id,
+            text: e.text,
+            row: e.messageId != null ? rowById.get(e.messageId) ?? null : null,
+          }))
+        : [],
+    [ranked, rowById, selection]
+  );
+
   const pinnedRows = useMemo(
     () => state.pinned.map((id) => rowById.get(id)).filter((r): r is ScoreQueryRow => !!r),
     [rowById, state.pinned]
@@ -707,7 +768,6 @@ export default function SimpleStudio({
         setExpanded={setExpanded}
         creating={creating}
         setCreating={setCreating}
-        rankedExamples={ranked}
         draftChanged={draftChanged}
         onUndo={canUndo ? undo : null}
         onRedo={canRedo ? redo : null}
@@ -729,6 +789,47 @@ export default function SimpleStudio({
       <QuestionColumn
         rows={searched}
         pinnedRows={pinnedRows}
+        exampleRows={exampleRows}
+        onDropExample={
+          readOnly || selection.kind !== 'intent'
+            ? null
+            : (exampleId) =>
+                void editExamples(
+                  { method: 'DELETE' },
+                  `sid=${selection.sid}&id=${exampleId}`
+                )
+        }
+        onRegenerateExamples={
+          readOnly || selection.kind !== 'intent'
+            ? null
+            : () =>
+                void editExamples({
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sid: selection.sid, regenerate: true }),
+                })
+        }
+        onAddExample={
+          readOnly || selection.kind !== 'intent'
+            ? null
+            : (messageId) =>
+                void editExamples({
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sid: selection.sid, messageId }),
+                })
+        }
+        furthest={furthest}
+        onFlipOrder={
+          selection.kind !== 'intent'
+            ? null
+            : () => {
+                setFurthest((v) => {
+                  if (!v) logUi(assignmentId, 'simple_order_furthest', { sid: selection.sid });
+                  return !v;
+                });
+              }
+        }
         allCount={material.length}
         query={query}
         setQuery={setQuery}
@@ -786,7 +887,6 @@ function ConfigColumn({
   setExpanded,
   creating,
   setCreating,
-  rankedExamples,
   draftChanged,
   onUndo,
   onRedo,
@@ -811,7 +911,6 @@ function ConfigColumn({
   setExpanded: (e: number | 'root' | null) => void;
   creating: Creating | null;
   setCreating: (c: Creating | null) => void;
-  rankedExamples: { sid: number; examples: string[] } | null;
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
   /** Null when there is nothing to step back to, or forward to. */
@@ -891,7 +990,6 @@ function ConfigColumn({
             dirty={state.dirty}
             savedVersionNo={state.savedVersionNo}
             countOf={countOf}
-            rankedExamples={rankedExamples}
             draftChanged={draftChanged}
             onUndo={onUndo}
             onRedo={onRedo}
@@ -1020,7 +1118,6 @@ function Tree({
   dirty,
   savedVersionNo,
   countOf,
-  rankedExamples,
   draftChanged,
   onUndo,
   onRedo,
@@ -1054,7 +1151,6 @@ function Tree({
   savedVersionNo: number | null;
   countOf: (sid: number | null) => number;
   /** The hypothetical questions the open intent's order was worked out from. */
-  rankedExamples: { sid: number; examples: string[] } | null;
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
   onUndo: (() => void) | null;
@@ -1246,8 +1342,6 @@ function Tree({
           >
             <Accordion
               api={api}
-              examples={rankedExamples?.sid === intent.sid ? rankedExamples.examples : []}
-              assignmentId={assignmentId}
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
               intent={intent}
@@ -1506,8 +1600,6 @@ function OrderButton({
  */
 function Accordion({
   api,
-  examples,
-  assignmentId,
   ruleSources,
   versions,
   intent,
@@ -1526,10 +1618,6 @@ function Accordion({
   onDelete,
 }: {
   api: (path: string, query?: string) => string;
-  /** The hypothetical questions this intent's order was worked out from —
-   * empty when it was carved out of a real one, which needs no invention. */
-  examples: string[];
-  assignmentId: string;
   /** Rules written elsewhere in this configuration, for the reuse picker. */
   ruleSources: RuleSource[];
   /** This intent's own history, newest first. */
@@ -1579,7 +1667,6 @@ function Accordion({
           placeholder="asks for…"
           className={FIELD_BOX + ' min-h-[4.5rem]'}
         />
-        <ExampleFold examples={examples} assignmentId={assignmentId} sid={intent.sid} />
       </Field>
       <Field
         label="Then"
@@ -1646,67 +1733,6 @@ function Accordion({
         onPick={onPickVersion}
         onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
       />
-    </div>
-  );
-}
-
-/**
- * The invented questions this intent's list was ordered by, folded away.
- *
- * One word, because the word is enough: under "When a question…", a fold
- * called Examples holds examples of such questions. It used to carry three
- * sentences explaining where they came from and what they were not, which is
- * the kind of note that gets written when the writer is nervous about a
- * feature rather than when the reader needs it.
- *
- * Folded, and one click from open, because that is the whole difference
- * between an explanation and a writing aid. A list of "questions your
- * description covers" sitting open beside the box is read as a draft to
- * converge on, and converging on machine-written text is the loop this
- * version exists without (§2). Opening it is logged, so the analysis can tell
- * a participant who leaned on it from one who never looked.
- *
- * Absent entirely when the intent was carved out of a real question — that
- * question is the anchor, and it is on the screen already.
- */
-function ExampleFold({
-  examples,
-  assignmentId,
-  sid,
-}: {
-  examples: string[];
-  assignmentId: string;
-  sid: number;
-}) {
-  const [open, setOpen] = useState(false);
-  if (examples.length === 0) return null;
-  return (
-    <div className="mt-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (!open) logUi(assignmentId, 'simple_examples_open', { sid });
-          setOpen((v) => !v);
-        }}
-        className="flex items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-      >
-        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        Examples
-        <span className="tabular-nums">{examples.length}</span>
-      </button>
-      {open && (
-        <div className="mt-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1.5">
-          {/* Bulleted, because five questions run together into one paragraph
-              of grey otherwise and the point is to read them one at a time. */}
-          <ul className="list-disc pl-4 space-y-1 marker:text-[hsl(var(--muted-foreground))]">
-            {examples.map((example, i) => (
-              <li key={i} className="text-2xs leading-relaxed pl-0.5">
-                {example}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   );
 }
@@ -1994,6 +2020,12 @@ function VersionList({
 function QuestionColumn({
   rows,
   pinnedRows,
+  exampleRows,
+  onDropExample,
+  onRegenerateExamples,
+  onAddExample,
+  furthest,
+  onFlipOrder,
   allCount,
   query,
   setQuery,
@@ -2012,6 +2044,15 @@ function QuestionColumn({
 }: {
   rows: ScoreQueryRow[];
   pinnedRows: ScoreQueryRow[];
+  /** What the open intent stands for: questions from the log, or written
+   * ones with no row of their own. */
+  exampleRows: { id: number; text: string | null; row: ScoreQueryRow | null }[];
+  onDropExample: ((exampleId: number) => void) | null;
+  onRegenerateExamples: (() => void) | null;
+  onAddExample: ((messageId: number) => void) | null;
+  /** Reading the list from the far end rather than the near one. */
+  furthest: boolean;
+  onFlipOrder: (() => void) | null;
   allCount: number;
   query: string;
   setQuery: (q: string) => void;
@@ -2086,8 +2127,77 @@ function QuestionColumn({
                 onSelect={onSelect}
                 onTogglePin={onTogglePin}
                 onCreateIntent={onCreateIntent}
+                onAddExample={null}
               />
             ))}
+          </ul>
+        </section>
+      )}
+
+      {/* What this intent stands for, above the list it puts in order.
+          A question from the log keeps its ownership chip here, so an example
+          that went somewhere else says so from inside the set it was added to
+          — adding one changes the ORDER of the list and nothing else; the
+          words are what decide where a question goes. */}
+      {exampleRows.length > 0 && (
+        <section className="shrink-0 max-h-[13rem] flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
+          <div className="shrink-0 flex items-baseline gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
+            <span className="text-sm font-semibold">Examples</span>
+            <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
+              {exampleRows.length}
+            </span>
+            <span className="flex-1" />
+            <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+              The list below is ordered by these
+            </span>
+            {onRegenerateExamples && (
+              <button
+                onClick={onRegenerateExamples}
+                title="Write a fresh set from the description, keeping any questions you added"
+                className="shrink-0 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
+              >
+                Rewrite
+              </button>
+            )}
+          </div>
+          <ul className="flex-1 min-h-0 overflow-y-auto">
+            {exampleRows.map((example) =>
+              example.row ? (
+                <QuestionRow
+                  key={`ex-${example.id}`}
+                  row={example.row}
+                  selected={selectedMessageId === example.row.messageId}
+                  pinned={pinnedSet.has(example.row.messageId)}
+                  owner={ownerOf(example.row.messageId)}
+                  titleOf={titleOf}
+                  showOwner={arm === 'score'}
+                  tone={null}
+                  onSelect={onSelect}
+                  onTogglePin={onTogglePin}
+                  onCreateIntent={null}
+                  onDropExample={onDropExample ? () => onDropExample(example.id) : null}
+                />
+              ) : (
+                <li
+                  key={`ex-${example.id}`}
+                  className="group flex gap-2 px-3 py-2 border-b border-[hsl(var(--border))]"
+                >
+                  <span className="flex-1 min-w-0 text-sm leading-snug text-[hsl(var(--muted-foreground))]">
+                    {example.text}
+                  </span>
+                  {onDropExample && (
+                    <button
+                      aria-label="Drop this example"
+                      title="Drop this example"
+                      onClick={() => onDropExample(example.id)}
+                      className="self-start p-1 rounded opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </li>
+              )
+            )}
           </ul>
         </section>
       )}
@@ -2109,6 +2219,23 @@ function QuestionColumn({
           <span className="flex items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))]">
             <Loader2 className="w-3 h-3 animate-spin" /> working out where questions go
           </span>
+        )}
+        {/* The same fact from the other end. Nearest-first answers "is this
+            working"; furthest-first answers "what did my words catch that is
+            least like what I meant" — and the row it lands on has the button
+            to make an intent out of it. */}
+        {onFlipOrder && exampleRows.length > 0 && (
+          <button
+            onClick={onFlipOrder}
+            title={
+              furthest
+                ? 'Show the ones closest to your examples first'
+                : 'Show the ones least like your examples first'
+            }
+            className="shrink-0 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
+          >
+            {furthest ? 'Least like these' : 'Most like these'}
+          </button>
         )}
         <span className="flex-1" />
         {/* An ordinary search box, over the students' own words. Everything
@@ -2157,6 +2284,7 @@ function QuestionColumn({
               onSelect={onSelect}
               onTogglePin={onTogglePin}
               onCreateIntent={onCreateIntent}
+              onAddExample={onAddExample ? () => onAddExample(row.messageId) : null}
             />
           ))}
           {listed.length === 0 && (
@@ -2201,6 +2329,8 @@ function QuestionRow({
   onSelect,
   onTogglePin,
   onCreateIntent,
+  onAddExample = null,
+  onDropExample = null,
 }: {
   row: ScoreQueryRow;
   selected: boolean;
@@ -2215,6 +2345,11 @@ function QuestionRow({
   onSelect: (id: number) => void;
   onTogglePin: (id: number) => void;
   onCreateIntent: ((id: number) => void) | null;
+  /** Offered while an intent is open: make this one of the questions its
+   * list is ordered by. It does not put the question in the intent. */
+  onAddExample?: (() => void) | null;
+  /** Set on the example rows themselves. */
+  onDropExample?: (() => void) | null;
 }) {
   return (
     <li
@@ -2270,6 +2405,24 @@ function QuestionRow({
         </div>
       </div>
       <div className="self-start flex items-center">
+        {onDropExample && (
+          <IconButton
+            label="Drop this example"
+            onClick={onDropExample}
+            className="opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))]"
+          >
+            <X className="w-3.5 h-3.5" />
+          </IconButton>
+        )}
+        {onAddExample && (
+          <IconButton
+            label="Use as an example — it orders the list, it does not move the question"
+            onClick={onAddExample}
+            className="opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))]"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+          </IconButton>
+        )}
         {/* Reading a question and deciding it belongs somewhere else is the
             move this board is built around, so it starts here, on the question,
             rather than over in the configuration. The label names what the new

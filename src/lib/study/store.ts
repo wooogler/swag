@@ -158,6 +158,26 @@ export async function ensureStudyTables(): Promise<void> {
         sql`ALTER TABLE "simple_config_versions" ADD COLUMN IF NOT EXISTS "deployed_at" timestamp`
       );
 
+      // The examples that stand for an intent, and order its question list.
+      //
+      // One row per example: either a real question from the log (message_id)
+      // or a written one (text, with its vector beside it, since there is no
+      // query cache to look it up in). They are the participant's — seeded at
+      // creation from the question it was carved out of, or from a few the
+      // model wrote, and then theirs to add to, remove and regenerate. Keyed
+      // by INTENT and not by definition text, so rewording a definition does
+      // not silently throw away examples somebody chose.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_intent_examples" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "assignment_id" text NOT NULL, "sid" integer NOT NULL,
+          "message_id" integer, "text" text, "embedding" jsonb,
+          "model" text, "created_at" timestamp NOT NULL
+        )`);
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "simple_intent_examples_intent_idx" ON "simple_intent_examples" ("assignment_id","sid")`
+      );
+
       // What a definition is ANCHORED to, for ordering its question list.
       //
       // Keyed by the definition text like the verdicts are, so editing a

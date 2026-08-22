@@ -28,7 +28,7 @@ import {
 } from './chain';
 import { definitionTasks, judgeBatch, readMatches } from './judge';
 import { fillMissingIntentTitles } from './titles';
-import { definitionsNeedingAnchors, ensureAnchor, readIntentSeeds } from './anchors';
+import { intentsNeedingExamples, seedIntentExamples } from './anchors';
 import { logStudyEvent } from '../events';
 import { prefetchResponses } from './respond';
 import { generateIntentVersionName, generateVersionName } from './name';
@@ -103,42 +103,44 @@ async function perform(job: SaveJob): Promise<void> {
     nameVersion(job),
     nameIntentVersions(job),
     titleNewIntents(job),
-    anchorNewDefinitions(job),
+    seedNewExamples(job),
     judgeAndPrefetch(job),
   ]);
 }
 
 /**
- * What an intent's question list will be ordered by.
+ * A starting set of examples for an intent that has none.
  *
  * Alongside the judging rather than after it, because the two answer different
  * halves of the same screen — the verdicts decide which questions are in the
- * list, this decides which of them is at the top, and a participant reads the
- * top one first. Best-effort and bounded like every other job here: without it
- * the list keeps the order it already had.
+ * list, the examples decide which of them is at the top, and a participant
+ * reads the top one first. Best-effort and bounded like every other job here:
+ * without it the list keeps the order it already had.
  *
- * Skipped for an intent carved out of a question — that question is the
- * anchor, and it is a better one than anything written here.
+ * Only ever fills an empty set. An intent carved out of a question already has
+ * one — that question — and a set somebody has edited is theirs.
  */
-async function anchorNewDefinitions(job: SaveJob): Promise<void> {
+async function seedNewExamples(job: SaveJob): Promise<void> {
   if (armOf(job.condition) !== 'score') return;
   try {
-    const seeded = new Set((await readIntentSeeds(job.assignmentId)).keys());
-    const wanted = job.snapshot.intents
-      .filter((i) => !seeded.has(i.sid))
-      .map((i) => i.definition);
-    const missing = await definitionsNeedingAnchors(job.assignmentId, wanted);
+    const withDefinition = job.snapshot.intents.filter((i) => i.definition.trim().length > 0);
+    const missing = await intentsNeedingExamples(
+      job.assignmentId,
+      withDefinition.map((i) => i.sid)
+    );
+    const byId = new Map(withDefinition.map((i) => [i.sid, i.definition]));
     await Promise.allSettled(
-      missing.slice(0, 4).map((definition) =>
-        ensureAnchor({
+      missing.slice(0, 4).map((sid) =>
+        seedIntentExamples({
           assignmentId: job.assignmentId,
-          definition,
+          sid,
+          definition: byId.get(sid) ?? '',
           assignmentPrompt: job.seedPrompt,
         })
       )
     );
   } catch (error) {
-    console.error('simple anchors failed (list keeps its order):', error);
+    console.error('simple examples failed (list keeps its order):', error);
   }
 }
 

@@ -13,7 +13,7 @@
  * eventually disagree with the first.
  */
 import { NextResponse } from 'next/server';
-import { rankQuestions, readAnchor } from '@/lib/study/simple/anchors';
+import { listIntentExamples, rankQuestions } from '@/lib/study/simple/anchors';
 import { definitionsOf, findIntent, resolveSimpleAll } from '@/lib/study/simple/chain';
 import { definitionTasks, readMatches } from '@/lib/study/simple/judge';
 import { simpleContext } from '@/lib/study/simple/route-context';
@@ -32,6 +32,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (armOf(condition) !== 'score') return NextResponse.json({ order: [], examples: [] });
 
   const sid = Number(url.searchParams.get('sid'));
+  // The same fact from the other end: nearest-first asks "is this working",
+  // furthest-first asks "what did my words catch that is least like what I
+  // meant" — which is where the next intent usually comes from.
+  const furthest = url.searchParams.get('order') === 'furthest';
   if (!Number.isFinite(sid) || sid <= 0) {
     return NextResponse.json({ error: 'bad_sid' }, { status: 400 });
   }
@@ -67,16 +71,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   // ordering exists to prevent.
   const owned = mine.filter((m) => owners.get(m)?.sid === sid);
   const elsewhere = mine.filter((m) => owners.get(m)?.sid !== sid);
-  const [rankedOwned, rankedElsewhere] = await Promise.all([
-    rankQuestions({ assignmentId: id, sid, definition: intent.definition, messageIds: owned }),
-    rankQuestions({ assignmentId: id, sid, definition: intent.definition, messageIds: elsewhere }),
+  const [rankedOwned, rankedElsewhere, examples] = await Promise.all([
+    rankQuestions({ assignmentId: id, sid, messageIds: owned, furthest }),
+    rankQuestions({ assignmentId: id, sid, messageIds: elsewhere, furthest }),
+    listIntentExamples(id, sid),
   ]);
 
-  const anchor = await readAnchor(id, intent.definition);
-  return NextResponse.json({
-    order: [...rankedOwned, ...rankedElsewhere],
-    // Folded away in the card until asked for. Empty whenever the intent was
-    // carved out of a real question — there was nothing to invent.
-    examples: anchor?.examples ?? [],
-  });
+  return NextResponse.json({ order: [...rankedOwned, ...rankedElsewhere], examples });
 }

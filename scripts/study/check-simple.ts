@@ -988,7 +988,7 @@ async function main() {
       } else {
         const ranked = (await call('rank', {}, `sid=${target.sid}`)).body as {
           order?: number[];
-          examples?: string[];
+          examples?: { id: number; messageId: number | null; text: string | null }[];
         };
         const order = ranked.order ?? [];
         check(
@@ -1000,6 +1000,31 @@ async function main() {
           'and it rearranges rather than filters',
           order.length === new Set(order).size && mine.every((m) => order.includes(m)),
           `${new Set(order).size} distinct`
+        );
+        // The examples are the anchor, and an intent written from nothing gets
+        // a set from the words it was written with. Without one the list keeps
+        // the order it already had, which is the failure this notices.
+        check(
+          'the intent stands for something',
+          (ranked.examples ?? []).length > 0,
+          `${(ranked.examples ?? []).length} example(s)`
+        );
+        // The same list from the far end: same questions, the other way up. It
+        // must not filter — that end is where the next intent comes from, and
+        // a missing row is a candidate nobody was offered.
+        const far = (await call('rank', {}, `sid=${target.sid}&order=furthest`)).body as {
+          order?: number[];
+        };
+        check(
+          'the far end holds the same questions',
+          (far.order ?? []).length === order.length &&
+            order.every((m) => (far.order ?? []).includes(m)),
+          `${(far.order ?? []).length} of ${order.length}`
+        );
+        check(
+          'and turns them over',
+          order.length < 2 || (far.order ?? [])[0] !== order[0],
+          `${order[0]} → ${(far.order ?? [])[0]}`
         );
         check(
           'the owned questions come before the ones taken elsewhere',

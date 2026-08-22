@@ -61,12 +61,11 @@ const UI_EVENTS = [
    * leaves no other trace. */
   'simple_version_view',
   'simple_local_version_view',
-  /** The fold under a definition, holding the invented questions its list is
-   * ordered by. It writes nothing and changes nothing, so opening it leaves no
-   * other trace — and it is the one surface on this board where a participant
-   * can read machine-written text about their own wording, which the analysis
-   * has to be able to separate out. */
-  'simple_examples_open',
+  /** Reading an intent's list from the far end instead of the near one —
+   * "what did my words catch that is least like what I meant". It is where a
+   * next intent usually comes from, and it writes nothing, so without this
+   * there is no trace that anyone went looking. */
+  'simple_order_furthest',
   /** An intent begun from a question in the list rather than from the button.
    * Which of the two doors gets used is the shape of the whole session. */
   'simple_intent_from_query',

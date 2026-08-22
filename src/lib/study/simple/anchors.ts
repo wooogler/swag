@@ -1,5 +1,5 @@
 /**
- * What an intent's question list is ordered by.
+ * The examples that stand for an intent, and the order they put its questions in.
  *
  * THE PROBLEM IS TRUST, NOT CONVENIENCE. A participant writes a definition,
  * opens it, and reads the first row. If that row is a question they would
@@ -9,66 +9,69 @@
  * should be the least arguable members of the category.
  *
  * The verdicts cannot supply that order. They are a yes and a no, and every
- * yes looks alike. So the ordering is by distance in embedding space, and the
- * only real question is what to measure the distance FROM.
+ * yes looks alike. So it is distance in embedding space, and everything here
+ * is about what to measure the distance FROM.
  *
- *   A QUESTION THEY POINTED AT, when there is one. An intent started from a
- *   row on the board records that row, and it is a better anchor than anything
- *   a model could produce: it is a real question, from this log, chosen by the
- *   person whose category it is.
+ * AN INTENT'S EXAMPLES ARE THE ANSWER, and they are one set however the intent
+ * was made. Carved out of a question, it starts with that question — a real
+ * one, from this log, chosen by the person whose category it is. Written from
+ * nothing, it starts with a few the model wrote, because a definition
+ * describes a category while a query is an instance of one and the two sit in
+ * different regions of the space (the technique is HyDE). From then on there
+ * is no difference: the set is the participant's to add to, remove from and
+ * regenerate, and the anchor is its mean.
  *
- *   HYPOTHETICAL QUESTIONS, otherwise. A definition describes a category and a
- *   query is an instance of one, and the two sit in different regions of the
- *   embedding space — so comparing a description against real questions ranks
- *   badly, and comparing invented questions against real ones ranks well.
- *   (The technique is HyDE.) Only the "+ New intent" path needs this; carving
- *   one out of a question does not.
+ * KEYED BY INTENT, NOT BY DEFINITION TEXT. The verdicts and the responses are
+ * keyed by the text that produced them, which makes editing a wording and
+ * editing it back free. Examples are not derived from the wording — they are
+ * chosen — so rewording must not silently discard them. What keeps them from
+ * going stale is a button, not an invalidation rule.
  *
- * WHERE THIS SITS AGAINST §1. The generated questions are never configuration:
- * they are not judged, not sent to the chatbot, not saved in the snapshot, and
- * editing one is not possible. They order a list. The card can show them, but
- * folded away and on request — because a list of "questions your description
- * covers" sitting open beside the box is a rewriting aid, and rewriting aids
- * are what this version exists without (§2). Opening it is logged, so a
- * participant who leaned on it can be told apart from one who never looked.
+ * WHERE THIS SITS AGAINST §1. An example is never configuration: it is not
+ * judged, not sent to the chatbot, not in the snapshot. Adding one does not
+ * put its question in the intent — the words do that, and the example row
+ * carries the same ownership chip as every other row, so a question that went
+ * somewhere else says so from inside the list it was added to. What examples
+ * change is the order, and ordering is not a ruling.
  *
  * Client-safe: no. Server module, but no `server-only` import — that package
  * is not a declared dependency here and adding it silently breaks every tsx
  * script that reaches into this directory.
  */
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { simpleDefinitionAnchors, simpleIntentSeeds } from '@/db/schema';
+import { simpleIntentExamples } from '@/db/schema';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
 import { cosineSimilarity, embedTexts, getQueryEmbeddings } from '@/lib/score/embeddings';
-import { intentDefHash } from '@/lib/score/intents';
 import { scopedRecords } from './scope';
 
 const EXAMPLE_MODEL = process.env.SCORE_EXAMPLE_MODEL || 'gpt-5.4-nano';
 
 /**
- * Five, and measured rather than guessed.
+ * Three, and the reasoning changed when they became visible.
  *
- * The anchor is the MEAN of the examples, so the count is really a question
- * about variance: how much does the top of the list move when the same
- * definition is generated twice? That is the thing the ordering exists to
- * protect — a first row that changes between runs is a first row nobody can
- * trust.
+ * Measured while they were hidden and fixed, five looked safer than three: the
+ * anchor is the MEAN, so more of them meant the top of the list moved less
+ * between generations. Once the examples sit at the top of the list where they
+ * can be read, edited and regenerated, that argument mostly dissolves — the
+ * rows a participant reads first ARE the examples, and they do not move unless
+ * asked to.
  *
- * Three definitions, three generations each, ranking the same 60 questions:
- * at three examples the top row moved between runs for two of the three, and
- * on the worst one the top FIVE agreed only 2.3/5 between runs. At five it
- * moved for one, and that same worst case rose to 4.3/5. Eight and twelve
- * bought nothing measurable over five (4.0 and 3.5 on the worst case, inside
- * the noise of four runs), so this is the flat part of the curve.
+ * What stayed true in the measurement: three ordinary examples rank about as
+ * stably as five (top-5 overlap 4.3/5 either way). What did NOT survive is
+ * asking for strong variety — "cover the whole of what the description
+ * describes" halved stability (2.3/5) while barely spreading the examples at
+ * all (0.72 → 0.62 similarity to each other), because a narrow definition has
+ * no corners to spread into. So the variety asked for below is the concrete
+ * kind: different phrasings, and some with pasted material and some without.
  */
-const EXAMPLE_COUNT = 5;
+const EXAMPLE_COUNT = 3;
 
 const SYSTEM = `You write example student questions for a similarity search. They are not shown as advice and nobody acts on them.
 
-You are given the assignment students were working on, and one description of a category of questions. Return "examples": ${EXAMPLE_COUNT} short questions a student might actually type that sit squarely inside that description — the most ordinary, least arguable members of it, not the edge cases.
+You are given the assignment students were working on, and one description of a category of questions. Return "examples": ${EXAMPLE_COUNT} short questions a student might actually type that sit squarely inside that description — ordinary, unarguable members of it rather than edge cases.
 
-Students often paste material into a message. Where an example would contain pasted material, write the placeholder instead of inventing the text: [Own draft], [Assignment prompt], [Bot reply], [Own question].
+Vary them: different phrasings and lengths, and some with pasted material and some without. Students often paste material into a message; where an example would contain some, write the placeholder instead of inventing the text: [Own draft], [Assignment prompt], [Bot reply], [Own question].
 
 Write the way students write — lowercase, brief, imperfect. Stay inside the description: do not broaden it, do not add anything it does not mention, and do not explain.`;
 
@@ -84,18 +87,92 @@ const SCHEMA = {
   },
 };
 
-export interface DefinitionAnchor {
-  examples: string[];
-  anchor: number[];
+export interface IntentExample {
+  id: number;
+  /** A question from this log, or null when it is a written one. */
+  messageId: number | null;
+  /** The written text, or null when it is a question from the log. */
+  text: string | null;
 }
 
-/** The hypothetical questions for one definition, written once and kept. */
-async function buildAnchor(
+/* ------------------------------------------------------------------ */
+/* Reading and writing the set                                         */
+/* ------------------------------------------------------------------ */
+
+export async function listIntentExamples(
   assignmentId: string,
-  definition: string,
-  assignmentPrompt: string
-): Promise<DefinitionAnchor | null> {
-  if (!isOpenAIConfigured()) return null;
+  sid: number
+): Promise<IntentExample[]> {
+  const rows = await db
+    .select()
+    .from(simpleIntentExamples)
+    .where(
+      and(eq(simpleIntentExamples.assignmentId, assignmentId), eq(simpleIntentExamples.sid, sid))
+    )
+    .orderBy(asc(simpleIntentExamples.id));
+  return rows.map((r) => ({ id: r.id, messageId: r.messageId, text: r.text }));
+}
+
+/** A question from the log, added by hand or as the one an intent came from. */
+export async function addQuestionExample(args: {
+  assignmentId: string;
+  sid: number;
+  messageId: number;
+}): Promise<void> {
+  const existing = await listIntentExamples(args.assignmentId, args.sid);
+  if (existing.some((e) => e.messageId === args.messageId)) return;
+  await db.insert(simpleIntentExamples).values({
+    assignmentId: args.assignmentId,
+    sid: args.sid,
+    messageId: args.messageId,
+    createdAt: new Date(),
+  });
+}
+
+/** Written examples, with their vectors — there is no query cache for these. */
+async function addTextExamples(args: {
+  assignmentId: string;
+  sid: number;
+  texts: string[];
+}): Promise<void> {
+  const texts = args.texts.map((t) => t.trim()).filter((t) => t.length > 0);
+  if (texts.length === 0) return;
+  const vectors = await embedTexts(texts).catch(() => [] as number[][]);
+  const now = new Date();
+  await db.insert(simpleIntentExamples).values(
+    texts.map((text, i) => ({
+      assignmentId: args.assignmentId,
+      sid: args.sid,
+      text,
+      embedding: vectors[i] ?? null,
+      model: EXAMPLE_MODEL,
+      createdAt: now,
+    }))
+  );
+}
+
+export async function removeIntentExample(args: {
+  assignmentId: string;
+  sid: number;
+  id: number;
+}): Promise<void> {
+  await db
+    .delete(simpleIntentExamples)
+    .where(
+      and(
+        eq(simpleIntentExamples.assignmentId, args.assignmentId),
+        eq(simpleIntentExamples.sid, args.sid),
+        eq(simpleIntentExamples.id, args.id)
+      )
+    );
+}
+
+/* ------------------------------------------------------------------ */
+/* Writing them from a definition                                      */
+/* ------------------------------------------------------------------ */
+
+async function writeExamples(definition: string, assignmentPrompt: string): Promise<string[]> {
+  if (!isOpenAIConfigured()) return [];
   const raw = await callModel(
     SYSTEM,
     `THE ASSIGNMENT\n${assignmentPrompt.trim().slice(0, 2000) || '(not available)'}\n\nTHE CATEGORY\n${definition.trim().slice(0, 1500)}`,
@@ -105,178 +182,156 @@ async function buildAnchor(
     { timeoutMs: 25_000, maxRetries: 1 }
   );
   const parsed = extractJsonObject(raw);
-  const examples = (Array.isArray(parsed.examples) ? parsed.examples : [])
+  return (Array.isArray(parsed.examples) ? parsed.examples : [])
     .filter((e): e is string => typeof e === 'string' && e.trim().length > 0)
     .map((e) => e.trim())
     .slice(0, EXAMPLE_COUNT);
-  if (examples.length === 0) return null;
-
-  const vectors = await embedTexts(examples);
-  if (vectors.length === 0) return null;
-  // The mean of the examples: one point standing for the middle of the
-  // category, rather than the nearest single invention.
-  const width = vectors[0].length;
-  const anchor = new Array<number>(width).fill(0);
-  for (const v of vectors) for (let i = 0; i < width; i += 1) anchor[i] += v[i] ?? 0;
-  for (let i = 0; i < width; i += 1) anchor[i] /= vectors.length;
-  return { examples, anchor };
 }
 
 /**
- * The anchor for a definition, generating it if this is the first time.
+ * Give an intent a starting set, if it has none.
  *
- * Keyed by the definition TEXT, like the verdicts and the responses, so
- * editing a wording and editing it back costs nothing and two intents that
- * describe the same thing share one.
+ * Only ever fills an empty set: an intent carved out of a question already has
+ * one, and one somebody has edited is theirs. Regenerating is a separate act
+ * with a button behind it.
  */
-export async function ensureAnchor(args: {
-  assignmentId: string;
-  definition: string;
-  assignmentPrompt: string;
-}): Promise<DefinitionAnchor | null> {
-  const definition = args.definition.trim();
-  if (definition.length === 0) return null;
-  const defHash = intentDefHash(definition);
-
-  const [existing] = await db
-    .select()
-    .from(simpleDefinitionAnchors)
-    .where(
-      and(
-        eq(simpleDefinitionAnchors.assignmentId, args.assignmentId),
-        eq(simpleDefinitionAnchors.defHash, defHash)
-      )
-    );
-  if (existing) {
-    return {
-      examples: (existing.examples as string[]) ?? [],
-      anchor: (existing.anchor as number[]) ?? [],
-    };
-  }
-
-  const built = await buildAnchor(args.assignmentId, definition, args.assignmentPrompt);
-  if (!built) return null;
-  await db
-    .insert(simpleDefinitionAnchors)
-    .values({
-      assignmentId: args.assignmentId,
-      defHash,
-      examples: built.examples,
-      anchor: built.anchor,
-      model: EXAMPLE_MODEL,
-      createdAt: new Date(),
-    })
-    .onConflictDoNothing();
-  return built;
-}
-
-/** Whatever is already stored — never generates, for read paths. */
-export async function readAnchor(
-  assignmentId: string,
-  definition: string
-): Promise<DefinitionAnchor | null> {
-  const text = definition.trim();
-  if (text.length === 0) return null;
-  const [row] = await db
-    .select()
-    .from(simpleDefinitionAnchors)
-    .where(
-      and(
-        eq(simpleDefinitionAnchors.assignmentId, assignmentId),
-        eq(simpleDefinitionAnchors.defHash, intentDefHash(text))
-      )
-    );
-  if (!row) return null;
-  return { examples: (row.examples as string[]) ?? [], anchor: (row.anchor as number[]) ?? [] };
-}
-
-/* ------------------------------------------------------------------ */
-/* The question an intent was carved out of                            */
-/* ------------------------------------------------------------------ */
-
-export async function recordIntentSeed(args: {
+export async function seedIntentExamples(args: {
   assignmentId: string;
   sid: number;
-  messageId: number;
-}): Promise<void> {
-  await db
-    .insert(simpleIntentSeeds)
-    .values({ ...args, createdAt: new Date() })
-    .onConflictDoNothing();
+  definition: string;
+  assignmentPrompt: string;
+}): Promise<number> {
+  if (args.definition.trim().length === 0) return 0;
+  const existing = await listIntentExamples(args.assignmentId, args.sid);
+  if (existing.length > 0) return 0;
+  const texts = await writeExamples(args.definition, args.assignmentPrompt);
+  await addTextExamples({ assignmentId: args.assignmentId, sid: args.sid, texts });
+  return texts.length;
 }
 
-export async function readIntentSeeds(assignmentId: string): Promise<Map<number, number>> {
-  const rows = await db
-    .select({ sid: simpleIntentSeeds.sid, messageId: simpleIntentSeeds.messageId })
-    .from(simpleIntentSeeds)
-    .where(eq(simpleIntentSeeds.assignmentId, assignmentId));
-  return new Map(rows.map((r) => [r.sid, r.messageId]));
+/**
+ * Replace the WRITTEN examples with a fresh set, on request.
+ *
+ * Questions from the log survive: those were pointed at rather than produced,
+ * and throwing them away would make the button destroy the half of the set the
+ * participant actually chose.
+ */
+export async function regenerateIntentExamples(args: {
+  assignmentId: string;
+  sid: number;
+  definition: string;
+  assignmentPrompt: string;
+}): Promise<number> {
+  const texts = await writeExamples(args.definition, args.assignmentPrompt);
+  if (texts.length === 0) return 0;
+  await db
+    .delete(simpleIntentExamples)
+    .where(
+      and(
+        eq(simpleIntentExamples.assignmentId, args.assignmentId),
+        eq(simpleIntentExamples.sid, args.sid),
+        // `isNull` on a jsonb-bearing row reads oddly; the discriminator is
+        // whether there is text, so ask that.
+        inArray(
+          simpleIntentExamples.id,
+          (await listIntentExamples(args.assignmentId, args.sid))
+            .filter((e) => e.text != null)
+            .map((e) => e.id)
+            .concat([-1])
+        )
+      )
+    );
+  await addTextExamples({ assignmentId: args.assignmentId, sid: args.sid, texts });
+  return texts.length;
 }
 
 /* ------------------------------------------------------------------ */
 /* The order itself                                                    */
 /* ------------------------------------------------------------------ */
 
+/** The mean of an intent's examples, or null when it has none to average. */
+async function anchorFor(
+  assignmentId: string,
+  sid: number,
+  queryVectors: Map<number, number[]>
+): Promise<number[] | null> {
+  const rows = await db
+    .select()
+    .from(simpleIntentExamples)
+    .where(
+      and(eq(simpleIntentExamples.assignmentId, assignmentId), eq(simpleIntentExamples.sid, sid))
+    );
+  const vectors: number[][] = [];
+  for (const row of rows) {
+    const v =
+      row.messageId != null
+        ? queryVectors.get(row.messageId)
+        : (row.embedding as number[] | null) ?? undefined;
+    if (v && v.length > 0) vectors.push(v);
+  }
+  if (vectors.length === 0) return null;
+  const width = vectors[0].length;
+  const anchor = new Array<number>(width).fill(0);
+  for (const v of vectors) for (let i = 0; i < width; i += 1) anchor[i] += v[i] ?? 0;
+  for (let i = 0; i < width; i += 1) anchor[i] /= vectors.length;
+  return anchor;
+}
+
 /**
- * Order one intent's questions, most typical first.
+ * Order one intent's questions by distance from its examples.
  *
  * Returns the ids it was given, rearranged — never a subset, so a caller that
- * uses this cannot accidentally hide a question. Anything without an anchor or
- * without an embedding keeps its incoming position relative to its peers,
- * which means a missing anchor degrades to "the order it already had" rather
- * than to a shuffle.
+ * uses this cannot accidentally hide a question. With no examples, or no
+ * embeddings, it hands back what it was given: a missing anchor degrades to
+ * "the order it already had" rather than to a shuffle.
+ *
+ * `furthest` reads the same fact from the other end. Nearest-first answers "is
+ * this working"; furthest-first answers "what did my words catch that is least
+ * like what I meant" — which is where the next intent usually comes from, and
+ * the row it lands on has the button to make one.
  */
 export async function rankQuestions(args: {
   assignmentId: string;
   sid: number;
-  definition: string;
   messageIds: number[];
+  furthest?: boolean;
 }): Promise<number[]> {
-  const { assignmentId, sid, definition, messageIds } = args;
+  const { assignmentId, sid, messageIds } = args;
   if (messageIds.length < 2) return messageIds;
 
-  const seeds = await readIntentSeeds(assignmentId);
-  const seedMessageId = seeds.get(sid) ?? null;
-
   const records = await scopedRecords(assignmentId);
-  const embeddings = await getQueryEmbeddings(assignmentId, records).catch(() => new Map());
-
-  let anchor: number[] | null = null;
-  if (seedMessageId != null) anchor = embeddings.get(seedMessageId) ?? null;
-  if (!anchor) anchor = (await readAnchor(assignmentId, definition))?.anchor ?? null;
-  if (!anchor || anchor.length === 0) return messageIds;
+  const embeddings = await getQueryEmbeddings(assignmentId, records).catch(
+    () => new Map<number, number[]>()
+  );
+  const anchor = await anchorFor(assignmentId, sid, embeddings);
+  if (!anchor) return messageIds;
 
   const score = new Map<number, number>();
   for (const id of messageIds) {
     const v = embeddings.get(id);
     score.set(id, v ? cosineSimilarity(anchor, v) : Number.NEGATIVE_INFINITY);
   }
-  // The seed itself first when there is one: it is the question this category
-  // was built to hold, and burying it under a closer neighbour would be odd.
-  return [...messageIds].sort((a, b) => {
-    if (a === seedMessageId) return -1;
-    if (b === seedMessageId) return 1;
-    return (score.get(b) ?? 0) - (score.get(a) ?? 0);
-  });
+  const direction = args.furthest ? -1 : 1;
+  return [...messageIds].sort(
+    (a, b) => direction * ((score.get(b) ?? 0) - (score.get(a) ?? 0))
+  );
 }
 
-/** Definitions that have no anchor yet — what a save has work to do about. */
-export async function definitionsNeedingAnchors(
+/** Which intents have no examples yet — what a save has work to do about. */
+export async function intentsNeedingExamples(
   assignmentId: string,
-  definitions: string[]
-): Promise<string[]> {
-  const wanted = [...new Set(definitions.map((d) => d.trim()).filter((d) => d.length > 0))];
-  if (wanted.length === 0) return [];
-  const hashes = new Map(wanted.map((d) => [intentDefHash(d), d]));
+  sids: number[]
+): Promise<number[]> {
+  if (sids.length === 0) return [];
   const rows = await db
-    .select({ defHash: simpleDefinitionAnchors.defHash })
-    .from(simpleDefinitionAnchors)
+    .select({ sid: simpleIntentExamples.sid })
+    .from(simpleIntentExamples)
     .where(
       and(
-        eq(simpleDefinitionAnchors.assignmentId, assignmentId),
-        inArray(simpleDefinitionAnchors.defHash, [...hashes.keys()])
+        eq(simpleIntentExamples.assignmentId, assignmentId),
+        inArray(simpleIntentExamples.sid, sids)
       )
     );
-  for (const row of rows) hashes.delete(row.defHash);
-  return [...hashes.values()];
+  const have = new Set(rows.map((r) => r.sid));
+  return sids.filter((sid) => !have.has(sid));
 }
