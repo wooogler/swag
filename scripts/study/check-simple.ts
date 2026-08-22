@@ -70,7 +70,14 @@ interface StateBody {
   unsavedSids: number[];
   intentVersions: Record<
     string,
-    { versionNo: number; definition: string; rule: string; name: string | null; matches: number | null }[]
+    {
+      versionNo: number;
+      displayNo: number | null;
+      definition: string;
+      rule: string;
+      name: string | null;
+      matches: number | null;
+    }[]
   >;
   pinned: number[];
   owners: Record<string, { sid: number | null; outcome: string; matchedElsewhere: number[] }>;
@@ -910,10 +917,21 @@ async function main() {
     // the other; either way it has a history, and it has been edited by now.
     const rootHistory = now.intentVersions['0'] ?? [];
     check('the else-rule keeps its own history', rootHistory.length > 0, `${rootHistory.length} version(s)`);
+    // Numbered by the SAVE each one belongs to, which is the one version axis
+    // this board has: a private per-intent count read as a version number and
+    // disagreed on screen with the picker beside it, which counts saves. Gaps
+    // are the point — they say which saves touched this intent.
     check(
-      'numbered from 1, newest first',
-      rootHistory[0]?.versionNo === rootHistory.length,
-      rootHistory.map((v) => `v${v.versionNo}`).join(' ')
+      'each row carries the number of the save it belongs to',
+      rootHistory.every((v) => typeof v.displayNo === 'number' && v.displayNo > 0),
+      rootHistory.map((v) => `v${v.displayNo ?? '?'}`).join(' ')
+    );
+    check(
+      'newest first, and never more than there are saves',
+      rootHistory.every(
+        (v, i) => i === 0 || (v.displayNo ?? 0) < (rootHistory[i - 1].displayNo ?? 0)
+      ) && (rootHistory[0]?.displayNo ?? 0) <= now.versions.length,
+      `${rootHistory.map((v) => `v${v.displayNo ?? '?'}`).join(' ')} · ${now.versions.length} save(s)`
     );
 
     if (arm === 'score') {

@@ -19,7 +19,7 @@
  */
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { simpleIntentVersions } from '@/db/schema';
+import { simpleConfigVersions, simpleIntentVersions } from '@/db/schema';
 import type { SimpleSnapshot } from './chain';
 import { countsByDefinition } from './starters';
 
@@ -39,6 +39,18 @@ export interface IntentVersion {
   createdAt: string;
   /** The write this pair first appeared in. */
   configVersionNo: number | null;
+  /**
+   * The number a reader sees — the SAVE it belongs to, counted the way the
+   * timeline counts saves.
+   *
+   * There is one version axis on this board, and it is the configuration's. A
+   * per-intent count of its own edits read as a version number, sat beside a
+   * picker labelled with the configuration's, and the two disagreed on screen:
+   * a card saying it had one version while the reply beside it said v3. Which
+   * saves changed THIS intent is what its history is for, and the gaps in the
+   * numbers say that better than a private sequence does.
+   */
+  displayNo: number | null;
   /**
    * How many of this log's questions that WORDING describes.
    *
@@ -158,8 +170,9 @@ export async function recordIntentVersions(args: {
       summary: row.summary,
       createdAt: row.createdAt.toISOString(),
       configVersionNo: row.configVersionNo,
-      // Written, not read: the count is a read-path concern and the caller
-      // here is naming what it just wrote.
+      // Written, not read: the number and the count are both read-path
+      // concerns, and the caller here is naming what it just wrote.
+      displayNo: null,
       matches: null,
     });
   }
@@ -188,6 +201,21 @@ export async function listIntentVersions(
     .where(eq(simpleIntentVersions.assignmentId, assignmentId))
     .orderBy(desc(simpleIntentVersions.versionNo));
 
+  // The save numbers, counted the way the timeline counts them: visible saves
+  // in order, from one.
+  const saves = await db
+    .select({ versionNo: simpleConfigVersions.versionNo })
+    .from(simpleConfigVersions)
+    .where(
+      and(
+        eq(simpleConfigVersions.assignmentId, assignmentId),
+        eq(simpleConfigVersions.kind, 'save'),
+        sql`${simpleConfigVersions.hiddenAt} is null`
+      )
+    )
+    .orderBy(asc(simpleConfigVersions.versionNo));
+  const displayNo = new Map(saves.map((row, i) => [row.versionNo, i + 1]));
+
   // One lookup for every distinct wording in the whole history: a verdict is
   // keyed by definition text, so an old one still has its own and nothing has
   // to be judged again to say how many questions it described.
@@ -210,6 +238,7 @@ export async function listIntentVersions(
       summary: row.summary,
       createdAt: row.createdAt.toISOString(),
       configVersionNo: row.configVersionNo,
+      displayNo: row.configVersionNo == null ? null : displayNo.get(row.configVersionNo) ?? null,
       matches: row.definition.trim() ? matches.get(row.definition.trim()) ?? 0 : null,
     });
   }
@@ -273,6 +302,7 @@ export async function previousIntentVersion(
         name: row.name,
         summary: row.summary,
         createdAt: row.createdAt.toISOString(),
+        displayNo: null,
         configVersionNo: row.configVersionNo,
         // The namer wants the previous WORDING, not what it caught.
         matches: null,

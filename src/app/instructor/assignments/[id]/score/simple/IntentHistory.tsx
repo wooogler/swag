@@ -71,6 +71,10 @@ export interface IntentVersion {
   summary: string | null;
   createdAt: string;
   configVersionNo: number | null;
+  /** The number a reader sees: the SAVE this pair belongs to, counted the way
+   * the timeline counts saves. One axis for the whole board — a private count
+   * of an intent's own edits disagreed on screen with the picker beside it. */
+  displayNo: number | null;
   /** How many of this log's questions that wording describes. Null for the
    * everything-else rule, which has no words to match with. */
   matches: number | null;
@@ -111,6 +115,7 @@ export default function IntentHistory({
   versions,
   currentDefinition,
   currentRule,
+  nextVersionNo,
   pending = null,
   onPutBack = null,
   onPick,
@@ -120,6 +125,9 @@ export default function IntentHistory({
   versions: IntentVersion[];
   currentDefinition: string;
   currentRule: string;
+  /** What the next save will be called — the timeline's number, not a private
+   * count of this intent's own edits. */
+  nextVersionNo: number;
   /**
    * The wording applied and not saved — not what is typed.
    *
@@ -173,7 +181,7 @@ export default function IntentHistory({
       ? [
           {
             key: 'pending',
-            versionNo: (versions[0]?.versionNo ?? 0) + 1,
+            versionNo: nextVersionNo,
             definition: pending.definition,
             rule: pending.rule,
             matches: pending.matches,
@@ -189,7 +197,7 @@ export default function IntentHistory({
       : []),
     ...versions.map((v) => ({
       key: String(v.id),
-      versionNo: v.versionNo,
+      versionNo: v.displayNo ?? v.versionNo,
       definition: v.definition,
       rule: v.rule,
       name: v.name,

@@ -1112,6 +1112,9 @@ function ConfigColumn({
             unsaved={unsaved}
             applied={state.snapshot}
             matchesNow={state.matchesNow ?? {}}
+            /* One axis for the whole board: the next save's number, which is
+               what the reply's picker will call it too. */
+            nextVersionNo={(state.versions[0]?.displayNo ?? 0) + 1}
             pendingName={state.dirty ? state.moments[0]?.name ?? null : null}
             draft={draft}
             setDraft={setDraft}
@@ -1229,6 +1232,7 @@ function Tree({
   unsaved,
   applied,
   matchesNow,
+  nextVersionNo,
   pendingName,
   draft,
   setDraft,
@@ -1260,6 +1264,8 @@ function Tree({
   applied: SimpleSnapshot;
   /** sid → what its wording catches right now. */
   matchesNow: Record<string, number | null>;
+  /** What the next save will be called. */
+  nextVersionNo: number;
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
@@ -1594,6 +1600,7 @@ function Tree({
               api={api}
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
+              nextVersionNo={nextVersionNo}
               intent={intent}
               pending={
                 held[intent.sid]
@@ -1804,6 +1811,7 @@ function Tree({
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
+            nextVersionNo={nextVersionNo}
             pending={held[0] ? { ...held[0], matches: null } : null}
             onPutBack={() => {
               const back = held[0];
@@ -1880,6 +1888,7 @@ function Accordion({
   api,
   ruleSources,
   versions,
+  nextVersionNo,
   intent,
   pending,
   onPutBack,
@@ -1900,6 +1909,8 @@ function Accordion({
   ruleSources: RuleSource[];
   /** This intent's own history, newest first. */
   versions: IntentVersion[];
+  /** What the next save will be called. */
+  nextVersionNo: number;
   /** Applied and not saved, for the row the next Save will write. */
   pending: {
     definition: string;
@@ -2004,6 +2015,7 @@ function Accordion({
         versions={versions}
         currentDefinition={intent.definition}
         currentRule={intent.rule}
+        nextVersionNo={nextVersionNo}
         pending={pending}
         onPutBack={onPutBack}
         disabled={readOnly}
