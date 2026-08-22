@@ -3532,7 +3532,6 @@ function ReplyVersionBar({
         }}
         className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5 text-2xs font-medium text-[hsl(var(--foreground))]"
       >
-        <option value="original">Original (as delivered)</option>
         {/* A save is "v3 · what it did"; the applied-but-unsaved state has no
             number because it is not a version. The name is what someone is
             scanning for — the number only says where it sits. */}
@@ -3542,6 +3541,11 @@ function ReplyVersionBar({
             {v.name ? ` · ${v.name}` : ''}
           </option>
         ))}
+        {/* Last, because it is the oldest thing here — older than v1, since it
+            is what the chatbot said before any of this was written. It used to
+            head the list as the "not a version" option, which put the oldest
+            answer above the newest and then ran back down through the rest. */}
+        <option value="original">Original (as delivered)</option>
       </select>
     </div>
     {/* The rule itself, under the version it belongs to. Two lines by default
