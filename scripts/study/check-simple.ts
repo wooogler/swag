@@ -31,7 +31,7 @@ import {
   studyEvents,
   studyParticipants,
 } from '../../src/db/schema';
-import { flattenStoredIntents } from '../../src/lib/study/simple/chain';
+import { describeStep, flattenStoredIntents } from '../../src/lib/study/simple/chain';
 import { intentDefHash } from '../../src/lib/score/intents';
 
 const BASE = process.env.SWAG_URL ?? 'http://localhost:3030';
@@ -262,6 +262,56 @@ async function main() {
       'a broken tree loses its nesting and not its intents',
       orphaned.length === 3,
       orphaned.map((i) => i.sid).join(',')
+    );
+  }
+
+  // 0b. What an undo step says it will do.
+  //
+  //     The control offering it used to be two arrows on the open card's own
+  //     button row, so a step that brought back an intent deleted a minute ago
+  //     looked like it was going to do something to the card it was drawn on.
+  //     Now it says where it lands, which only helps if the sentence is right.
+  {
+    const base = {
+      arm: 'score' as const,
+      prompt: '',
+      rootRule: 'be helpful',
+      intents: [
+        { sid: 1, title: 'Grammar', definition: 'a', rule: 'a' },
+        { sid: 2, title: 'Outlines', definition: 'b', rule: 'b' },
+      ],
+    };
+    const without = { ...base, intents: [base.intents[1]] };
+    check(
+      'an undo over a delete says which intent comes back',
+      describeStep(without, base) === 'brings back “Grammar”',
+      describeStep(without, base)
+    );
+    check(
+      'and the redo the other way says it goes',
+      describeStep(base, without) === 'removes “Grammar”',
+      describeStep(base, without)
+    );
+    const edited = {
+      ...base,
+      intents: [{ ...base.intents[0], rule: 'a2' }, base.intents[1]],
+    };
+    check(
+      'a rewrite names the intent it rewrites',
+      describeStep(edited, base) === 'changes “Grammar”',
+      describeStep(edited, base)
+    );
+    const rootOnly = { ...base, rootRule: 'be brief' };
+    check(
+      'and a step over the uncategorized rule says so instead of naming an intent',
+      describeStep(rootOnly, base) === 'changes the Uncategorized rule',
+      describeStep(rootOnly, base)
+    );
+    const swapped = { ...base, intents: [base.intents[1], base.intents[0]] };
+    check(
+      'a step that only moves them says that',
+      describeStep(swapped, base) === 'puts the intents back in their old order',
+      describeStep(swapped, base)
     );
   }
 

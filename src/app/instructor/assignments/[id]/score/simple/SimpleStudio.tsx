@@ -69,6 +69,7 @@ import IntentHistory, { type IntentVersion } from './IntentHistory';
 import { intentColor } from './colors';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
+  describeStep,
   insertBefore,
   moveIntent,
   removeIntent,
@@ -441,6 +442,18 @@ export default function SimpleStudio({
 
   const canUndo = past.length > 0 && !saving && state.atTip;
   const canRedo = future.length > 0 && !saving && state.atTip;
+  /* Where the step lands, not merely that there is one. Read from the
+     snapshot it would apply, so it is the same fact the board will show a
+     second later rather than a note somebody has to keep in sync. */
+  /* The visible word first either way: an accessible name that replaces the
+     label on the button rather than extending it leaves the two saying
+     different things. */
+  const undoLabel = canUndo
+    ? `Undo (⌘Z) — ${describeStep(state.snapshot, past[past.length - 1])}`
+    : 'Undo (⌘Z) — nothing to step back to';
+  const redoLabel = canRedo
+    ? `Redo (⇧⌘Z) — ${describeStep(state.snapshot, future[future.length - 1])}`
+    : 'Redo (⇧⌘Z) — nothing to step forward to';
   const undo = useCallback(() => {
     if (!canUndo) return;
     void walk(past[past.length - 1], state.snapshot, 'undo');
@@ -786,6 +799,8 @@ export default function SimpleStudio({
         draftChanged={draftChanged}
         onUndo={canUndo ? undo : null}
         onRedo={canRedo ? redo : null}
+        undoLabel={undoLabel}
+        redoLabel={redoLabel}
         onApply={apply}
         onSaveVersion={saveVersion}
         onRevert={revert}
@@ -912,6 +927,8 @@ function ConfigColumn({
   draftChanged,
   onUndo,
   onRedo,
+  undoLabel,
+  redoLabel,
   onApply,
   onSaveVersion,
   onRevert,
@@ -936,6 +953,9 @@ function ConfigColumn({
   /** Null when there is nothing to step back to, or forward to. */
   onUndo: (() => void) | null;
   onRedo: (() => void) | null;
+  /** What each step will do, for the control that offers it. */
+  undoLabel: string;
+  redoLabel: string;
   onApply: (
     next: SimpleSnapshot,
     focusSid: number | null,
@@ -954,6 +974,26 @@ function ConfigColumn({
   return (
     <div className="min-h-0 flex flex-col gap-3">
       <section className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
+        {/* The steps belong to the COLUMN, not to whichever card is open.
+            They used to sit on the Apply row inside a card, which read as
+            "step this intent" — and after a delete the open card is the
+            uncategorized one, so an undo offered there looked like it would
+            do something to the uncategorized rule and instead brought back an
+            intent. What they step is the whole configuration: creations,
+            deletions and order have no card to live on, and a card's own
+            history is the version list inside it. */}
+        {!readOnly && (
+          <div className="sticky top-0 z-10 flex items-center justify-end gap-1 px-2 py-1 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
+            <StepButton label={undoLabel} onClick={onUndo}>
+              <Undo2 className="w-3.5 h-3.5" />
+              Undo
+            </StepButton>
+            <StepButton label={redoLabel} onClick={onRedo}>
+              <Redo2 className="w-3.5 h-3.5" />
+              Redo
+            </StepButton>
+          </div>
+        )}
         {readOnly && (
           <div className="sticky top-0 z-10 px-3 py-2 bg-[hsl(var(--muted))] border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
             <span className="text-xs text-[hsl(var(--muted-foreground))]">
@@ -986,8 +1026,6 @@ function ConfigColumn({
             draftChanged={draftChanged}
             onApply={() => onApply(draft, null)}
             onSaveVersion={onSaveVersion}
-            onUndo={onUndo}
-            onRedo={onRedo}
           />
         ) : (
           <Tree
@@ -1010,8 +1048,6 @@ function ConfigColumn({
             savedVersionNo={state.savedVersionNo}
             countOf={countOf}
             draftChanged={draftChanged}
-            onUndo={onUndo}
-            onRedo={onRedo}
             assignmentId={assignmentId}
           />
         )}
@@ -1038,8 +1074,6 @@ function PromptEditor({
   draftChanged,
   onApply,
   onSaveVersion,
-  onUndo,
-  onRedo,
 }: {
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
@@ -1049,8 +1083,6 @@ function PromptEditor({
   draftChanged: boolean;
   onApply: () => void;
   onSaveVersion: () => Promise<void>;
-  onUndo: (() => void) | null;
-  onRedo: (() => void) | null;
 }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
@@ -1087,12 +1119,6 @@ function PromptEditor({
           >
             Save
           </button>
-          <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
-            <Undo2 className="w-3.5 h-3.5" />
-          </StepButton>
-          <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
-            <Redo2 className="w-3.5 h-3.5" />
-          </StepButton>
         </div>
       )}
     </div>
@@ -1136,8 +1162,6 @@ function Tree({
   savedVersionNo,
   countOf,
   draftChanged,
-  onUndo,
-  onRedo,
   assignmentId,
 }: {
   api: (path: string, query?: string) => string;
@@ -1169,8 +1193,6 @@ function Tree({
   /** The hypothetical questions the open intent's order was worked out from. */
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
-  onUndo: (() => void) | null;
-  onRedo: (() => void) | null;
   assignmentId: string;
 }) {
   /**
@@ -1409,8 +1431,6 @@ function Tree({
               onSaveVersion={onSaveVersion}
               onRevert={onRevert}
               draftChanged={draftChanged}
-              onUndo={onUndo}
-              onRedo={onRedo}
               onPickVersion={(v) =>
                 void onApply(
                   {
@@ -1578,12 +1598,6 @@ function Tree({
               >
                 Save
               </button>
-              <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
-                <Undo2 className="w-3.5 h-3.5" />
-              </StepButton>
-              <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
-                <Redo2 className="w-3.5 h-3.5" />
-              </StepButton>
             </div>
           )}
           <IntentHistory
@@ -1675,8 +1689,6 @@ function Accordion({
   onSaveVersion,
   onRevert,
   draftChanged,
-  onUndo,
-  onRedo,
   onPickVersion,
   onDelete,
 }: {
@@ -1697,8 +1709,6 @@ function Accordion({
   onRevert: () => Promise<void>;
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
-  onUndo: (() => void) | null;
-  onRedo: (() => void) | null;
   /** Put a version's pair back AND apply it, so the list beside it becomes
    * that version's list without a second click. */
   onPickVersion: (v: IntentVersion) => void;
@@ -1774,14 +1784,6 @@ function Accordion({
           >
             Save
           </button>
-          {/* Stepping through applies is about what is in effect, which is what
-              Apply and Save are about too, so it belongs on this row. */}
-          <StepButton label="Undo the last apply (⌘Z)" onClick={onUndo}>
-            <Undo2 className="w-3.5 h-3.5" />
-          </StepButton>
-          <StepButton label="Redo (⇧⌘Z)" onClick={onRedo}>
-            <Redo2 className="w-3.5 h-3.5" />
-          </StepButton>
           <span className="flex-1" />
           <DeleteIntent onDelete={onDelete} />
         </div>
@@ -1895,13 +1897,15 @@ function StepButton({
   onClick: (() => void) | null;
   children: React.ReactNode;
 }) {
-  if (!onClick) return null;
+  // Dim rather than absent: a control that vanishes when there is nothing to
+  // do takes its neighbour's position with it, and says nothing about why.
   return (
     <button
-      onClick={onClick}
+      onClick={onClick ?? undefined}
+      disabled={!onClick}
       title={label}
       aria-label={label}
-      className="p-1.5 rounded-lg text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+      className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[hsl(var(--muted-foreground))]"
     >
       {children}
     </button>

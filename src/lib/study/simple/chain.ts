@@ -284,6 +284,50 @@ export function flattenStoredIntents(
   return out;
 }
 
+/**
+ * What moving from one configuration to another does, in one phrase.
+ *
+ * For the undo/redo controls, which otherwise offer a step with nothing said
+ * about where it lands. A step that brings back an intent somebody deleted a
+ * minute ago is not surprising when the control says so; it is very surprising
+ * when the control is two arrows.
+ *
+ * Written as the RESULT ("brings back X"), not as the edit that is being
+ * reversed, because the reader is choosing whether to press it.
+ */
+export function describeStep(from: SimpleSnapshot, to: SimpleSnapshot): string {
+  if (to.arm === 'baseline') {
+    return from.prompt === to.prompt ? 'changes nothing' : 'changes the rules document';
+  }
+  const name = (i: SimpleIntent) => `“${i.title.trim() || 'Untitled'}”`;
+  const fromById = new Map(from.intents.map((i) => [i.sid, i]));
+  const toById = new Map(to.intents.map((i) => [i.sid, i]));
+  const back = to.intents.filter((i) => !fromById.has(i.sid));
+  const gone = from.intents.filter((i) => !toById.has(i.sid));
+  if (back.length + gone.length > 0) {
+    const parts: string[] = [];
+    if (back.length === 1) parts.push(`brings back ${name(back[0])}`);
+    else if (back.length > 1) parts.push(`brings back ${back.length} intents`);
+    if (gone.length === 1) parts.push(`removes ${name(gone[0])}`);
+    else if (gone.length > 1) parts.push(`removes ${gone.length} intents`);
+    return parts.join(' and ');
+  }
+  const edited = to.intents.filter((i) => {
+    const was = fromById.get(i.sid);
+    return (
+      was &&
+      (was.title !== i.title || was.definition !== i.definition || was.rule !== i.rule)
+    );
+  });
+  const rootMoved = from.rootRule !== to.rootRule;
+  if (edited.length === 1 && !rootMoved) return `changes ${name(edited[0])}`;
+  if (edited.length > 1) return `changes ${edited.length} intents`;
+  if (rootMoved) return 'changes the Uncategorized rule';
+  const order = (s: SimpleSnapshot) => s.intents.map((i) => i.sid).join(',');
+  if (order(from) !== order(to)) return 'puts the intents back in their old order';
+  return 'changes nothing';
+}
+
 /** Every definition in a snapshot, in evaluation order — what the judge needs. */
 export function definitionsOf(snapshot: SimpleSnapshot): { sid: number; definition: string }[] {
   return compileSimpleChain(snapshot)
