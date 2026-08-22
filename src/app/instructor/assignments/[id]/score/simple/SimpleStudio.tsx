@@ -616,6 +616,38 @@ export default function SimpleStudio({
   );
 
   /**
+   * The questions an intent at this position could take.
+   *
+   * Everything from the row it is read before, downwards: the intents ABOVE
+   * are tried first and keep what they have. It is what the starter counts are
+   * counted over, because that number is read as "how many would come here",
+   * and over the whole log it promised questions that are already spoken for.
+   *
+   * A question nobody has judged yet is included: nothing above it has claimed
+   * it, so until something does it is still in play.
+   */
+  const takeableFrom = useCallback(
+    (beforeSid: number | null): number[] => {
+      if (arm !== 'score') return [];
+      const at =
+        beforeSid == null
+          ? draft.intents.length
+          : draft.intents.findIndex((i) => i.sid === beforeSid);
+      const below = new Set<number | null>([
+        null,
+        ...draft.intents.slice(at < 0 ? draft.intents.length : at).map((i) => i.sid),
+      ]);
+      return material
+        .filter((row) => {
+          const owner = ownerOf(row.messageId);
+          return !owner || owner.outcome === 'pending' || below.has(owner.sid);
+        })
+        .map((row) => row.messageId);
+    },
+    [arm, draft.intents, material, ownerOf]
+  );
+
+  /**
    * Start an intent from one question.
    *
    * The question becomes the new intent's first EXAMPLE, which is what the
@@ -865,6 +897,7 @@ export default function SimpleStudio({
         creating={creating}
         setCreating={setCreating}
         draftChanged={draftChanged}
+        takeableFrom={takeableFrom}
         onUndo={canUndo ? undo : null}
         onRedo={canRedo ? redo : null}
         undoLabel={undoLabel}
@@ -993,6 +1026,7 @@ function ConfigColumn({
   creating,
   setCreating,
   draftChanged,
+  takeableFrom,
   onUndo,
   onRedo,
   undoLabel,
@@ -1018,6 +1052,8 @@ function ConfigColumn({
   setCreating: (c: Creating | null) => void;
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
+  /** The questions an intent read before this row could take. */
+  takeableFrom: (beforeSid: number | null) => number[];
   /** Null when there is nothing to step back to, or forward to. */
   onUndo: (() => void) | null;
   onRedo: (() => void) | null;
@@ -1112,6 +1148,7 @@ function ConfigColumn({
             unsaved={unsaved}
             applied={state.snapshot}
             matchesNow={state.matchesNow ?? {}}
+            takeableFrom={takeableFrom}
             /* One axis for the whole board: the next save's number, which is
                what the reply's picker will call it too. */
             nextVersionNo={(state.versions[0]?.displayNo ?? 0) + 1}
@@ -1233,6 +1270,7 @@ function Tree({
   applied,
   matchesNow,
   nextVersionNo,
+  takeableFrom,
   pendingName,
   draft,
   setDraft,
@@ -1266,6 +1304,8 @@ function Tree({
   matchesNow: Record<string, number | null>;
   /** What the next save will be called. */
   nextVersionNo: number;
+  /** The questions an intent read before this row could take. */
+  takeableFrom: (beforeSid: number | null) => number[];
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
@@ -1413,7 +1453,7 @@ function Tree({
    * have, which is the other half of the same fact and the reason neither
    * number is the whole log.
    */
-  const takeableFrom = (beforeSid: number | null) => {
+  const countsFrom = (beforeSid: number | null) => {
     const at = beforeSid == null ? -1 : draft.intents.findIndex((i) => i.sid === beforeSid);
     if (at < 0) return { here: countOf(null), below: 0 };
     return {
@@ -1435,7 +1475,8 @@ function Tree({
           ruleSources={ruleSources(null)}
           creating={creating}
           beforeTitle={beforeTitle}
-          takeable={takeableFrom(beforeSid)}
+          takeable={countsFrom(beforeSid)}
+          within={takeableFrom(beforeSid)}
           draft={draft}
           onCancel={() => setCreating(null)}
           onCreate={async (next, sid, seed) => {
@@ -1602,6 +1643,7 @@ function Tree({
               versions={intentVersions[String(intent.sid)] ?? []}
               nextVersionNo={nextVersionNo}
               intent={intent}
+              within={takeableFrom(intent.sid)}
               pending={
                 held[intent.sid]
                   ? { ...held[intent.sid], matches: matchesNow[String(intent.sid)] ?? null }
@@ -1890,6 +1932,7 @@ function Accordion({
   versions,
   nextVersionNo,
   intent,
+  within,
   pending,
   onPutBack,
   readOnly,
@@ -1911,6 +1954,8 @@ function Accordion({
   versions: IntentVersion[];
   /** What the next save will be called. */
   nextVersionNo: number;
+  /** The questions this intent could take, for counting starter sets over. */
+  within: number[];
   /** Applied and not saved, for the row the next Save will write. */
   pending: {
     definition: string;
@@ -1946,6 +1991,9 @@ function Accordion({
           <StarterPicker
             api={api}
             disabled={readOnly}
+            /* An intent already in the list can only take what is at its own
+               position and below, same as one being written there. */
+            within={within}
             onPick={(starter) =>
               onChange({
                 definition: starter.definition,
@@ -2269,6 +2317,7 @@ function NewIntent({
   creating,
   beforeTitle,
   takeable,
+  within,
   draft,
   onCancel,
   onCreate,
@@ -2281,6 +2330,8 @@ function NewIntent({
   /** What is still unclaimed by the time its turn comes: the row it is named
    * after, and everything under that row as one figure. */
   takeable: { here: number; below: number };
+  /** The questions it could take, for counting the starter sets over. */
+  within: number[];
   draft: SimpleSnapshot;
   onCancel: () => void;
   onCreate: (
@@ -2356,6 +2407,7 @@ function NewIntent({
             api={api}
             disabled={busy}
             forMessageId={creating.fromMessageId}
+            within={within}
             onPick={(starter) => {
               setDefinition(starter.definition);
               if (!title.trim()) setTitle(starter.title);

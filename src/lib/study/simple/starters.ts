@@ -68,7 +68,17 @@ export interface StarterGroup {
  */
 export async function countsByDefinition(
   assignmentId: string,
-  definitions: string[]
+  definitions: string[],
+  /**
+   * Count only these questions.
+   *
+   * The dropdown's number is read as "how many would come here if I took
+   * this", so it has to be counted over the questions that COULD come here —
+   * the pile the new intent is being read before, and everything under it.
+   * Counted over the whole log it quietly promised questions an intent above
+   * has already taken.
+   */
+  within?: Set<number> | null
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (definitions.length === 0) return counts;
@@ -77,7 +87,8 @@ export async function countsByDefinition(
   // holds the earlier turns of each thread, and counting those would have the
   // dropdown promise a number the board can never show.
   const scope = await reviewScope(assignmentId);
-  const inScope = (messageId: number) => !scope || scope.has(messageId);
+  const inScope = (messageId: number) =>
+    (!scope || scope.has(messageId)) && (!within || within.has(messageId));
 
   // The clone's own prepared categories, matched by text.
   const templates = await db
@@ -243,7 +254,9 @@ async function definitionsContaining(
  */
 export async function loadStarters(
   assignmentId: string,
-  forMessageId?: number | null
+  forMessageId?: number | null,
+  /** The questions this intent could take — see countsByDefinition. */
+  within?: Set<number> | null
 ): Promise<StarterGroup[]> {
   const config = await getScoreConfig();
   const suggestions = buildJelsonSuggestions(config);
@@ -288,7 +301,8 @@ export async function loadStarters(
   const [counts, containing] = await Promise.all([
     countsByDefinition(
       assignmentId,
-      seeds.map((s) => s.item.definition)
+      seeds.map((s) => s.item.definition),
+      within
     ),
     forMessageId == null
       ? Promise.resolve(new Set<string>())

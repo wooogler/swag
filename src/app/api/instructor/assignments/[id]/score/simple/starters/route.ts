@@ -21,8 +21,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if ('error' in gate) return gate.error;
   // `forMessageId` marks the sets that already describe one question — sent
   // when an intent is being started from a row in the list. Still a read.
-  const forMessageId = Number(new URL(request.url).searchParams.get('forMessageId'));
+  const params2 = new URL(request.url).searchParams;
+  const forMessageId = Number(params2.get('forMessageId'));
+  // `within` is the questions the intent being written could actually take:
+  // the pile it will be read before, and everything under it. The counts are
+  // read as "how many would come here", so they are counted over exactly that.
+  const within = (params2.get('within') ?? '')
+    .split(',')
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0);
   return NextResponse.json({
-    groups: await loadStarters(id, Number.isFinite(forMessageId) && forMessageId > 0 ? forMessageId : null),
+    groups: await loadStarters(
+      id,
+      Number.isFinite(forMessageId) && forMessageId > 0 ? forMessageId : null,
+      within.length > 0 ? new Set(within) : null
+    ),
   });
 }

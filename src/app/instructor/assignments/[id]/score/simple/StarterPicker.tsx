@@ -56,6 +56,7 @@ export default function StarterPicker({
   onPick,
   disabled = false,
   forMessageId = null,
+  within = null,
 }: {
   /** Builds a URL for the simple routes, carrying any preview `?view=`. */
   api: (path: string, query?: string) => string;
@@ -63,9 +64,16 @@ export default function StarterPicker({
   disabled?: boolean;
   /** The question this intent was started from, if it was started from one. */
   forMessageId?: number | null;
+  /**
+   * The questions this intent could take: the pile it is read before, and
+   * everything under it. The counts are counted over these, because the
+   * number is read as "how many would come here if I took this" — over the
+   * whole log it promises questions an intent above has already taken.
+   */
+  within?: number[] | null;
 }) {
   const [groups, setGroups] = useState<StarterGroup[] | null>(null);
-  const [loadedFor, setLoadedFor] = useState<number | null | undefined>(undefined);
+  const [loadedFor, setLoadedFor] = useState<string | undefined>(undefined);
   const [hovered, setHovered] = useState<StarterItem | null>(null);
   const [everOpened, setEverOpened] = useState(false);
 
@@ -73,23 +81,29 @@ export default function StarterPicker({
   // round-trip every time the menu opens would make it feel like it is
   // thinking about something. The one thing that can change it is which
   // question the dots are about, so that is what invalidates it.
+  const scope = (within ?? []).join(',');
+  const key = `${forMessageId ?? ''}|${scope}`;
   useEffect(() => {
-    if (!everOpened || (groups && loadedFor === forMessageId)) return;
+    if (!everOpened || (groups && loadedFor === key)) return;
     let cancelled = false;
     (async () => {
-      const res = await fetch(
-        api('starters', forMessageId ? `forMessageId=${forMessageId}` : undefined)
-      );
+      const query = [
+        forMessageId ? `forMessageId=${forMessageId}` : null,
+        scope ? `within=${scope}` : null,
+      ]
+        .filter(Boolean)
+        .join('&');
+      const res = await fetch(api('starters', query || undefined));
       if (!res.ok || cancelled) return;
       const body = await res.json();
       if (cancelled) return;
       setGroups(body.groups ?? []);
-      setLoadedFor(forMessageId);
+      setLoadedFor(key);
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, everOpened, forMessageId, groups, loadedFor]);
+  }, [api, everOpened, forMessageId, groups, key, loadedFor, scope]);
 
   return (
     <div onMouseDown={() => setEverOpened(true)}>
