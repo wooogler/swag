@@ -835,6 +835,11 @@ export default function SimpleStudio({
         setQuery={setQuery}
         elsewhereCount={elsewhereCount}
         selection={selection}
+        definition={
+          selection.kind === 'intent'
+            ? draft.intents.find((i) => i.sid === selection.sid)?.definition ?? ''
+            : ''
+        }
         selectedMessageId={selectedMessageId}
         onSelect={setSelectedMessageId}
         onTogglePin={togglePin}
@@ -2027,6 +2032,7 @@ function QuestionColumn({
   furthest,
   onFlipOrder,
   allCount,
+  definition,
   query,
   setQuery,
   elsewhereCount,
@@ -2054,6 +2060,8 @@ function QuestionColumn({
   furthest: boolean;
   onFlipOrder: (() => void) | null;
   allCount: number;
+  /** The open intent's own words — what this list is a list OF. */
+  definition: string;
   query: string;
   setQuery: (q: string) => void;
   /** Matches this search has, outside whatever is selected. */
@@ -2203,7 +2211,8 @@ function QuestionColumn({
       )}
 
       <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
-      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
+      <div className="shrink-0 px-3 py-2 border-b border-[hsl(var(--border))]">
+      <div className="flex items-center gap-2">
         <span className="text-sm font-semibold truncate">{label}</span>
         <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
           {rows.length} of {allCount}
@@ -2264,6 +2273,20 @@ function QuestionColumn({
             </button>
           )}
         </label>
+      </div>
+      {/* The words this list is a list OF, under the name of the thing they
+          define. They live in the card on the left, which is the wrong place
+          to read them from while looking at what they caught — the question is
+          always "do these words describe these questions", and it cannot be
+          asked with the two halves in different columns. */}
+      {definition.trim().length > 0 && (
+        <p
+          title={definition}
+          className="mt-1 line-clamp-2 text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]"
+        >
+          {definition}
+        </p>
+      )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -2372,27 +2395,16 @@ function QuestionRow({
             {row.participantToken} · {row.turnNumber}
           </span>
           {showOwner && owner && (
-            // Where the question goes, stated and not interpreted (§5.4). The
-            // chip itself stays grey: the row already carries tinted chips for
-            // pasted material, and a second tinted chip on the same line would
-            // be two colour languages an inch apart. The dot does the colour,
-            // which also keeps it quiet enough to repeat sixty times.
-            <span className="inline-flex items-center gap-1 rounded bg-[hsl(var(--muted))] px-1.5 py-0.5 text-2xs text-[hsl(var(--muted-foreground))]">
-              {owner.outcome !== 'pending' && (
-                <span
-                  aria-hidden
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{
-                    // Grey for the else branch: "nothing claimed this" is a
-                    // different kind of answer from "I put it here", and the
-                    // difference is worth seeing down a column.
-                    backgroundColor:
-                      owner.sid == null ? 'hsl(var(--muted-foreground))' : intentColor(owner.sid),
-                  }}
-                />
-              )}
-              {owner.outcome === 'pending' ? 'working it out' : titleOf(owner.sid)}
-            </span>
+            // Where the question goes, stated and not interpreted (§5.4), and
+            // unboxed: the row already carries tinted chips for pasted
+            // material, so a second filled chip on the same line was two
+            // colour languages an inch apart. The dot does the colour, which
+            // also keeps it quiet enough to repeat sixty times.
+            <OwnerMark
+              sid={owner.sid}
+              title={titleOf(owner.sid)}
+              pending={owner.outcome === 'pending'}
+            />
           )}
         </div>
         <div className="text-sm leading-snug">
@@ -2450,6 +2462,41 @@ function QuestionRow({
         </IconButton>
       </div>
     </li>
+  );
+}
+
+/**
+ * Where a question goes, said as quietly as a fact can be said.
+ *
+ * A dot in the intent's colour and its name, at the smallest size on the
+ * board. It used to be a filled chip in the list and a sentence — "answered by
+ * X" — over the reply, which made the same small fact look like two different
+ * announcements, and the sentence competed with the reply it was labelling.
+ * Grey for the else branch, because "nothing claimed this" is a different kind
+ * of answer from "I put it here".
+ */
+function OwnerMark({
+  sid,
+  title,
+  pending = false,
+}: {
+  sid: number | null;
+  title: string;
+  pending?: boolean;
+}) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))]">
+      {!pending && (
+        <span
+          aria-hidden
+          className="w-1.5 h-1.5 rounded-full shrink-0"
+          style={{
+            backgroundColor: sid == null ? 'hsl(var(--muted-foreground))' : intentColor(sid),
+          }}
+        />
+      )}
+      <span className="truncate">{pending ? 'working it out' : title}</span>
+    </span>
   );
 }
 
@@ -2531,6 +2578,7 @@ function ViewerColumn({
     text: string;
     state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
     owner: string | null;
+    ownerSid: number | null;
   } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -2550,12 +2598,12 @@ function ViewerColumn({
     const messageId = row.messageId;
 
     if (asDelivered) {
-      setAnswer({ messageId, versionNo, text: '', state: 'original', owner: null });
+      setAnswer({ messageId, versionNo, text: '', state: 'original', owner: null, ownerSid: null });
       return;
     }
 
     (async () => {
-      setAnswer({ messageId, versionNo, text: '', state: 'streaming', owner: null });
+      setAnswer({ messageId, versionNo, text: '', state: 'streaming', owner: null, ownerSid: null });
       try {
         const res = await fetch(api('respond'), {
           method: 'POST',
@@ -2564,13 +2612,13 @@ function ViewerColumn({
           signal: controller.signal,
         });
         if (!res.ok) {
-          setAnswer({ messageId, versionNo, text: '', state: 'failed', owner: null });
+          setAnswer({ messageId, versionNo, text: '', state: 'failed', owner: null, ownerSid: null });
           return;
         }
         if (res.headers.get('content-type')?.includes('application/json')) {
           const data = await res.json();
           if (data.status === 'pending') {
-            setAnswer({ messageId, versionNo, text: '', state: 'pending', owner: null });
+            setAnswer({ messageId, versionNo, text: '', state: 'pending', owner: null, ownerSid: null });
             return;
           }
           // The rule here is still the assignment's own prompt, which is what
@@ -2583,6 +2631,7 @@ function ViewerColumn({
               text: '',
               state: 'original',
               owner: data.sid == null ? null : titleOf(data.sid),
+              ownerSid: data.sid ?? null,
             });
             return;
           }
@@ -2592,12 +2641,14 @@ function ViewerColumn({
             text: data.response ?? '',
             state: 'ready',
             owner: data.sid == null ? null : titleOf(data.sid),
+            ownerSid: data.sid ?? null,
           });
           return;
         }
         // A miss: show it arriving rather than making them wait in silence.
         const ownerHeader = res.headers.get('X-Simple-Owner');
-        const owner = ownerHeader && ownerHeader !== 'root' ? titleOf(Number(ownerHeader)) : null;
+        const ownerSid = ownerHeader && ownerHeader !== 'root' ? Number(ownerHeader) : null;
+        const owner = ownerSid == null ? null : titleOf(ownerSid);
         const reader = res.body?.getReader();
         if (!reader) return;
         const decoder = new TextDecoder();
@@ -2606,12 +2657,12 @@ function ViewerColumn({
           const { done, value } = await reader.read();
           if (done) break;
           text += decoder.decode(value, { stream: true });
-          setAnswer({ messageId, versionNo, text, state: 'streaming', owner });
+          setAnswer({ messageId, versionNo, text, state: 'streaming', owner, ownerSid });
         }
-        setAnswer({ messageId, versionNo, text, state: 'ready', owner });
+        setAnswer({ messageId, versionNo, text, state: 'ready', owner, ownerSid });
       } catch (error) {
         if ((error as Error)?.name === 'AbortError') return;
-        setAnswer({ messageId, versionNo, text: '', state: 'failed', owner: null });
+        setAnswer({ messageId, versionNo, text: '', state: 'failed', owner: null, ownerSid: null });
       }
     })();
 
@@ -2665,6 +2716,7 @@ function ViewerColumn({
               current={versionNo}
               state={answer?.messageId === row.messageId ? answer.state : 'streaming'}
               owner={answer?.messageId === row.messageId ? answer.owner : null}
+              ownerSid={answer?.messageId === row.messageId ? answer.ownerSid : null}
               onPick={(next) => {
                 setLocalVersionNo(next);
                 onLocalVersionLog(typeof next === 'number' ? next : null);
@@ -2715,6 +2767,7 @@ function ReplyVersionBar({
   current,
   state,
   owner,
+  ownerSid,
   onPick,
 }: {
   moments: SimpleVersion[];
@@ -2724,6 +2777,9 @@ function ReplyVersionBar({
   current: number | null;
   state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
   owner: string | null;
+  /** Which intent that name belongs to, for the colour it carries in the
+   * list. Null is the else branch. */
+  ownerSid: number | null;
   onPick: (next: number | 'original' | null) => void;
 }) {
   if (state === 'pending') {
@@ -2778,7 +2834,11 @@ function ReplyVersionBar({
       {/* Says which of the two kinds of "original" this is: one they chose,
           or one that happened because nothing has been changed yet. */}
       {asDelivered && pick !== 'original' && <span>— nothing here has been changed yet</span>}
-      {!asDelivered && state === 'ready' && owner && <span>— answered by “{owner}”</span>}
+      {/* The same small mark the list uses, rather than a sentence: it is the
+          same fact, and a sentence here competed with the reply under it. */}
+      {!asDelivered && state === 'ready' && owner && (
+        <OwnerMark sid={ownerSid} title={owner} />
+      )}
     </div>
   );
 }

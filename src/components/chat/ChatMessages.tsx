@@ -149,11 +149,23 @@ export default function ChatMessages({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, autoScrollToHighlight]);
 
+  // Bring the highlighted message into view when it CHANGES, and not while it
+  // grows. `messages` has to stay in the deps — on the first render the target
+  // is not in the DOM yet — but a streaming reply rewrites that array on every
+  // token, and re-running the scroll each time drags the view back under
+  // anyone reading further down. The ref makes it once per message: click A,
+  // scroll away, click B, click A again and it still scrolls, because the id
+  // it last obeyed is B.
+  const scrolledToHighlightRef = useRef<string | number | null>(null);
   useEffect(() => {
     if (!autoScrollToHighlight || highlightedMessageId == null) return;
-    scrollContainerRef.current
-      ?.querySelector(`[data-message-id="${highlightedMessageId}"]`)
-      ?.scrollIntoView({ block: HIGHLIGHT_ALIGN });
+    if (scrolledToHighlightRef.current === highlightedMessageId) return;
+    const target = scrollContainerRef.current?.querySelector(
+      `[data-message-id="${highlightedMessageId}"]`
+    );
+    if (!target) return;
+    scrolledToHighlightRef.current = highlightedMessageId;
+    target.scrollIntoView({ block: HIGHLIGHT_ALIGN });
   }, [autoScrollToHighlight, highlightedMessageId, messages]);
 
   // Highlighted-message visibility: when the reader scrolls it off-screen, a
