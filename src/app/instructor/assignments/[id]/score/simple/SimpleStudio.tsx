@@ -395,7 +395,11 @@ export default function SimpleStudio({
     async (
       next: SimpleSnapshot,
       focusSid: number | null,
-      seed?: { sid: number; messageId: number } | null
+      seed?: { sid: number; messageId: number } | null,
+      /** Writing an intent into existence is a decision, not a try: it keeps,
+       * so the card opens on a v1 instead of a history of nothing. Editing one
+       * afterwards is an apply like everything else. */
+      kind: 'apply' | 'save' = 'apply'
     ) => {
       // The state being left, captured before the write replaces it. A step
       // taken BY undo or redo is not itself an undo step.
@@ -404,7 +408,7 @@ export default function SimpleStudio({
         setPast((p) => [...p.slice(-24), from]);
         setFuture([]);
       }
-      return write(next, focusSid, 'apply', seed);
+      return write(next, focusSid, kind, seed);
     },
     [state.snapshot, write]
   );
@@ -932,7 +936,8 @@ function ConfigColumn({
   onApply: (
     next: SimpleSnapshot,
     focusSid: number | null,
-    seed?: { sid: number; messageId: number } | null
+    seed?: { sid: number; messageId: number } | null,
+    kind?: 'apply' | 'save'
   ) => Promise<{ created?: number[] } | null>;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
@@ -1149,7 +1154,8 @@ function Tree({
   onApply: (
     next: SimpleSnapshot,
     focusSid: number | null,
-    seed?: { sid: number; messageId: number } | null
+    seed?: { sid: number; messageId: number } | null,
+    kind?: 'apply' | 'save'
   ) => Promise<{ created?: number[] } | null>;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
@@ -1219,7 +1225,10 @@ function Tree({
             // the column and left nothing at all on screen for the seconds the
             // write takes. The second click that would write the same intent
             // twice is stopped by disabling the form, not by removing it.
-            const written = await onApply(next, sid, seed);
+            // Kept, not merely applied: an intent coming into existence is
+            // the decision the verb Save is for, and it is what gives the card
+            // a v1 to open on instead of a history of nothing.
+            const written = await onApply(next, sid, seed, 'save');
             setCreating(null);
             // Land on what was just made. The board only learns the real id
             // here — the form sent a temporary negative one — and the next
@@ -1957,7 +1966,8 @@ function NewIntent({
   onCreate: (
     next: SimpleSnapshot,
     focusSid: number | null,
-    seed?: { sid: number; messageId: number } | null
+    seed?: { sid: number; messageId: number } | null,
+    kind?: 'apply' | 'save'
   ) => Promise<{ created?: number[] } | null>;
 }) {
   const [title, setTitle] = useState('');
@@ -2829,7 +2839,17 @@ function ViewerColumn({
       // announcing a wait here put a spinner on every question anyone clicked
       // on a board where nothing had been changed. The word starts meaning
       // what it says: text is arriving.
-      setAnswer({ messageId, versionNo, text: '', state: 'idle', ownerSid: null });
+      // The text it had, until the new one starts arriving. Blanking it made
+      // the thread fall back to the delivered reply — and for the rows that
+      // never had one, to "No reply was delivered for this question", which
+      // flashed on every question after every apply.
+      setAnswer((prev) => ({
+        messageId,
+        versionNo,
+        text: prev?.messageId === messageId ? prev.text : '',
+        state: 'idle',
+        ownerSid: prev?.messageId === messageId ? prev.ownerSid : null,
+      }));
       try {
         const res = await fetch(api('respond'), {
           method: 'POST',
@@ -2871,20 +2891,23 @@ function ViewerColumn({
         }
         // A miss, and only now: the headers are in, the body is a stream, and
         // there is a real wait to report.
-        setAnswer({ messageId, versionNo, text: '', state: 'streaming', ownerSid: null });
         const ownerHeader = res.headers.get('X-Simple-Owner');
         const ownerSid = ownerHeader && ownerHeader !== 'root' ? Number(ownerHeader) : null;
         const reader = res.body?.getReader();
         if (!reader) return;
         const decoder = new TextDecoder();
         let text = '';
+        // Cleared at the FIRST token, not before it: until then the previous
+        // answer is the truest thing there is to show.
+        let started = false;
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           text += decoder.decode(value, { stream: true });
+          started = true;
           setAnswer({ messageId, versionNo, text, state: 'streaming', ownerSid });
         }
-        setAnswer({ messageId, versionNo, text, state: 'ready', ownerSid });
+        setAnswer({ messageId, versionNo, text, state: started ? 'ready' : 'failed', ownerSid });
       } catch (error) {
         if ((error as Error)?.name === 'AbortError') return;
         setAnswer({ messageId, versionNo, text: '', state: 'failed', ownerSid: null });
@@ -2925,8 +2948,9 @@ function ViewerColumn({
             answer &&
             answer.messageId === row.messageId &&
             answer.state !== 'pending' &&
-            answer.state !== 'original'
-              ? { messageId: row.messageId, text: answer.text || ' ', raw: false }
+            answer.state !== 'original' &&
+            answer.text.length > 0
+              ? { messageId: row.messageId, text: answer.text, raw: false }
               : null
           }
           responseSlot={

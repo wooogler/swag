@@ -168,6 +168,13 @@ export interface StreamedResponse {
  * for that is what makes people stop asking. A failure mid-stream ends the
  * stream and writes nothing, so the row simply regenerates when the question
  * is opened again — one row's problem, not the screen's.
+ *
+ * A reader who moves on mid-stream is NOT a failure. The client aborts, the
+ * controller closes under us, and the generation carries on being paid for
+ * either way — so it is collected to the end and cached, and coming back to
+ * that question is a hit rather than a second bill. Pushing at a closed
+ * controller was also throwing on every such click: `Invalid state:
+ * Controller is already closed`.
  */
 export async function streamResponse(args: {
   assignmentId: string;
@@ -189,6 +196,7 @@ export async function streamResponse(args: {
 
   const encoder = new TextEncoder();
   let full = '';
+  let listening = true;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
@@ -197,7 +205,8 @@ export async function streamResponse(args: {
             const delta = event.delta || '';
             if (delta) {
               full += delta;
-              controller.enqueue(encoder.encode(delta));
+              // Collected whether or not anyone is still reading it.
+              if (listening) controller.enqueue(encoder.encode(delta));
             }
           }
         }
@@ -210,11 +219,15 @@ export async function streamResponse(args: {
             model,
           });
         }
-        controller.close();
+        if (listening) controller.close();
       } catch (error) {
         console.error(`simple response stream failed for message ${args.messageId}:`, error);
-        controller.error(error);
+        if (listening) controller.error(error);
       }
+    },
+    cancel() {
+      // They clicked elsewhere. Stop pushing; keep collecting.
+      listening = false;
     },
   });
   return { stream, ruleHash };
