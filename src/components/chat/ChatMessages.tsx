@@ -369,7 +369,13 @@ export default function ChatMessages({
             className={`group/msg flex scroll-mt-4 ${isUser ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`${isUser ? 'max-w-[85%]' : 'w-full'} ${isUser ? 'items-end' : 'items-start'} flex flex-col ${
+              /* A decorated reply sets its own width: the marking it carries
+                 bleeds into the list's gutters so the text inside lands where
+                 an undecorated reply's does, and `w-full` would pin the box at
+                 the column width and take the bleed out of the text instead. */
+              className={`${
+                isUser ? 'max-w-[85%]' : decoration?.className ? '' : 'w-full'
+              } ${isUser ? 'items-end' : 'items-start'} flex flex-col ${
                 decoration?.className ?? ''
               }`}
             >

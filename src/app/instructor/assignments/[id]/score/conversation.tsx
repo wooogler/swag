@@ -168,13 +168,14 @@ export function ConversationThread({
               // every pixel off its width comes back as lines, so the one turn
               // worth reading closely was the one made narrowest and tallest.
               //
-              // The bar is paid for out of the list's own gutter: pulled left
-              // by exactly the padding it adds, the text starts where every
-              // other reply's does and the marking costs nothing on that side.
-              // Nothing is added on the right at all. Same shape as the row
-              // the version history marks as current.
+              // The marking is paid for out of the list's own gutters: pulled
+              // out by exactly the padding it adds, on both sides, so the text
+              // inside starts and ends where every other reply's does — the
+              // rule box lines up with the question above it. It sets its own
+              // width for that; see the note by `w-full` in ChatMessages. Same
+              // shape as the row the version history marks as current.
               className: responseSwapped
-                ? '-ml-3 rounded-r-lg border-l-2 border-blue-400 bg-blue-50/60 pl-[calc(0.75rem-2px)] py-1.5 dark:border-blue-700 dark:bg-blue-950/30'
+                ? '-mx-3 w-[calc(100%+1.5rem)] rounded-r-lg border-l-2 border-blue-400 bg-blue-50/60 pl-[calc(0.75rem-2px)] pr-3 py-1.5 dark:border-blue-700 dark:bg-blue-950/30'
                 : undefined,
             }
           : null

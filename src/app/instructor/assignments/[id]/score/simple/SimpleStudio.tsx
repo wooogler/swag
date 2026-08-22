@@ -3531,11 +3531,6 @@ function ReplyVersionBar({
           </option>
         ))}
       </select>
-      {/* The same small mark the list uses, rather than a sentence: it is the
-          same fact, and a sentence here competed with the reply under it. */}
-      {!asDelivered && state === 'ready' && owner && (
-        <OwnerMark sid={ownerSid} title={owner} />
-      )}
     </div>
     {/* The rule itself, under the version it belongs to. Two lines by default
         because a rule runs long and the reply is the thing being read; the
@@ -3553,10 +3548,14 @@ function RuleUnderReply({ rule }: { rule: string }) {
       type="button"
       onClick={() => setOpen((v) => !v)}
       title={open ? 'Show less' : 'Show the whole rule'}
-      className="mt-1 block w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1 text-left"
+      /* Opaque, and its own colour. Muted grey on muted grey is a box you can
+         see and text you cannot: sitting on the wash that marks a rewritten
+         reply it lost what little contrast it had, and this is the sentence
+         that explains the reply under it. */
+      className="mt-1 block w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-left"
     >
       <span
-        className={`block whitespace-pre-wrap text-2xs leading-relaxed text-[hsl(var(--muted-foreground))] ${
+        className={`block whitespace-pre-wrap text-xs leading-relaxed text-[hsl(var(--foreground))] ${
           open ? '' : 'line-clamp-2'
         }`}
       >
