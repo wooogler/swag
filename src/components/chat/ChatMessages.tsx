@@ -25,6 +25,10 @@ import { renderHighlightedChildren, type ReplayPasteHighlight } from './replayPa
  */
 const HIGHLIGHT_ALIGN: ScrollLogicalPosition = 'start';
 
+/** What "the top" leaves above it — this list's own p-4, matched by the
+ * scroll-mt-4 on every message. */
+const HIGHLIGHT_INSET = 16;
+
 export interface Message {
   id: string | number;
   role: 'user' | 'assistant';
@@ -166,15 +170,55 @@ export default function ChatMessages({
   // scroll away, click B, click A again and it still scrolls, because the id
   // it last obeyed is B.
   const scrolledToHighlightRef = useRef<string | number | null>(null);
+  /**
+   * Empty room after the last turn, so a question CAN be put at the top.
+   *
+   * Without it the last turns of a thread land wherever the scrollbar runs
+   * out: asking to scroll further than there is content to scroll does
+   * nothing, so the same click that puts one question at the top leaves
+   * another halfway down, and the difference is invisible — it is whether the
+   * reply below happens to be a screenful long. Measured on one board: six
+   * questions at 16px from the top and one at 200px, the one with 227px of
+   * thread left under it in an 844px window.
+   *
+   * Exactly the shortfall, not a blanket screenful: most questions need none,
+   * and it is re-fitted as a streamed reply grows under them, so the space
+   * disappears as the content arrives to replace it.
+   */
+  const [tailSpace, setTailSpace] = useState(0);
   useEffect(() => {
     if (!autoScrollToHighlight || highlightedMessageId == null) return;
-    if (scrolledToHighlightRef.current === highlightedMessageId) return;
-    const target = scrollContainerRef.current?.querySelector(
+    const target = scrollContainerRef.current?.querySelector<HTMLElement>(
       `[data-message-id="${highlightedMessageId}"]`
     );
     if (!target) return;
+
+    // Whichever box actually scrolls — in several mounts it is an ancestor of
+    // this list, not this list.
+    let scroller: HTMLElement | null = target.parentElement;
+    while (scroller && scroller.scrollHeight <= scroller.clientHeight + 2) {
+      scroller = scroller.parentElement;
+    }
+    if (scroller) {
+      const top =
+        target.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop;
+      // What is below it now, against what putting it at the top would need.
+      const need = scroller.clientHeight - HIGHLIGHT_INSET - (scroller.scrollHeight - top);
+      // The current space is already inside scrollHeight, so this converges in
+      // one step rather than chasing itself.
+      setTailSpace((space) => Math.max(0, Math.round(space + need)));
+    }
+
+    if (scrolledToHighlightRef.current === highlightedMessageId) return;
     scrolledToHighlightRef.current = highlightedMessageId;
-    target.scrollIntoView({ block: HIGHLIGHT_ALIGN });
+    // After the space above has been laid out, or the scroll asks for a
+    // position that does not exist yet and stops short.
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => target.scrollIntoView({ block: HIGHLIGHT_ALIGN }))
+    );
+    return () => cancelAnimationFrame(frame);
   }, [autoScrollToHighlight, highlightedMessageId, messages]);
 
   // Highlighted-message visibility: when the reader scrolls it off-screen, a
@@ -558,6 +602,7 @@ export default function ChatMessages({
         </div>
       )}
 
+      {tailSpace > 0 && <div aria-hidden style={{ height: tailSpace }} />}
       <div ref={messagesEndRef} />
     </div>
   );
