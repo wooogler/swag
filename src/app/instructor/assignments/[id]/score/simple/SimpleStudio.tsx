@@ -1580,7 +1580,12 @@ function Tree({
           {/* Which one, not just whether. Plain and unstyled: this is a fact
               about what the next step will read, not a fault to fix. */}
           {unsaved.has(intent.sid) && (
-            <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
+            <span
+              title="Applied, and not in what the next step will read. Deploy keeps it."
+              className="shrink-0 rounded-full bg-[hsl(var(--primary))]/15 px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--primary))]"
+            >
+              unsaved
+            </span>
           )}
           {/* Order is meaning here: the first intent that matches a question
               answers it. So it is a control, not a preference.
@@ -1789,7 +1794,12 @@ function Tree({
         </span>
         <span className="flex-1 text-sm font-semibold">Uncategorized</span>
         {unsaved.has(0) && (
-          <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
+          <span
+              title="Applied, and not in what the next step will read. Deploy keeps it."
+              className="shrink-0 rounded-full bg-[hsl(var(--primary))]/15 px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--primary))]"
+            >
+              unsaved
+            </span>
         )}
         {judging && <Loader2 className="w-3 h-3 animate-spin text-[hsl(var(--muted-foreground))]" />}
         <QuestionCount

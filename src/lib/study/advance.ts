@@ -114,17 +114,24 @@ export async function advanceParticipant(
     // too, not only the work — the console can force a phase, and a jump past
     // the work would otherwise reach generation with nothing deployed and
     // report it as something going wrong on our side.
-    const { deployed, unsaved } = await deployStateFor(clone);
+    const { deployed, unsaved, label } = await deployStateFor(clone);
     if (!deployed) {
+      // Three ways of not being ready, and each one has to name the button
+      // that fixes it and the state it is in. The simple board's said "save"
+      // — written before it had a Deploy button, and left naming a verb that
+      // is on the screen but is not the one that ends the block. A message
+      // pointing at the wrong control is worse than none: it reads as
+      // something having gone wrong rather than as one press being missing.
+      const simple = familyOf(participant) === 'simple';
       return refuse(participant, phase, unsaved ? 'unsaved_changes' : 'not_deployed', {
-        // Three ways of not being ready, and each one has to name the button
-        // that fixes it. A participant who has never seen a Deploy button
-        // cannot act on being told to press it, and one who has already saved
-        // once needs to hear that it is the LATEST changes that are not in.
-        message: unsaved
-          ? 'You have changes that are not saved yet. Save them — the next step is about your saved version.'
-          : familyOf(participant) === 'simple'
-            ? 'Save your chatbot first — the next step is about what you have saved.'
+        message: simple
+          ? label === 'changed since deploy'
+            ? 'You have changed things since you deployed. Press Deploy again — the next step is about the setup you deploy.'
+            : label === 'never deployed'
+              ? 'You have not deployed yet. Press Deploy — the next step is about the setup you deploy.'
+              : 'Nothing has been set up here yet. Change something, then press Deploy — the next step is about the setup you deploy.'
+          : unsaved
+            ? 'You have changes that are not saved yet. Save them — the next step is about your saved version.'
             : 'Deploy your chatbot first — the next step is about the version you deployed.',
         detail: { datasetKey: clone.datasetKey },
       });
