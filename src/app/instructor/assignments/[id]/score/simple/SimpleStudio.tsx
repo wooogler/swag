@@ -2477,7 +2477,7 @@ function GenerateExamples({ onClick }: { onClick: () => Promise<void> }) {
       }}
       disabled={busy}
       title="Write examples from the description. Any written ones here are replaced; questions you added are kept."
-      className="shrink-0 inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-60 disabled:hover:bg-transparent"
+      className="shrink-0 inline-flex h-5 items-center gap-1 rounded border border-[hsl(var(--border))] px-1.5 text-2xs font-semibold leading-none hover:bg-[hsl(var(--muted))] disabled:opacity-60 disabled:hover:bg-transparent"
     >
       {busy && <Loader2 className="w-3 h-3 animate-spin" />}
       {busy ? 'Writing…' : 'Generate examples'}
@@ -2609,7 +2609,11 @@ function QuestionColumn({
           words are what decide where a question goes. */}
       {exampleRows.length > 0 && (
         <section className="shrink-0 max-h-[13rem] flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
-          <div className="shrink-0 flex items-baseline gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
+          {/* items-center, and the same padding as the headers beside it: on
+              a baseline the descenders of the controls hang below the heading
+              and push the row a pixel taller than the two columns it sits
+              between. */}
+          <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
             <span className="text-sm font-semibold">Examples</span>
             <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
               {exampleRows.length}
@@ -2622,7 +2626,11 @@ function QuestionColumn({
                 phrase cannot say whether it is describing the order or offering
                 it. */}
               {onFlipOrder && exampleRows.length > 0 && (
-                <span className="shrink-0 inline-flex overflow-hidden rounded border border-[hsl(var(--border))]">
+                /* h-5, like every other control that sits in a header row:
+                   the text these hold is smaller than a heading but their
+                   padding and borders are not, and two pixels of that made
+                   this box taller than the two columns beside it. */
+                <span className="shrink-0 inline-flex h-5 items-center overflow-hidden rounded border border-[hsl(var(--border))]">
                   {(
                     [
                       ['Closest first', false],
@@ -2640,7 +2648,7 @@ function QuestionColumn({
                           ? 'Order the list by what is least like these — where the next intent usually comes from'
                           : 'Order the list by what is closest to these'
                       }
-                      className={`px-1.5 py-0.5 text-2xs font-semibold ${
+                      className={`h-full px-1.5 text-2xs font-semibold leading-none ${
                         furthest === wantsFurthest
                           ? 'bg-[hsl(var(--foreground))] text-[hsl(var(--background))]'
                           : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
