@@ -44,7 +44,15 @@
  * problem, and deciding whether it is one, is the participant's work and is
  * what we are here to watch (§1-4).
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -1726,12 +1734,11 @@ function Tree({
               )
             }
           >
-            <textarea
+            <AutoTextarea
               value={draft.rootRule}
               readOnly={readOnly}
               maxLength={STUDY_PROMPT_CHAR_LIMIT}
               onChange={(e) => setDraft({ ...draft, rootRule: e.target.value })}
-              className={FIELD_BOX + ' min-h-[9rem]'}
             />
           </Field>
           {!readOnly && (
@@ -1899,13 +1906,12 @@ function Accordion({
           />
         }
       >
-        <textarea
+        <AutoTextarea
           value={intent.definition}
           readOnly={readOnly}
           maxLength={4000}
           onChange={(e) => onChange({ definition: e.target.value })}
           placeholder="asks for…"
-          className={FIELD_BOX + ' min-h-[7.5rem]'}
         />
       </Field>
       <Field
@@ -1914,13 +1920,12 @@ function Accordion({
           !readOnly && <RulePicker sources={ruleSources} onPick={(rule) => onChange({ rule })} />
         }
       >
-        <textarea
+        <AutoTextarea
           value={intent.rule}
           readOnly={readOnly}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => onChange({ rule: e.target.value })}
           placeholder="What the chatbot should do with those questions."
-          className={FIELD_BOX + ' min-h-[9rem]'}
         />
       </Field>
       {!readOnly && (
@@ -1971,10 +1976,64 @@ function Accordion({
   );
 }
 
-/** Every text box in this column, so they cannot drift apart one at a time. */
+/**
+ * Every text box in this column, so they cannot drift apart one at a time.
+ *
+ * px-3 with py-2, which is even although the numbers are not: `leading-relaxed`
+ * puts half its extra leading above the first line and half below the last, so
+ * 8px of padding already reads as about 12 — the same 12 the sides have. Equal
+ * numbers here would leave the text sitting visibly low in its box, which is
+ * the thing this is fixing.
+ */
 const FIELD_BOX =
-  'w-full resize-y rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] ' +
-  'p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]';
+  'w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] ' +
+  'px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]';
+
+/** Two lines to start, ten before it stops growing and starts scrolling. */
+const FIELD_MIN_LINES = 2;
+const FIELD_MAX_LINES = 10;
+
+// useLayoutEffect measures, so it has to run before the paint — but it does
+// not exist on the server, and this file is rendered there too.
+const useMeasure = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+/**
+ * A box the size of what is written in it.
+ *
+ * A fixed height is wrong in both directions at once: a one-line rule sat in
+ * six lines of empty box, and a long definition scrolled inside a window a
+ * third of its length while the empty box below it waited its turn. This is
+ * two lines when there is nothing and grows to ten, after which it scrolls —
+ * ten lines is already most of the column, and a box that can eat the page
+ * takes the buttons under it off the screen.
+ *
+ * Measured from the computed style rather than from constants, so it follows
+ * the type scale instead of having to be kept in step with it by hand.
+ */
+function AutoTextarea({
+  className = '',
+  ...props
+}: React.ComponentPropsWithoutRef<'textarea'>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useMeasure(() => {
+    const el = ref.current;
+    if (!el) return;
+    const style = getComputedStyle(el);
+    const line = parseFloat(style.lineHeight) || 20;
+    const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    const frame = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + border;
+    // Let it collapse first, or it can only ever grow.
+    el.style.height = 'auto';
+    const wanted = el.scrollHeight + border;
+    const height = Math.min(
+      Math.max(wanted, line * FIELD_MIN_LINES + frame),
+      line * FIELD_MAX_LINES + frame
+    );
+    el.style.height = `${height}px`;
+    el.style.overflowY = wanted > height ? 'auto' : 'hidden';
+  }, [props.value]);
+  return <textarea ref={ref} className={`${FIELD_BOX} ${className}`.trim()} {...props} />;
+}
 
 /** A labelled box, with whatever picker belongs to it on the same line. */
 function Field({
@@ -2249,26 +2308,26 @@ function NewIntent({
           />
         }
       >
-        <textarea
+        <AutoTextarea
           value={definition}
           autoFocus
           readOnly={busy}
           maxLength={4000}
           onChange={(e) => setDefinition(e.target.value)}
           placeholder="asks for…"
-          className={FIELD_BOX + ' min-h-[7.5rem]' + (busy ? ' opacity-60' : '')}
+          className={busy ? 'opacity-60' : ''}
         />
       </Field>
       <Field
         label="Then"
         control={!busy && <RulePicker sources={ruleSources} onPick={setRule} />}
       >
-        <textarea
+        <AutoTextarea
           value={rule}
           readOnly={busy}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => setRule(e.target.value)}
-          className={FIELD_BOX + ' min-h-[9rem]' + (busy ? ' opacity-60' : '')}
+          className={busy ? 'opacity-60' : ''}
         />
       </Field>
       <div className="flex items-center gap-2">
