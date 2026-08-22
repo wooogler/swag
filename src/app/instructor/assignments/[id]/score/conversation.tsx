@@ -162,8 +162,19 @@ export function ConversationThread({
               // list puts behind a version chip, so "a rule rewrote this" is
               // one colour wherever it shows. Purple belongs to the selected
               // question's own ring and would blur the two.
+              //
+              // A bar and a wash, not a box. A framed box has to inset its
+              // contents, and the reply is the longest thing on the screen —
+              // every pixel off its width comes back as lines, so the one turn
+              // worth reading closely was the one made narrowest and tallest.
+              //
+              // The bar is paid for out of the list's own gutter: pulled left
+              // by exactly the padding it adds, the text starts where every
+              // other reply's does and the marking costs nothing on that side.
+              // Nothing is added on the right at all. Same shape as the row
+              // the version history marks as current.
               className: responseSwapped
-                ? 'rounded-xl border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900 dark:bg-blue-950/30'
+                ? '-ml-3 rounded-r-lg border-l-2 border-blue-400 bg-blue-50/60 pl-[calc(0.75rem-2px)] py-1.5 dark:border-blue-700 dark:bg-blue-950/30'
                 : undefined,
             }
           : null
