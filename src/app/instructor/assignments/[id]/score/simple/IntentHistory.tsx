@@ -202,20 +202,20 @@ export default function IntentHistory({
   const shown = all ? rows : rows.slice(0, SHOWN);
 
   /**
-   * Where Revert lands, and whether there is anything to drop.
+   * Where Revert lands, and whether it is offered at all.
    *
-   * One verb, because there is one thing being asked for: put the version I am
-   * on back in charge. Sitting on the unsaved row that is the save under it —
-   * dropping what is applied and not saved IS going back one version — and
-   * sitting on an older row it is that row, with the saves in between going
-   * with it. Nothing above the row it lands on means nothing to drop, and the
-   * button says so by being absent.
+   * Only after going back: the row in effect has to be a saved one that is not
+   * the top of the list — which is exactly the state you are in having pressed
+   * an older row. On the newest there is nothing to go back TO, and a live
+   * button there reads as an offer to undo something you are in the middle of.
+   * (What is applied and not saved is dropped by going back to the save under
+   * it, which is that same press from that same row.)
    */
   const inEffect = rows.findIndex(
     (r) => r.definition === currentDefinition && r.rule === currentRule
   );
-  const target = rows.slice(Math.max(inEffect, 0)).find((r) => r.version != null) ?? null;
-  const dropping = target ? rows.indexOf(target) : 0;
+  const target = inEffect > 0 && rows[inEffect]?.version != null ? rows[inEffect] : null;
+  const dropping = target ? inEffect : 0;
   const landsOnNewestSave = target != null && target === rows.find((r) => r.version != null);
 
   // Nothing written here yet — a heading over an empty box is furniture. The
