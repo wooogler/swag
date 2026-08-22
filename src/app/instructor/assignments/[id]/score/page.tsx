@@ -150,6 +150,16 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       participant && deployedSomething
         ? { phase: currentPhase(participant), waits: advanceWaits(currentPhase(participant)) }
         : null;
+    // Deploy IS the end of the block for a participant. The briefing says
+    // "when you feel it's ready, deploy it" and stops there, and the step
+    // after deploying was a second button that had to be found — so the press
+    // asks once and carries them through. It goes through PhaseAdvance rather
+    // than the deploy button's own fetch because leaving some phases runs a
+    // generation batch that has to take over the screen, and because where to
+    // land afterwards is a rule that lives in one place.
+    const simpleDeploy = participant
+      ? { phase: currentPhase(participant), waits: advanceWaits(currentPhase(participant)) }
+      : null;
     return (
       <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
         <StudioShell
@@ -179,13 +189,31 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               // it commits whatever is in effect and marks it as the setup
               // they stand behind, which is the one the next step reads.
               publish={
-                <SimpleDeployButton
-                  assignmentId={id}
-                  view={storedCondition ? null : view ?? null}
-                  deployedVersionNo={initialState.deployedVersionNo}
-                  currentVersionNo={initialState.viewing?.versionNo ?? null}
-                  dirty={initialState.dirty}
-                />
+                simpleDeploy ? (
+                  <PhaseAdvance
+                    compact
+                    from={simpleDeploy.phase}
+                    label="Deploy"
+                    waits={simpleDeploy.waits}
+                    // Not "are you sure" and not "not yet" — this is the one
+                    // press that does the thing and then ends the block, and
+                    // it says both halves before it happens.
+                    blocked={{
+                      reason:
+                        'This deploys the setup you have now and ends it. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it.',
+                      actionLabel: 'Deploy and finish',
+                      actionUrl: `/api/instructor/assignments/${id}/score/simple/deploy`,
+                    }}
+                  />
+                ) : (
+                  <SimpleDeployButton
+                    assignmentId={id}
+                    view={storedCondition ? null : view ?? null}
+                    deployedVersionNo={initialState.deployedVersionNo}
+                    currentVersionNo={initialState.viewing?.versionNo ?? null}
+                    dirty={initialState.dirty}
+                  />
+                )
               }
               blockDone={
                 simpleBlockDone ? (
