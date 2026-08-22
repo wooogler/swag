@@ -56,6 +56,7 @@
  */
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import QuestionCount, { questionsThat } from './QuestionCount';
 
 export interface IntentVersion {
   id: number;
@@ -271,12 +272,14 @@ export default function IntentHistory({
                       it too, and the question a history answers is about the
                       words on the row — did widening this catch more. */}
                   {version.matches != null && (
-                    <span
-                      title={`${version.matches} question${version.matches === 1 ? '' : 's'} match this wording`}
-                      className="shrink-0 w-6 text-right text-2xs tabular-nums text-[hsl(var(--muted-foreground))]"
-                    >
-                      {version.matches}
-                    </span>
+                    <QuestionCount
+                      value={version.matches}
+                      title={`${questionsThat(
+                        version.matches,
+                        'matches this wording',
+                        'match this wording'
+                      )} — not the same as how many end up here, since an intent above can take one first`}
+                    />
                   )}
                   <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
                     {version.createdAt == null

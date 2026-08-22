@@ -20,6 +20,7 @@
  */
 import { useMemo, useState } from 'react';
 import PickerPopover from './PickerPopover';
+import QuestionCount, { questionsThat } from './QuestionCount';
 
 export interface RuleSource {
   /** Which intent carries it — 'root' for the everything-else rule. */
@@ -126,9 +127,14 @@ export default function RulePicker({
               className="flex w-full items-baseline gap-2 py-1 px-2.5 text-left hover:bg-[hsl(var(--muted))]"
             >
               <span className="flex-1 truncate text-xs">{label(entry)}</span>
-              <span className="shrink-0 text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
-                {entry.count}
-              </span>
+              <QuestionCount
+                value={entry.count}
+                title={questionsThat(
+                  entry.count,
+                  'is answered with this rule today',
+                  'are answered with this rule today'
+                )}
+              />
             </button>
           ))}
           <p className="border-t border-[hsl(var(--border))] px-2.5 py-1.5 text-2xs text-[hsl(var(--muted-foreground))]">

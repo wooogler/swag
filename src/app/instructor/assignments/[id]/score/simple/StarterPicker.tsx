@@ -31,6 +31,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import PickerPopover from './PickerPopover';
+import QuestionCount, { questionsThat } from './QuestionCount';
 
 export interface StarterItem {
   key: string;
@@ -209,9 +210,10 @@ function Row({
       <span className={`flex-1 truncate text-xs ${strong ? 'font-semibold' : ''}`}>
         {label ?? item.title}
       </span>
-      <span className="shrink-0 text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
-        {item.count}
-      </span>
+      <QuestionCount
+        value={item.count}
+        title={questionsThat(item.count, 'in this course matches it', 'in this course match it')}
+      />
     </button>
   );
 }

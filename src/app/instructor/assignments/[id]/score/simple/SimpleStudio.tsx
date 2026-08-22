@@ -66,6 +66,7 @@ import type { ScoreQueryRow } from '../IntentBoard';
 import StarterPicker from './StarterPicker';
 import RulePicker, { type RuleSource } from './RulePicker';
 import IntentHistory, { type IntentVersion } from './IntentHistory';
+import QuestionCount, { questionsThat } from './QuestionCount';
 import { intentColor } from './colors';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
@@ -1423,7 +1424,11 @@ function Tree({
               />
             </span>
           )}
-          <Count value={countOf(intent.sid)} />
+          <QuestionCount
+            value={countOf(intent.sid)}
+            title={questionsThat(countOf(intent.sid), 'goes here', 'go here')}
+            strong
+          />
         </div>
 
         {open && (
@@ -1578,7 +1583,11 @@ function Tree({
           <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">unsaved</span>
         )}
         {judging && <Loader2 className="w-3 h-3 animate-spin text-[hsl(var(--muted-foreground))]" />}
-        <Count value={countOf(null)} />
+        <QuestionCount
+          value={countOf(null)}
+          title={questionsThat(countOf(null), 'is claimed by no intent', 'are claimed by no intent')}
+          strong
+        />
       </div>
 
       {!creating && selection.kind === 'root' && (
@@ -1649,14 +1658,6 @@ function Tree({
  * the order controls appeared under the pointer, which is the one moment
  * someone is looking at it.
  */
-function Count({ value }: { value: number }) {
-  return (
-    <span className="shrink-0 min-w-[1.6rem] text-right text-xs font-semibold tabular-nums">
-      {value}
-    </span>
-  );
-}
-
 function OrderButton({
   disabled,
   label,

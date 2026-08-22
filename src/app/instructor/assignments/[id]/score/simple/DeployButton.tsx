@@ -18,7 +18,7 @@
  * work since. The third is the one worth being loud about, because it is the
  * one where what they are looking at is not what the next step will read.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2, Rocket } from 'lucide-react';
 
 export default function SimpleDeployButton({
@@ -37,8 +37,28 @@ export default function SimpleDeployButton({
   dirty: boolean;
 }) {
   const [busy, setBusy] = useState(false);
-  const behind = deployedVersionNo != null && (dirty || deployedVersionNo !== currentVersionNo);
-  const live = deployedVersionNo != null && !behind;
+  // The server told us where things stood at render; the studio tells us what
+  // has happened since. Without the listener this button only learns about a
+  // save from a full reload, and a fresh board's first Save leaves Deploy
+  // disabled with no way to know why.
+  const [liveState, setLiveState] = useState({ currentVersionNo, dirty, deployedVersionNo });
+  useEffect(() => {
+    const onState = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        currentVersionNo: number | null;
+        dirty: boolean;
+        deployedVersionNo: number | null;
+      };
+      setLiveState(d);
+    };
+    window.addEventListener('simple-studio:state', onState);
+    return () => window.removeEventListener('simple-studio:state', onState);
+  }, []);
+  const cur = liveState.currentVersionNo;
+  const isDirty = liveState.dirty;
+  const deployed = liveState.deployedVersionNo;
+  const behind = deployed != null && (isDirty || deployed !== cur);
+  const live = deployed != null && !behind;
 
   const deploy = async () => {
     setBusy(true);
@@ -59,14 +79,14 @@ export default function SimpleDeployButton({
     <div className="flex items-center gap-2">
       <span className="hidden sm:inline text-2xs text-[hsl(var(--muted-foreground))]">
         {live
-          ? `Deployed v${deployedVersionNo}`
+          ? `Deployed v${deployed}`
           : behind
-            ? `Changed since v${deployedVersionNo}`
+            ? `Changed since v${deployed}`
             : 'Not deployed yet'}
       </span>
       <button
         onClick={() => void deploy()}
-        disabled={busy || live || currentVersionNo == null}
+        disabled={busy || live || cur == null}
         title={
           live
             ? 'This is already what you deployed'
