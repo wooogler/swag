@@ -96,8 +96,11 @@ interface StatePayload {
   counts: Record<string, number>;
   judged: number;
   pending: number;
-  /** The newest SAVE — what the study measures. Null if they never saved. */
+  /** The newest SAVE. Null if they never saved. */
   savedVersionNo: number | null;
+  /** What they deployed — the setup they stand behind, and what the study
+   * measures. Null until they have deployed once. */
+  deployedVersionNo: number | null;
   /** Something took effect that the newest save does not carry. */
   dirty: boolean;
   /** Which intents differ from the last save (0 = everything else). */

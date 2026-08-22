@@ -102,6 +102,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     atTip: state.atTip,
     // What the study measures, and whether the board has moved past it.
     savedVersionNo: state.savedVersionNo,
+    deployedVersionNo: state.deployedVersionNo,
     dirty: state.dirty,
     unsavedSids: state.unsavedSids,
     // sid → that intent's own history, newest first. '0' is the

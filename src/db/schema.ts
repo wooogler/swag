@@ -594,6 +594,9 @@ export const simpleConfigVersions = pgTable('simple_config_versions', {
   name: text('name'),
   summary: text('summary'),
   hiddenAt: timestamp('hidden_at'),
+  // Set when this save became the one they stand behind. Deploy is the final
+  // save; only a deployed configuration is measured.
+  deployedAt: timestamp('deployed_at'),
   createdBy: text('created_by'),
   createdAt: timestamp('created_at').notNull(),
 }, (table) => ({

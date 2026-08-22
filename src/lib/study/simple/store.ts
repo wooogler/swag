@@ -39,7 +39,7 @@
  * back is RQ1 data, and hard-deleting it is the mistake the full version's
  * rule-version revert already makes.
  */
-import { and, asc, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { simpleConfigVersions, simplePins } from '@/db/schema';
 import { armOf, type StudioView } from '../config';
@@ -79,6 +79,8 @@ export interface SimpleState {
   atTip: boolean;
   /** The newest SAVE — what the study measures. Null if they never saved. */
   savedVersionNo: number | null;
+  /** The version they stood behind, if they have deployed one. */
+  deployedVersionNo: number | null;
   /** Applied changes the newest save does not carry. */
   dirty: boolean;
   /**
@@ -234,6 +236,8 @@ export async function getSimpleState(args: {
       : null,
     atTip: !wanted || !tip || wanted.versionNo === tip.versionNo,
     savedVersionNo: savedTip?.versionNo ?? null,
+    deployedVersionNo:
+      [...rows].reverse().find((r) => r.deployedAt != null)?.versionNo ?? null,
     // Something took effect that the newest save does not carry. The board
     // says so, and the study refuses to end a block on it.
     dirty: !!tip && tip.versionNo !== (savedTip?.versionNo ?? -1),
@@ -288,6 +292,67 @@ function unsavedAgainst(now: SimpleSnapshot, saved: SimpleSnapshot | null): numb
  * decided was worth keeping. Those are the same thing only when they saved,
  * which is why nothing lets them finish a block until they have.
  */
+/**
+ * The configuration the participant stands behind — what the study measures.
+ *
+ * Deploy is the final save. There is no separate live copy here: the board has
+ * always answered from the newest write, and the briefing has always told
+ * participants to deploy when it is ready. What deploying adds is the
+ * DECLARATION — of the saves they made, this is the one — and until it exists
+ * there is nothing to measure, because "the last one they happened to save"
+ * is not an answer anybody gave.
+ */
+export async function getSimpleDeployed(args: {
+  assignmentId: string;
+  condition: StudioView;
+  seedPrompt: string;
+}): Promise<{ snapshot: SimpleSnapshot; version: { id: number; versionNo: number } | null }> {
+  const [row] = await db
+    .select()
+    .from(simpleConfigVersions)
+    .where(
+      and(
+        eq(simpleConfigVersions.assignmentId, args.assignmentId),
+        isNotNull(simpleConfigVersions.deployedAt),
+        isNull(simpleConfigVersions.hiddenAt)
+      )
+    )
+    .orderBy(desc(simpleConfigVersions.deployedAt))
+    .limit(1);
+  return {
+    snapshot: row
+      ? parseSnapshot(row.snapshot, args.condition, args.seedPrompt)
+      : emptySnapshot(armOf(args.condition), args.seedPrompt),
+    version: row ? { id: row.id, versionNo: row.versionNo } : null,
+  };
+}
+
+/**
+ * Deploy: save whatever is in effect, and stand behind it.
+ *
+ * Two acts in one press because they are one decision. Deploying with an
+ * unsaved change and deploying the save before it are both wrong answers to
+ * "is this what you meant" — so the applied state is committed first, and the
+ * version that results is the one stamped.
+ */
+export async function deploySimpleVersion(args: {
+  assignmentId: string;
+  versionNo: number;
+}): Promise<{ versionNo: number } | null> {
+  const [row] = await db
+    .update(simpleConfigVersions)
+    .set({ deployedAt: new Date() })
+    .where(
+      and(
+        eq(simpleConfigVersions.assignmentId, args.assignmentId),
+        eq(simpleConfigVersions.versionNo, args.versionNo),
+        eq(simpleConfigVersions.kind, 'save')
+      )
+    )
+    .returning({ versionNo: simpleConfigVersions.versionNo });
+  return row ?? null;
+}
+
 export async function getSimpleSaved(args: {
   assignmentId: string;
   condition: StudioView;

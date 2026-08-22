@@ -60,6 +60,7 @@ interface StateBody {
   moments: { versionNo: number; displayNo: number; name: string | null; kind: string }[];
   atTip: boolean;
   savedVersionNo: number | null;
+  deployedVersionNo: number | null;
   dirty: boolean;
   unsavedSids: number[];
   intentVersions: Record<string, { versionNo: number; definition: string; rule: string; name: string | null }[]>;
@@ -647,7 +648,7 @@ async function main() {
       condition: view ?? 'simple_score',
     });
     check('a block cannot end on unsaved changes', !gate.deployed && gate.unsaved === true,
-      `deployed=${gate.deployed} unsaved=${gate.unsaved}`);
+      `deployed=${gate.deployed} unsaved=${gate.unsaved} (${gate.label})`);
 
     // Revert: back to the point they marked.
     await call('revert', { method: 'POST' });
@@ -679,11 +680,68 @@ async function main() {
       committed.savedVersionNo === committed.versions[0]?.versionNo &&
         configText(committed.snapshot).includes('This one gets kept')
     );
+    // Saving is still not finishing. Deploy is the final save — the briefing
+    // tells them to deploy when it is ready — so a block cannot end on a
+    // configuration nobody stood behind, however carefully it was saved.
+    const gateSaved = await deployStateFor({
+      assignmentId,
+      condition: view ?? 'simple_score',
+    });
+    check(
+      'saving is not deploying',
+      !gateSaved.deployed && gateSaved.label === 'never deployed',
+      `${gateSaved.label}`
+    );
+    const deployed = await call('deploy', { method: 'POST' });
+    check(
+      'deploy takes what is in effect',
+      deployed.status === 200 && typeof deployed.body.versionNo === 'number',
+      `v${deployed.body.versionNo}`
+    );
+    const afterDeploy = await state();
+    check(
+      'and the board says which version they stood behind',
+      afterDeploy.deployedVersionNo === deployed.body.versionNo,
+      `${afterDeploy.deployedVersionNo}`
+    );
     const gateAfter = await deployStateFor({
       assignmentId,
       condition: view ?? 'simple_score',
     });
     check('and the block can end now', gateAfter.deployed, `${gateAfter.label}`);
+
+    // Working on after deploying puts the gate back up: what is on screen is
+    // no longer what the next step would read.
+    await call('save', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'apply',
+        rootRule: 'Answer briefly. Changed after deploying.',
+        prompt: 'Answer briefly. Changed after deploying.',
+        intents: afterDeploy.snapshot.intents,
+      }),
+    });
+    const gateMoved = await deployStateFor({
+      assignmentId,
+      condition: view ?? 'simple_score',
+    });
+    check(
+      'and goes back up once they work on past it',
+      !gateMoved.deployed && gateMoved.label === 'changed since deploy',
+      `${gateMoved.label}`
+    );
+    // Deploying again catches up, and saves on the way.
+    const again = await call('deploy', { method: 'POST' });
+    check(
+      'deploying again saves what is in effect first',
+      again.status === 200 && again.body.committed === true,
+      `committed=${again.body.committed}`
+    );
+    const gateCaught = await deployStateFor({
+      assignmentId,
+      condition: view ?? 'simple_score',
+    });
+    check('and stands behind it', gateCaught.deployed, `${gateCaught.label}`);
   }
 
   // 8c. The version axis the participant reads: one timeline per intent.

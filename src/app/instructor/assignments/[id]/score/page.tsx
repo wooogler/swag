@@ -30,6 +30,7 @@ import DeployControls from './DeployControls';
 import StudioShell from './StudioShell';
 import StudioHeader from './StudioHeader';
 import SimpleStudio from './simple/SimpleStudio';
+import SimpleDeployButton from './simple/DeployButton';
 import { loadSimpleBoard } from './simple/page-data';
 import {
   DISSECTION_VERSION,
@@ -141,9 +142,12 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     // configuration they had already moved past, and nothing in the answers
     // would look wrong. The server refuses that case too; this puts the fix
     // in front of the click instead of behind it.
-    const savedSomething = initialState.versions.length > 0;
+    // "I'm done" only exists once there is something deployed to be done
+    // WITH, exactly as the full version's does — it is the step after
+    // publishing, not an alternative to it.
+    const deployedSomething = initialState.deployedVersionNo != null;
     const simpleBlockDone =
-      participant && savedSomething
+      participant && deployedSomething
         ? { phase: currentPhase(participant), waits: advanceWaits(currentPhase(participant)) }
         : null;
     return (
@@ -171,8 +175,18 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                   : instructor.email
               }
               showAccountControls={!participant}
-              // Nothing to publish: Save is the whole of it.
-              publish={null}
+              // The verb the briefing promises. Deploy is the final save —
+              // it commits whatever is in effect and marks it as the setup
+              // they stand behind, which is the one the next step reads.
+              publish={
+                <SimpleDeployButton
+                  assignmentId={id}
+                  view={storedCondition ? null : view ?? null}
+                  deployedVersionNo={initialState.deployedVersionNo}
+                  currentVersionNo={initialState.viewing?.versionNo ?? null}
+                  dirty={initialState.dirty}
+                />
+              }
               blockDone={
                 simpleBlockDone ? (
                   <PhaseAdvance
@@ -180,12 +194,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                     from={simpleBlockDone.phase}
                     label="I'm done"
                     blocked={
-                      initialState.dirty
+                      initialState.dirty ||
+                      initialState.deployedVersionNo !== initialState.viewing?.versionNo
                         ? {
                             reason:
-                              'Some of your changes are in effect but not saved. The questions coming next are about your saved version — save them first.',
-                            actionLabel: 'Save and finish',
-                            actionUrl: `/api/instructor/assignments/${id}/score/simple/commit`,
+                              'You have changed things since you deployed. The questions coming next are about the setup you deployed — deploy this one first.',
+                            actionLabel: 'Deploy and finish',
+                            actionUrl: `/api/instructor/assignments/${id}/score/simple/deploy`,
                           }
                         : null
                     }

@@ -151,6 +151,13 @@ export async function ensureStudyTables(): Promise<void> {
         sql`CREATE INDEX IF NOT EXISTS "simple_ratings_assignment_idx" ON "simple_ratings" ("assignment_id")`
       );
 
+      // When a save became the one the participant stands behind. Deploy is
+      // the final save — the briefing tells them to deploy when it is ready —
+      // and nothing measures a configuration that was never deployed.
+      await db.execute(
+        sql`ALTER TABLE "simple_config_versions" ADD COLUMN IF NOT EXISTS "deployed_at" timestamp`
+      );
+
       // What a definition is ANCHORED to, for ordering its question list.
       //
       // Keyed by the definition text like the verdicts are, so editing a
