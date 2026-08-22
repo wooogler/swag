@@ -3163,7 +3163,37 @@ function ReplyVersionBar({
   }
 
   const asDelivered = state === 'original';
-  const value = pick === 'original' ? 'original' : String(current ?? moments[0]?.versionNo ?? '');
+  /**
+   * What the box says it is showing.
+   *
+   * A reply that came from no configuration must not be labelled with one.
+   * The newest version was standing in as the value whenever nothing had been
+   * picked, so an untouched question read "This reply is v1" — a claim that
+   * v1 produced it, when what produced it was the assignment's own prompt
+   * months ago. Only a version somebody CHOSE keeps its number here.
+   */
+  const value =
+    pick === 'original' || (pick == null && asDelivered)
+      ? 'original'
+      : String(current ?? moments[0]?.versionNo ?? '');
+
+  /**
+   * And when there is nothing else this reply could be, no box at all.
+   *
+   * The list is the delivered reply plus one entry per moment, so with a
+   * single moment the choice is between the delivered reply and a version
+   * that is producing exactly it — one answer wearing two labels. A second
+   * moment is where a real comparison begins, because an older one may have
+   * caught this question when the newest does not.
+   */
+  const nothingToCompare = asDelivered && pick == null && moments.length <= 1;
+  if (nothingToCompare) {
+    return (
+      <p className="mb-1 text-2xs text-[hsl(var(--muted-foreground))]">
+        This reply is the one that was delivered.
+      </p>
+    );
+  }
   return (
     <div className="mb-1">
     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs text-[hsl(var(--muted-foreground))]">
