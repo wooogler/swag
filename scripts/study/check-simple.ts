@@ -315,6 +315,14 @@ async function main() {
     }),
   });
   check('second save returns a version', typeof withIntent.body.versionNo === 'number');
+  // The ids it handed out. The board sends a temporary negative one for
+  // anything new and cannot know the real one until the write comes back —
+  // and it needs it to land on what was just made.
+  check(
+    'and says which ids it created',
+    Array.isArray(withIntent.body.created) && (withIntent.body.created as number[]).length === 1,
+    JSON.stringify(withIntent.body.created)
+  );
   const v2 = withIntent.body.versionNo as number;
 
   const afterIntent = await state();

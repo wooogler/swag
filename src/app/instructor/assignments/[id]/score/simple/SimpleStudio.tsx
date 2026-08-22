@@ -329,7 +329,7 @@ export default function SimpleStudio({
        * the write that creates it and is written once, server-side, beside
        * the snapshot rather than in it. */
       seed?: { sid: number; messageId: number } | null
-    ) => {
+    ): Promise<{ created?: number[] } | null> => {
       setSaving(true);
       try {
         const res = await fetch(api('save'), {
@@ -348,12 +348,15 @@ export default function SimpleStudio({
             recentMessageIds: selectedMessageId ? [selectedMessageId] : [],
           }),
         });
-        if (!res.ok) return;
+        if (!res.ok) return null;
+        const body = (await res.json()) as { created?: number[] };
         setLocalVersionNo(null);
         await load({ versionNo: null });
+        return body;
       } finally {
         setSaving(false);
       }
+      return null;
     },
     [api, load, selectedMessageId]
   );
@@ -390,7 +393,7 @@ export default function SimpleStudio({
         setPast((p) => [...p.slice(-24), from]);
         setFuture([]);
       }
-      await write(next, focusSid, 'apply', seed);
+      return write(next, focusSid, 'apply', seed);
     },
     [state.snapshot, write]
   );
@@ -920,7 +923,7 @@ function ConfigColumn({
     next: SimpleSnapshot,
     focusSid: number | null,
     seed?: { sid: number; messageId: number } | null
-  ) => Promise<void>;
+  ) => Promise<{ created?: number[] } | null>;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
   onRestore: (versionNo: number) => Promise<void>;
@@ -1143,7 +1146,7 @@ function Tree({
     next: SimpleSnapshot,
     focusSid: number | null,
     seed?: { sid: number; messageId: number } | null
-  ) => Promise<void>;
+  ) => Promise<{ created?: number[] } | null>;
   onSaveVersion: () => Promise<void>;
   onRevert: () => Promise<void>;
   /** Something is in effect that the newest save does not carry. */
@@ -1206,12 +1209,18 @@ function Tree({
           beforeTitle={beforeTitle}
           draft={draft}
           onCancel={() => setCreating(null)}
-          onCreate={(next, sid, seed) => {
+          onCreate={async (next, sid, seed) => {
             // Closed on the way out, not on the way back: leaving the form
             // open after a save invites a second click that writes the same
             // intent again.
             setCreating(null);
-            return onApply(next, sid, seed);
+            const written = await onApply(next, sid, seed);
+            // Land on what was just made. The board only learns the real id
+            // here — the form sent a temporary negative one — and the next
+            // thing anyone wants is the list of what those words caught.
+            const made = written?.created?.[0];
+            if (made != null) setSelection({ kind: 'intent', sid: made });
+            return null;
           }}
         />
       </div>
@@ -1858,7 +1867,7 @@ function NewIntent({
     next: SimpleSnapshot,
     focusSid: number | null,
     seed?: { sid: number; messageId: number } | null
-  ) => Promise<void>;
+  ) => Promise<{ created?: number[] } | null>;
 }) {
   const [title, setTitle] = useState('');
   const [definition, setDefinition] = useState('');

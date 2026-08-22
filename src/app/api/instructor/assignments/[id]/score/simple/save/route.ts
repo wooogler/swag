@@ -85,9 +85,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   let allocate = await nextSid(id);
   const incoming = body.intents ?? base.intents;
   const seeds: { sid: number; messageId: number }[] = [];
+  const created: number[] = [];
   const intents: SimpleIntent[] = incoming.map((raw) => {
     const isNew = !(raw.sid != null && raw.sid > 0);
     const sid = isNew ? allocate++ : (raw.sid as number);
+    if (isNew) created.push(sid);
     const seedMessageId = 'seedMessageId' in raw ? raw.seedMessageId : null;
     if (isNew && seedMessageId) seeds.push({ sid, messageId: seedMessageId });
     return {
@@ -150,7 +152,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     recentMessageIds: body.recentMessageIds ?? [],
   });
 
-  return NextResponse.json({ versionNo: version.versionNo, id: version.id, kind: body.kind });
+  // The ids it handed out. The board sends a temporary negative one for
+  // anything new and cannot know the real one until here — and it needs it to
+  // select what was just made.
+  return NextResponse.json({
+    versionNo: version.versionNo,
+    id: version.id,
+    kind: body.kind,
+    created,
+  });
 }
 
 /**
