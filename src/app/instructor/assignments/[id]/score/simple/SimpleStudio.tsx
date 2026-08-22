@@ -1224,18 +1224,23 @@ function PromptEditor({
       {!readOnly && (
         <div className="flex items-center gap-2">
           <ApplyButton saving={saving} disabled={!draftChanged} onClick={onApply} />
-          <button
-            onClick={() => void onSaveVersion()}
-            disabled={saving || (!dirty && !draftChanged)}
-            title={
-              dirty || draftChanged
-                ? 'Keep this as a version you can come back to'
-                : 'Nothing has changed since the last save'
+          <Why
+            reason={
+              saving
+                ? 'Waiting for the last change to land'
+                : dirty || draftChanged
+                  ? 'Keep this as a version you can come back to'
+                  : 'Nothing has changed since the last save'
             }
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
           >
-            Save
-          </button>
+            <button
+              onClick={() => void onSaveVersion()}
+              disabled={saving || (!dirty && !draftChanged)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              Save
+            </button>
+          </Why>
         </div>
       )}
     </div>
@@ -1839,20 +1844,25 @@ function Tree({
                   void onApply(draft, null);
                 }}
               />
-              <button
-                onClick={() => void onSaveVersion()}
-                disabled={saving || !dirty || draftChanged}
-                title={
-                  draftChanged
-                    ? 'Apply these edits first — Save keeps what is in effect'
-                    : dirty
-                      ? 'Keep the whole configuration as a version you can come back to'
-                      : 'Nothing has changed since the last save'
+              <Why
+                reason={
+                  saving
+                    ? 'Waiting for the last change to land'
+                    : draftChanged
+                      ? 'Apply these edits first — Save keeps what is in effect'
+                      : dirty
+                        ? 'Keep the whole configuration as a version you can come back to'
+                        : 'Nothing has changed since the last save'
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
               >
-                Save
-              </button>
+                <button
+                  onClick={() => void onSaveVersion()}
+                  disabled={saving || !dirty || draftChanged}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  Save
+                </button>
+              </Why>
             </div>
           )}
           <IntentHistory
@@ -2041,24 +2051,29 @@ function Accordion({
           {/* It writes the WHOLE configuration — a version is the whole of it —
               which is why it says so on the way in and why the tree marks every
               intent the save will carry. */}
-          <button
-            onClick={() => void onSaveVersion()}
-            /* Save keeps what is IN EFFECT, not what is in the boxes, so with
-               unapplied edits sitting there it would keep something other than
-               what is on screen. Apply, look at what it did, then decide
-               whether to keep it. */
-            disabled={saving || !dirty || draftChanged}
-            title={
-              draftChanged
-                ? 'Apply these edits first — Save keeps what is in effect'
-                : dirty
-                  ? 'Keep the whole configuration as a version you can come back to'
-                  : 'Nothing has changed since the last save'
+          <Why
+            reason={
+              saving
+                ? 'Waiting for the last change to land'
+                : draftChanged
+                  ? 'Apply these edits first — Save keeps what is in effect'
+                  : dirty
+                    ? 'Keep the whole configuration as a version you can come back to'
+                    : 'Nothing has changed since the last save'
             }
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
           >
-            Save
-          </button>
+            <button
+              onClick={() => void onSaveVersion()}
+              /* Save keeps what is IN EFFECT, not what is in the boxes, so
+                 with unapplied edits sitting there it would keep something
+                 other than what is on screen. Apply, look at what it did,
+                 then decide whether to keep it. */
+              disabled={saving || !dirty || draftChanged}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              Save
+            </button>
+          </Why>
           <span className="flex-1" />
           <DeleteIntent onDelete={onDelete} />
         </div>
@@ -2258,6 +2273,22 @@ function StepButton({
  * report on what it was asked to do and nothing else. It still greys out for
  * every write, which is right: two at once is not a thing to allow.
  */
+/**
+ * Why a button will not do anything, on the button that will not do it.
+ *
+ * A disabled control receives no pointer events, so its own `title` never
+ * opens — every reason these two carried had been written and never shown.
+ * The reason hangs on a wrapper instead, which is not disabled, so it reads
+ * the same whether the button is live or dim.
+ */
+function Why({ reason, children }: { reason: string; children: React.ReactNode }) {
+  return (
+    <span title={reason} className="inline-flex">
+      {children}
+    </span>
+  );
+}
+
 function ApplyButton({
   saving,
   disabled,
@@ -2270,26 +2301,31 @@ function ApplyButton({
 }) {
   const [busy, setBusy] = useState(false);
   return (
-    <button
-      onClick={async () => {
-        setBusy(true);
-        try {
-          await onClick();
-        } finally {
-          setBusy(false);
-        }
-      }}
-      disabled={saving || disabled}
-      title={
-        disabled
-          ? 'Nothing here that is not already in effect'
-          : 'Put this into effect and see what it answers'
+    <Why
+      reason={
+        saving
+          ? 'Waiting for the last change to land'
+          : disabled
+            ? 'Nothing written here that is not already in effect'
+            : 'Put this into effect and see what it answers'
       }
-      className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
     >
-      {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-      Apply
-    </button>
+      <button
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onClick();
+          } finally {
+            setBusy(false);
+          }
+        }}
+        disabled={saving || disabled}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
+      >
+        {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+        Apply
+      </button>
+    </Why>
   );
 }
 
