@@ -982,20 +982,30 @@ function ConfigColumn({
             intent. What they step is the whole configuration: creations,
             deletions and order have no card to live on, and a card's own
             history is the version list inside it. */}
-        {!readOnly && (
-          <div className="sticky top-0 z-10 flex items-center justify-end gap-1 px-2 py-1 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
-            <StepButton label={undoLabel} onClick={onUndo}>
-              <Undo2 className="w-3.5 h-3.5" />
-              Undo
-            </StepButton>
-            <StepButton label={redoLabel} onClick={onRedo}>
-              <Redo2 className="w-3.5 h-3.5" />
-              Redo
-            </StepButton>
-          </div>
-        )}
+        {/* The column says what it is, like the two beside it. "Setup" is the
+            participant's own word for this: the task they were read says
+            "adjust the setup so that it responds the way you want", and a
+            column labelled anything else would be a second name for the thing
+            they were asked to change. One word in both arms, because the shell
+            is identical in both and only what is INSIDE this column differs. */}
+        <div className="sticky top-0 z-10 flex items-center gap-2 px-3 py-2 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
+          <span className="text-sm font-semibold">Setup</span>
+          <span className="flex-1" />
+          {!readOnly && (
+            <>
+              <StepButton label={undoLabel} onClick={onUndo}>
+                <Undo2 className="w-3.5 h-3.5" />
+                Undo
+              </StepButton>
+              <StepButton label={redoLabel} onClick={onRedo}>
+                <Redo2 className="w-3.5 h-3.5" />
+                Redo
+              </StepButton>
+            </>
+          )}
+        </div>
         {readOnly && (
-          <div className="sticky top-0 z-10 px-3 py-2 bg-[hsl(var(--muted))] border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
+          <div className="sticky top-9 z-10 px-3 py-2 bg-[hsl(var(--muted))] border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
             <span className="text-xs text-[hsl(var(--muted-foreground))]">
               Looking at v{state.viewing?.displayNo}. Editing happens on the latest one.
             </span>
@@ -1905,7 +1915,7 @@ function StepButton({
       disabled={!onClick}
       title={label}
       aria-label={label}
-      className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[hsl(var(--muted-foreground))]"
+      className="inline-flex items-center gap-1 h-5 px-1.5 rounded-lg text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[hsl(var(--muted-foreground))]"
     >
       {children}
     </button>
