@@ -54,7 +54,15 @@ export function ConversationThread({
   /** Replace ONE turn's reply with a regenerated response (rule workbench:
    * "this step's response, in the context of the prior conversation"). `raw`
    * overrides the thread-wide NIRVANA raw rendering for just that message. */
-  overrideResponse?: { messageId: number; text: string; raw?: boolean } | null;
+  overrideResponse?: {
+    messageId: number;
+    text: string;
+    raw?: boolean;
+    /** The text is on its way. Until the first of it lands the reply reads as
+     * working rather than as the delivered one, which is a different answer
+     * and would otherwise stand there long enough to look like the verdict. */
+    loading?: boolean;
+  } | null;
   /** Render ONLY the current question's Q→response instead of the whole thread —
    * the "Add example" preview defaults to this, with the full thread one toggle
    * away. Same bubbles either way, so toggling reads as a zoom, not a new view. */
@@ -79,6 +87,9 @@ export function ConversationThread({
         const override =
           overrideResponse && overrideResponse.messageId === r.messageId ? overrideResponse : null;
         const responseText = override ? override.text : r.responseText;
+        // Keep the reply's place while it is being worked out, so the slot
+        // above it and the thread below it do not jump.
+        const working = Boolean(override?.loading) && !override?.text.trim();
         return [
           {
             id: r.messageId,
@@ -86,13 +97,13 @@ export function ConversationThread({
             content: r.queryText,
             timestamp: Date.parse(r.queryTimestamp),
           },
-          ...(responseText && responseText.trim()
+          ...(working || (responseText && responseText.trim())
             ? [
                 {
                   // Distinct id space from the (numeric) user message ids.
                   id: `assistant-${r.messageId}`,
                   role: 'assistant' as const,
-                  content: responseText,
+                  content: responseText ?? '',
                   ...(override ? { metadata: { rawText: override.raw ?? false } } : {}),
                 },
               ]
@@ -140,11 +151,13 @@ export function ConversationThread({
   // plainly as delivered.
   const currentResponseId = `assistant-${current.messageId}`;
   const responseSwapped = overrideResponse?.messageId === current.messageId;
+  const replyWorking = responseSwapped && Boolean(overrideResponse?.loading) && !overrideResponse?.text.trim();
   const decorateMessage = responseSlot
     ? (m: Message) =>
         m.id === currentResponseId
           ? {
               above: responseSlot,
+              body: replyWorking ? <ReplyPlaceholder /> : undefined,
               // Blue is the rule-version accent — the same one the question
               // list puts behind a version chip, so "a rule rewrote this" is
               // one colour wherever it shows. Purple belongs to the selected
@@ -174,5 +187,18 @@ export function ConversationThread({
       rawAssistantText={isNirvana}
       renderUserContent={renderUserContent}
     />
+  );
+}
+
+/** The shape of a reply, before there is one. Three lines of it: enough to
+ * hold the space a paragraph will take, not so much that it promises a length
+ * nobody knows yet. */
+function ReplyPlaceholder() {
+  return (
+    <div className="space-y-2 py-1" aria-label="Working out this reply">
+      <div className="h-3.5 w-[92%] animate-pulse rounded bg-[hsl(var(--muted))]" />
+      <div className="h-3.5 w-[78%] animate-pulse rounded bg-[hsl(var(--muted))]" />
+      <div className="h-3.5 w-[45%] animate-pulse rounded bg-[hsl(var(--muted))]" />
+    </div>
   );
 }

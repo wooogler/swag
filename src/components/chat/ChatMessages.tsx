@@ -73,7 +73,16 @@ interface ChatMessagesProps {
    * (bubble + its controls). Return null for every other message. The board's
    * viewer uses it to hang the rule-version picker on the reply that version
    * rewrites, and to tint that one reply while it is being viewed. */
-  decorateMessage?: (message: Message) => { above?: React.ReactNode; className?: string } | null;
+  decorateMessage?: (
+    message: Message
+  ) => {
+    above?: React.ReactNode;
+    className?: string;
+    /** Stand in for the bubble's contents — a reply being worked out, where
+     * `content` would otherwise have to be some placeholder string pretending
+     * to be a message. */
+    body?: React.ReactNode;
+  } | null;
 }
 
 export default function ChatMessages({
@@ -333,7 +342,9 @@ export default function ChatMessages({
                   : 'bg-transparent text-[hsl(var(--foreground))] px-0 py-0'
                   } ${isHighlighted ? 'ring-2 ring-purple-500 ring-offset-2 shadow-lg shadow-purple-200' : ''}`}
               >
-                {isUser ? (
+                {decoration?.body ? (
+                  decoration.body
+                ) : isUser ? (
                   <p className="text-base whitespace-pre-wrap wrap-break-word">
                     {renderUserContent?.(message) ??
                       renderHighlightedChildren(message.content, messageHighlights, onReplayPasteClick)}

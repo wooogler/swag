@@ -2782,6 +2782,33 @@ function ViewerColumn({
         ? owners[String(row.messageId)]?.sid ?? null
         : null;
 
+  /**
+   * What the reply below is doing, decided at RENDER rather than by the effect.
+   *
+   * The effect runs after the paint, so on the frame a new question arrives —
+   * or a new rule is applied to this one — the answer still belongs to the old
+   * state and every "is this generated?" test came out false. For one paint the
+   * thread therefore showed the DELIVERED reply, and then swapped it for the
+   * one the rule produced. Two answers in a row, the first of them wrong, on
+   * every click: exactly the flicker this reads ahead to avoid.
+   *
+   * `original` is the one case that can be settled without asking, and it is
+   * settled here too — a rule still equal to the assignment's own prompt
+   * produces the reply already on the screen, so that one must NOT wait.
+   */
+  const reply: 'original' | 'working' | 'shown' | 'failed' =
+    answer && row && answer.messageId === row.messageId
+      ? answer.state === 'original'
+        ? 'original'
+        : answer.state === 'failed'
+          ? 'failed'
+          : answer.text.length > 0
+            ? 'shown'
+            : 'working'
+      : knownOriginal
+        ? 'original'
+        : 'working';
+
   const [rule, setRule] = useState<string | null>(null);
   useEffect(() => {
     if (!row) {
@@ -2834,20 +2861,22 @@ function ViewerColumn({
     }
 
     (async () => {
-      // Not 'streaming' — nothing is streaming yet. A cache hit and an
-      // untouched rule both come back as JSON without generating anything, so
-      // announcing a wait here put a spinner on every question anyone clicked
-      // on a board where nothing had been changed. The word starts meaning
-      // what it says: text is arriving.
-      // The text it had, until the new one starts arriving. Blanking it made
-      // the thread fall back to the delivered reply — and for the rows that
-      // never had one, to "No reply was delivered for this question", which
-      // flashed on every question after every apply.
+      // Working, from the moment the request goes out. Getting here at all
+      // means a generation is coming — the untouched-rule case never reaches
+      // it — so the honest thing to show is that it is being worked out.
+      //
+      // Two things it must NOT show meanwhile. Not the delivered reply: that
+      // is a different answer, and letting it stand for a second before the
+      // new one lands makes the screen say the rule did nothing and then
+      // change its mind. Not an empty bubble either, which on the rows that
+      // never had a delivered reply read as "No reply was delivered for this
+      // question". The text it already had is kept when there is one; the bar
+      // above says it is working either way.
       setAnswer((prev) => ({
         messageId,
         versionNo,
         text: prev?.messageId === messageId ? prev.text : '',
-        state: 'idle',
+        state: 'streaming',
         ownerSid: prev?.messageId === messageId ? prev.ownerSid : null,
       }));
       try {
@@ -2945,13 +2974,17 @@ function ViewerColumn({
           // opening them by default put the reply below the fold — the one
           // thing this column is for. Every bubble keeps its own show control.
           overrideResponse={
-            answer &&
-            answer.messageId === row.messageId &&
-            answer.state !== 'pending' &&
-            answer.state !== 'original' &&
-            answer.text.length > 0
-              ? { messageId: row.messageId, text: answer.text, raw: false }
-              : null
+            // An absent override means the delivered reply, so the working
+            // state has to be an override too — with `loading`, which holds
+            // the reply's place and shows it being written.
+            reply === 'original' || reply === 'failed'
+              ? null
+              : {
+                  messageId: row.messageId,
+                  text: answer?.messageId === row.messageId ? answer.text : '',
+                  raw: false,
+                  loading: reply === 'working',
+                }
           }
           responseSlot={
             // On the reply, not in the column header. A rule applies to ONE
@@ -2973,7 +3006,7 @@ function ViewerColumn({
                   ? answer.state
                   : knownOriginal
                     ? 'original'
-                    : 'idle'
+                    : 'streaming'
               }
               owner={ownerSidNow == null ? null : titleOf(ownerSidNow)}
               ownerSid={ownerSidNow}
