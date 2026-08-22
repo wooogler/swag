@@ -61,6 +61,10 @@ interface ChatMessagesProps {
    * point of interest is mid-conversation, not the latest message. It lands at
    * the top of the window; see HIGHLIGHT_ALIGN. */
   autoScrollToHighlight?: boolean;
+  /** The ring on the highlighted message. Defaults to the selection purple;
+   * the simple board passes the colour of the intent that answers it, so the
+   * question, its reply and the row in the list are one colour. */
+  highlightColor?: string | null;
   /** Override the body of a USER bubble (e.g. SCORE's Material tags — pasted
    * content collapsed into clickable per-kind chips). Return null to fall back
    * to the default plain-text rendering for that message. */
@@ -82,6 +86,9 @@ interface ChatMessagesProps {
   ) => {
     above?: React.ReactNode;
     className?: string;
+    /** For colours that come from data rather than from the palette — the
+     * intent that answers this turn has one, and Tailwind cannot name it. */
+    style?: React.CSSProperties;
     /** Stand in for the bubble's contents — a reply being worked out, where
      * `content` would otherwise have to be some placeholder string pretending
      * to be a message. */
@@ -101,6 +108,7 @@ export default function ChatMessages({
   onReplayPasteClick,
   rawAssistantText = false,
   autoScrollToHighlight = false,
+  highlightColor,
   renderUserContent,
   onEditAssistant,
   showQueryNav = false,
@@ -378,6 +386,7 @@ export default function ChatMessages({
               } ${isUser ? 'items-end' : 'items-start'} flex flex-col ${
                 decoration?.className ?? ''
               }`}
+              style={decoration?.style}
             >
               {decoration?.above}
               {showConversationBadge && message.conversationTitle && (
@@ -390,7 +399,24 @@ export default function ChatMessages({
                 className={`rounded-2xl px-4 py-3 transition-all duration-300 ${isUser
                   ? 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground))] rounded-tr-sm'
                   : 'bg-transparent text-[hsl(var(--foreground))] px-0 py-0'
-                  } ${isHighlighted ? 'ring-2 ring-purple-500 ring-offset-2 shadow-lg shadow-purple-200' : ''}`}
+                  } ${
+                    isHighlighted
+                      ? highlightColor
+                        ? 'ring-2 ring-offset-2 shadow-lg'
+                        : 'ring-2 ring-purple-500 ring-offset-2 shadow-lg shadow-purple-200'
+                      : ''
+                  }`}
+                style={
+                  isHighlighted && highlightColor
+                    ? {
+                        // color-mix rather than an opacity utility: the value
+                        // is a data colour, so the shade has to be worked out
+                        // where it is used.
+                        ['--tw-ring-color' as string]: highlightColor,
+                        boxShadow: `0 10px 15px -3px color-mix(in srgb, ${highlightColor} 25%, transparent)`,
+                      }
+                    : undefined
+                }
               >
                 {decoration?.body ? (
                   decoration.body

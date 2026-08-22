@@ -3339,6 +3339,11 @@ function ViewerColumn({
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3">
         <ConversationThread
+          /* One colour for the question, the reply and the row in the list:
+             whatever answers it. */
+          accent={
+            snapshot.arm === 'score' && ownerSidNow != null ? intentColor(ownerSidNow) : null
+          }
           rows={rows}
           current={row}
           isNirvana={isNirvana}

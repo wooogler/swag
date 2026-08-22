@@ -42,6 +42,7 @@ export function ConversationThread({
   singleTurn = false,
   expandMaterials = false,
   responseSlot,
+  accent = null,
 }: {
   rows: ScoreQueryRow[];
   current: ScoreQueryRow;
@@ -73,6 +74,13 @@ export function ConversationThread({
    * together, so a regenerated response reads as this one reply changing and
    * not as a setting on the whole conversation. */
   responseSlot?: React.ReactNode;
+  /**
+   * The colour of whatever answers this question — the intent's own, as the
+   * list and the tree draw it. Null falls back to the rule-version blue, which
+   * is what the uncategorized rule gets: it has no colour of its own anywhere
+   * else either.
+   */
+  accent?: string | null;
 }) {
   const thread = useMemo(() => {
     const full = rows
@@ -158,10 +166,10 @@ export function ConversationThread({
           ? {
               above: responseSlot,
               body: replyWorking ? <ReplyPlaceholder /> : undefined,
-              // Blue is the rule-version accent — the same one the question
-              // list puts behind a version chip, so "a rule rewrote this" is
-              // one colour wherever it shows. Purple belongs to the selected
-              // question's own ring and would blur the two.
+              // The colour of the intent that answers it, so the dot in the
+              // list, the row in the tree and the reply here are one colour.
+              // Blue when nothing owns it: the uncategorized rule has no
+              // colour of its own anywhere else either.
               //
               // A bar and a wash, not a box. A framed box has to inset its
               // contents, and the reply is the longest thing on the screen —
@@ -175,8 +183,19 @@ export function ConversationThread({
               // width for that; see the note by `w-full` in ChatMessages. Same
               // shape as the row the version history marks as current.
               className: responseSwapped
-                ? '-mx-3 w-[calc(100%+1.5rem)] rounded-r-lg border-l-2 border-blue-400 bg-blue-50/60 pl-[calc(0.75rem-2px)] pr-3 py-1.5 dark:border-blue-700 dark:bg-blue-950/30'
+                ? `-mx-3 w-[calc(100%+1.5rem)] rounded-r-lg border-l-2 pl-[calc(0.75rem-2px)] pr-3 py-1.5 ${
+                    accent
+                      ? ''
+                      : 'border-blue-400 bg-blue-50/60 dark:border-blue-700 dark:bg-blue-950/30'
+                  }`
                 : undefined,
+              style:
+                responseSwapped && accent
+                  ? {
+                      borderLeftColor: accent,
+                      backgroundColor: `color-mix(in srgb, ${accent} 8%, transparent)`,
+                    }
+                  : undefined,
             }
           : null
     : undefined;
@@ -197,6 +216,7 @@ export function ConversationThread({
       // turn (singleTurn, or a one-question conversation) — nowhere to go.
       showQueryNav
       rawAssistantText={isNirvana}
+      highlightColor={accent}
       renderUserContent={renderUserContent}
     />
   );
