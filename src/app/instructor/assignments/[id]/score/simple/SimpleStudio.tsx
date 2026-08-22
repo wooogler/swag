@@ -1979,15 +1979,16 @@ function Accordion({
 /**
  * Every text box in this column, so they cannot drift apart one at a time.
  *
- * px-3 with py-2, which is even although the numbers are not: `leading-relaxed`
- * puts half its extra leading above the first line and half below the last, so
- * 8px of padding already reads as about 12 — the same 12 the sides have. Equal
- * numbers here would leave the text sitting visibly low in its box, which is
- * the thing this is fixing.
+ * px-2 with py-1, which is even although the numbers are not. `leading-relaxed`
+ * puts half its extra leading above the first line and half below the last —
+ * about 4px at this size — so the padding has to be that much smaller to leave
+ * the same gap the sides do. Equal numbers leave the text sitting visibly low
+ * in its box; the gap that matters is the one to the ink, and it is 8px on all
+ * four sides.
  */
 const FIELD_BOX =
   'w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] ' +
-  'px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]';
+  'px-2 py-1 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]';
 
 /** Two lines to start, ten before it stops growing and starts scrolling. */
 const FIELD_MIN_LINES = 2;

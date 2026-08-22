@@ -282,8 +282,16 @@ export default function IntentHistory({
                         ? 'This is what is in effect — Save keeps it as this version'
                         : 'Your unsaved wording — put it back and apply it'
                   }
-                  className={`flex w-full items-baseline gap-1.5 px-2 py-1 text-left hover:bg-[hsl(var(--muted))] disabled:hover:bg-transparent ${
-                    isCurrent || isLive ? 'bg-[hsl(var(--primary))]/5' : ''
+                  /* The row being read has to win against the row under the
+                     pointer. A 5% tint lost to the hover grey, which is the
+                     one thing it is next to — so it takes the accent colour
+                     properly and a bar down its edge, and the transparent bar
+                     on every other row keeps the text from stepping sideways
+                     as the reading moves. */
+                  className={`flex w-full items-baseline gap-1.5 border-l-2 pl-1.5 pr-2 py-1 text-left ${
+                    isCurrent || isLive
+                      ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/15'
+                      : 'border-transparent hover:bg-[hsl(var(--muted))] disabled:hover:bg-transparent'
                   } ${disabled ? 'opacity-50' : ''}`}
                 >
                   <span className="shrink-0 text-2xs font-bold tabular-nums text-[hsl(var(--muted-foreground))]">
@@ -311,7 +319,13 @@ export default function IntentHistory({
                       )} — not the same as how many end up here, since an intent above can take one first`}
                     />
                   )}
-                  <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
+                  <span
+                    className={`shrink-0 w-[3.5rem] text-right text-2xs ${
+                      isCurrent || isLive
+                        ? 'font-semibold text-[hsl(var(--primary))]'
+                        : 'text-[hsl(var(--muted-foreground))]'
+                    }`}
+                  >
                     {version.createdAt == null
                       ? isLive
                         ? 'unsaved'
