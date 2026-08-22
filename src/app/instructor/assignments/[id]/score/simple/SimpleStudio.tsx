@@ -870,7 +870,7 @@ export default function SimpleStudio({
           readOnly || selection.kind !== 'intent'
             ? null
             : () =>
-                void editExamples({
+                editExamples({
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ sid: selection.sid, regenerate: true }),
@@ -2439,6 +2439,36 @@ function VersionList({
 /* Middle: the questions                                               */
 /* =================================================================== */
 
+/**
+ * Write the examples, and say so while it is happening.
+ *
+ * Three invented questions is a model call — a couple of seconds — and until
+ * it came back the list sat there unchanged, which reads as a button that did
+ * nothing and invites a second press. The spinner belongs to this press, like
+ * Apply's does, rather than to a flag shared with every other write.
+ */
+function GenerateExamples({ onClick }: { onClick: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await onClick();
+        } finally {
+          setBusy(false);
+        }
+      }}
+      disabled={busy}
+      title="Write examples from the description. Any written ones here are replaced; questions you added are kept."
+      className="shrink-0 inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-60 disabled:hover:bg-transparent"
+    >
+      {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+      {busy ? 'Writing…' : 'Generate examples'}
+    </button>
+  );
+}
+
 function QuestionColumn({
   rows,
   pinnedRows,
@@ -2470,7 +2500,9 @@ function QuestionColumn({
    * ones with no row of their own. */
   exampleRows: { id: number; text: string | null; row: ScoreQueryRow | null }[];
   onDropExample: ((exampleId: number) => void) | null;
-  onRegenerateExamples: (() => void) | null;
+  /** Awaited, so the button can say it is working: writing three examples is
+   * a model call, and it took seconds with nothing on screen to show for it. */
+  onRegenerateExamples: (() => Promise<void>) | null;
   onAddExample: ((messageId: number) => void) | null;
   /** Reading the list from the far end rather than the near one. */
   furthest: boolean;
@@ -2609,13 +2641,7 @@ function QuestionColumn({
               // written, so the button ADDS rather than rewrites. This names
               // the act it always performs, and the title carries what happens
               // to any written ones already there.
-              <button
-                onClick={onRegenerateExamples}
-                title="Write examples from the description. Any written ones here are replaced; questions you added are kept."
-                className="shrink-0 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
-              >
-                Generate examples
-              </button>
+              <GenerateExamples onClick={onRegenerateExamples} />
             )}
           </div>
           <ul className="flex-1 min-h-0 overflow-y-auto">
