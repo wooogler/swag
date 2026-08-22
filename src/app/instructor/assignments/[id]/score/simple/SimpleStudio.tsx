@@ -616,35 +616,31 @@ export default function SimpleStudio({
   );
 
   /**
-   * The questions an intent at this position could take.
+   * The questions the pile a new intent is read before is holding today.
    *
-   * Everything from the row it is read before, downwards: the intents ABOVE
-   * are tried first and keep what they have. It is what the starter counts are
-   * counted over, because that number is read as "how many would come here",
-   * and over the whole log it promised questions that are already spoken for.
+   * Putting one above another is done to intercept it — to take, first, some
+   * of what that one is taking now — so the number the starter sets show is
+   * how much of THAT pile each would take. Counted over everything the new
+   * intent could reach it was mostly the uncategorized heap, which says
+   * nothing about the split being considered.
    *
-   * A question nobody has judged yet is included: nothing above it has claimed
-   * it, so until something does it is still in play.
+   * It can still take from further down, and the line on the form says so.
+   * That is a consequence of being read first, not the reason for writing it.
+   *
+   * Ownership as resolved, so the ceiling here is exactly the number on the
+   * row: an unjudged question is nobody's yet and is counted nowhere.
    */
   const takeableFrom = useCallback(
     (beforeSid: number | null): number[] => {
       if (arm !== 'score') return [];
-      const at =
-        beforeSid == null
-          ? draft.intents.length
-          : draft.intents.findIndex((i) => i.sid === beforeSid);
-      const below = new Set<number | null>([
-        null,
-        ...draft.intents.slice(at < 0 ? draft.intents.length : at).map((i) => i.sid),
-      ]);
       return material
         .filter((row) => {
           const owner = ownerOf(row.messageId);
-          return !owner || owner.outcome === 'pending' || below.has(owner.sid);
+          return owner?.outcome !== 'pending' && (owner?.sid ?? null) === beforeSid;
         })
         .map((row) => row.messageId);
     },
-    [arm, draft.intents, material, ownerOf]
+    [arm, material, ownerOf]
   );
 
   /**
@@ -2367,16 +2363,10 @@ function NewIntent({
         Read before “{beforeTitle}”, so any of its{' '}
         <span className="font-semibold text-[hsl(var(--foreground))]">
           {takeable.here} question{takeable.here === 1 ? '' : 's'}
-        </span>
-        {takeable.below > 0 && (
-          <>
-            {' '}— or of the{' '}
-            <span className="font-semibold text-[hsl(var(--foreground))]">
-              {takeable.below} below it
-            </span>{' '}—
-          </>
-        )}{' '}
-        can come here. Nothing above it moves.
+        </span>{' '}
+        can come here
+        {takeable.below > 0 ? `, and anything below it this also describes` : ''}. Nothing
+        above it moves.
       </p>
       {creating.fromRow && (
         // The question that prompted this, drawn the way the list draws it —
