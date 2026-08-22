@@ -315,6 +315,31 @@ export default function SimpleStudio({
     }
   }, [api, arm, load, material, state.pinned]);
 
+  /**
+   * Names arrive after the write that earns them, and nothing else goes back
+   * for them.
+   *
+   * Naming is best-effort and runs behind the response — a second or three
+   * with the smallest model there is. The board only reloads while it is
+   * judging, so whether a name was ever seen came down to whether it landed
+   * before the judging loop's last pass: the same apply showed "v2 · Refined
+   * Complete Text intent" on one run and a bare "v2" on the next. A row you
+   * are deciding whether to keep is exactly where that line is worth reading,
+   * so this asks again, a few times, and stops.
+   */
+  const [nameTries, setNameTries] = useState(0);
+  useEffect(() => {
+    const unnamed =
+      (state.dirty && state.moments[0] != null && !state.moments[0].name) ||
+      Object.values(state.intentVersions).some((rows) => rows.some((row) => !row.name));
+    if (!unnamed || nameTries >= 8) return;
+    const timer = setTimeout(() => {
+      setNameTries((n) => n + 1);
+      void load({ keepDraft: true });
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [state.dirty, state.moments, state.intentVersions, nameTries, load]);
+
   // Anything unjudged gets judged, without being asked for — a "Run" button
   // here would be handing the participant the machine to operate.
   //
@@ -345,6 +370,8 @@ export default function SimpleStudio({
        * the snapshot rather than in it. */
       seed?: { sid: number; messageId: number } | null
     ): Promise<{ created?: number[] } | null> => {
+      // A new write earns new names; start listening for them again.
+      setNameTries(0);
       setSaving(true);
       try {
         const res = await fetch(api('save'), {
@@ -1046,6 +1073,7 @@ function ConfigColumn({
             intentVersions={state.intentVersions}
             unsaved={unsaved}
             applied={state.snapshot}
+            pendingName={state.dirty ? state.moments[0]?.name ?? null : null}
             draft={draft}
             setDraft={setDraft}
             readOnly={readOnly}
@@ -1161,6 +1189,7 @@ function Tree({
   intentVersions,
   unsaved,
   applied,
+  pendingName,
   draft,
   setDraft,
   readOnly,
@@ -1184,6 +1213,8 @@ function Tree({
   intentVersions: Record<string, IntentVersion[]>;
   /** Intents that differ from the last save (0 = the uncategorized rule). */
   unsaved: Set<number>;
+  /** The name of the moment in effect, for the row that is holding it. */
+  pendingName: string | null;
   /** What is in EFFECT — which is not what is in the boxes while something is
    * typed and not applied. The history's pending row is about the first. */
   applied: SimpleSnapshot;
@@ -1239,6 +1270,80 @@ function Tree({
         count: countOf(i.sid),
       })),
   ];
+
+  /**
+   * The wording each card applied and has not saved, kept while the reader
+   * goes off to look at an older row.
+   *
+   * Picking a row APPLIES it, which is the point — a version you can read the
+   * text of but not the effect of is half a version — but it also means the
+   * work that was in effect stops being in effect, and it was being derived
+   * from what is in effect, so it vanished from the list that was supposed to
+   * be holding it. Unsaved work is still work.
+   *
+   * Set by the Apply it came from, so a pick can never overwrite it. Filled in
+   * from what is in effect when there is no entry, which is what a reload
+   * needs. Cleared by the two things that end it: a save keeps it, a revert
+   * throws it away.
+   */
+  const [held, setHeld] = useState<
+    Record<number, { definition: string; rule: string; name: string | null }>
+  >({});
+  const hold = (sid: number, pair: { definition: string; rule: string }) =>
+    setHeld((h) => ({ ...h, [sid]: { ...pair, name: null } }));
+  const savedRef = useRef(savedVersionNo);
+  useEffect(() => {
+    if (savedRef.current === savedVersionNo) return;
+    savedRef.current = savedVersionNo;
+    setHeld({});
+  }, [savedVersionNo]);
+  useEffect(() => {
+    setHeld((prev) => {
+      const next = { ...prev };
+      let filled = false;
+      const pairs: [number, { definition: string; rule: string }][] = [
+        [0, { definition: '', rule: applied.rootRule }],
+        ...applied.intents.map(
+          (i) =>
+            [i.sid, { definition: i.definition, rule: i.rule }] as [
+              number,
+              { definition: string; rule: string },
+            ]
+        ),
+      ];
+      for (const [sid, pair] of pairs) {
+        if (unsaved.has(sid) && !next[sid]) {
+          next[sid] = { ...pair, name: null };
+          filled = true;
+        }
+      }
+      return filled ? next : prev;
+    });
+  }, [applied, unsaved]);
+  /**
+   * The name the model wrote for the apply, kept ON the held wording.
+   *
+   * It arrives a few seconds after the apply and describes the moment that was
+   * in effect then — so it has to be copied onto the row while that is still
+   * true. Read live it would be the name of whatever is in effect NOW, which
+   * after a look at an older row is a different change entirely.
+   */
+  const unsavedKey = [...unsaved].sort().join(',');
+  useEffect(() => {
+    if (!pendingName) return;
+    setHeld((prev) => {
+      const next = { ...prev };
+      let named = false;
+      for (const sid of unsavedKey ? unsavedKey.split(',').map(Number) : []) {
+        if (next[sid] && next[sid].name !== pendingName) {
+          next[sid] = { ...next[sid], name: pendingName };
+          named = true;
+        }
+      }
+      return named ? next : prev;
+    });
+  }, [pendingName, unsavedKey]);
+  const dropHeld = () => setHeld({});
 
   /** Which title is open for editing. One at a time, like the editors. */
   const [renaming, setRenaming] = useState<number | null>(null);
@@ -1446,20 +1551,34 @@ function Tree({
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
               intent={intent}
-              pending={
-                unsaved.has(intent.sid)
-                  ? (() => {
-                      const live = findIntent(applied, intent.sid);
-                      return live ? { definition: live.definition, rule: live.rule } : null;
-                    })()
-                  : null
-              }
+              pending={held[intent.sid] ?? null}
+              onPutBack={() => {
+                const back = held[intent.sid];
+                if (!back) return;
+                void onApply(
+                  {
+                    ...draft,
+                    intents: draft.intents.map((i) =>
+                      i.sid === intent.sid ? { ...i, ...back } : i
+                    ),
+                  },
+                  intent.sid
+                );
+              }}
               readOnly={readOnly}
               saving={saving}
               dirty={dirty}
               savedVersionNo={savedVersionNo}
               onSaveVersion={onSaveVersion}
-              onRevert={onRevert}
+              /* Revert is the one press that says "throw the unsaved work
+                 away", so it is the one that stops holding it. */
+              onRevert={async () => {
+                // After, not before: the gap-filler reads what is in effect,
+                // and until the revert lands that is still the work being
+                // thrown away — it would put it straight back.
+                await onRevert();
+                dropHeld();
+              }}
               draftChanged={draftChanged}
               onPickVersion={(v) =>
                 void onApply(
@@ -1475,8 +1594,12 @@ function Tree({
                 )
               }
               onChange={(fields) => patch(intent.sid, fields)}
-              onApply={() => onApply(draft, intent.sid)}
+              onApply={() => {
+                hold(intent.sid, { definition: intent.definition, rule: intent.rule });
+                return onApply(draft, intent.sid);
+              }}
               onDelete={async () => {
+                setHeld(({ [intent.sid]: _gone, ...rest }) => rest);
                 await onApply(
                   { ...draft, intents: removeIntent(draft.intents, intent.sid) },
                   null
@@ -1616,7 +1739,10 @@ function Tree({
               <ApplyButton
                 saving={saving}
                 disabled={!draftChanged}
-                onClick={() => void onApply(draft, null)}
+                onClick={() => {
+                  hold(0, { definition: '', rule: draft.rootRule });
+                  void onApply(draft, null);
+                }}
               />
               <button
                 onClick={() => void onSaveVersion()}
@@ -1638,10 +1764,18 @@ function Tree({
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
-            pending={unsaved.has(0) ? { definition: '', rule: applied.rootRule } : null}
+            pending={held[0] ?? null}
+            onPutBack={() => {
+              const back = held[0];
+              if (back) void onApply({ ...draft, rootRule: back.rule }, null);
+            }}
             disabled={readOnly}
             onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
-            onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
+            onRevert={
+              !readOnly && dirty && savedVersionNo != null
+                ? () => void onRevert().then(dropHeld)
+                : null
+            }
           />
         </div>
       )}
@@ -1708,6 +1842,7 @@ function Accordion({
   versions,
   intent,
   pending,
+  onPutBack,
   readOnly,
   saving,
   dirty,
@@ -1726,7 +1861,9 @@ function Accordion({
   /** This intent's own history, newest first. */
   versions: IntentVersion[];
   /** Applied and not saved, for the row the next Save will write. */
-  pending: { definition: string; rule: string } | null;
+  pending: { definition: string; rule: string; name: string | null } | null;
+  /** Put that wording back after a look at an older row. */
+  onPutBack: () => void;
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
@@ -1825,6 +1962,7 @@ function Accordion({
         currentDefinition={intent.definition}
         currentRule={intent.rule}
         pending={pending}
+        onPutBack={onPutBack}
         disabled={readOnly}
         onPick={onPickVersion}
         onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}

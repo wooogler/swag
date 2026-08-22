@@ -110,6 +110,7 @@ export default function IntentHistory({
   currentDefinition,
   currentRule,
   pending = null,
+  onPutBack = null,
   onPick,
   onRevert,
   disabled = false,
@@ -117,9 +118,17 @@ export default function IntentHistory({
   versions: IntentVersion[];
   currentDefinition: string;
   currentRule: string;
-  /** What is IN EFFECT and not saved — not what is typed. Null when the newest
-   * save is what the board is answering from. */
-  pending?: { definition: string; rule: string } | null;
+  /**
+   * The wording applied and not saved — not what is typed.
+   *
+   * It survives going off to look at an older row: work that has not been
+   * saved is still work, and a list that drops it the moment you read
+   * something else is a list you cannot read anything else from. When it is
+   * not what is in effect, the row offers to put it back.
+   */
+  pending?: { definition: string; rule: string; name: string | null } | null;
+  /** Apply the pending wording again, after a look elsewhere. */
+  onPutBack?: (() => void) | null;
   onPick: (version: IntentVersion) => void;
   /** Go back to the last save. Beside the history because that is where the
    * thing it goes back TO is listed. Null when there is nothing applied, or
@@ -151,7 +160,11 @@ export default function IntentHistory({
             versionNo: (versions[0]?.versionNo ?? 0) + 1,
             definition: pending.definition,
             rule: pending.rule,
-            name: null,
+            // The name the model wrote for the apply. Applies are named for
+            // the reply's version picker anyway, and a row you are deciding
+            // whether to keep is exactly where a one-line "what this did" is
+            // worth reading.
+            name: pending.name,
             matches: null,
             createdAt: null,
             version: null,
@@ -228,11 +241,20 @@ export default function IntentHistory({
               version.version != null &&
               version.definition === currentDefinition &&
               version.rule === currentRule;
+            // The pending row, and it is what the board is answering with —
+            // as opposed to set aside while an older row is being read.
+            const isLive =
+              version.version == null &&
+              version.definition === currentDefinition &&
+              version.rule === currentRule;
             // Newest first, so the one after it in the list is the one before
             // it in time. The oldest has nothing to differ from.
             const before = rows[i + 1] ?? null;
+            // What moved, against the row before it in time. The oldest has
+            // nothing to differ from and says nothing — "first" was a label
+            // for the absence of a comparison, which is not news.
             const moved = !before
-              ? 'first'
+              ? ''
               : version.definition !== before.definition && version.rule !== before.rule
                 ? 'when + then'
                 : version.definition !== before.definition
@@ -242,18 +264,26 @@ export default function IntentHistory({
               <li key={version.key}>
                 <button
                   type="button"
-                  /* The pending row is what is in effect: there is nothing to
-                     put back, and offering to apply it would be a button that
-                     does nothing. */
-                  disabled={disabled || version.version == null}
-                  onClick={version.version ? () => onPick(version.version!) : undefined}
+                  /* Nothing to press only when this row is what is running:
+                     applying what is applied does nothing. Set aside, the
+                     pending row is a way back to your own work. */
+                  disabled={disabled || (version.version == null && (isLive || !onPutBack))}
+                  onClick={
+                    version.version
+                      ? () => onPick(version.version!)
+                      : isLive || !onPutBack
+                        ? undefined
+                        : () => onPutBack()
+                  }
                   title={
                     version.version
                       ? 'Put this wording back and apply it'
-                      : 'This is what is in effect — Save keeps it as this version'
+                      : isLive
+                        ? 'This is what is in effect — Save keeps it as this version'
+                        : 'Your unsaved wording — put it back and apply it'
                   }
                   className={`flex w-full items-baseline gap-1.5 px-2 py-1 text-left hover:bg-[hsl(var(--muted))] disabled:hover:bg-transparent ${
-                    isCurrent || version.version == null ? 'bg-[hsl(var(--primary))]/5' : ''
+                    isCurrent || isLive ? 'bg-[hsl(var(--primary))]/5' : ''
                   } ${disabled ? 'opacity-50' : ''}`}
                 >
                   <span className="shrink-0 text-2xs font-bold tabular-nums text-[hsl(var(--muted-foreground))]">
@@ -283,7 +313,9 @@ export default function IntentHistory({
                   )}
                   <span className="shrink-0 w-[3.5rem] text-right text-2xs text-[hsl(var(--muted-foreground))]">
                     {version.createdAt == null
-                      ? 'unsaved'
+                      ? isLive
+                        ? 'unsaved'
+                        : 'set aside'
                       : isCurrent
                         ? 'current'
                         : ago(version.createdAt, now)}
