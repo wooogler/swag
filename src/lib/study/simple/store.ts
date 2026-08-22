@@ -247,8 +247,13 @@ export async function getSimpleState(args: {
     // Something took effect that the newest save does not carry. The board
     // says so, and the study refuses to end a block on it.
     dirty: !!tip && tip.versionNo !== (savedTip?.versionNo ?? -1),
+    // Against the TIP, not against what is being shown: what somebody has
+    // applied and not saved is a fact about their work, and it does not stop
+    // being true because they are looking at an older version. Read off the
+    // shown snapshot it went away exactly when they went to look, taking the
+    // row that offers the way back with it.
     unsavedSids: unsavedAgainst(
-      shown,
+      tip ? parseSnapshot(tip.snapshot, condition, seedPrompt) : shown,
       savedTip ? parseSnapshot(savedTip.snapshot, condition, seedPrompt) : null
     ),
     pinned: pins.map((p) => p.messageId),

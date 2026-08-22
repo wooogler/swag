@@ -1119,18 +1119,8 @@ function ConfigColumn({
             <span className="text-xs text-[hsl(var(--muted-foreground))]">
               Looking at v{state.viewing?.displayNo}. Editing happens on the latest one.
             </span>
-            <div className="flex gap-1.5">
-              <RestoreVersion
-                to={state.viewing?.displayNo ?? 0}
-                onRestore={() => state.viewing && void onRestore(state.viewing.versionNo)}
-              />
-              <button
-                onClick={() => onView(null)}
-                className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--background))]"
-              >
-                Latest
-              </button>
-            </div>
+            {/* The two things to do about it are beside the list that put the
+                board here — this row only has to say where "here" is. */}
           </div>
         )}
 
@@ -1175,6 +1165,8 @@ function ConfigColumn({
             draftChanged={draftChanged}
             onView={onView}
             viewingVersionNo={state.viewing && !state.atTip ? state.viewing.versionNo : null}
+            viewingLabel={state.viewing?.displayNo ?? null}
+            onRestore={() => state.viewing && void onRestore(state.viewing.versionNo)}
             assignmentId={assignmentId}
           />
         )}
@@ -1301,6 +1293,8 @@ function Tree({
   draftChanged,
   onView,
   viewingVersionNo,
+  viewingLabel,
+  onRestore,
   assignmentId,
 }: {
   api: (path: string, query?: string) => string;
@@ -1344,6 +1338,10 @@ function Tree({
   onView: (configVersionNo: number | null) => void;
   /** Which version the board is showing, or null when it is on the newest. */
   viewingVersionNo: number | null;
+  /** What that version is called. */
+  viewingLabel: number | null;
+  /** Make the version on screen the newest one again. */
+  onRestore: () => void;
   /** The hypothetical questions the open intent's order was worked out from. */
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
@@ -1385,9 +1383,15 @@ function Tree({
    * model's name copied across before it could go stale — and every line of
    * that existed to survive a press that has stopped doing the damage.
    */
-  const pendingFor = (sid: number, pair: { definition: string; rule: string }) =>
+  const pendingFor = (sid: number) =>
     unsaved.has(sid)
-      ? { ...pair, name: pendingName, matches: sid === 0 ? null : matchesNow[String(sid)] ?? null }
+      ? {
+          name: pendingName,
+          // Only the board's own position can answer this. Reading an older
+          // version, the counts on screen are that version's.
+          matches:
+            viewingVersionNo != null || sid === 0 ? null : matchesNow[String(sid)] ?? null,
+        }
       : null;
 
   /** Which title is open for editing. One at a time, like the editors. */
@@ -1608,14 +1612,11 @@ function Tree({
               nextVersionNo={nextVersionNo}
               onView={onView}
               viewingVersionNo={viewingVersionNo}
+              viewingLabel={viewingLabel}
+              onRestore={onRestore}
               intent={intent}
               within={takeableFrom(intent.sid)}
-              pending={(() => {
-                const live = findIntent(applied, intent.sid);
-                return live
-                  ? pendingFor(intent.sid, { definition: live.definition, rule: live.rule })
-                  : null;
-              })()}
+              pending={pendingFor(intent.sid)}
               readOnly={readOnly}
               saving={saving}
               dirty={dirty}
@@ -1787,12 +1788,12 @@ function Tree({
           )}
           <IntentHistory
             versions={intentVersions['0'] ?? []}
-            currentDefinition=""
-            currentRule={draft.rootRule}
             nextVersionNo={nextVersionNo}
-            pending={pendingFor(0, { definition: '', rule: applied.rootRule })}
+            pending={pendingFor(0)}
             onView={onView}
             viewingVersionNo={viewingVersionNo}
+            viewingLabel={viewingLabel}
+            onRestore={onRestore}
           />
         </div>
       )}
@@ -1860,6 +1861,8 @@ function Accordion({
   nextVersionNo,
   onView,
   viewingVersionNo,
+  viewingLabel,
+  onRestore,
   intent,
   within,
   pending,
@@ -1885,15 +1888,14 @@ function Accordion({
   onView: (configVersionNo: number | null) => void;
   /** Which version the board is showing, or null when it is on the newest. */
   viewingVersionNo: number | null;
+  /** What that version is called. */
+  viewingLabel: number | null;
+  /** Make the version on screen the newest one again. */
+  onRestore: () => void;
   /** The questions this intent could take, for counting starter sets over. */
   within: number[];
   /** Applied and not saved, for the row the next Save will write. */
-  pending: {
-    definition: string;
-    rule: string;
-    name: string | null;
-    matches: number | null;
-  } | null;
+  pending: { name: string | null; matches: number | null } | null;
   intent: SimpleIntent;
   readOnly: boolean;
   saving: boolean;
@@ -1992,12 +1994,12 @@ function Accordion({
           hidden behind a number. */}
       <IntentHistory
         versions={versions}
-        currentDefinition={intent.definition}
-        currentRule={intent.rule}
         nextVersionNo={nextVersionNo}
         pending={pending}
         onView={onView}
         viewingVersionNo={viewingVersionNo}
+        viewingLabel={viewingLabel}
+        onRestore={onRestore}
       />
     </div>
   );
@@ -2185,50 +2187,6 @@ function StepButton({
  * The reason hangs on a wrapper instead, which is not disabled, so it reads
  * the same whether the button is live or dim.
  */
-/**
- * Make the version on screen the newest one again.
- *
- * It asks first: everything saved or applied after this point leaves the
- * timeline, and "restore" on its own says where it lands but not what it
- * costs.
- */
-function RestoreVersion({ to, onRestore }: { to: number; onRestore: () => void }) {
-  const [asking, setAsking] = useState(false);
-  if (!asking) {
-    return (
-      <button
-        onClick={() => setAsking(true)}
-        title={`Make v${to} the newest again, dropping everything saved or applied after it`}
-        className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--background))]"
-      >
-        Restore this version
-      </button>
-    );
-  }
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className="text-2xs text-[hsl(var(--muted-foreground))]">
-        Back to v{to}, dropping what came after — the whole setup?
-      </span>
-      <button
-        onClick={() => {
-          setAsking(false);
-          onRestore();
-        }}
-        className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-[hsl(var(--background))] dark:text-rose-400"
-      >
-        Restore
-      </button>
-      <button
-        onClick={() => setAsking(false)}
-        className="rounded px-1.5 py-1 text-xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--card))]"
-      >
-        Cancel
-      </button>
-    </span>
-  );
-}
-
 function Why({ reason, children }: { reason: string; children: React.ReactNode }) {
   return (
     <span title={reason} className="inline-flex">

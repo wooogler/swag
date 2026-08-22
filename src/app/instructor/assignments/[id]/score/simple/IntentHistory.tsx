@@ -116,33 +116,28 @@ function ago(iso: string, now: number): string {
 
 export default function IntentHistory({
   versions,
-  currentDefinition,
-  currentRule,
   nextVersionNo,
   pending = null,
   onView,
   viewingVersionNo = null,
-  disabled = false,
+  onRestore = null,
+  viewingLabel = null,
 }: {
   versions: IntentVersion[];
-  currentDefinition: string;
-  currentRule: string;
   /** What the next save will be called — the timeline's number, not a private
    * count of this intent's own edits. */
   nextVersionNo: number;
   /**
-   * The wording applied and not saved — not what is typed.
+   * There is something applied and not saved for this intent.
    *
-   * It survives going off to look at an older row: work that has not been
-   * saved is still work, and a list that drops it the moment you read
-   * something else is a list you cannot read anything else from. When it is
-   * not what is in effect, the row offers to put it back.
+   * It survives going off to read an older version — work that has not been
+   * saved is still work, and a list that drops it the moment you look
+   * elsewhere is a list you cannot look away from. Pressing it comes back to
+   * the newest, which is where that work is.
    */
   pending?: {
-    definition: string;
-    rule: string;
     name: string | null;
-    /** What this wording catches now — the same number the saved rows show. */
+    /** What this wording catches, when the board is on it to know. */
     matches: number | null;
   } | null;
 
@@ -154,7 +149,11 @@ export default function IntentHistory({
   onView: (configVersionNo: number | null) => void;
   /** Which version the board is showing, or null when it is on the newest. */
   viewingVersionNo?: number | null;
-  disabled?: boolean;
+  /** Make the version on screen the newest one again — offered here, beside
+   * the list that put the board there. */
+  onRestore?: (() => void) | null;
+  /** What that version is called, for the question it asks first. */
+  viewingLabel?: number | null;
 }) {
   /** Expanded past the three newest onto the whole history. */
   const [all, setAll] = useState(false);
@@ -172,29 +171,14 @@ export default function IntentHistory({
    * It takes one of the three places rather than adding a fourth, so the card
    * keeps its height whether or not something is applied.
    */
-  /**
-   * The pending row is a wording that is in no save yet.
-   *
-   * Pressing an old row APPLIES it, which is the point — and that apply is a
-   * write, so what is in effect stops being the newest save and a row appeared
-   * for it, numbered next and carrying the same words as the row just pressed.
-   * Reading v1 produced a v3 that WAS v1. What is in effect being a wording
-   * already in the list is not a new version; the "current" mark on the row it
-   * matches says where the board is, and the chip in the tree says it is not
-   * the newest save.
-   */
-  const pendingIsNew =
-    pending != null &&
-    !versions.some((v) => v.definition === pending.definition && v.rule === pending.rule);
-
   const rows: Row[] = [
-    ...(pending && pendingIsNew
+    ...(pending
       ? [
           {
             key: 'pending',
             versionNo: nextVersionNo,
-            definition: pending.definition,
-            rule: pending.rule,
+            definition: '',
+            rule: '',
             matches: pending.matches,
             // The name the model wrote for the apply. Applies are named for
             // the reply's version picker anyway, and a row you are deciding
@@ -256,6 +240,23 @@ export default function IntentHistory({
           <span className="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
             Version history
             {rows.length > 0 && <span className="tabular-nums font-normal">{rows.length}</span>}
+          </span>
+        )}
+        <span className="flex-1" />
+        {/* Where the press that moved the board was, rather than at the top of
+            the column: the list is what is being read, and the two things to
+            do about it are to keep this version or to stop reading. */}
+        {viewingVersionNo != null && (
+          <span className="flex shrink-0 items-center gap-1.5">
+            {onRestore && <RestoreVersion to={viewingLabel ?? 0} onRestore={onRestore} />}
+            <button
+              type="button"
+              onClick={() => onView(null)}
+              title="Back to the newest, where editing happens"
+              className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
+            >
+              Latest
+            </button>
           </span>
         )}
       </div>
@@ -340,3 +341,49 @@ export default function IntentHistory({
   );
 }
 
+/**
+ * Make the version on screen the newest one again.
+ *
+ * It asks first: everything saved or applied after this point leaves the
+ * timeline, and "restore" on its own says where it lands but not what it
+ * costs.
+ */
+function RestoreVersion({ to, onRestore }: { to: number; onRestore: () => void }) {
+  const [asking, setAsking] = useState(false);
+  if (!asking) {
+    return (
+      <button
+        type="button"
+        onClick={() => setAsking(true)}
+        title={`Make v${to} the newest again, dropping everything saved or applied after it`}
+        className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
+      >
+        Restore
+      </button>
+    );
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+        Back to v{to}, dropping what came after — the whole setup?
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          setAsking(false);
+          onRestore();
+        }}
+        className="rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold text-rose-600 hover:bg-[hsl(var(--muted))] dark:text-rose-400"
+      >
+        Restore
+      </button>
+      <button
+        type="button"
+        onClick={() => setAsking(false)}
+        className="rounded px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+      >
+        Cancel
+      </button>
+    </span>
+  );
+}
