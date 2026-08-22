@@ -661,6 +661,14 @@ export const simpleDefinitionAnchors = pgTable('simple_definition_anchors', {
   uniq: uniqueIndex('simple_definition_anchors_unique').on(table.assignmentId, table.defHash),
 }));
 
+// The next intent id for an assignment. Only ever goes up: an id is what
+// verdicts, examples, versions and logged events all hang off, so it must not
+// be re-issued after a delete.
+export const simpleSidCounter = pgTable('simple_sid_counter', {
+  assignmentId: text('assignment_id').primaryKey(),
+  nextSid: integer('next_sid').notNull(),
+});
+
 // The examples that stand for an intent. Either a real question from the log
 // or a written one, and the participant's to add to, remove and regenerate.
 // Not configuration: they change no routing and no answer, only the order the

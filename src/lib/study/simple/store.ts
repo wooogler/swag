@@ -41,7 +41,13 @@
  */
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
-import { simpleConfigVersions, simplePins } from '@/db/schema';
+import {
+  simpleConfigVersions,
+  simpleIntentExamples,
+  simpleIntentVersions,
+  simplePins,
+  simpleSidCounter,
+} from '@/db/schema';
 import { armOf, type StudioView } from '../config';
 import { emptySnapshot, flattenStoredIntents, type SimpleSnapshot } from './chain';
 
@@ -591,18 +597,59 @@ export async function revertSimpleWorking(assignmentId: string): Promise<{
 }
 
 /** The next unused stable id for this assignment, counting hidden versions. */
-export async function nextSid(assignmentId: string): Promise<number> {
-  const rows = await db
-    .select({ snapshot: simpleConfigVersions.snapshot })
-    .from(simpleConfigVersions)
-    .where(eq(simpleConfigVersions.assignmentId, assignmentId));
-  let max = 0;
-  for (const row of rows) {
+/**
+ * Hand out `count` intent ids, and never hand the same one out twice.
+ *
+ * It used to be inferred — the largest sid in any stored snapshot, plus one —
+ * which held while every write appended a row. Applies overwrite a single
+ * working row now, so an intent created and deleted without ever being saved
+ * left nothing behind, and the next one was given its id back along with its
+ * examples, its history and its cached verdicts. An id is what judgments,
+ * answers and logged events all hang off; it cannot be a guess about which
+ * rows happen to still exist.
+ *
+ * The counter is seeded on first use from everything that ever mentioned an
+ * id, so an assignment that predates it does not start again at 1.
+ */
+export async function reserveSids(assignmentId: string, count: number): Promise<number[]> {
+  if (count <= 0) return [];
+  const [row] = await db
+    .insert(simpleSidCounter)
+    .values({ assignmentId, nextSid: (await highestSidSoFar(assignmentId)) + 1 + count })
+    .onConflictDoUpdate({
+      target: simpleSidCounter.assignmentId,
+      set: { nextSid: sql`${simpleSidCounter.nextSid} + ${count}` },
+    })
+    .returning({ nextSid: simpleSidCounter.nextSid });
+  const after = row?.nextSid ?? count + 1;
+  const first = after - count;
+  return Array.from({ length: count }, (_, i) => first + i);
+}
+
+/** Every id this assignment has ever used, from all four places one can be
+ * mentioned — the seed for the counter and nothing else. */
+async function highestSidSoFar(assignmentId: string): Promise<number> {
+  const [snapshots, versions, examples] = await Promise.all([
+    db
+      .select({ snapshot: simpleConfigVersions.snapshot })
+      .from(simpleConfigVersions)
+      .where(eq(simpleConfigVersions.assignmentId, assignmentId)),
+    db
+      .select({ high: sql<number>`coalesce(max(${simpleIntentVersions.sid}), 0)::int` })
+      .from(simpleIntentVersions)
+      .where(eq(simpleIntentVersions.assignmentId, assignmentId)),
+    db
+      .select({ high: sql<number>`coalesce(max(${simpleIntentExamples.sid}), 0)::int` })
+      .from(simpleIntentExamples)
+      .where(eq(simpleIntentExamples.assignmentId, assignmentId)),
+  ]);
+  let max = Math.max(versions[0]?.high ?? 0, examples[0]?.high ?? 0);
+  for (const row of snapshots) {
     const intents = (row.snapshot as Partial<SimpleSnapshot>)?.intents;
     if (!Array.isArray(intents)) continue;
     for (const intent of intents) max = Math.max(max, Number(intent?.sid) || 0);
   }
-  return max + 1;
+  return max;
 }
 
 export async function addSimplePin(assignmentId: string, messageId: number): Promise<void> {

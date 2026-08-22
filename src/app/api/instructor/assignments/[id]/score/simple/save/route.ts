@@ -26,7 +26,7 @@ import { logStudyEvent } from '@/lib/study/events';
 import { runAfterSave } from '@/lib/study/simple/after-save';
 import { emptySnapshot, type SimpleIntent, type SimpleSnapshot } from '@/lib/study/simple/chain';
 import { simpleContext } from '@/lib/study/simple/route-context';
-import { getSimpleTip, nextSid, saveSimpleVersion } from '@/lib/study/simple/store';
+import { getSimpleTip, reserveSids, saveSimpleVersion } from '@/lib/study/simple/store';
 import { recordIntentVersions } from '@/lib/study/simple/intent-versions';
 import { addQuestionExample } from '@/lib/study/simple/anchors';
 import { STUDY_PROMPT_CHAR_LIMIT } from '@/lib/study/config';
@@ -81,14 +81,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   });
   const base = previousVersion ? previous : emptySnapshot(arm, seedPrompt);
 
-  // Stable ids for anything new, in the order they were sent.
-  let allocate = await nextSid(id);
+  // Stable ids for anything new, in the order they were sent. Reserved in one
+  // block from a counter that only goes up: an id must never be handed out
+  // twice, or a new intent inherits a deleted one's examples and verdicts.
   const incoming = body.intents ?? base.intents;
+  const fresh = await reserveSids(
+    id,
+    incoming.filter((raw) => !(raw.sid != null && raw.sid > 0)).length
+  );
+  let allocate = 0;
   const seeds: { sid: number; messageId: number }[] = [];
   const created: number[] = [];
   const intents: SimpleIntent[] = incoming.map((raw) => {
     const isNew = !(raw.sid != null && raw.sid > 0);
-    const sid = isNew ? allocate++ : (raw.sid as number);
+    const sid = isNew ? fresh[allocate++] : (raw.sid as number);
     if (isNew) created.push(sid);
     const seedMessageId = 'seedMessageId' in raw ? raw.seedMessageId : null;
     if (isNew && seedMessageId) seeds.push({ sid, messageId: seedMessageId });

@@ -504,6 +504,45 @@ async function main() {
     );
   }
 
+  // 6a. An id is never handed out twice.
+  //
+  //     It used to be inferred from the largest sid in any stored snapshot,
+  //     which held while every write appended a row. Applies overwrite one
+  //     working row now, so an intent created and deleted without ever being
+  //     saved left no trace and the next one was given its id back — along
+  //     with its examples, its history and its cached verdicts.
+  if (arm === 'score') {
+    const body = (intents: unknown[]) =>
+      JSON.stringify({
+        kind: 'apply',
+        rootRule: 'Answer briefly and never write the essay for them.',
+        prompt: 'Answer briefly and never write the essay for them.',
+        intents,
+      });
+    const first = await call('save', {
+      method: 'POST',
+      body: body([
+        { title: 'CHECK: doomed', definition: 'is a greeting', rule: 'Doomed rule.' },
+      ]),
+    });
+    await call('save', { method: 'POST', body: body([]) });
+    const second = await call('save', {
+      method: 'POST',
+      body: body([
+        { title: 'CHECK: fresh', definition: 'asks how many sources', rule: 'Fresh rule.' },
+      ]),
+    });
+    const a = (first.body.created as number[])?.[0];
+    const b = (second.body.created as number[])?.[0];
+    check(
+      'an id is not handed out again after a delete',
+      typeof a === 'number' && typeof b === 'number' && a !== b,
+      `${a} then ${b}`
+    );
+    await call('save', { method: 'POST', body: body([]) });
+    await settle();
+  }
+
   // 6b. Two intents that describe exactly the same questions.
   //
   //     Identical definitions make first-match testable without depending on

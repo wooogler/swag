@@ -158,6 +158,22 @@ export async function ensureStudyTables(): Promise<void> {
         sql`ALTER TABLE "simple_config_versions" ADD COLUMN IF NOT EXISTS "deployed_at" timestamp`
       );
 
+      // The next intent id to hand out, which only ever goes up.
+      //
+      // It used to be inferred: the largest sid in any stored snapshot, plus
+      // one. That held while every write appended a row, and stopped holding
+      // when applies began overwriting a single working row — an intent
+      // created and deleted without ever being saved left no trace, so the
+      // next one was handed the same id and inherited the dead one's examples,
+      // its history and its cached verdicts. An id is what judgments, answers
+      // and logged events all hang off, so it cannot be a guess about what
+      // rows happen to exist.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "simple_sid_counter" (
+          "assignment_id" text PRIMARY KEY NOT NULL,
+          "next_sid" integer NOT NULL
+        )`);
+
       // The examples that stand for an intent, and order its question list.
       //
       // One row per example: either a real question from the log (message_id)
