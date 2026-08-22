@@ -48,16 +48,16 @@
  * version was v1 while the board answered from something else entirely, and
  * the only place that disagreement showed was a grey word on the row above.
  *
- * PRESSING A ROW OPENS IT. It does not put anything into effect: reading is
- * reading, and the effect is already readable elsewhere — the reply's own
- * picker answers every version without touching the configuration. Applying
- * on a press cost more than it gave. It clobbered whatever was in the boxes,
- * it made looking at v1 write a v3 that WAS v1 (the apply is a write, so the
- * board grew a moment for it, numbered next and carrying the same words), and
- * it needed a whole apparatus to hold the work it displaced.
+ * PRESSING A ROW SHOWS THAT VERSION, on the whole board and read-only: the
+ * boxes fill with what it said, the question list is the list it produced,
+ * and the conversation answers out of it. Nothing is written — a banner at the
+ * top of the column says which version is on screen, and offers the way back
+ * to the newest and the way to make this one newest again.
  *
- * Going back to a version is a separate press, inside the row that was
- * opened, and it asks first — because it drops what came after.
+ * It used to APPLY the row instead, which cost more than it gave: it clobbered
+ * whatever was in the boxes, and looking at v1 wrote a v3 that WAS v1, since
+ * an apply is a write and the board grows a moment for it, numbered next and
+ * carrying the same words.
  */
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -120,7 +120,8 @@ export default function IntentHistory({
   currentRule,
   nextVersionNo,
   pending = null,
-  onRevert,
+  onView,
+  viewingVersionNo = null,
   disabled = false,
 }: {
   versions: IntentVersion[];
@@ -147,17 +148,12 @@ export default function IntentHistory({
 
 
   /**
-   * Go back to a saved version, dropping everything after it — across the
-   * whole setup, because a version IS the whole setup.
-   *
-   * `configVersionNo` is null for the newest save, which needs nothing hidden:
-   * only the working row is in the way, and a row that was never a version has
-   * no history to keep.
-   *
-   * Beside the history because that is where the thing it goes back TO is
-   * listed. Null when there is no save to go back to.
+   * Put the whole board into this version and read it there. Null means the
+   * newest, which is where editing happens.
    */
-  onRevert?: ((configVersionNo: number | null) => void) | null;
+  onView: (configVersionNo: number | null) => void;
+  /** Which version the board is showing, or null when it is on the newest. */
+  viewingVersionNo?: number | null;
   disabled?: boolean;
 }) {
   /** Expanded past the three newest onto the whole history. */
@@ -224,9 +220,14 @@ export default function IntentHistory({
   const more = rows.length > SHOWN;
   const shown = all ? rows : rows.slice(0, SHOWN);
 
-  /** Which row is open. One at a time — this is a comparison, not a spread. */
-  const [reading, setReading] = useState<string | null>(null);
-  const newestSaved = rows.find((r) => r.version != null) ?? null;
+  /**
+   * The row the board is showing: the newest when it is on the newest, and
+   * otherwise whichever version is being read.
+   */
+  const showing =
+    viewingVersionNo == null
+      ? rows[0]
+      : rows.find((r) => r.version?.configVersionNo === viewingVersionNo);
 
   // Nothing written here yet — a heading over an empty box is furniture.
   if (versions.length === 0 && !pending) return null;
@@ -263,18 +264,20 @@ export default function IntentHistory({
         // Capped and scrolling: a long history must not push the boxes it is
         // about off the screen.
         <ul className="mt-1 max-h-[12rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
-          {shown.map((version, i) => {
-            // The row the board is answering with: the pending one when there
-            // is one, and otherwise the newest save.
-            const isCurrent = rows[0] === version;
-            const open = reading === version.key;
+          {shown.map((version) => {
+            const isCurrent = showing === version;
             return (
               <li key={version.key}>
                 <button
                   type="button"
-                  disabled={disabled}
-                  onClick={() => setReading((k) => (k === version.key ? null : version.key))}
-                  title={open ? 'Close' : 'Read this version'}
+                  /* Never disabled: showing a version writes nothing, and it
+                     is the one thing a read-only board is still for. */
+                  onClick={() => onView(version.version?.configVersionNo ?? null)}
+                  title={
+                    version.version
+                      ? 'Show the whole board as it was in this version'
+                      : 'Back to the newest, where editing happens'
+                  }
                   /* The row being read has to win against the row under the
                      pointer. A 5% tint lost to the hover grey, which is the
                      one thing it is next to — so it takes the accent colour
@@ -287,10 +290,8 @@ export default function IntentHistory({
                   className={`flex w-full items-center gap-1.5 border-l-2 pl-1.5 pr-2 py-1 text-left ${
                     isCurrent
                       ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/15'
-                      : open
-                        ? 'border-[hsl(var(--border))] bg-[hsl(var(--muted))]'
-                        : 'border-transparent hover:bg-[hsl(var(--muted))] disabled:hover:bg-transparent'
-                  } ${disabled ? 'opacity-50' : ''}`}
+                      : 'border-transparent hover:bg-[hsl(var(--muted))]'
+                  }`}
                 >
                   <span className="shrink-0 text-2xs font-bold tabular-nums text-[hsl(var(--muted-foreground))]">
                     v{version.versionNo}
@@ -324,31 +325,12 @@ export default function IntentHistory({
                     {version.createdAt == null
                       ? 'unsaved'
                       : isCurrent
-                        ? 'current'
+                        ? viewingVersionNo == null
+                          ? 'current'
+                          : 'showing'
                         : ago(version.createdAt, now)}
                   </span>
                 </button>
-                {open && (
-                  /* What this version said, where it can be read against the
-                     boxes above without either one moving. */
-                  <div className="border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-2 py-1.5 space-y-1.5">
-                    {version.definition.trim().length > 0 && (
-                      <Said label="When a question…" text={version.definition} />
-                    )}
-                    <Said label="Then" text={version.rule} />
-                    {onRevert && i > 0 && (
-                      <Revert
-                        to={version.versionNo}
-                        dropping={i}
-                        onRevert={() =>
-                          onRevert(
-                            version === newestSaved ? null : version.version?.configVersionNo ?? null
-                          )
-                        }
-                      />
-                    )}
-                  </div>
-                )}
               </li>
             );
           })}
@@ -358,71 +340,3 @@ export default function IntentHistory({
   );
 }
 
-/**
- * Go back to a version, dropping what came after it.
- *
- * It asks first, and the question names both halves — where it lands and how
- * much goes — because what it drops is work, minutes of it sometimes, and it
- * sits one press away from a list whose every other press is reversible.
- */
-function Revert({
-  onRevert,
-  to,
-  dropping,
-}: {
-  onRevert: () => void;
-  to: number;
-  dropping: number;
-}) {
-  const [asking, setAsking] = useState(false);
-  if (!asking) {
-    return (
-      <button
-        type="button"
-        onClick={() => setAsking(true)}
-        title={`Take the whole setup back to v${to}, dropping everything saved or applied after it`}
-        className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
-      >
-        Revert
-      </button>
-    );
-  }
-  return (
-    <span className="flex shrink-0 items-center gap-1.5">
-      <span className="text-2xs text-[hsl(var(--muted-foreground))]">
-        Back to v{to}, dropping {dropping} later — the whole setup?
-      </span>
-      <button
-        type="button"
-        onClick={() => {
-          setAsking(false);
-          onRevert();
-        }}
-        className="rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold text-rose-600 hover:bg-[hsl(var(--muted))] dark:text-rose-400"
-      >
-        Drop
-      </button>
-      <button
-        type="button"
-        onClick={() => setAsking(false)}
-        className="rounded px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
-      >
-        Cancel
-      </button>
-    </span>
-  );
-}
-
-/** One half of a version, read-only, under the row it belongs to. */
-function Said({ label, text }: { label: string; text: string }) {
-  return (
-    <div>
-      <p className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-        {label}
-      </p>
-      <p className="whitespace-pre-wrap text-2xs leading-relaxed text-[hsl(var(--foreground))]">
-        {text.trim().length > 0 ? text : 'No instructions at all.'}
-      </p>
-    </div>
-  );
-}

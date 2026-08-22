@@ -577,6 +577,14 @@ export default function SimpleStudio({
     [api, load]
   );
 
+  /**
+   * Make the version being read the newest one again.
+   *
+   * Everything after it leaves the timeline — hidden, not deleted, so the
+   * trail keeps the attempt even after their own list stops showing it. The
+   * undo stack goes too: its steps point at states that are no longer in the
+   * timeline, and walking back into one would rebuild what was just dropped.
+   */
   const restore = useCallback(
     async (versionNo: number) => {
       await fetch(api('restore'), {
@@ -585,6 +593,8 @@ export default function SimpleStudio({
         body: JSON.stringify({ versionNo }),
       });
       setLocalVersionNo(null);
+      setPast([]);
+      setFuture([]);
       await load({ versionNo: null });
     },
     [api, load]
@@ -1110,12 +1120,10 @@ function ConfigColumn({
               Looking at v{state.viewing?.displayNo}. Editing happens on the latest one.
             </span>
             <div className="flex gap-1.5">
-              <button
-                onClick={() => state.viewing && void onRestore(state.viewing.versionNo)}
-                className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--background))]"
-              >
-                Restore this version
-              </button>
+              <RestoreVersion
+                to={state.viewing?.displayNo ?? 0}
+                onRestore={() => state.viewing && void onRestore(state.viewing.versionNo)}
+              />
               <button
                 onClick={() => onView(null)}
                 className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--background))]"
@@ -1165,6 +1173,8 @@ function ConfigColumn({
             savedVersionNo={state.savedVersionNo}
             countOf={countOf}
             draftChanged={draftChanged}
+            onView={onView}
+            viewingVersionNo={state.viewing && !state.atTip ? state.viewing.versionNo : null}
             assignmentId={assignmentId}
           />
         )}
@@ -1289,6 +1299,8 @@ function Tree({
   savedVersionNo,
   countOf,
   draftChanged,
+  onView,
+  viewingVersionNo,
   assignmentId,
 }: {
   api: (path: string, query?: string) => string;
@@ -1328,6 +1340,10 @@ function Tree({
   dirty: boolean;
   savedVersionNo: number | null;
   countOf: (sid: number | null) => number;
+  /** Show the whole board as it was in a version, or the newest when null. */
+  onView: (configVersionNo: number | null) => void;
+  /** Which version the board is showing, or null when it is on the newest. */
+  viewingVersionNo: number | null;
   /** The hypothetical questions the open intent's order was worked out from. */
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
@@ -1522,9 +1538,11 @@ function Tree({
             </span>
           )}
           <span className="flex-1" />
-          {/* Which one, not just whether. Plain and unstyled: this is a fact
-              about what the next step will read, not a fault to fix. */}
-          {unsaved.has(intent.sid) && (
+          {/* Which one, not just whether. A fact about what the next step will
+              read, not a fault to fix — and not shown while an older version
+              is on screen, where nothing is unsaved and the chip would be
+              reading the difference between two versions instead. */}
+          {!readOnly && unsaved.has(intent.sid) && (
             <span
               title="Applied, and not in what the next step will read. Deploy keeps it."
               className="shrink-0 rounded-full bg-[hsl(var(--primary))]/15 px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--primary))]"
@@ -1588,6 +1606,8 @@ function Tree({
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
               nextVersionNo={nextVersionNo}
+              onView={onView}
+              viewingVersionNo={viewingVersionNo}
               intent={intent}
               within={takeableFrom(intent.sid)}
               pending={(() => {
@@ -1701,7 +1721,7 @@ function Tree({
           <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--muted-foreground))]" />
         </span>
         <span className="flex-1 text-sm font-semibold">Uncategorized</span>
-        {unsaved.has(0) && (
+        {!readOnly && unsaved.has(0) && (
           <span
               title="Applied, and not in what the next step will read. Deploy keeps it."
               className="shrink-0 rounded-full bg-[hsl(var(--primary))]/15 px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--primary))]"
@@ -1771,12 +1791,8 @@ function Tree({
             currentRule={draft.rootRule}
             nextVersionNo={nextVersionNo}
             pending={pendingFor(0, { definition: '', rule: applied.rootRule })}
-            disabled={readOnly}
-            onRevert={
-              readOnly || savedVersionNo == null
-                ? null
-                : (configVersionNo) => void onRevert(configVersionNo)
-            }
+            onView={onView}
+            viewingVersionNo={viewingVersionNo}
           />
         </div>
       )}
@@ -1842,6 +1858,8 @@ function Accordion({
   ruleSources,
   versions,
   nextVersionNo,
+  onView,
+  viewingVersionNo,
   intent,
   within,
   pending,
@@ -1863,6 +1881,10 @@ function Accordion({
   versions: IntentVersion[];
   /** What the next save will be called. */
   nextVersionNo: number;
+  /** Show the whole board as it was in a version, or the newest when null. */
+  onView: (configVersionNo: number | null) => void;
+  /** Which version the board is showing, or null when it is on the newest. */
+  viewingVersionNo: number | null;
   /** The questions this intent could take, for counting starter sets over. */
   within: number[];
   /** Applied and not saved, for the row the next Save will write. */
@@ -1974,12 +1996,8 @@ function Accordion({
         currentRule={intent.rule}
         nextVersionNo={nextVersionNo}
         pending={pending}
-        disabled={readOnly}
-        onRevert={
-          readOnly || savedVersionNo == null
-            ? null
-            : (configVersionNo) => void onRevert(configVersionNo)
-        }
+        onView={onView}
+        viewingVersionNo={viewingVersionNo}
       />
     </div>
   );
@@ -2167,6 +2185,50 @@ function StepButton({
  * The reason hangs on a wrapper instead, which is not disabled, so it reads
  * the same whether the button is live or dim.
  */
+/**
+ * Make the version on screen the newest one again.
+ *
+ * It asks first: everything saved or applied after this point leaves the
+ * timeline, and "restore" on its own says where it lands but not what it
+ * costs.
+ */
+function RestoreVersion({ to, onRestore }: { to: number; onRestore: () => void }) {
+  const [asking, setAsking] = useState(false);
+  if (!asking) {
+    return (
+      <button
+        onClick={() => setAsking(true)}
+        title={`Make v${to} the newest again, dropping everything saved or applied after it`}
+        className="text-xs font-semibold px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--background))]"
+      >
+        Restore this version
+      </button>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+        Back to v{to}, dropping what came after — the whole setup?
+      </span>
+      <button
+        onClick={() => {
+          setAsking(false);
+          onRestore();
+        }}
+        className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-[hsl(var(--background))] dark:text-rose-400"
+      >
+        Restore
+      </button>
+      <button
+        onClick={() => setAsking(false)}
+        className="rounded px-1.5 py-1 text-xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--card))]"
+      >
+        Cancel
+      </button>
+    </span>
+  );
+}
+
 function Why({ reason, children }: { reason: string; children: React.ReactNode }) {
   return (
     <span title={reason} className="inline-flex">
