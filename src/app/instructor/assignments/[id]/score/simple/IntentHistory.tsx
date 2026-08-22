@@ -8,13 +8,20 @@
  * and its three edits are scattered among everyone else's. So the version
  * number a participant reads belongs to the intent.
  *
- * It has been three shapes. A dropdown labelled "v2" — missed entirely, because
+ * It has been four shapes. A dropdown labelled "v2" — missed entirely, because
  * beside two neighbours that say what they hold ("Starter sets", "Reuse a
  * rule") a lone number reads as a status badge rather than something to open.
- * Then a list always open under the buttons — found, but it pushed the boxes it
- * is about off the screen. Now a labelled row that says how many there are,
- * opening onto the list: a heading is hard to mistake for a badge, and a card
- * that is not being rewound stays the height of the thing being edited.
+ * Then a whole list always open under the buttons — found, but it pushed the
+ * boxes it is about off the screen. Then a heading that opened onto the list —
+ * which fixed the height and hid the history behind a click nobody had a
+ * reason to take, since a fold with no visible contents gives no reason to
+ * open it.
+ *
+ * Now: the three newest are always on show, and the heading opens onto the
+ * rest. Three is what "where am I" needs — the last save, the one before it,
+ * and enough of a run to see a direction — and it costs about the height of
+ * the button row above. Everything older is one click away, which is the right
+ * price for a question people ask far less often.
  *
  * A version is the WHEN and the THEN together. They are one thought here, and
  * the same rule text can be right or wrong depending on what it was scoped to,
@@ -64,6 +71,9 @@ export interface IntentVersion {
  * going to work out. Hours only appear if someone leaves a board open far
  * longer than a block.
  */
+/** How much history a card carries without being asked. */
+const SHOWN = 3;
+
 function ago(iso: string, now: number): string {
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   if (seconds < 45) return 'just now';
@@ -90,18 +100,18 @@ export default function IntentHistory({
   onRevert?: (() => void) | null;
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  /** A long history buries the boxes it is about. Three is enough to see where
-   * you are; the rest is one click away. */
+  /** Expanded past the three newest onto the whole history. */
   const [all, setAll] = useState(false);
   // Relative times go stale on a card left open. One tick a minute is enough
   // for a readout whose smallest unit is a minute.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!open) return;
+    if (versions.length === 0) return;
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
-  }, [open]);
+  }, [versions.length]);
+  const more = versions.length > SHOWN;
+  const shown = all ? versions : versions.slice(0, SHOWN);
 
   // Nothing written here yet — a heading over an empty box is furniture. The
   // one exception is a configuration with something applied and a save to go
@@ -111,20 +121,31 @@ export default function IntentHistory({
   return (
     <div className="border-t border-[hsl(var(--border))] pt-1.5">
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            setNow(Date.now());
-            setOpen((v) => !v);
-          }}
-          disabled={versions.length === 0}
-          className="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] disabled:opacity-50"
-        >
-          {versions.length > 0 &&
-            (open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}
-          Version history
-          <span className="tabular-nums font-normal">{versions.length}</span>
-        </button>
+        {/* A heading, and only a control when there is something behind it: a
+            dead chevron over a list that is already all of itself is a
+            promise of more. */}
+        {more ? (
+          <button
+            type="button"
+            onClick={() => {
+              setNow(Date.now());
+              setAll((v) => !v);
+            }}
+            title={all ? `Show the ${SHOWN} newest` : `Show all ${versions.length}`}
+            className="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+          >
+            {all ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            Version history
+            <span className="tabular-nums font-normal">{versions.length}</span>
+          </button>
+        ) : (
+          <span className="flex items-center gap-1 text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            Version history
+            {versions.length > 0 && (
+              <span className="tabular-nums font-normal">{versions.length}</span>
+            )}
+          </span>
+        )}
         <span className="flex-1" />
         {/* Beside the list, because the list is where the thing it goes back
             TO is. It is not one of the three verbs on the row above: those act
@@ -141,11 +162,11 @@ export default function IntentHistory({
         )}
       </div>
 
-      {open && (
+      {versions.length > 0 && (
         // Capped and scrolling: a long history must not push the boxes it is
         // about off the screen.
         <ul className="mt-1 max-h-[12rem] overflow-y-auto rounded border border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
-          {(all ? versions : versions.slice(0, 3)).map((version, i) => {
+          {shown.map((version, i) => {
             const isCurrent =
               version.definition === currentDefinition && version.rule === currentRule;
             // Newest first, so the one after it in the list is the one before
@@ -199,17 +220,6 @@ export default function IntentHistory({
               </li>
             );
           })}
-          {versions.length > 3 && (
-            <li>
-              <button
-                type="button"
-                onClick={() => setAll((v) => !v)}
-                className="w-full px-2 py-1 text-left text-2xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
-              >
-                {all ? 'Show fewer' : `Show all ${versions.length}`}
-              </button>
-            </li>
-          )}
         </ul>
       )}
     </div>
