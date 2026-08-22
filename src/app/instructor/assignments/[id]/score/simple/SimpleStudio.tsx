@@ -156,7 +156,7 @@ function withFilledTitles(draft: SimpleSnapshot, server: SimpleSnapshot): Simple
 }
 
 /** What the middle column is showing. */
-type Selection = { kind: 'all' } | { kind: 'root' } | { kind: 'intent'; sid: number };
+type Selection = { kind: 'root' } | { kind: 'intent'; sid: number };
 
 /** An intent being written, and where it will land. */
 interface Creating {
@@ -193,7 +193,11 @@ export default function SimpleStudio({
 }) {
   const [state, setState] = useState<StatePayload>(initialState);
   const [draft, setDraft] = useState<SimpleSnapshot>(initialState.snapshot);
-  const [selection, setSelection] = useState<Selection>({ kind: 'all' });
+  // Uncategorized, not "everything". Everything was the state the board
+  // opened in and the one place the tree offers no way back to — a default
+  // nobody could return to. On a board with no intents the two show the same
+  // sixty questions anyway.
+  const [selection, setSelection] = useState<Selection>({ kind: 'root' });
   const [expanded, setExpanded] = useState<number | 'root' | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
   const [query, setQuery] = useState('');
@@ -631,7 +635,7 @@ export default function SimpleStudio({
   );
 
   const listed = useMemo(() => {
-    if (selection.kind === 'all' || arm === 'baseline') return material;
+    if (arm === 'baseline') return material;
     if (selection.kind === 'root') {
       return material.filter((r) => ownerOf(r.messageId)?.sid === null);
     }
@@ -2175,7 +2179,7 @@ function QuestionColumn({
   const liftedOut = rows.length - listed.length;
 
   const label =
-    selection.kind === 'all' || arm === 'baseline'
+    arm === 'baseline'
       ? 'All questions'
       : selection.kind === 'root'
         ? 'Uncategorized'
@@ -2665,7 +2669,7 @@ function ViewerColumn({
     messageId: number;
     versionNo: number | null;
     text: string;
-    state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
+    state: 'idle' | 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
     /**
      * WHICH intent answered, not what it is called.
      *
@@ -2733,7 +2737,12 @@ function ViewerColumn({
     }
 
     (async () => {
-      setAnswer({ messageId, versionNo, text: '', state: 'streaming', ownerSid: null });
+      // Not 'streaming' — nothing is streaming yet. A cache hit and an
+      // untouched rule both come back as JSON without generating anything, so
+      // announcing a wait here put a spinner on every question anyone clicked
+      // on a board where nothing had been changed. The word starts meaning
+      // what it says: text is arriving.
+      setAnswer({ messageId, versionNo, text: '', state: 'idle', ownerSid: null });
       try {
         const res = await fetch(api('respond'), {
           method: 'POST',
@@ -2773,7 +2782,9 @@ function ViewerColumn({
           });
           return;
         }
-        // A miss: show it arriving rather than making them wait in silence.
+        // A miss, and only now: the headers are in, the body is a stream, and
+        // there is a real wait to report.
+        setAnswer({ messageId, versionNo, text: '', state: 'streaming', ownerSid: null });
         const ownerHeader = res.headers.get('X-Simple-Owner');
         const ownerSid = ownerHeader && ownerHeader !== 'root' ? Number(ownerHeader) : null;
         const reader = res.body?.getReader();
@@ -2841,7 +2852,7 @@ function ViewerColumn({
               moments={moments}
               pick={localVersionNo}
               current={versionNo}
-              state={answer?.messageId === row.messageId ? answer.state : 'streaming'}
+              state={answer?.messageId === row.messageId ? answer.state : 'idle'}
               owner={
                 answer?.messageId === row.messageId && answer.ownerSid != null
                   ? titleOf(answer.ownerSid)
@@ -2908,7 +2919,7 @@ function ReplyVersionBar({
   pick: number | 'original' | null;
   /** The version actually in force, once `pick` has been resolved. */
   current: number | null;
-  state: 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
+  state: 'idle' | 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
   owner: string | null;
   /** Which intent that name belongs to, for the colour it carries in the
    * list. Null is the else branch. */
@@ -2917,6 +2928,9 @@ function ReplyVersionBar({
   rule: string | null;
   onPick: (next: number | 'original' | null) => void;
 }) {
+  // Nothing to report yet: the reply below is still the delivered one and the
+  // question of which version it is under has no answer.
+  if (state === 'idle') return null;
   if (state === 'pending') {
     return (
       <p className="mb-1 flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
@@ -2967,9 +2981,6 @@ function ReplyVersionBar({
           </option>
         ))}
       </select>
-      {/* Says which of the two kinds of "original" this is: one they chose,
-          or one that happened because nothing has been changed yet. */}
-      {asDelivered && pick !== 'original' && <span>— nothing here has been changed yet</span>}
       {/* The same small mark the list uses, rather than a sentence: it is the
           same fact, and a sentence here competed with the reply under it. */}
       {!asDelivered && state === 'ready' && owner && (
