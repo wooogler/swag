@@ -328,6 +328,34 @@ export function describeStep(from: SimpleSnapshot, to: SimpleSnapshot): string {
   return 'changes nothing';
 }
 
+/**
+ * Which version a reply should be asked about, or null for "the current one".
+ *
+ * One line, extracted because it went wrong silently and expensively. `viewing`
+ * is never null — at the tip it is the tip — so reading it directly made "I am
+ * looking at the newest" indistinguishable from "I have gone back to v3", and
+ * a board that has gone back is not allowed to work the rule out for itself.
+ * The result was a round trip and a wait for every question opened, including
+ * the ones no rule touches, whose answer was already on the screen.
+ *
+ * `pick` is what the reader chose on this reply: a version number, 'original'
+ * for the delivered reply (which is no version at all), or null for whatever
+ * the board is on.
+ */
+export function askedVersionNo({
+  pick,
+  atTip,
+  viewingVersionNo,
+}: {
+  pick: number | 'original' | null;
+  atTip: boolean;
+  viewingVersionNo: number | null;
+}): number | null {
+  if (pick === 'original') return null;
+  if (pick != null) return pick;
+  return atTip ? null : viewingVersionNo;
+}
+
 /** Every definition in a snapshot, in evaluation order — what the judge needs. */
 export function definitionsOf(snapshot: SimpleSnapshot): { sid: number; definition: string }[] {
   return compileSimpleChain(snapshot)

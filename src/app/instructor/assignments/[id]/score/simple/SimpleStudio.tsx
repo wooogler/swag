@@ -69,6 +69,7 @@ import IntentHistory, { type IntentVersion } from './IntentHistory';
 import { intentColor } from './colors';
 import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
+  askedVersionNo,
   describeStep,
   insertBefore,
   moveIntent,
@@ -2808,7 +2809,7 @@ function ViewerColumn({
   // "As delivered" is not a version, so it resolves to no version at all and
   // short-circuits the round trip: the reply it asks for is already below.
   const asDelivered = localVersionNo === 'original';
-  const versionNo = asDelivered ? null : localVersionNo ?? viewingVersionNo;
+  const versionNo = askedVersionNo({ pick: localVersionNo, atTip, viewingVersionNo });
 
   /**
    * The rule this reply came out of.

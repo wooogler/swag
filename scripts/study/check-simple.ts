@@ -31,7 +31,11 @@ import {
   studyEvents,
   studyParticipants,
 } from '../../src/db/schema';
-import { describeStep, flattenStoredIntents } from '../../src/lib/study/simple/chain';
+import {
+  askedVersionNo,
+  describeStep,
+  flattenStoredIntents,
+} from '../../src/lib/study/simple/chain';
 import { intentDefHash } from '../../src/lib/score/intents';
 
 const BASE = process.env.SWAG_URL ?? 'http://localhost:3030';
@@ -312,6 +316,36 @@ async function main() {
       'a step that only moves them says that',
       describeStep(swapped, base) === 'puts the intents back in their old order',
       describeStep(swapped, base)
+    );
+  }
+
+  // 0b2. Which version a reply is asked about.
+  //
+  //      `viewing` is never null — at the tip it IS the tip — so a board that
+  //      read it directly could not tell "looking at the newest" from "gone
+  //      back to v1", and took the second reading. Everything that is allowed
+  //      only at the tip then switched itself off, so every question opened
+  //      cost a round trip and a wait to be told what the board already knew.
+  {
+    check(
+      'at the tip a reply is asked about no version in particular',
+      askedVersionNo({ pick: null, atTip: true, viewingVersionNo: 3 }) === null,
+      String(askedVersionNo({ pick: null, atTip: true, viewingVersionNo: 3 }))
+    );
+    check(
+      'and looking back at an old one asks about that one',
+      askedVersionNo({ pick: null, atTip: false, viewingVersionNo: 2 }) === 2,
+      String(askedVersionNo({ pick: null, atTip: false, viewingVersionNo: 2 }))
+    );
+    check(
+      'a version chosen on the reply itself wins over both',
+      askedVersionNo({ pick: 1, atTip: true, viewingVersionNo: 3 }) === 1,
+      String(askedVersionNo({ pick: 1, atTip: true, viewingVersionNo: 3 }))
+    );
+    check(
+      'and the delivered reply is no version at all',
+      askedVersionNo({ pick: 'original', atTip: false, viewingVersionNo: 2 }) === null,
+      String(askedVersionNo({ pick: 'original', atTip: false, viewingVersionNo: 2 }))
     );
   }
 
