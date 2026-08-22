@@ -1378,12 +1378,13 @@ function Tree({
               }
               onChange={(fields) => patch(intent.sid, fields)}
               onApply={() => onApply(draft, intent.sid)}
-              onDelete={() =>
-                void onApply(
+              onDelete={async () => {
+                await onApply(
                   { ...draft, intents: removeIntent(draft.intents, intent.sid) },
                   null
-                ).then(() => setExpanded(null))
-              }
+                );
+                setExpanded(null);
+              }}
             />
           </div>
         )}
@@ -1651,7 +1652,7 @@ function Accordion({
   /** Put a version's pair back AND apply it, so the list beside it becomes
    * that version's list without a second click. */
   onPickVersion: (v: IntentVersion) => void;
-  onDelete: () => void;
+  onDelete: () => Promise<void>;
 }) {
   return (
     <div className="space-y-3">
@@ -1732,13 +1733,7 @@ function Accordion({
             <Redo2 className="w-3.5 h-3.5" />
           </StepButton>
           <span className="flex-1" />
-          <button
-            onClick={onDelete}
-            title="Delete this intent"
-            className="p-1 rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+          <DeleteIntent onDelete={onDelete} />
         </div>
       )}
       {/* Under the buttons: this intent's own history, laid out rather than
@@ -1784,6 +1779,64 @@ function Field({
   );
 }
 
+/**
+ * Deleting an intent, asked twice.
+ *
+ * It throws away a definition, a rule, the examples chosen for it and its
+ * whole history, and it was one click on an icon sitting beside two ordinary
+ * verbs. The second press is the whole safeguard, and it is inline rather than
+ * a dialog because this board does not open dialogs (§2) — the row it replaces
+ * is the row it is about.
+ *
+ * Its own spinner, too. The delete goes out as an apply, so the shared saving
+ * flag used to spin the APPLY button while the trash can was what got pressed:
+ * a control reporting on an act nobody asked it to do.
+ */
+function DeleteIntent({ onDelete }: { onDelete: () => Promise<void> }) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!asking) {
+    return (
+      <button
+        onClick={() => setAsking(true)}
+        title="Delete this intent"
+        aria-label="Delete this intent"
+        className="p-1 rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="text-2xs text-[hsl(var(--muted-foreground))]">Delete this intent?</span>
+      <button
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onDelete();
+          } finally {
+            setBusy(false);
+            setAsking(false);
+          }
+        }}
+        disabled={busy}
+        className="inline-flex items-center gap-1 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold text-rose-600 hover:bg-[hsl(var(--muted))] disabled:opacity-50 dark:text-rose-400"
+      >
+        {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+        Delete
+      </button>
+      <button
+        onClick={() => setAsking(false)}
+        disabled={busy}
+        className="rounded px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+      >
+        Cancel
+      </button>
+    </span>
+  );
+}
+
 function StepButton({
   label,
   onClick,
@@ -1806,6 +1859,15 @@ function StepButton({
   );
 }
 
+/**
+ * Apply, and a spinner that belongs to the press.
+ *
+ * It used to turn while ANY write was in flight, because they all share one
+ * saving flag — so deleting an intent, which goes out as an apply, spun the
+ * Apply button while the trash can was what got pressed. A control should
+ * report on what it was asked to do and nothing else. It still greys out for
+ * every write, which is right: two at once is not a thing to allow.
+ */
 function ApplyButton({
   saving,
   disabled,
@@ -1814,11 +1876,19 @@ function ApplyButton({
   saving: boolean;
   /** Nothing written that is not already in effect. */
   disabled: boolean;
-  onClick: () => void;
+  onClick: () => void | Promise<unknown>;
 }) {
+  const [busy, setBusy] = useState(false);
   return (
     <button
-      onClick={onClick}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await onClick();
+        } finally {
+          setBusy(false);
+        }
+      }}
       disabled={saving || disabled}
       title={
         disabled
@@ -1827,7 +1897,7 @@ function ApplyButton({
       }
       className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
     >
-      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+      {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
       Apply
     </button>
   );
