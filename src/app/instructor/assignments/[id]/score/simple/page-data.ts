@@ -158,7 +158,6 @@ export async function loadSimpleBoard(args: {
       pending,
       // Nothing has just been saved on a first render, so nothing is running.
       working: false,
-      diff: null,
     },
   };
 }

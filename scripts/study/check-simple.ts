@@ -69,7 +69,6 @@ interface StateBody {
   counts: Record<string, number>;
   pending: number;
   working: boolean;
-  diff: { sid: number | null; entered: number[]; left: number[] }[] | null;
 }
 
 async function main() {
@@ -596,10 +595,6 @@ async function main() {
       written?.definition === 'asks how many sources the essay needs'
     );
   }
-
-  // 7. Diff against an earlier version, which is what paints the rows.
-  const diffed = (await call('state', {}, `diffFrom=${v1}`)).body as unknown as StateBody;
-  check('a diff comes back', Array.isArray(diffed.diff), `${diffed.diff?.length ?? 0} entr(ies)`);
 
   // 8. Restore, which must hide what came after and keep it in the table.
   //    One more save first, so there is always something after v2 to drop —

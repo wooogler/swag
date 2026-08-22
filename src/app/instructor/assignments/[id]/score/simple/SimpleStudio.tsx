@@ -111,7 +111,6 @@ interface StatePayload {
   intentVersions: Record<string, IntentVersion[]>;
   /** The write's own follow-up work is still running on the server. */
   working: boolean;
-  diff: { sid: number | null; entered: number[]; left: number[] }[] | null;
 }
 
 /**
@@ -201,7 +200,6 @@ export default function SimpleStudio({
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [judging, setJudging] = useState(false);
-  const [diffFrom, setDiffFrom] = useState<number | null>(null);
   /**
    * What the open conversation's reply is being read under.
    *
@@ -237,16 +235,28 @@ export default function SimpleStudio({
   /* --------------------------------------------------------------- */
 
   const load = useCallback(
-    async (opts?: { versionNo?: number | null; diffFrom?: number | null; keepDraft?: boolean }) => {
+    async (opts?: { versionNo?: number | null; keepDraft?: boolean }) => {
       const params = new URLSearchParams();
       const versionNo = opts?.versionNo === undefined ? state.viewing?.versionNo ?? null : opts.versionNo;
       if (versionNo != null) params.set('versionNo', String(versionNo));
-      const df = opts?.diffFrom === undefined ? diffFrom : opts.diffFrom;
-      if (df != null) params.set('diffFrom', String(df));
       const res = await fetch(api('state', params.toString()));
       if (!res.ok) return null;
       const next: StatePayload = await res.json();
       setState(next);
+      // The header's Deploy button is a sibling from the server render, so it
+      // cannot see client-side writes — without this, a participant who never
+      // reloads (i.e. every participant) saves v1 and finds Deploy still
+      // disabled. Every path that changes what Deploy should say funnels
+      // through here, so this one dispatch keeps it honest.
+      window.dispatchEvent(
+        new CustomEvent('simple-studio:state', {
+          detail: {
+            currentVersionNo: next.versions[0]?.versionNo ?? null,
+            dirty: next.dirty,
+            deployedVersionNo: next.deployedVersionNo,
+          },
+        })
+      );
       // `keepDraft` exists so a poll cannot overwrite what someone is in the
       // middle of typing — but a title generated after the write lands in the
       // server's copy and nowhere else, and the tree reads the draft. Filling
@@ -256,7 +266,7 @@ export default function SimpleStudio({
       else setDraft(next.snapshot);
       return next;
     },
-    [api, diffFrom, state.viewing?.versionNo]
+    [api, state.viewing?.versionNo]
   );
 
   /* --------------------------------------------------------------- */
@@ -321,7 +331,6 @@ export default function SimpleStudio({
       seed?: { sid: number; messageId: number } | null
     ) => {
       setSaving(true);
-      const previousVersion = state.versions[0]?.versionNo ?? null;
       try {
         const res = await fetch(api('save'), {
           method: 'POST',
@@ -340,17 +349,13 @@ export default function SimpleStudio({
           }),
         });
         if (!res.ok) return;
-        // Against the version that WAS current, so the list shows what this
-        // save moved — the only comparison a participant did not have to ask
-        // for and the only one they can act on.
-        setDiffFrom(previousVersion);
         setLocalVersionNo(null);
-        await load({ versionNo: null, diffFrom: previousVersion });
+        await load({ versionNo: null });
       } finally {
         setSaving(false);
       }
     },
-    [api, load, selectedMessageId, state.versions]
+    [api, load, selectedMessageId]
   );
 
   /** Take effect. The verb every editor carries. */
@@ -466,9 +471,8 @@ export default function SimpleStudio({
     try {
       const res = await fetch(api('revert'), { method: 'POST' });
       if (!res.ok) return;
-      setDiffFrom(null);
       setLocalVersionNo(null);
-      await load({ versionNo: null, diffFrom: null });
+      await load({ versionNo: null });
     } finally {
       setSaving(false);
     }
@@ -481,9 +485,8 @@ export default function SimpleStudio({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ versionNo }),
       });
-      setDiffFrom(null);
       setLocalVersionNo(null);
-      await load({ versionNo: null, diffFrom: null });
+      await load({ versionNo: null });
     },
     [api, load]
   );
@@ -624,11 +627,6 @@ export default function SimpleStudio({
     [api]
   );
 
-  const diffFor = useCallback(
-    (sid: number | null) => state.diff?.find((d) => d.sid === sid) ?? null,
-    [state.diff]
-  );
-
   const listed = useMemo(() => {
     if (selection.kind === 'all' || arm === 'baseline') return material;
     if (selection.kind === 'root') {
@@ -639,10 +637,9 @@ export default function SimpleStudio({
     // list answered "what does this definition catch" with a number that has
     // already been adjusted for something the participant cannot see.
     const sid = selection.sid;
-    const left = new Set(diffFor(sid)?.left ?? []);
     const mine = material.filter((r) => {
       const owner = ownerOf(r.messageId);
-      return owner?.sid === sid || owner?.matchedElsewhere.includes(sid) || left.has(r.messageId);
+      return owner?.sid === sid || owner?.matchedElsewhere.includes(sid);
     });
     // Most typical first. The first row a participant reads is what tells them
     // whether the classifier can be trusted, so it should be the least
@@ -663,7 +660,7 @@ export default function SimpleStudio({
         (at.get(a.messageId) ?? Number.MAX_SAFE_INTEGER) -
         (at.get(b.messageId) ?? Number.MAX_SAFE_INTEGER)
     );
-  }, [arm, diffFor, material, ownerOf, ranked, selection]);
+  }, [arm, material, ownerOf, ranked, selection]);
 
   /**
    * Whatever the middle column is showing, narrowed to the student's own
@@ -777,8 +774,7 @@ export default function SimpleStudio({
         onRestore={restore}
         onView={(versionNo) => {
           setLocalVersionNo(null);
-          void load({ versionNo, diffFrom: null });
-          setDiffFrom(null);
+          void load({ versionNo });
           // Looking back at an older version changes nothing and would
           // otherwise leave no trace at all.
           logUi(assignmentId, 'simple_version_view', { versionNo });
@@ -847,7 +843,6 @@ export default function SimpleStudio({
         pinned={state.pinned}
         ownerOf={ownerOf}
         titleOf={title}
-        diff={diffFor(selection.kind === 'intent' ? selection.sid : selection.kind === 'root' ? null : null)}
         arm={arm}
         judging={judging}
       />
@@ -2044,7 +2039,6 @@ function QuestionColumn({
   pinned,
   ownerOf,
   titleOf,
-  diff,
   arm,
   judging,
 }: {
@@ -2076,12 +2070,9 @@ function QuestionColumn({
   pinned: number[];
   ownerOf: (id: number) => Owner | null;
   titleOf: (sid: number | null) => string;
-  diff: { sid: number | null; entered: number[]; left: number[] } | null;
   arm: 'score' | 'baseline';
   judging: boolean;
 }) {
-  const entered = useMemo(() => new Set(diff?.entered ?? []), [diff]);
-  const left = useMemo(() => new Set(diff?.left ?? []), [diff]);
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
 
   // A kept question lives in the shelf above and nowhere else. It used to
@@ -2131,7 +2122,6 @@ function QuestionColumn({
                 owner={ownerOf(row.messageId)}
                 titleOf={titleOf}
                 showOwner={arm === 'score'}
-                tone={null}
                 onSelect={onSelect}
                 onTogglePin={onTogglePin}
                 onCreateIntent={onCreateIntent}
@@ -2155,16 +2145,54 @@ function QuestionColumn({
               {exampleRows.length}
             </span>
             <span className="flex-1" />
-            <span className="text-2xs text-[hsl(var(--muted-foreground))]">
-              The list below is ordered by these
-            </span>
+            {/* Beside the thing it sorts BY, which is what let the caption go: a
+                control offering closest and furthest, sitting in the Examples
+                header, says "the list is ordered by these" without a sentence
+                saying it. Two choices with the current one filled, because a lone
+                phrase cannot say whether it is describing the order or offering
+                it. */}
+              {onFlipOrder && exampleRows.length > 0 && (
+                <span className="shrink-0 inline-flex overflow-hidden rounded border border-[hsl(var(--border))]">
+                  {(
+                    [
+                      ['Closest first', false],
+                      ['Furthest first', true],
+                    ] as const
+                  ).map(([label, wantsFurthest]) => (
+                    <button
+                      key={label}
+                      onClick={() => {
+                        if (wantsFurthest !== furthest) onFlipOrder();
+                      }}
+                      aria-pressed={furthest === wantsFurthest}
+                      title={
+                        wantsFurthest
+                          ? 'Order the list by what is least like these — where the next intent usually comes from'
+                          : 'Order the list by what is closest to these'
+                      }
+                      className={`px-1.5 py-0.5 text-2xs font-semibold ${
+                        furthest === wantsFurthest
+                          ? 'bg-[hsl(var(--foreground))] text-[hsl(var(--background))]'
+                          : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </span>
+              )}
             {onRegenerateExamples && (
+              // "Rewrite" was wrong for the commonest set there is: an intent
+              // carved out of a question holds one question and nothing
+              // written, so the button ADDS rather than rewrites. This names
+              // the act it always performs, and the title carries what happens
+              // to any written ones already there.
               <button
                 onClick={onRegenerateExamples}
-                title="Write a fresh set from the description, keeping any questions you added"
+                title="Write examples from the description. Any written ones here are replaced; questions you added are kept."
                 className="shrink-0 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
               >
-                Rewrite
+                Generate examples
               </button>
             )}
           </div>
@@ -2179,7 +2207,6 @@ function QuestionColumn({
                   owner={ownerOf(example.row.messageId)}
                   titleOf={titleOf}
                   showOwner={arm === 'score'}
-                  tone={null}
                   onSelect={onSelect}
                   onTogglePin={onTogglePin}
                   onCreateIntent={null}
@@ -2214,7 +2241,7 @@ function QuestionColumn({
       <div className="shrink-0 px-3 py-2 border-b border-[hsl(var(--border))]">
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold truncate">{label}</span>
-        <span className="text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
+        <span className="shrink-0 whitespace-nowrap text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
           {rows.length} of {allCount}
         </span>
         {/* Says where the missing rows went, so the number above and the rows
@@ -2233,19 +2260,6 @@ function QuestionColumn({
             working"; furthest-first answers "what did my words catch that is
             least like what I meant" — and the row it lands on has the button
             to make an intent out of it. */}
-        {onFlipOrder && exampleRows.length > 0 && (
-          <button
-            onClick={onFlipOrder}
-            title={
-              furthest
-                ? 'Show the ones closest to your examples first'
-                : 'Show the ones least like your examples first'
-            }
-            className="shrink-0 rounded border border-[hsl(var(--border))] px-1.5 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
-          >
-            {furthest ? 'Least like these' : 'Most like these'}
-          </button>
-        )}
         <span className="flex-1" />
         {/* An ordinary search box, over the students' own words. Everything
             else on this board is about what the configuration does; this is
@@ -2300,9 +2314,6 @@ function QuestionColumn({
               owner={ownerOf(row.messageId)}
               titleOf={titleOf}
               showOwner={arm === 'score'}
-              tone={
-                entered.has(row.messageId) ? 'entered' : left.has(row.messageId) ? 'left' : null
-              }
               highlight={query}
               onSelect={onSelect}
               onTogglePin={onTogglePin}
@@ -2347,7 +2358,6 @@ function QuestionRow({
   owner,
   titleOf,
   showOwner,
-  tone,
   highlight,
   onSelect,
   onTogglePin,
@@ -2361,8 +2371,6 @@ function QuestionRow({
   owner: Owner | null;
   titleOf: (sid: number | null) => string;
   showOwner: boolean;
-  /** Whether this row moved in or out since the version being compared. */
-  tone: 'entered' | 'left' | null;
   /** The search term, marked wherever it appears in the student's words. */
   highlight?: string;
   onSelect: (id: number) => void;
@@ -2379,14 +2387,6 @@ function QuestionRow({
       onClick={() => onSelect(row.messageId)}
       className={`group flex gap-2 px-3 py-2 border-b border-[hsl(var(--border))] cursor-pointer ${
         selected ? 'bg-[hsl(var(--primary))]/8' : 'hover:bg-[hsl(var(--muted))]'
-      } ${
-        // Green for what moved in, red for what moved out, and nothing else
-        // read into either.
-        tone === 'entered'
-          ? 'border-l-2 border-l-emerald-400'
-          : tone === 'left'
-            ? 'border-l-2 border-l-rose-400 opacity-60'
-            : ''
       }`}
     >
       <div className="flex-1 min-w-0">

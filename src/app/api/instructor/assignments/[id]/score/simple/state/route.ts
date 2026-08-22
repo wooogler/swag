@@ -8,15 +8,20 @@
  * chatbot does.
  *
  * `versionNo` looks at an older version: the editors lock and every question
- * is resolved against that snapshot instead. `diffFrom` additionally returns
- * what moved in or out of each intent since a given version, which is what
- * paints the green and red rows after a definition is saved.
+ * is resolved against that snapshot instead.
+ *
+ * It used to answer `diffFrom` as well — what moved in or out of each intent
+ * since a given version, painted as green and red rows. That signal was read
+ * by POSITION, and it stopped being legible once the list started being
+ * ordered by an intent's examples and flipped end for end: a row that moved in
+ * could be anywhere. If the question comes back, the form that survives
+ * reordering is a count, not a colour on a row.
  */
 import { NextResponse } from 'next/server';
 import { afterSaveInFlight } from '@/lib/study/simple/after-save';
 import { listIntentVersions } from '@/lib/study/simple/intent-versions';
 import { simpleContext } from '@/lib/study/simple/route-context';
-import { getSimpleState, getSimpleVersion } from '@/lib/study/simple/store';
+import { getSimpleState } from '@/lib/study/simple/store';
 import { definitionsOf, resolveSimpleAll, type SimpleSnapshot } from '@/lib/study/simple/chain';
 import { definitionTasks, readMatches } from '@/lib/study/simple/judge';
 import { armOf } from '@/lib/study/config';
@@ -45,7 +50,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const url = new URL(request.url);
   const versionParam = url.searchParams.get('versionNo');
-  const diffParam = url.searchParams.get('diffFrom');
 
   const state = await getSimpleState({
     assignmentId: id,
@@ -57,41 +61,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const records = await scopedRecords(id);
   const messageIds = records.map((r) => r.messageId);
   const current = await ownershipFor(id, state.snapshot, messageIds);
-
-  // What moved since a chosen version — shown as a plain +/− on the rows, with
-  // no reading of whether the move was an improvement.
-  let diff: { sid: number | null; entered: number[]; left: number[] }[] | null = null;
-  if (diffParam) {
-    const before = await getSimpleVersion({
-      assignmentId: id,
-      condition,
-      seedPrompt,
-      versionNo: Number(diffParam),
-    });
-    if (before) {
-      const previous = await ownershipFor(id, before, messageIds);
-      const sids = new Set<number | null>([
-        null,
-        ...state.snapshot.intents.map((i) => i.sid),
-        ...before.intents.map((i) => i.sid),
-      ]);
-      diff = [...sids].map((sid) => ({
-        sid,
-        entered: messageIds.filter(
-          (m) =>
-            current.owners.get(m)?.sid === sid &&
-            current.owners.get(m)?.outcome !== 'pending' &&
-            previous.owners.get(m)?.sid !== sid
-        ),
-        left: messageIds.filter(
-          (m) =>
-            previous.owners.get(m)?.sid === sid &&
-            previous.owners.get(m)?.outcome !== 'pending' &&
-            current.owners.get(m)?.sid !== sid
-        ),
-      }));
-    }
-  }
 
   return NextResponse.json({
     arm: armOf(condition),
@@ -127,6 +96,5 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // would read the cache, both would find the same pairs missing, and both
     // would call the model for every one of them.
     working: afterSaveInFlight(id) !== null,
-    diff,
   });
 }
