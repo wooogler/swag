@@ -2587,6 +2587,38 @@ function ViewerColumn({
   const asDelivered = localVersionNo === 'original';
   const versionNo = asDelivered ? null : localVersionNo ?? viewingVersionNo;
 
+  /**
+   * The rule this reply came out of.
+   *
+   * Read separately from the reply because a rule runs to thousands of
+   * characters — too much for a response header, and the streaming path has
+   * nowhere else to carry it. Asking for it on its own also means there is one
+   * place the screen learns the rule from, rather than one for a cache hit and
+   * another for a miss.
+   */
+  const [rule, setRule] = useState<string | null>(null);
+  useEffect(() => {
+    if (!row) {
+      setRule(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(
+        api(
+          'respond',
+          `messageId=${row.messageId}${versionNo != null ? `&versionNo=${versionNo}` : ''}`
+        )
+      );
+      if (!res.ok || cancelled) return;
+      const body = await res.json();
+      if (!cancelled) setRule(typeof body.rule === 'string' ? body.rule : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, row, versionNo]);
+
   useEffect(() => {
     if (!row) {
       setAnswer(null);
@@ -2717,6 +2749,7 @@ function ViewerColumn({
               state={answer?.messageId === row.messageId ? answer.state : 'streaming'}
               owner={answer?.messageId === row.messageId ? answer.owner : null}
               ownerSid={answer?.messageId === row.messageId ? answer.ownerSid : null}
+              rule={rule}
               onPick={(next) => {
                 setLocalVersionNo(next);
                 onLocalVersionLog(typeof next === 'number' ? next : null);
@@ -2768,6 +2801,7 @@ function ReplyVersionBar({
   state,
   owner,
   ownerSid,
+  rule,
   onPick,
 }: {
   moments: SimpleVersion[];
@@ -2780,6 +2814,8 @@ function ReplyVersionBar({
   /** Which intent that name belongs to, for the colour it carries in the
    * list. Null is the else branch. */
   ownerSid: number | null;
+  /** The rule this reply came out of — the one for the version above. */
+  rule: string | null;
   onPick: (next: number | 'original' | null) => void;
 }) {
   if (state === 'pending') {
@@ -2801,7 +2837,8 @@ function ReplyVersionBar({
   const asDelivered = state === 'original';
   const value = pick === 'original' ? 'original' : String(current ?? moments[0]?.versionNo ?? '');
   return (
-    <div className="mb-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs text-[hsl(var(--muted-foreground))]">
+    <div className="mb-1">
+    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs text-[hsl(var(--muted-foreground))]">
       {state === 'streaming' && <Loader2 className="w-3 h-3 shrink-0 animate-spin" />}
       <span>
         {state === 'streaming'
@@ -2840,5 +2877,31 @@ function ReplyVersionBar({
         <OwnerMark sid={ownerSid} title={owner} />
       )}
     </div>
+    {/* The rule itself, under the version it belongs to. Two lines by default
+        because a rule runs long and the reply is the thing being read; the
+        whole of it is one click away. Changing the version above changes this
+        with it — that is what a version IS here. */}
+    {rule != null && rule.trim().length > 0 && <RuleUnderReply rule={rule} />}
+    </div>
+  );
+}
+
+function RuleUnderReply({ rule }: { rule: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen((v) => !v)}
+      title={open ? 'Show less' : 'Show the whole rule'}
+      className="mt-1 block w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-2 py-1 text-left"
+    >
+      <span
+        className={`block whitespace-pre-wrap text-2xs leading-relaxed text-[hsl(var(--muted-foreground))] ${
+          open ? '' : 'line-clamp-2'
+        }`}
+      >
+        {rule}
+      </span>
+    </button>
   );
 }

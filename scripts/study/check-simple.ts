@@ -221,6 +221,13 @@ async function main() {
   const startingVersions = before.versions.length;
   const arm = before.arm;
   const startersOnly = process.argv.includes('--starters');
+  // Each arm writes a different field — the tree's else-rule, or the one
+  // document — so an assertion on the wrong one passes vacuously. It did once:
+  // two checks read rootRule on both arms, so the baseline's save path was
+  // never actually being looked at. Declared out here because the sections
+  // that need it sit in two different `if (!startersOnly)` blocks.
+  const configText = (snap: StateBody['snapshot']) =>
+    arm === 'baseline' ? snap.prompt : snap.rootRule;
 
   // Steps 1-8 drive every act a participant can perform, which on a real
   // clone means rating a fresh definition against the whole log. --starters
@@ -366,6 +373,25 @@ async function main() {
       'a reply comes back',
       answer.status === 200 && answer.text.trim().length > 0,
       answer.text.slice(0, 60)
+    );
+
+    // The rule that produced it, asked for on its own: too long for a header,
+    // and the streaming path has nowhere else to carry it. The screen prints
+    // this under the reply, so it has to be the rule that actually applied.
+    const asked = (await call('respond', {}, `messageId=${messageId}`)).body as {
+      rule?: string;
+      sid?: number | null;
+    };
+    check(
+      'the rule that answered can be read back',
+      typeof asked.rule === 'string' && asked.rule.length > 0,
+      `${(asked.rule ?? '').slice(0, 40)}…`
+    );
+    check(
+      'and it is the one the configuration would send',
+      asked.rule === configText((await state()).snapshot) ||
+        (await state()).snapshot.intents.some((i) => i.rule === asked.rule),
+      `sid=${asked.sid ?? 'root'}`
     );
 
     // The same question again must now be a cache hit — the point of keying on
@@ -610,12 +636,6 @@ async function main() {
   //     study measures the SAVE, so a block must not be endable while
   //     something is applied and unsaved.
   if (!startersOnly) {
-    // Each arm writes a different field — the tree's else-rule, or the one
-    // document — so an assertion on the wrong one passes vacuously. It did:
-    // these two checked rootRule on both arms, so the baseline's apply/save
-    // path was never actually being read.
-    const configText = (snap: StateBody['snapshot']) =>
-      arm === 'baseline' ? snap.prompt : snap.rootRule;
     const beforeApply = await state();
     const savedBefore = beforeApply.savedVersionNo;
     await call('save', {

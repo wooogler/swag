@@ -36,6 +36,54 @@ import { getSimpleTip, getSimpleVersion } from '@/lib/study/simple/store';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+/**
+ * WHAT would answer this question, without answering it.
+ *
+ * The same resolution the POST does, stopping at the rule. The reply screen
+ * shows the rule that produced what it is showing, and a rule runs to
+ * thousands of characters — too much for a response header, and the streaming
+ * path has nowhere else to put it. So it is asked for separately, which also
+ * means the client has ONE place it learns the rule from rather than one for
+ * cache hits and another for misses.
+ */
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const url = new URL(request.url);
+  const gate = await simpleContext(id, url.searchParams.get('view'));
+  if ('error' in gate) return gate.error;
+  const { condition, seedPrompt } = gate.context;
+
+  const messageId = Number(url.searchParams.get('messageId'));
+  if (!Number.isFinite(messageId)) {
+    return NextResponse.json({ error: 'invalid_query' }, { status: 400 });
+  }
+  const versionParam = url.searchParams.get('versionNo');
+  const snapshot =
+    versionParam != null
+      ? await getSimpleVersion({
+          assignmentId: id,
+          condition,
+          seedPrompt,
+          versionNo: Number(versionParam),
+        })
+      : (await getSimpleTip({ assignmentId: id, condition, seedPrompt })).snapshot;
+  if (!snapshot) return NextResponse.json({ error: 'no_such_version' }, { status: 404 });
+
+  let sid: number | null = null;
+  if (snapshot.arm === 'score') {
+    const tasks = definitionTasks(definitionsOf(snapshot));
+    const matches = await readMatches({ assignmentId: id, tasks });
+    const ownership = resolveSimpleOwnership(
+      snapshot,
+      compileSimpleChain(snapshot),
+      matches.get(messageId) ?? new Map()
+    );
+    if (ownership.outcome === 'pending') return NextResponse.json({ status: 'pending' });
+    sid = ownership.sid;
+  }
+  return NextResponse.json({ sid, rule: ruleForOwner(snapshot, sid) });
+}
+
 const bodySchema = z.object({
   messageId: z.number().int(),
   /** Look at this question under an older version, without leaving the tip. */
