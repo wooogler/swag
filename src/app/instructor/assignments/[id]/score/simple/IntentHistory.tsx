@@ -138,10 +138,18 @@ export default function IntentHistory({
   /** Apply the pending wording again, after a look elsewhere. */
   onPutBack?: (() => void) | null;
   onPick: (version: IntentVersion) => void;
-  /** Go back to the last save. Beside the history because that is where the
-   * thing it goes back TO is listed. Null when there is nothing applied, or
-   * no save to go back to. */
-  onRevert?: (() => void) | null;
+  /**
+   * Go back to a saved version, dropping everything after it — across the
+   * whole setup, because a version IS the whole setup.
+   *
+   * `configVersionNo` is null for the newest save, which needs nothing hidden:
+   * only the working row is in the way, and a row that was never a version has
+   * no history to keep.
+   *
+   * Beside the history because that is where the thing it goes back TO is
+   * listed. Null when there is no save to go back to.
+   */
+  onRevert?: ((configVersionNo: number | null) => void) | null;
   disabled?: boolean;
 }) {
   /** Expanded past the three newest onto the whole history. */
@@ -193,6 +201,23 @@ export default function IntentHistory({
   const more = rows.length > SHOWN;
   const shown = all ? rows : rows.slice(0, SHOWN);
 
+  /**
+   * Where Revert lands, and whether there is anything to drop.
+   *
+   * One verb, because there is one thing being asked for: put the version I am
+   * on back in charge. Sitting on the unsaved row that is the save under it —
+   * dropping what is applied and not saved IS going back one version — and
+   * sitting on an older row it is that row, with the saves in between going
+   * with it. Nothing above the row it lands on means nothing to drop, and the
+   * button says so by being absent.
+   */
+  const inEffect = rows.findIndex(
+    (r) => r.definition === currentDefinition && r.rule === currentRule
+  );
+  const target = rows.slice(Math.max(inEffect, 0)).find((r) => r.version != null) ?? null;
+  const dropping = target ? rows.indexOf(target) : 0;
+  const landsOnNewestSave = target != null && target === rows.find((r) => r.version != null);
+
   // Nothing written here yet — a heading over an empty box is furniture. The
   // one exception is a configuration with something applied and a save to go
   // back to: the way back has to be reachable before there is a list.
@@ -228,15 +253,14 @@ export default function IntentHistory({
         {/* Beside the list, because the list is where the thing it goes back
             TO is. It is not one of the three verbs on the row above: those act
             on what is being written, and this discards it. */}
-        {onRevert && (
-          <button
-            type="button"
-            onClick={onRevert}
-            title="Go back to the last saved version, dropping what you applied since"
-            className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
-          >
-            Revert
-          </button>
+        {onRevert && target && dropping > 0 && (
+          <Revert
+            to={target.versionNo}
+            dropping={dropping}
+            onRevert={() =>
+              onRevert(landsOnNewestSave ? null : target.version?.configVersionNo ?? null)
+            }
+          />
         )}
       </div>
 
@@ -285,7 +309,10 @@ export default function IntentHistory({
                      properly and a bar down its edge, and the transparent bar
                      on every other row keeps the text from stepping sideways
                      as the reading moves. */
-                  className={`flex w-full items-baseline gap-1.5 border-l-2 pl-1.5 pr-2 py-1 text-left ${
+                  /* Centres, not baselines: the count is a pill with its own
+                     box, and hanging it off the text's baseline sat it a
+                     pixel low against everything else on the row. */
+                  className={`flex w-full items-center gap-1.5 border-l-2 pl-1.5 pr-2 py-1 text-left ${
                     isCurrent || isLive
                       ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/15'
                       : 'border-transparent hover:bg-[hsl(var(--muted))] disabled:hover:bg-transparent'
@@ -335,5 +362,60 @@ export default function IntentHistory({
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * Go back to a version, dropping what came after it.
+ *
+ * It asks first, and the question names both halves — where it lands and how
+ * much goes — because what it drops is work, minutes of it sometimes, and it
+ * sits one press away from a list whose every other press is reversible.
+ */
+function Revert({
+  onRevert,
+  to,
+  dropping,
+}: {
+  onRevert: () => void;
+  to: number;
+  dropping: number;
+}) {
+  const [asking, setAsking] = useState(false);
+  if (!asking) {
+    return (
+      <button
+        type="button"
+        onClick={() => setAsking(true)}
+        title={`Take the whole setup back to v${to}, dropping everything saved or applied after it`}
+        className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
+      >
+        Revert
+      </button>
+    );
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+        Back to v{to}, dropping {dropping} later — the whole setup?
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          setAsking(false);
+          onRevert();
+        }}
+        className="rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold text-rose-600 hover:bg-[hsl(var(--muted))] dark:text-rose-400"
+      >
+        Drop
+      </button>
+      <button
+        type="button"
+        onClick={() => setAsking(false)}
+        className="rounded px-1.5 py-0.5 text-2xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+      >
+        Cancel
+      </button>
+    </span>
   );
 }

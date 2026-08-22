@@ -554,6 +554,18 @@ export async function restoreSimpleVersion(args: {
       )
     )
     .returning({ id: simpleConfigVersions.id });
+  // The per-intent rows that belonged to those writes go with them, and here
+  // deleted rather than hidden: every one of them is a copy of a pair that is
+  // still in the snapshot above, so the trail loses nothing — and leaving them
+  // would number the next save v5 after a card whose last row says v1.
+  await db
+    .delete(simpleIntentVersions)
+    .where(
+      and(
+        eq(simpleIntentVersions.assignmentId, args.assignmentId),
+        gt(simpleIntentVersions.configVersionNo, args.versionNo)
+      )
+    );
   return { hidden: hidden.length };
 }
 

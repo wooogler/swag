@@ -26,6 +26,7 @@ import {
   instructors,
   studyReviewQuestions,
   simpleConfigVersions,
+  simpleIntentVersions,
   simplePins,
   simpleRatings,
   studyEvents,
@@ -175,7 +176,16 @@ async function main() {
     .select({ high: sql<number>`coalesce(max(${simplePins.id}), 0)::int` })
     .from(simplePins)
     .where(eq(simplePins.assignmentId, assignmentId));
+  // The per-intent rows too. They used to be left behind, which was harmless
+  // while nothing deleted them — a restore does now, so a second run on the
+  // same assignment read the first one's orphans and saw a history with holes
+  // in it.
+  const [intentVersions0] = await db
+    .select({ high: sql<number>`coalesce(max(${simpleIntentVersions.id}), 0)::int` })
+    .from(simpleIntentVersions)
+    .where(eq(simpleIntentVersions.assignmentId, assignmentId));
   const eventsHighWater = events0?.high ?? 0;
+  const intentVersionsHighWater = intentVersions0?.high ?? 0;
   const versionsHighWater = versions0?.high ?? 0;
   const ratingsHighWater = ratings0?.high ?? 0;
   const pinsHighWater = pins0?.high ?? 0;
@@ -1356,6 +1366,14 @@ async function main() {
         )
       );
     await db
+      .delete(simpleIntentVersions)
+      .where(
+        and(
+          eq(simpleIntentVersions.assignmentId, assignmentId),
+          gt(simpleIntentVersions.id, intentVersionsHighWater)
+        )
+      );
+    await db
       .delete(simpleRatings)
       .where(and(eq(simpleRatings.assignmentId, assignmentId), gt(simpleRatings.id, ratingsHighWater)));
     await db
@@ -1364,7 +1382,7 @@ async function main() {
     await db
       .delete(studyEvents)
       .where(and(eq(studyEvents.assignmentId, assignmentId), gt(studyEvents.id, eventsHighWater)));
-    console.log('\ncleaned up the preview run (versions, verdicts, pins, events)');
+    console.log('\ncleaned up the preview run (versions, intent versions, verdicts, pins, events)');
   } else {
     console.log(`\nleft ${written.length} version(s) on the participant clone — clean up by hand`);
   }

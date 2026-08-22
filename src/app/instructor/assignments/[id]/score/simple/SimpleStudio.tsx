@@ -538,17 +538,46 @@ export default function SimpleStudio({
   }, [api, load]);
 
   /** Throw away the applies since the last save. */
-  const revert = useCallback(async () => {
-    setSaving(true);
-    try {
-      const res = await fetch(api('revert'), { method: 'POST' });
-      if (!res.ok) return;
-      setLocalVersionNo(null);
-      await load({ versionNo: null });
-    } finally {
-      setSaving(false);
-    }
-  }, [api, load]);
+  /**
+   * Go back to a saved version and drop what came after it.
+   *
+   * One verb for what used to look like two. Dropping what is applied and not
+   * saved IS going back one version, so there is nothing to tell apart — only
+   * how far back, and that is which row the reader is sitting on.
+   *
+   * The newest save needs nothing hidden: the only thing in its way is the
+   * working row, which was never a version and is deleted rather than kept.
+   * Going further back hides the saves in between instead — an attempt someone
+   * abandoned is the trace the study is about, and it survives in the trail
+   * even after it leaves their timeline.
+   *
+   * The undo stack goes with it. Its steps point at states that are no longer
+   * in the timeline, and stepping back into one would quietly rebuild what was
+   * just thrown away on purpose.
+   */
+  const revert = useCallback(
+    async (configVersionNo: number | null) => {
+      setSaving(true);
+      try {
+        const res =
+          configVersionNo == null
+            ? await fetch(api('revert'), { method: 'POST' })
+            : await fetch(api('restore'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ versionNo: configVersionNo }),
+              });
+        if (!res.ok) return;
+        setLocalVersionNo(null);
+        setPast([]);
+        setFuture([]);
+        await load({ versionNo: null });
+      } finally {
+        setSaving(false);
+      }
+    },
+    [api, load]
+  );
 
   const restore = useCallback(
     async (versionNo: number) => {
@@ -1004,7 +1033,7 @@ function ConfigColumn({
     kind?: 'apply' | 'save'
   ) => Promise<{ created?: number[] } | null>;
   onSaveVersion: () => Promise<void>;
-  onRevert: () => Promise<void>;
+  onRevert: (configVersionNo: number | null) => Promise<void>;
   onRestore: (versionNo: number) => Promise<void>;
   onView: (versionNo: number | null) => void;
   assignmentId: string;
@@ -1249,7 +1278,7 @@ function Tree({
     kind?: 'apply' | 'save'
   ) => Promise<{ created?: number[] } | null>;
   onSaveVersion: () => Promise<void>;
-  onRevert: () => Promise<void>;
+  onRevert: (configVersionNo: number | null) => Promise<void>;
   /** Something is in effect that the newest save does not carry. */
   dirty: boolean;
   savedVersionNo: number | null;
@@ -1591,11 +1620,11 @@ function Tree({
               onSaveVersion={onSaveVersion}
               /* Revert is the one press that says "throw the unsaved work
                  away", so it is the one that stops holding it. */
-              onRevert={async () => {
+              onRevert={async (configVersionNo) => {
                 // After, not before: the gap-filler reads what is in effect,
                 // and until the revert lands that is still the work being
                 // thrown away — it would put it straight back.
-                await onRevert();
+                await onRevert(configVersionNo);
                 dropHeld();
               }}
               draftChanged={draftChanged}
@@ -1790,9 +1819,9 @@ function Tree({
             disabled={readOnly}
             onPick={(v) => void onApply({ ...draft, rootRule: v.rule }, null)}
             onRevert={
-              !readOnly && dirty && savedVersionNo != null
-                ? () => void onRevert().then(dropHeld)
-                : null
+              readOnly || savedVersionNo == null
+                ? null
+                : (configVersionNo) => void onRevert(configVersionNo).then(dropHeld)
             }
           />
         </div>
@@ -1896,7 +1925,7 @@ function Accordion({
   onChange: (fields: Partial<SimpleIntent>) => void;
   onApply: () => void;
   onSaveVersion: () => Promise<void>;
-  onRevert: () => Promise<void>;
+  onRevert: (configVersionNo: number | null) => Promise<void>;
   /** Something is written that has not taken effect. */
   draftChanged: boolean;
   /** Put a version's pair back AND apply it, so the list beside it becomes
@@ -1986,7 +2015,11 @@ function Accordion({
         onPutBack={onPutBack}
         disabled={readOnly}
         onPick={onPickVersion}
-        onRevert={!readOnly && dirty && savedVersionNo != null ? () => void onRevert() : null}
+        onRevert={
+          readOnly || savedVersionNo == null
+            ? null
+            : (configVersionNo) => void onRevert(configVersionNo)
+        }
       />
     </div>
   );
