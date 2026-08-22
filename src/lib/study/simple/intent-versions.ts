@@ -216,6 +216,34 @@ export async function listIntentVersions(
   return out;
 }
 
+/**
+ * How many questions each intent's CURRENT wording describes.
+ *
+ * The row for what is applied and not saved has no stored version to carry a
+ * count, and a column that is full on every row but the top one is worse than
+ * no column. Same lookup as the history's: a verdict is keyed by definition
+ * text, so this costs a read and never a judgement.
+ *
+ * Null for the uncategorized rule, which has no words to match with.
+ */
+export async function currentMatches(
+  assignmentId: string,
+  snapshot: SimpleSnapshot
+): Promise<Record<string, number | null>> {
+  const pairs = pairsOf(snapshot);
+  const counts = await countsByDefinition(
+    assignmentId,
+    [...new Set(pairs.map((p) => p.definition.trim()).filter((d) => d.length > 0))]
+  ).catch(() => new Map<string, number>());
+  const out: Record<string, number | null> = {};
+  for (const pair of pairs) {
+    out[String(pair.sid)] = pair.definition.trim()
+      ? counts.get(pair.definition.trim()) ?? 0
+      : null;
+  }
+  return out;
+}
+
 /** The version immediately before this one, for naming its diff. */
 export async function previousIntentVersion(
   assignmentId: string,

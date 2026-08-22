@@ -122,6 +122,9 @@ interface StatePayload {
   unsavedSids: number[];
   /** sid → that intent's own history, newest first ('0' = everything else). */
   intentVersions: Record<string, IntentVersion[]>;
+  /** sid → what its wording catches right now, for the row that is applied
+   * and not saved and so has no stored version to carry the number. */
+  matchesNow: Record<string, number | null>;
   /** The write's own follow-up work is still running on the server. */
   working: boolean;
 }
@@ -1081,6 +1084,7 @@ function ConfigColumn({
             intentVersions={state.intentVersions}
             unsaved={unsaved}
             applied={state.snapshot}
+            matchesNow={state.matchesNow ?? {}}
             pendingName={state.dirty ? state.moments[0]?.name ?? null : null}
             draft={draft}
             setDraft={setDraft}
@@ -1197,6 +1201,7 @@ function Tree({
   intentVersions,
   unsaved,
   applied,
+  matchesNow,
   pendingName,
   draft,
   setDraft,
@@ -1226,6 +1231,8 @@ function Tree({
   /** What is in EFFECT — which is not what is in the boxes while something is
    * typed and not applied. The history's pending row is about the first. */
   applied: SimpleSnapshot;
+  /** sid → what its wording catches right now. */
+  matchesNow: Record<string, number | null>;
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
   readOnly: boolean;
@@ -1559,7 +1566,11 @@ function Tree({
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
               intent={intent}
-              pending={held[intent.sid] ?? null}
+              pending={
+                held[intent.sid]
+                  ? { ...held[intent.sid], matches: matchesNow[String(intent.sid)] ?? null }
+                  : null
+              }
               onPutBack={() => {
                 const back = held[intent.sid];
                 if (!back) return;
@@ -1771,7 +1782,7 @@ function Tree({
             versions={intentVersions['0'] ?? []}
             currentDefinition=""
             currentRule={draft.rootRule}
-            pending={held[0] ?? null}
+            pending={held[0] ? { ...held[0], matches: null } : null}
             onPutBack={() => {
               const back = held[0];
               if (back) void onApply({ ...draft, rootRule: back.rule }, null);
@@ -1868,7 +1879,12 @@ function Accordion({
   /** This intent's own history, newest first. */
   versions: IntentVersion[];
   /** Applied and not saved, for the row the next Save will write. */
-  pending: { definition: string; rule: string; name: string | null } | null;
+  pending: {
+    definition: string;
+    rule: string;
+    name: string | null;
+    matches: number | null;
+  } | null;
   /** Put that wording back after a look at an older row. */
   onPutBack: () => void;
   intent: SimpleIntent;

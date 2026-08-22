@@ -27,11 +27,13 @@
  * the same rule text can be right or wrong depending on what it was scoped to,
  * so restoring one without the other would hand back a half-sentence.
  *
- * Each row says which of the two moved, because that is what a reader is
- * looking for: an edit to the WHEN changed which questions arrive, an edit to
- * the THEN changed what they are answered with, and only one of those explains
- * a response that looks different. It is read off the row before it rather
- * than stored, so it cannot disagree with the texts it describes.
+ * Each row used to say which of the two moved — "when", "then", "when + then".
+ * It was read as a time, or as nothing at all: the words name the fields on
+ * the card above, and nobody carries that mapping around while scanning a
+ * list. The count does the same job better, in the units the rest of the
+ * board already counts in — a wording that catches more questions is a
+ * wording that was widened, and it says so in a number that means the same
+ * thing here as it does on the row in the tree.
  *
  * Every STORED row here is a save. Applying does not write one: applying is
  * meant to be cheap enough to do constantly, and a history of every wording
@@ -126,7 +128,13 @@ export default function IntentHistory({
    * something else is a list you cannot read anything else from. When it is
    * not what is in effect, the row offers to put it back.
    */
-  pending?: { definition: string; rule: string; name: string | null } | null;
+  pending?: {
+    definition: string;
+    rule: string;
+    name: string | null;
+    /** What this wording catches now — the same number the saved rows show. */
+    matches: number | null;
+  } | null;
   /** Apply the pending wording again, after a look elsewhere. */
   onPutBack?: (() => void) | null;
   onPick: (version: IntentVersion) => void;
@@ -160,12 +168,12 @@ export default function IntentHistory({
             versionNo: (versions[0]?.versionNo ?? 0) + 1,
             definition: pending.definition,
             rule: pending.rule,
+            matches: pending.matches,
             // The name the model wrote for the apply. Applies are named for
             // the reply's version picker anyway, and a row you are deciding
             // whether to keep is exactly where a one-line "what this did" is
             // worth reading.
             name: pending.name,
-            matches: null,
             createdAt: null,
             version: null,
           },
@@ -249,17 +257,6 @@ export default function IntentHistory({
               version.rule === currentRule;
             // Newest first, so the one after it in the list is the one before
             // it in time. The oldest has nothing to differ from.
-            const before = rows[i + 1] ?? null;
-            // What moved, against the row before it in time. The oldest has
-            // nothing to differ from and says nothing — "first" was a label
-            // for the absence of a comparison, which is not news.
-            const moved = !before
-              ? ''
-              : version.definition !== before.definition && version.rule !== before.rule
-                ? 'when + then'
-                : version.definition !== before.definition
-                  ? 'when'
-                  : 'then';
             return (
               <li key={version.key}>
                 <button
@@ -302,10 +299,7 @@ export default function IntentHistory({
                       the same row; the number and the time are enough to say
                       which version this is. */}
                   <span className="flex-1 truncate text-xs">{version.name ?? ''}</span>
-                  <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
-                    {moved}
-                  </span>
-                  {/* What that wording caught. Matches rather than ownership:
+                  {/* What that wording catches. Matches rather than ownership:
                       what an intent ends up holding depends on what sits above
                       it too, and the question a history answers is about the
                       words on the row — did widening this catch more. */}
