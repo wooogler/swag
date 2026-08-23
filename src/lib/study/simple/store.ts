@@ -156,9 +156,25 @@ async function clearWorkingRow(assignmentId: string, upToVersionNo: number): Pro
   return dropped.length;
 }
 
+/**
+ * The timeline, WITHOUT the configurations themselves.
+ *
+ * Every column but `snapshot`. Everything left reading this only asks what
+ * kind a row is and where it sits — which one is the working row, whether the
+ * newest is a save, which save to fall back to — and none of it opens a
+ * configuration. `timelineFor` below is the one that needs the text.
+ */
 async function visibleVersions(assignmentId: string) {
   const rows = await db
-    .select()
+    .select({
+      id: simpleConfigVersions.id,
+      versionNo: simpleConfigVersions.versionNo,
+      kind: simpleConfigVersions.kind,
+      name: simpleConfigVersions.name,
+      summary: simpleConfigVersions.summary,
+      deployedAt: simpleConfigVersions.deployedAt,
+      createdAt: simpleConfigVersions.createdAt,
+    })
     .from(simpleConfigVersions)
     .where(
       and(
@@ -168,6 +184,59 @@ async function visibleVersions(assignmentId: string) {
     )
     .orderBy(asc(simpleConfigVersions.versionNo));
   return rows;
+}
+
+/**
+ * The timeline, carrying the configuration on the rows whose text gets read.
+ *
+ * Three of them at most — what is being looked at, what is in effect, and what
+ * was last saved — and usually one row wearing three hats. Everything else on
+ * the timeline is a label and a number.
+ *
+ * Which three they are depends on the list, so the obvious shape is to read
+ * the list and then go back for those snapshots. That is wrong twice over.
+ * `clearWorkingRow` deletes the working row as part of every save, so a read
+ * landing in the gap comes back with a row on the timeline and nothing to put
+ * under it — and the fallback for a configuration that will not load is the
+ * prompt the assignment shipped with, so the board would show a participant
+ * someone else's work. One statement, and there is no gap to land in.
+ *
+ * Picked in SQL rather than by fetching every snapshot and choosing afterwards
+ * because that is the point: an apply appends a row, so "every snapshot" grows
+ * for as long as somebody works, and this is on the path the board polls.
+ */
+async function timelineFor(assignmentId: string, versionNo: number | null) {
+  const rows = await db.execute<{
+    id: number;
+    version_no: number;
+    kind: string;
+    name: string | null;
+    summary: string | null;
+    deployed_at: Date | null;
+    created_at: Date;
+    snapshot: unknown;
+  }>(sql`
+    SELECT id, version_no, kind, name, summary, deployed_at, created_at,
+           CASE
+             WHEN version_no = max(version_no) OVER ()
+               OR version_no = max(version_no) FILTER (WHERE kind = 'save') OVER ()
+               OR version_no = ${versionNo}
+             THEN snapshot
+           END AS snapshot
+    FROM simple_config_versions
+    WHERE assignment_id = ${assignmentId} AND hidden_at IS NULL
+    ORDER BY version_no ASC
+  `);
+  return [...rows].map((row) => ({
+    id: Number(row.id),
+    versionNo: Number(row.version_no),
+    kind: row.kind,
+    name: row.name,
+    summary: row.summary,
+    deployedAt: row.deployed_at,
+    createdAt: new Date(row.created_at),
+    snapshot: row.snapshot,
+  }));
 }
 
 /**
@@ -187,7 +256,7 @@ export async function getSimpleState(args: {
   versionNo?: number | null;
 }): Promise<SimpleState> {
   const { assignmentId, condition, seedPrompt } = args;
-  const rows = await visibleVersions(assignmentId);
+  const rows = await timelineFor(assignmentId, args.versionNo ?? null);
   // The history is the saves. Applies took effect and are kept for the trail,
   // but they are not places to come back to and listing them would bury the
   // ones that are.
@@ -573,8 +642,10 @@ export async function restoreSimpleVersion(args: {
   // after it. Starting over from what the chatbot came with is a place to go
   // back to like any other — the difference is only that it is the floor.
   if (args.versionNo !== 0) {
+    // Only whether it is there — reading the configuration to answer that
+    // would carry the whole thing back to be thrown away.
     const [target] = await db
-      .select()
+      .select({ id: simpleConfigVersions.id })
       .from(simpleConfigVersions)
       .where(
         and(

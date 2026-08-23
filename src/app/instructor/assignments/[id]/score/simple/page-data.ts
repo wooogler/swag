@@ -22,7 +22,7 @@ import { armOf, type StudioView } from '@/lib/study/config';
 import { definitionsOf, resolveSimpleAll } from '@/lib/study/simple/chain';
 import { definitionTasks, readMatches } from '@/lib/study/simple/judge';
 import { getSimpleState } from '@/lib/study/simple/store';
-import { currentMatches, listIntentVersions } from '@/lib/study/simple/intent-versions';
+import { readIntentWordings } from '@/lib/study/simple/intent-versions';
 import { reviewScope } from '@/lib/study/simple/scope';
 
 export async function loadSimpleBoard(args: {
@@ -127,6 +127,7 @@ export async function loadSimpleBoard(args: {
   for (const messageId of messageIds) {
     if (owners.get(messageId)?.outcome === 'pending') pending += 1;
   }
+  const wordings = await readIntentWordings(assignmentId, state.snapshot);
 
   return {
     rows,
@@ -143,8 +144,8 @@ export async function loadSimpleBoard(args: {
       deployedVersionNo: state.deployedVersionNo,
       dirty: state.dirty,
       unsavedSids: state.unsavedSids,
-      intentVersions: await listIntentVersions(assignmentId),
-      matchesNow: await currentMatches(assignmentId, state.snapshot),
+      intentVersions: wordings.intentVersions,
+      matchesNow: wordings.matchesNow,
       pinned: state.pinned,
       owners: Object.fromEntries(
         [...owners.entries()].map(([messageId, o]) => [

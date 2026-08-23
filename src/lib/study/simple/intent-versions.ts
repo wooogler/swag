@@ -191,10 +191,33 @@ export async function nameIntentVersion(
     .where(eq(simpleIntentVersions.id, id));
 }
 
-/** Every intent's history, newest first, for the board. */
-export async function listIntentVersions(
-  assignmentId: string
-): Promise<Record<string, IntentVersion[]>> {
+/**
+ * Both of the things the board asks about wordings, from one lookup.
+ *
+ * Each intent's history with a count beside every row, and a count for what is
+ * in effect right now. That is the same question asked about two sets of
+ * definitions — everything ever written here, and whatever is applied — and
+ * the sets overlap almost entirely, since what is applied was usually written.
+ *
+ * They were two calls, and each one re-read the clone's prepared verdicts in
+ * full: measured at 17ms against 32ms for the pair on a log with thirty
+ * thousand of them, in series, on a route the board polls every 1.2 seconds
+ * while judging runs. Not the largest cost on that path, but the easiest one
+ * to stop paying twice.
+ *
+ * One pass over the union, then. Splitting the result back out is a lookup by
+ * definition text, which is the key the counts already come back under. They
+ * are answered together rather than left as two functions because nothing has
+ * ever wanted one without the other — both call sites asked for the pair.
+ */
+export async function readIntentWordings(
+  assignmentId: string,
+  /** The configuration in effect, for the second answer. */
+  snapshot: SimpleSnapshot
+): Promise<{
+  intentVersions: Record<string, IntentVersion[]>;
+  matchesNow: Record<string, number | null>;
+}> {
   const rows = await db
     .select()
     .from(simpleIntentVersions)
@@ -216,13 +239,18 @@ export async function listIntentVersions(
     .orderBy(asc(simpleConfigVersions.versionNo));
   const displayNo = new Map(saves.map((row, i) => [row.versionNo, i + 1]));
 
-  // One lookup for every distinct wording in the whole history: a verdict is
-  // keyed by definition text, so an old one still has its own and nothing has
-  // to be judged again to say how many questions it described.
-  const matches = await countsByDefinition(
-    assignmentId,
-    [...new Set(rows.map((r) => r.definition.trim()).filter((d) => d.length > 0))]
-  ).catch(() => new Map<string, number>());
+  // One lookup for every distinct wording in the whole history AND in the
+  // configuration in effect: a verdict is keyed by definition text, so an old
+  // one still has its own and nothing has to be judged again to say how many
+  // questions it described.
+  const pairs = pairsOf(snapshot);
+  const matches = await countsByDefinition(assignmentId, [
+    ...new Set(
+      [...rows.map((r) => r.definition), ...pairs.map((p) => p.definition)]
+        .map((d) => d.trim())
+        .filter((d) => d.length > 0)
+    ),
+  ]).catch(() => new Map<string, number>());
 
   const out: Record<string, IntentVersion[]> = {};
   for (const row of rows) {
@@ -242,35 +270,24 @@ export async function listIntentVersions(
       matches: row.definition.trim() ? matches.get(row.definition.trim()) ?? 0 : null,
     });
   }
-  return out;
-}
 
-/**
- * How many questions each intent's CURRENT wording describes.
- *
- * The row for what is applied and not saved has no stored version to carry a
- * count, and a column that is full on every row but the top one is worse than
- * no column. Same lookup as the history's: a verdict is keyed by definition
- * text, so this costs a read and never a judgement.
- *
- * Null for the uncategorized rule, which has no words to match with.
- */
-export async function currentMatches(
-  assignmentId: string,
-  snapshot: SimpleSnapshot
-): Promise<Record<string, number | null>> {
-  const pairs = pairsOf(snapshot);
-  const counts = await countsByDefinition(
-    assignmentId,
-    [...new Set(pairs.map((p) => p.definition.trim()).filter((d) => d.length > 0))]
-  ).catch(() => new Map<string, number>());
-  const out: Record<string, number | null> = {};
+  /**
+   * How many questions each intent's CURRENT wording describes.
+   *
+   * The row for what is applied and not saved has no stored version to carry a
+   * count, and a column that is full on every row but the top one is worse
+   * than no column.
+   *
+   * Null for the uncategorized rule, which has no words to match with.
+   */
+  const matchesNow: Record<string, number | null> = {};
   for (const pair of pairs) {
-    out[String(pair.sid)] = pair.definition.trim()
-      ? counts.get(pair.definition.trim()) ?? 0
+    matchesNow[String(pair.sid)] = pair.definition.trim()
+      ? matches.get(pair.definition.trim()) ?? 0
       : null;
   }
-  return out;
+
+  return { intentVersions: out, matchesNow };
 }
 
 /**

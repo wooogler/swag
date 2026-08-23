@@ -19,7 +19,7 @@
  */
 import { NextResponse } from 'next/server';
 import { afterSaveInFlight } from '@/lib/study/simple/after-save';
-import { currentMatches, listIntentVersions } from '@/lib/study/simple/intent-versions';
+import { readIntentWordings } from '@/lib/study/simple/intent-versions';
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleState } from '@/lib/study/simple/store';
 import { definitionsOf, resolveSimpleAll, type SimpleSnapshot } from '@/lib/study/simple/chain';
@@ -60,7 +60,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     versionNo: versionParam != null && versionParam !== '' ? Number(versionParam) : null,
   });
 
-  const records = await scopedRecords(id);
+  // Side by side: neither of these needs the other, and this route is polled.
+  const [records, wordings] = await Promise.all([
+    scopedRecords(id),
+    readIntentWordings(id, state.snapshot),
+  ]);
   const messageIds = records.map((r) => r.messageId);
   const current = await ownershipFor(id, state.snapshot, messageIds);
 
@@ -78,10 +82,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     unsavedSids: state.unsavedSids,
     // sid → that intent's own history, newest first. '0' is the
     // everything-else rule, and in the baseline arm it is the whole of it.
-    intentVersions: await listIntentVersions(id),
+    intentVersions: wordings.intentVersions,
     // sid → what its wording catches right now, for the row that is applied
     // and not saved yet and so has no stored version to carry the number.
-    matchesNow: await currentMatches(id, state.snapshot),
+    matchesNow: wordings.matchesNow,
     pinned: state.pinned,
     // messageId → { sid, outcome }. The board renders "applied: X" from this
     // and nothing else, so what it shows is what would actually be sent.
