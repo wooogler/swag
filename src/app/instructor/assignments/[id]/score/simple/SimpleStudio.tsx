@@ -2614,34 +2614,6 @@ function GenerateExamples({ full, onClick }: { full: boolean; onClick: () => Pro
   );
 }
 
-/**
- * The words a list is a list OF, in two lines until they are asked for.
- *
- * They run to a paragraph — the starters spell out three examples each — and
- * a header that gives them all the room they want pushes the questions off the
- * screen. Clamped they were unreadable past the second line, with only a
- * hover tooltip behind them, which is not somewhere to read a paragraph from.
- */
-function Definition({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={() => setOpen((v) => !v)}
-      title={open ? 'Show less' : 'Show all of it'}
-      className="mt-1 block w-full text-left"
-    >
-      <span
-        className={`text-2xs leading-relaxed text-[hsl(var(--muted-foreground))] ${
-          open ? 'block' : 'line-clamp-2'
-        }`}
-      >
-        {text}
-      </span>
-    </button>
-  );
-}
-
 function QuestionColumn({
   api,
   rows,
@@ -2873,8 +2845,12 @@ function QuestionColumn({
 
       <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
       <div className="shrink-0 px-3 py-2 border-b border-[hsl(var(--border))]">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold truncate">{label}</span>
+      {/* Two rows, because they answer different questions: what this list is,
+          and what to do to it. Sharing one row, the controls took the width
+          first and the name of the list — the one thing that has to be
+          readable — came out as "Provide Exa…". */}
+      <div className="flex items-baseline gap-2">
+        <span className="text-sm font-semibold">{label}</span>
         <span className="shrink-0 whitespace-nowrap text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
           {rows.length} of {allCount}
         </span>
@@ -2890,11 +2866,9 @@ function QuestionColumn({
             <Loader2 className="w-3 h-3 animate-spin" /> working out where questions go
           </span>
         )}
-        {/* The same fact from the other end. Nearest-first answers "is this
-            working"; furthest-first answers "what did my words catch that is
-            least like what I meant" — and the row it lands on has the button
-            to make an intent out of it. */}
         <span className="flex-1" />
+      </div>
+      <div className="mt-1.5 flex items-center gap-2">
         {/* The prepared categories, as a way of reading rather than a way of
             writing. This arm has no intents to slice its log with, and the
             categories are knowledge about the log — what students ask and how
@@ -2927,7 +2901,7 @@ function QuestionColumn({
         {/* An ordinary search box, over the students' own words. Everything
             else on this board is about what the configuration does; this is
             the one control for finding a question you remember. */}
-        <label className="shrink-0 relative flex items-center">
+        <label className="relative flex flex-1 items-center">
           <Search className="pointer-events-none absolute left-1.5 w-3 h-3 text-[hsl(var(--muted-foreground))]" />
           <input
             value={query}
@@ -2937,7 +2911,7 @@ function QuestionColumn({
               e.stopPropagation();
             }}
             placeholder="Search questions"
-            className="w-40 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] py-1 pl-6 pr-6 text-xs focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+            className="w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] py-1 pl-6 pr-6 text-xs focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
           />
           {query.length > 0 && (
             <button
@@ -2956,7 +2930,13 @@ function QuestionColumn({
           to read them from while looking at what they caught — the question is
           always "do these words describe these questions", and it cannot be
           asked with the two halves in different columns. */}
-      {shownDefinition.trim().length > 0 && <Definition text={shownDefinition} />}
+      {shownDefinition.trim().length > 0 && (
+        /* All of it. Two lines with a press behind them is a paragraph nobody
+           knows is there — the press was not something anyone found. */
+        <p className="mt-1.5 text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]">
+          {shownDefinition}
+        </p>
+      )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
