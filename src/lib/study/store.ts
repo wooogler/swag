@@ -506,6 +506,9 @@ export async function ensureStudyTables(): Promise<void> {
         `"pointed_span_end" integer`,
         `"pointed_text" text`,
         `"pointed_at" timestamp`,
+        // Baseline pointing became a LIST of stretches rather than one, so the
+        // offsets moved into their own column; the two above are the pilot's.
+        `"pointed_spans" jsonb`,
         // The v2 instrument's free text. Retired by BLOCK_TEST v3 §9 and never
         // written any more, but kept so the pilot's rows stay readable.
         `"expectation" text`,

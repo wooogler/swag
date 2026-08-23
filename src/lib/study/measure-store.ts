@@ -1,16 +1,25 @@
 /**
- * Reads and writes for the block-test screen.
+ * Reads and writes for the block-test screen (docs/BLOCK_TEST v3.md).
  *
  * The one rule that shapes this module: a frozen response is released to the
- * participant only AFTER their prediction is recorded — and design v2 §5 made
- * the prediction two things, a yes/no and a POINT at the part of the
- * configuration they expect to act. Both must be on record before the answer
- * is released, because pointing after seeing the answer is not a prediction.
- * The gate lives on the server and the client is never sent an answer it
- * should not have yet.
+ * participant only AFTER their prediction is recorded — and v3 §4 makes the
+ * prediction four things: how it SHOULD ideally answer (Q1), a POINT at the
+ * part of the configuration that will handle it (Q2), how confidently they can
+ * anticipate the answer (Q3), and whether they expect it to be educationally
+ * desirable (Q4). All four are on record before the answer is released,
+ * because none of them is a prediction once the answer is on screen. The gate
+ * lives on the server and the client is never sent an answer it should not
+ * have yet.
  *
- * Both halves are first-answer-wins for the same reason: a second attempt is
- * made with knowledge the first did not have.
+ * The prediction is first-answer-wins for the same reason: a second attempt is
+ * made with knowledge the first did not have. Pass 2's judgements are NOT —
+ * revising a rating is a second thought about the same visible response, and
+ * how often it happens is itself logged (§6-7).
+ *
+ * WHAT ELSE IS HELD BACK, AND UNTIL WHEN (§3.2). The intent that actually
+ * fired — the "Matched" chip — is released only once BOTH judgements are in
+ * and one of them is negative. Shown any earlier it answers Q6 for them
+ * ("it went where I said, so it must follow my setup") and drags Q5 with it.
  */
 import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
@@ -26,9 +35,9 @@ import {
 } from '@/db/schema';
 import { getLatestChatDeploy } from '@/lib/score/deploy-store';
 import type { SnapshotConfig } from '@/components/study/SnapshotConfigView';
-import { armOf, familyOf, type StudioView } from './config';
+import { armOf, familyOf, isStudioView, type StudioView } from './config';
 import { assignmentBasePrompt } from '@/lib/assignment-ai';
-import { getSimpleSaved } from './simple/store';
+import { getSimpleDeployed } from './simple/store';
 import { blockPlan } from './phases';
 
 /**
@@ -52,40 +61,84 @@ export interface MeasureQuestion {
   questionMaterials: QuestionMaterials | null;
 }
 
-/** Where the participant expects the answer to come from, before seeing it. */
+/** One stretch of the baseline prompt, as pointed at. */
+export interface PointedSpan {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/**
+ * Where the participant expects the answer to come from, before seeing it.
+ *
+ * `span` carries a LIST. A monolithic prompt rarely addresses a question in
+ * one place — a tone line at the top, a "never write it for them" halfway
+ * down — and forcing one selection would make the answer a choice about which
+ * of their own sentences counts most, which is not the question being asked.
+ */
 export type Pointing =
   | { kind: 'intent'; intentId: number }
   | { kind: 'none' }
   | { kind: 'not_sure' }
-  | { kind: 'span'; start: number; end: number; text: string }
+  | { kind: 'span'; spans: PointedSpan[] }
   | { kind: 'nothing' };
 
 export interface TestItem extends MeasureQuestion {
-  /** Pass 1's written description of what they expect (문항지 §3 ①). */
-  expectation: string | null;
-  guess: boolean | null;
-  /** Null until pointed; replayed so a reload resumes mid-item. */
+  /** Q1 — how it should IDEALLY answer, in their own words. */
+  ideal: string | null;
+  /** Q2 — null until pointed; replayed so a reload resumes mid-item. */
   pointing: Pointing | null;
-  rating: number | null;
-  /** Opens at a rating of 3 or less (§3 ③). */
-  whatsOff: string | null;
-  /** Opens only where the prediction missed (§3 ④); may be left blank. */
+  /** Q3, Q4 — 6-point agreement. */
+  confidence: number | null;
+  expectDesirable: number | null;
+  /** Q5, Q6 — 6-point agreement, after the response is on screen. */
+  desirable: number | null;
+  follows: number | null;
+  /** P and F — the free text the negative half opens; may be left blank. */
   probe: string | null;
+  repair: string | null;
   /**
-   * Whether this item's prediction missed — the condition §3 ④ opens the probe
-   * on. Computed server-side and only once the rating is in, because half of
-   * it IS the rating and the other half is the routing record, which the
-   * participant never sees.
+   * What actually answered (§4 ③) — the intent, or the fact that none did.
+   *
+   * Carries the ID as well as the name, because the panel is where this is
+   * shown: the row that answered gets a badge in the participant's own setup,
+   * beside the row they picked, and a name alone cannot find a row. `intentId`
+   * is null when nothing claimed the question — that is Uncategorized, which
+   * has a row too.
+   *
+   * SCORE only, and released ONLY with the probe panel: both judgements in and
+   * at least one of them negative. Null everywhere else, so a client that
+   * renders early has nothing to render.
    */
-  missed: boolean | null;
+  matched: { label: string; intentId: number | null } | null;
   /** Present ONLY once EVERY item in the block has been predicted. */
   response: string | null;
 }
 
-/** Rebuild the stored columns into the shape the client sent. */
-function readPointing(row: {
+/** The fold every conditional in the instrument runs on: 1-3 negative, 4-6
+ * positive (§3.3). One rule, no midpoint to arbitrate. */
+export function negative(value: number | null | undefined): boolean {
+  return typeof value === 'number' && value <= 3;
+}
+
+/** Does the probe panel open on this item? — §4 ③, and the only gate that
+ * releases the Matched chip. */
+export function probeOpens(desirable: number | null, follows: number | null): boolean {
+  if (desirable === null || follows === null) return false;
+  return negative(desirable) || negative(follows);
+}
+
+/**
+ * Rebuild the stored columns into the shape the client sent.
+ *
+ * Exported because the export scores pointing too, and a second reader written
+ * against the same five columns is a second place for "none" to drift away
+ * from meaning "the default rule".
+ */
+export function readPointing(row: {
   pointedKind: string | null;
   pointedIntentId: number | null;
+  pointedSpans?: unknown;
   pointedSpanStart: number | null;
   pointedSpanEnd: number | null;
   pointedText: string | null;
@@ -93,15 +146,18 @@ function readPointing(row: {
   switch (row.pointedKind) {
     case 'intent':
       return row.pointedIntentId === null ? null : { kind: 'intent', intentId: row.pointedIntentId };
-    case 'span':
-      return row.pointedSpanStart === null || row.pointedSpanEnd === null
-        ? null
-        : {
-            kind: 'span',
-            start: row.pointedSpanStart,
-            end: row.pointedSpanEnd,
-            text: row.pointedText ?? '',
-          };
+    case 'span': {
+      const spans = readSpans(row.pointedSpans);
+      if (spans.length > 0) return { kind: 'span', spans };
+      // The pilot's one-span rows, read as a list of one.
+      if (row.pointedSpanStart === null || row.pointedSpanEnd === null) return null;
+      return {
+        kind: 'span',
+        spans: [
+          { start: row.pointedSpanStart, end: row.pointedSpanEnd, text: row.pointedText ?? '' },
+        ],
+      };
+    }
     case 'none':
     case 'not_sure':
     case 'nothing':
@@ -109,6 +165,20 @@ function readPointing(row: {
     default:
       return null;
   }
+}
+
+/** jsonb is `unknown` until proven otherwise — a malformed row reads empty
+ * rather than crashing the screen it is on. */
+function readSpans(raw: unknown): PointedSpan[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (s): s is PointedSpan =>
+      !!s &&
+      typeof s === 'object' &&
+      typeof (s as PointedSpan).start === 'number' &&
+      typeof (s as PointedSpan).end === 'number' &&
+      typeof (s as PointedSpan).text === 'string'
+  );
 }
 
 interface FrozenTurn {
@@ -253,9 +323,10 @@ async function simpleConfigFor(
   view: StudioView
 ): Promise<SnapshotConfig | null> {
   const [assignment] = await db.select().from(assignments).where(eq(assignments.id, assignmentId));
-  // The saved one — the same configuration the frozen answers came from, so
-  // the panel a participant reads while predicting is the one that answered.
-  const tip = await getSimpleSaved({
+  // The DEPLOYED one — the configuration they stood behind, and the same one
+  // the frozen answers came from, so the panel a participant reads while
+  // predicting is the one that answered.
+  const tip = await getSimpleDeployed({
     assignmentId,
     condition: view,
     seedPrompt: assignment ? assignmentBasePrompt(assignment) : '',
@@ -333,13 +404,25 @@ function seededShuffle<T>(items: T[], seedKey: string): T[] {
 }
 
 /**
- * The block-test items for one clone, with each item's answer state. A
- * response is attached only where a guess already exists — see the module
- * comment.
+ * The block-test items for one clone, with each item's answer state. No
+ * response is attached until the whole block has been predicted — see the
+ * module comment and the gate below.
  */
 export async function getTestItems(
   participant: StudyParticipant,
-  clone: { assignmentId: string; datasetKey: string }
+  clone: {
+    assignmentId: string;
+    datasetKey: string;
+    /**
+     * The arm, or the full view — either reads. Needed for ONE thing: the
+     * Matched chip is a SCORE device and must not appear in baseline, which
+     * has no first-match to report and whose participants should never be
+     * handed the vocabulary of one (§7: C2/C3 are structurally impossible
+     * there, and that asymmetry is a finding, not something to paper over).
+     * Absent or unreadable withholds the chip rather than guessing.
+     */
+    condition?: string;
+  }
 ): Promise<TestItem[]> {
   const bank = await db
     .select()
@@ -388,9 +471,10 @@ export async function getTestItems(
   //
   // Per-item release let an early answer teach the participant what this
   // configuration does, and they carried that lesson into the predictions that
-  // followed — so items 6-8 measured a participant who had been shown six
-  // worked examples, and items 1-3 one who had not. The predictions have to be
-  // made under the same information, which means all of them before any reveal.
+  // followed — so the last items measured a participant who had been shown
+  // worked examples and the first ones one who had not. The predictions have
+  // to be made under the same information, which means all of them before any
+  // reveal (§3.1: it is confidence, Q3, that per-item release corrupts worst).
   // Checked on `pointedAt` rather than on the reconstructed pointing so an
   // unreadable row fails closed.
   // Material tags for the questions, and for the earlier student turns where
@@ -408,15 +492,18 @@ export async function getTestItems(
     ]),
   ]);
 
+  const arm = isStudioView(clone.condition) ? armOf(clone.condition) : null;
+
   const predictionsDone = bank.every((item) => {
     const answer = answerByItem.get(item.id);
-    return answer?.guess != null && answer?.pointedAt != null;
+    return answer?.expectDesirable != null && answer?.pointedAt != null;
   });
 
   return ordered.map((item) => {
     const answer = answerByItem.get(item.id);
-    const guessed = answer?.guess ?? null;
     const pointing = answer ? readPointing(answer) : null;
+    const desirable = answer?.desirable ?? null;
+    const follows = answer?.followsSetup ?? null;
     return {
       bankItemId: item.id,
       position: item.position,
@@ -429,58 +516,72 @@ export async function getTestItems(
       questionMaterials: item.sourceMessageId
         ? materials.get(item.sourceMessageId) ?? null
         : null,
-      expectation: answer?.expectation ?? null,
-      guess: guessed,
+      ideal: answer?.ideal ?? null,
       pointing,
-      rating: answer?.rating ?? null,
-      whatsOff: answer?.whatsOff ?? null,
+      confidence: answer?.confidence ?? null,
+      expectDesirable: answer?.expectDesirable ?? null,
+      desirable,
+      follows,
       probe: answer?.probe ?? null,
-      // Null until rated: the fold needs the rating, and releasing the routing
-      // comparison earlier would hand back part of the answer.
-      missed:
-        answer?.rating == null
-          ? null
-          : predictionMissed({
-              guess: guessed,
-              rating: answer.rating,
-              pointing,
-              applied: appliedByItem.get(item.id) ?? null,
-            }),
+      repair: answer?.repair ?? null,
+      // Held back until the probe panel is the thing on screen (§3.2), and
+      // computed here rather than sent as raw routing so the client has no
+      // copy of the answer it is not showing.
+      matched:
+        arm === 'score' && probeOpens(desirable, follows)
+          ? matchedLabel(appliedByItem.get(item.id) ?? null)
+          : null,
       response: predictionsDone ? responseByItem.get(item.id) ?? null : null,
     };
   });
 }
 
-/**
- * Did the prediction miss? — the condition §3 ④ opens the probe on.
- *
- * Two independent halves, either of which counts: the yes/no against the
- * participant's own rating folded at 3 ("접기 규칙: 5점 3 이하 = '아니오'"), and
- * — SCORE only — the intent they pointed at against the one that actually
- * fired. Baseline has no objective second half, so a highlighted span never
- * counts as a miss on its own; "not sure" is a real answer and is not scored
- * either way.
- *
- * Same rules as the export's pointing_correct, deliberately: a probe asked in
- * the room and a finding computed afterwards have to be about the same items.
- */
-export function predictionMissed(args: {
-  guess: boolean | null;
-  rating: number | null;
-  pointing: Pointing | null;
-  applied: unknown;
-}): boolean {
-  const { guess, rating, pointing } = args;
-  if (guess !== null && rating !== null && guess !== rating >= 4) return true;
+/** The routing audit as the generator wrote it. */
+export type AppliedRouting = {
+  outcome?: string;
+  intentId?: number;
+  intentTitle?: string;
+} | null;
 
-  const applied = (args.applied ?? null) as { outcome?: string; intentId?: number } | null;
+/**
+ * The "Matched: …" chip (§4 ③) — what actually handled the question.
+ *
+ * A phrase and not an id, because it is read inside the probe panel by the
+ * person who wrote the intent. "None" is said out loud rather than left blank:
+ * a question falling to the default rule is the coverage gap C1 is about, and
+ * an empty chip would read as missing data.
+ */
+export function matchedLabel(applied: AppliedRouting): { label: string; intentId: number | null } {
+  if (applied?.outcome === 'intent') {
+    return {
+      label: applied.intentTitle ?? `intent #${applied.intentId ?? '?'}`,
+      intentId: applied.intentId ?? null,
+    };
+  }
+  // Named as the participant's own list names it, not as the chain names it.
+  return { label: 'Uncategorized', intentId: null };
+}
+
+/**
+ * Was the pointing (Q2) right? — the routing accuracy of §5, and the only
+ * comprehension measure that is statistically independent of the judgements.
+ *
+ * SCORE only: null for baseline, which has no first-match to be right about,
+ * and null for "I don't know", which is a real answer and is scored as its own
+ * rate rather than as a wrong one.
+ *
+ * ONE definition, used by the console and the export both — a number a
+ * facilitator reads in the room and a column an analyst reads afterwards have
+ * to be about the same items.
+ */
+export function pointingCorrect(pointing: Pointing | null, applied: AppliedRouting): boolean | null {
   if (pointing?.kind === 'intent') {
-    return !(applied?.outcome === 'intent' && applied?.intentId === pointing.intentId);
+    return applied?.outcome === 'intent' && applied?.intentId === pointing.intentId;
   }
   if (pointing?.kind === 'none') {
-    return !(applied == null || applied.outcome === 'type_default');
+    return applied == null || applied.outcome === 'type_default';
   }
-  return false;
+  return null;
 }
 
 /**
@@ -511,7 +612,7 @@ export async function predictionsComplete(clone: {
           studyTestAnswers.bankItemId,
           bank.map((b) => b.id)
         ),
-        isNotNull(studyTestAnswers.guess),
+        isNotNull(studyTestAnswers.expectDesirable),
         isNotNull(studyTestAnswers.pointedAt)
       )
     );
@@ -540,16 +641,32 @@ async function hasResponse(cloneAssignmentId: string, bankItemId: number): Promi
  * step and the yes/no. `study_test_answers.timing` documents the fields.
  */
 export interface StepTiming {
+  /** Pass 1 · Q1's first and last keystroke. */
+  idealStart?: number;
+  idealEnd?: number;
+  /** Pass 1 · Q2: the first pointing, the one that survived to Next, and how
+   * many times it changed in between (§6-7). */
   pointFirst?: number;
   point?: number;
   pointChanges?: number;
-  expectStart?: number;
-  expectEnd?: number;
-  guess?: number;
+  /** Pass 1 · Q3, Q4, Next. */
+  confidence?: number;
+  expectDesirable?: number;
   submit?: number;
+  /** Pass 2 · the reveal, then each judgement and how often it was revised —
+   * the drift §10-5 says to watch for. */
   reveal?: number;
-  rate?: number;
+  desirable?: number;
+  follows?: number;
+  desirableChanges?: number;
+  followsChanges?: number;
+  /** Pass 2 · whether the probe panel opened at all, and what was written in
+   * it (§6-7: open/closed and the character counts). */
+  probeOpened?: number;
   probe?: number;
+  repair?: number;
+  probeChars?: number;
+  repairChars?: number;
 }
 
 /**
@@ -566,29 +683,30 @@ function timingPatch(timing?: StepTiming | null) {
 }
 
 /**
- * Record a whole prediction — description, yes/no, and pointing — in one write.
+ * Record a whole prediction — Q1 through Q4 — in one write.
  *
- * One call because the participant now enters all three and presses Next
- * (문항지 §3 Pass 1, 08-15): there is no moment between them where a partial
- * prediction means anything, and three round trips would give a half-recorded
- * item three ways to end up wrong.
+ * One call because the participant enters all four and presses Next (§4 Pass
+ * 1): there is no moment between them where a partial prediction means
+ * anything, and four round trips would give a half-recorded item four ways to
+ * end up wrong.
  *
  * First submission wins for the item as a whole. Nothing is released here —
- * the answers unlock only when the last of the eight lands (see the gate in
- * getTestItems) — so a participant is free to change their mind up until Next,
- * and has learned nothing that could inform a second attempt afterwards.
+ * the answers unlock only when the last item in the block lands (see the gate
+ * in getTestItems) — so a participant is free to change their mind up until
+ * Next, and has learned nothing that could inform a second attempt afterwards.
  */
 export async function recordPrediction(args: {
   participant: StudyParticipant;
   cloneAssignmentId: string;
   bankItemId: number;
-  expectation: string;
-  guess: boolean;
+  ideal: string;
   pointing: Pointing;
+  confidence: number;
+  expectDesirable: number;
   /** Per-step durations from when the question appeared (ms) — see schema. */
   timing?: StepTiming | null;
 }): Promise<{ ok: true } | { error: 'no_response' }> {
-  const { participant, cloneAssignmentId, bankItemId, expectation, guess, pointing } = args;
+  const { participant, cloneAssignmentId, bankItemId, ideal, pointing } = args;
 
   // Refuse rather than record a prediction we cannot show an answer to: the
   // pair is the measurement.
@@ -601,13 +719,19 @@ export async function recordPrediction(args: {
       participantId: participant.id,
       cloneAssignmentId,
       bankItemId,
-      expectation,
-      guess,
+      ideal,
       pointedKind: pointing.kind,
       pointedIntentId: pointing.kind === 'intent' ? pointing.intentId : null,
-      pointedSpanStart: pointing.kind === 'span' ? pointing.start : null,
-      pointedSpanEnd: pointing.kind === 'span' ? pointing.end : null,
-      pointedText: pointing.kind === 'span' ? pointing.text : null,
+      pointedSpans: pointing.kind === 'span' ? pointing.spans : null,
+      // The quotations, joined, so the export carries what they pointed at
+      // without anyone having to parse json to read it.
+      pointedText:
+        pointing.kind === 'span' ? pointing.spans.map((s) => s.text).join(' … ') : null,
+      confidence: args.confidence,
+      expectDesirable: args.expectDesirable,
+      // Both are the same instant — Pass 1 is one write. `guessed_at` keeps
+      // its v2 name and its v2 meaning: when the prediction was recorded, and
+      // the evidence that it beat the reveal.
       guessedAt: now,
       pointedAt: now,
       timing: args.timing ?? null,
@@ -620,29 +744,32 @@ export async function recordPrediction(args: {
 }
 
 /**
- * Record the 1-5 fit rating, and "what's off" when the rating opens it.
+ * Record a judgement — Q5, Q6, or both.
  *
- * Only reachable once the answers have been released, which now means the
- * WHOLE block has been predicted — a rating is a judgement of something seen,
- * and nothing in this block is seen before then. The caller checks the
- * block-wide half (it holds the clone); the per-item `pointedAt` rides in the
- * WHERE rather than in a prior read, so neither can slip past on a client's
- * say-so.
+ * A PATCH, because the two are answered as two clicks and either can be
+ * revised: sending one must not blank the other, and the second click must not
+ * re-decide the first. Only reachable once the answers have been released,
+ * which means the WHOLE block has been predicted — a judgement is a judgement
+ * of something seen, and nothing in this block is seen before then. The caller
+ * checks the block-wide half (it holds the clone); the per-item `pointedAt`
+ * rides in the WHERE rather than in a prior read, so neither can slip past on
+ * a client's say-so.
+ *
+ * Returns the item's judgements as they now stand, so the caller can decide
+ * whether the probe panel — and with it the Matched chip — is owed.
  */
-export async function recordRating(args: {
+export async function recordJudgement(args: {
   cloneAssignmentId: string;
   bankItemId: number;
-  rating: number;
-  whatsOff?: string | null;
+  desirable?: number;
+  follows?: number;
   timing?: StepTiming | null;
-}): Promise<{ ok: boolean }> {
+}): Promise<{ ok: boolean; desirable: number | null; follows: number | null }> {
   const updated = await db
     .update(studyTestAnswers)
     .set({
-      rating: args.rating,
-      // Above the fold there is no "what's off" to keep; clearing it stops a
-      // stale answer surviving a corrected rating.
-      whatsOff: args.rating <= 3 ? args.whatsOff?.trim() || null : null,
+      ...(args.desirable === undefined ? {} : { desirable: args.desirable }),
+      ...(args.follows === undefined ? {} : { followsSetup: args.follows }),
       ratedAt: new Date(),
       ...timingPatch(args.timing),
     })
@@ -653,24 +780,40 @@ export async function recordRating(args: {
         isNotNull(studyTestAnswers.pointedAt)
       )
     )
-    .returning({ id: studyTestAnswers.id });
-  return { ok: updated.length > 0 };
+    .returning({
+      desirable: studyTestAnswers.desirable,
+      follows: studyTestAnswers.followsSetup,
+    });
+  const row = updated[0];
+  return {
+    ok: updated.length > 0,
+    desirable: row?.desirable ?? null,
+    follows: row?.follows ?? null,
+  };
 }
 
 /**
- * Record the probe (§3 ④) — optional by design, so a blank one is a real
- * answer and saved as null rather than refused. Only accepted after a rating,
- * because that is when the box opens.
+ * Record the probe (P) and the repair (F).
+ *
+ * Both optional by design, so a blank one is a real answer and saved as null
+ * rather than refused — §10-5 wants the box cheap to leave empty, not a toll
+ * that teaches people to rate above the fold. Only accepted after a judgement,
+ * because that is when the panel opens.
  */
 export async function recordProbe(args: {
   cloneAssignmentId: string;
   bankItemId: number;
-  probe: string;
+  probe?: string;
+  repair?: string;
   timing?: StepTiming | null;
 }): Promise<{ ok: boolean }> {
   const updated = await db
     .update(studyTestAnswers)
-    .set({ probe: args.probe.trim() || null, ...timingPatch(args.timing) })
+    .set({
+      ...(args.probe === undefined ? {} : { probe: args.probe.trim() || null }),
+      ...(args.repair === undefined ? {} : { repair: args.repair.trim() || null }),
+      ...timingPatch(args.timing),
+    })
     .where(
       and(
         eq(studyTestAnswers.cloneAssignmentId, args.cloneAssignmentId),

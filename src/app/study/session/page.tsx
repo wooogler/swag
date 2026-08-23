@@ -60,8 +60,8 @@ export default async function StudySessionPage() {
     if (clone) {
       const items = await getTestItems(participant, clone);
       testProgress = {
-        predicted: items.filter((i) => i.guess !== null && i.pointing !== null).length,
-        rated: items.filter((i) => i.rating !== null).length,
+        predicted: items.filter((i) => i.expectDesirable !== null && i.pointing !== null).length,
+        rated: items.filter((i) => i.desirable !== null && i.follows !== null).length,
         total: items.length,
       };
     }

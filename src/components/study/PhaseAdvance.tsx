@@ -14,6 +14,13 @@
  * the studio header, inches from Deploy. Ending a block cannot be undone from
  * the participant's side: the phase gate shuts the board behind them.
  *
+ * `guard` is the page's veto, and the reason it exists is that this button is
+ * often the ONLY button on a screen that has work of its own to finish. A
+ * questionnaire has answers to check and save; disabling the button until they
+ * are is the tempting alternative and the worse one — a dead button says
+ * nothing about which question was missed. So the click always lands, the page
+ * decides whether it counts, and the page says why when it does not.
+ *
  * `blocked` is for a different thing: not "are you sure" but "not yet, and
  * here is the one button that fixes it". The server refuses the same case
  * independently — this exists so the refusal arrives before the click instead
@@ -25,7 +32,7 @@
  * how the two would drift apart.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 
 export default function PhaseAdvance({
@@ -34,6 +41,8 @@ export default function PhaseAdvance({
   waits = false,
   waitLabel = 'Getting the next step ready.',
   confirm,
+  confirmLabel = "Yes, I'm done",
+  guard,
   blocked = null,
   compact = false,
   className = '',
@@ -46,6 +55,15 @@ export default function PhaseAdvance({
   waitLabel?: string;
   /** Ask before acting, with this as the question. */
   confirm?: string;
+  /** The affirmative answer to `confirm`. */
+  confirmLabel?: string;
+  /**
+   * Run before anything else on every click; false stops the click dead — no
+   * confirmation, no advance — and leaves the explaining to the caller, which
+   * is the only side that knows what is missing. Async so it can also be the
+   * page's save.
+   */
+  guard?: () => boolean | Promise<boolean>;
   /**
    * Something has to happen first. Shows `reason` instead of the confirmation,
    * with a button that POSTs `actionUrl` and then moves on — so the fix and
@@ -59,6 +77,23 @@ export default function PhaseAdvance({
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * The confirmation opens BELOW the button, and this button is often the last
+   * thing on a long page — so the question can open off the bottom of the
+   * screen, leaving a participant who pressed Continue with a page that
+   * visibly did nothing. Bring it into view, minimally (`nearest` moves
+   * nothing when it already fits) and a frame late, after the click's own
+   * focus scrolling has settled.
+   */
+  const asked = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!asking) return;
+    const id = requestAnimationFrame(() =>
+      asked.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    );
+    return () => cancelAnimationFrame(id);
+  }, [asking]);
 
   /** Do the blocking thing, then carry on into the hand-off. */
   const resolveThenGo = async () => {
@@ -80,6 +115,27 @@ export default function PhaseAdvance({
       return;
     }
     await go();
+  };
+
+  /**
+   * The click, whatever it turns into. The guard runs first and under the
+   * button's own busy state — it may be saving, and a second click landing
+   * mid-save would save twice and ask twice.
+   */
+  const press = async () => {
+    if (guard) {
+      setBusy(true);
+      setError(null);
+      let allowed = false;
+      try {
+        allowed = await guard();
+      } finally {
+        setBusy(false);
+      }
+      if (!allowed) return;
+    }
+    if (confirm || blocked) setAsking((v) => !v);
+    else await go();
   };
 
   const go = async () => {
@@ -122,7 +178,7 @@ export default function PhaseAdvance({
   return (
     <div className={`relative ${compact ? 'inline-flex items-center' : 'flex flex-col'} ${className}`}>
       <button
-        onClick={confirm || blocked ? () => setAsking((v) => !v) : go}
+        onClick={press}
         disabled={busy}
         className={
           compact
@@ -136,6 +192,7 @@ export default function PhaseAdvance({
 
       {asking && (confirm || blocked) && !busy && (
         <div
+          ref={asked}
           className={`absolute top-full z-30 mt-2 w-72 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 shadow-lg ${
             compact ? 'right-0' : 'left-1/2 -translate-x-1/2'
           }`}
@@ -154,7 +211,7 @@ export default function PhaseAdvance({
               onClick={blocked ? resolveThenGo : go}
               className="rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-white"
             >
-              {blocked ? blocked.actionLabel : "Yes, I'm done"}
+              {blocked ? blocked.actionLabel : confirmLabel}
             </button>
           </div>
         </div>

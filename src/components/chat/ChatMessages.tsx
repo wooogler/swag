@@ -28,6 +28,9 @@ const HIGHLIGHT_ALIGN: ScrollLogicalPosition = 'start';
 /** What "the top" leaves above it — this list's own p-4, matched by the
  * scroll-mt-4 on every message. */
 const HIGHLIGHT_INSET = 16;
+/** The same, when the "earlier turns" strip is pinned above the thread
+ * (scroll-mt-14): the room the question needs to clear it. */
+const HIGHLIGHT_INSET_WITH_STRIP = 56;
 
 export interface Message {
   id: string | number;
@@ -61,6 +64,43 @@ interface ChatMessagesProps {
    * point of interest is mid-conversation, not the latest message. It lands at
    * the top of the window; see HIGHLIGHT_ALIGN. */
   autoScrollToHighlight?: boolean;
+  /**
+   * What to do when the highlight MOVES to a message that is already on
+   * screen: 'align' puts it at the top regardless, 'if-needed' leaves the
+   * scroll where it is and only moves when the message would otherwise be cut
+   * off — smoothly, so the page does not jump.
+   *
+   * 'if-needed' is for a reveal. The block test appends the chatbot's answer
+   * under the question being predicted about, and yanking the question off the
+   * top of the pane to align the answer costs the reader the thing the answer
+   * is an answer TO. When the answer is longer than the window there is no
+   * choice, and then the scroll is animated rather than instant so it is
+   * legible as movement rather than as a repaint.
+   */
+  highlightScroll?: 'align' | 'if-needed';
+  /** Keep the scrollbar on screen even before the reader touches it.
+   *
+   * Goes with `autoScrollToHighlight`: a thread that opens part-way down has
+   * turns above the fold. Off by default — a live chat starts at the top of
+   * its own history and has nothing to announce.
+   *
+   * NOT SUFFICIENT ON ITS OWN, which is why `showEarlierTurns` exists: macOS
+   * hides scrollbars until you scroll unless the reader has changed a system
+   * setting, and a styled `::-webkit-scrollbar` does not override that. The
+   * gutter is still reserved and it still draws everywhere else, so it stays
+   * — but nothing may depend on it being seen. */
+  persistentScrollbar?: boolean;
+  /**
+   * Say, in the pane itself, that the thread continues above the fold.
+   *
+   * A count and an arrow, pinned to the top of the scrollport while anything
+   * is scrolled past it. This is the affordance that actually carries the
+   * message: it is drawn by the page, so no OS setting can decide not to show
+   * it, and it says HOW MUCH is up there rather than leaving a thumb's
+   * position to be interpreted. Companion to `autoScrollToHighlight` — a pane
+   * that opens at the top has nothing to point at.
+   */
+  showEarlierTurns?: boolean;
   /** The ring on the highlighted message. Defaults to the selection purple;
    * the simple board passes the colour of the intent that answers it, so the
    * question, its reply and the row in the list are one colour. */
@@ -108,6 +148,9 @@ export default function ChatMessages({
   onReplayPasteClick,
   rawAssistantText = false,
   autoScrollToHighlight = false,
+  highlightScroll = 'align',
+  persistentScrollbar = false,
+  showEarlierTurns = false,
   highlightColor,
   renderUserContent,
   onEditAssistant,
@@ -213,7 +256,17 @@ export default function ChatMessages({
         scroller.getBoundingClientRect().top +
         scroller.scrollTop;
       // What is below it now, against what putting it at the top would need.
-      const need = scroller.clientHeight - HIGHLIGHT_INSET - (scroller.scrollHeight - top);
+      if (highlightScroll === 'if-needed') {
+        // LEAVE IT EXACTLY AS IT IS. The space was put there to hold the
+        // question at the top, and the scroll position that holds it depends
+        // on it: taking it away shortens the scrollable range, the browser
+        // clamps the offset, and the whole thread slides down — a jump of
+        // ninety pixels at the one moment this mode exists to keep still.
+        // It is recomputed from scratch on the next question, which remounts.
+        return;
+      }
+      const inset = showEarlierTurns ? HIGHLIGHT_INSET_WITH_STRIP : HIGHLIGHT_INSET;
+      const need = scroller.clientHeight - inset - (scroller.scrollHeight - top);
       // The current space is already inside scrollHeight, so this converges in
       // one step rather than chasing itself.
       setTailSpace((space) => Math.max(0, Math.round(space + need)));
@@ -224,10 +277,26 @@ export default function ChatMessages({
     // After the space above has been laid out, or the scroll asks for a
     // position that does not exist yet and stops short.
     const frame = requestAnimationFrame(() =>
-      requestAnimationFrame(() => target.scrollIntoView({ block: HIGHLIGHT_ALIGN }))
+      requestAnimationFrame(() => {
+        if (highlightScroll === 'align') {
+          target.scrollIntoView({ block: HIGHLIGHT_ALIGN });
+          return;
+        }
+        // Already readable where it is: leave the page alone. `nearest` is not
+        // enough on its own — it still scrolls a message whose top is visible
+        // but whose body runs off the bottom, which is the common case for a
+        // long reply and exactly when moving is right.
+        const box = target.getBoundingClientRect();
+        const view = scrollContainerRef.current?.getBoundingClientRect();
+        if (!view) return;
+        const top = Math.max(view.top, 0);
+        const bottom = Math.min(view.bottom, window.innerHeight);
+        if (box.top >= top - 1 && box.bottom <= bottom + 1) return;
+        target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      })
     );
     return () => cancelAnimationFrame(frame);
-  }, [autoScrollToHighlight, highlightedMessageId, messages]);
+  }, [autoScrollToHighlight, highlightScroll, highlightedMessageId, messages, showEarlierTurns]);
 
   // Highlighted-message visibility: when the reader scrolls it off-screen, a
   // floating "back to the question" button appears (thread views only). The
@@ -262,6 +331,45 @@ export default function ChatMessages({
       window.removeEventListener('resize', update);
     };
   }, [autoScrollToHighlight, highlightedMessageId, messages]);
+
+  /**
+   * How many turns are scrolled off the top right now.
+   *
+   * Measured against the intersection of this container with the viewport —
+   * the same window the back-to-the-question button uses — so it is right
+   * whether this element scrolls or an ancestor does. Counted rather than
+   * merely detected: "3 earlier turns" tells a reader what is up there, where
+   * a bare arrow only tells them that something is.
+   */
+  const [turnsAbove, setTurnsAbove] = useState(0);
+  useEffect(() => {
+    if (!showEarlierTurns) {
+      setTurnsAbove(0);
+      return;
+    }
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const update = () => {
+      const c = container.getBoundingClientRect();
+      const top = Math.max(c.top, 0);
+      let above = 0;
+      container.querySelectorAll<HTMLElement>('[data-message-id]').forEach((el) => {
+        if (el.getBoundingClientRect().bottom < top + 8) above += 1;
+      });
+      setTurnsAbove(above);
+    };
+    update();
+    // Again after the opening scroll lands: on mount nothing is above yet, and
+    // it is that scroll — not a reader's — that puts the context out of sight.
+    const frame = requestAnimationFrame(() => requestAnimationFrame(update));
+    document.addEventListener('scroll', update, { capture: true, passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('scroll', update, { capture: true });
+      window.removeEventListener('resize', update);
+    };
+  }, [showEarlierTurns, messages]);
 
   // When a new replay paste highlight appears, bring that highlight near top for easier scanning.
   useEffect(() => {
@@ -352,7 +460,44 @@ export default function ChatMessages({
   }
 
   return (
-    <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-6">
+    <div
+      ref={scrollContainerRef}
+      className={`flex-1 p-4 space-y-6 ${
+        persistentScrollbar ? 'scrollbar-always' : 'overflow-y-auto'
+      }`}
+    >
+      {/* "There is more above", FIRST in the scroll content — which is what
+          lets `sticky top-2` pin it to the top edge while anything is scrolled
+          past it. Placed at the end (where the back-to-the-question button
+          lives) it would sit under the last message instead, pointing up from
+          the bottom of a pane whose top is where the missing turns are.
+
+          Hidden while the back-to-the-question button is showing at that same
+          edge: two controls pointing the same way at the same corner is one of
+          them getting in the other's way, and the question is the more
+          important of the two things to get back to. */}
+      {showEarlierTurns && turnsAbove > 0 && highlightOffscreen !== 'up' && (
+        // -top-4 and -mt-4, not top-0: sticky offsets are measured from the
+        // scrollport's PADDING box, so a strip pinned at 0 leaves this list's
+        // own p-4 uncovered — and content scrolling up through that 16px is
+        // visible above the very thing that is masking it. The negative bottom
+        // margin gives the strip back the height it takes in flow, so
+        // appearing does not shove the thread down by its own size.
+        <div className="sticky -top-4 z-10 -mx-4 -mt-4 -mb-10 px-4 pt-4 pb-2 flex justify-center pointer-events-none bg-gradient-to-b from-[hsl(var(--card))] via-[hsl(var(--card))] via-70% to-transparent">
+          <button
+            onClick={() => {
+              const el = scrollContainerRef.current?.querySelector<HTMLElement>('[data-message-id]');
+              el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--muted-foreground))] shadow-md hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+            title="Scroll up to the start of this conversation"
+          >
+            <ArrowUp className="w-3.5 h-3.5" />
+            {turnsAbove === 1 ? '1 earlier turn above' : `${turnsAbove} earlier turns above`}
+          </button>
+        </div>
+      )}
+
       {messages.map((message, index) => {
         const isUser = message.role === 'user';
         const isCopied = copiedId === message.id;
@@ -369,12 +514,18 @@ export default function ChatMessages({
           <div
             key={message.id}
             data-message-id={message.id}
+            // With the "earlier turns" strip pinned to the top, the question has
+            // to land BELOW it — a highlighted message aligned to the pane's
+            // own inset would open with its first line under the very control
+            // that is there to say what it is missing.
             // scroll-mt matches this list's own p-4 top inset: aligning a message
             // to the top of the scrollport otherwise scrolls that padding away and
             // clips the highlight ring, which paints 4px OUTSIDE the bubble
             // (ring-2 + ring-offset-2) and so reads as a cut-off border. With it,
             // a message scrolled to lands exactly where the first message sits.
-            className={`group/msg flex scroll-mt-4 ${isUser ? 'justify-end' : 'justify-start'}`}
+            className={`group/msg flex ${showEarlierTurns ? 'scroll-mt-14' : 'scroll-mt-4'} ${
+              isUser ? 'justify-end' : 'justify-start'
+            }`}
           >
             <div
               /* A decorated reply sets its own width: the marking it carries

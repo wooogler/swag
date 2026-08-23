@@ -967,10 +967,20 @@ export const studyTestAnswers = pgTable('study_test_answers', {
   // Baseline: 'span' | 'nothing' | 'not_sure'.
   pointedKind: text('pointed_kind'),
   pointedIntentId: integer('pointed_intent_id'),
+  /**
+   * Baseline pointing, as a LIST: a prompt is one document and the thing that
+   * addresses a question is often several places in it, so one span would ask
+   * the participant to pick a favourite. `[{start, end, text}]`, merged and in
+   * document order.
+   */
+  pointedSpans: jsonb('pointed_spans'),
+  /** The highlighted text itself — outlives the offsets across a redeploy, and
+   * is what a CSV reader can actually read. Every span, joined. */
+  pointedText: text('pointed_text'),
+  // The single-span shape this replaced. Written by the pilot only; new rows
+  // carry their offsets in pointed_spans.
   pointedSpanStart: integer('pointed_span_start'),
   pointedSpanEnd: integer('pointed_span_end'),
-  /** The highlighted text itself — outlives the offsets across a redeploy. */
-  pointedText: text('pointed_text'),
   /** Q3 — "I can anticipate how the chatbot will respond", 1-6. */
   confidence: smallint('confidence'),
   /** Q4 — "the response WILL be educationally desirable", 1-6. */

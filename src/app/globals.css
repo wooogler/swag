@@ -124,6 +124,21 @@ html:has([data-study-scale]) {
   font-size: 118.75%;
 }
 
+/* …except where a participant screen is as dense as the product itself.
+
+   The block test puts three columns side by side — the question, the whole
+   configuration, and six inputs — and every one of them has to be readable at
+   the same moment. A size up buys legibility in a column of prose and spends
+   it here on horizontal room, which is the scarcer thing: the configuration is
+   read ACROSS to the question beside it, so a wider column of larger type is a
+   worse trade than the product's own scale.
+
+   Same specificity as the rule above and deliberately after it, so a screen
+   that renders this marker inside the study layout wins. */
+html:has([data-product-scale]) {
+  font-size: 100%;
+}
+
 body {
   color: hsl(var(--foreground));
   background: hsl(var(--background));
@@ -142,6 +157,80 @@ h6 {
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  /* A scrollbar that is there before you scroll.
+
+     For a pane whose content does not START at the top — the block test opens
+     each thread scrolled to the question being asked about, with the turns
+     that led to it above the fold. An overlay scrollbar appears on the first
+     scroll, which is no use to someone deciding whether there is anything to
+     scroll TO: the honest reading of a still pane with no scrollbar is that
+     this is all there is, and here that is false.
+
+     `scroll` rather than `auto` keeps the track present when the thread is
+     short enough to fit, so the gutter does not appear and disappear between
+     questions; `scrollbar-gutter: stable` keeps the text from reflowing when
+     it does. The thumb is drawn small and quiet — it is a signpost, not a
+     control anyone has to aim at. */
+  .scrollbar-always {
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  }
+  .scrollbar-always::-webkit-scrollbar {
+    width: 10px;
+  }
+  /* No lane. The thumb is the whole signal, and it is present exactly when
+     there is something to scroll to — a pane that fits shows nothing but the
+     gutter it already reserved. */
+  .scrollbar-always::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-always::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.5);
+    border-radius: 9999px;
+    /* Inset by a transparent border, so the thumb reads as a bar in a lane
+       rather than a bar filling the edge of the panel. */
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  /* A reply arriving, said once.
+
+     The block test reveals a frozen answer under a question that has been on
+     screen for a minute, and if the scroll does not move — which is the point,
+     the question has to stay put — the only evidence that anything happened is
+     text appearing below the fold of the eye. This blinks the new bubble twice
+     and stops: enough to catch the eye at the moment it lands, gone before it
+     becomes something to wait out. */
+  @keyframes reveal-flash {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+    }
+    15%,
+    55% {
+      box-shadow: 0 0 0 4px hsl(var(--primary) / 0.28);
+    }
+    35%,
+    75% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+    }
+  }
+  .animate-reveal-flash {
+    animation: reveal-flash 1.4s ease-in-out 1;
+  }
+  /* Someone who has asked not to see motion still gets the mark, held still. */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-reveal-flash {
+      animation: none;
+      box-shadow: 0 0 0 3px hsl(var(--primary) / 0.25);
+    }
+  }
+
+  .scrollbar-always::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.75);
   }
 }
 
