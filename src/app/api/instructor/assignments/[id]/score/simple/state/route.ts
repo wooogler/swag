@@ -55,7 +55,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     assignmentId: id,
     condition,
     seedPrompt,
-    versionNo: versionParam ? Number(versionParam) : null,
+    // "0" is a version — the one as delivered — so an empty string is the
+    // only thing that means "no version asked for".
+    versionNo: versionParam != null && versionParam !== '' ? Number(versionParam) : null,
   });
 
   const records = await scopedRecords(id);

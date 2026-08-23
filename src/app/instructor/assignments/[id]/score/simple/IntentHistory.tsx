@@ -103,6 +103,8 @@ const SHOWN = 3;
  * has everything a row needs except a version to go back to. */
 interface Row {
   key: string;
+  /** The configuration as delivered, which no row in any table holds. */
+  floor?: boolean;
   versionNo: number;
   definition: string;
   rule: string;
@@ -123,6 +125,7 @@ function ago(iso: string, now: number): string {
 export default function IntentHistory({
   versions,
   pending = null,
+  delivered = false,
   onView,
   viewingVersionNo = null,
   onRestore = null,
@@ -148,6 +151,13 @@ export default function IntentHistory({
    * Put the whole board into this version and read it there. Null means the
    * newest, which is where editing happens.
    */
+  /**
+   * This list stands on the configuration AS DELIVERED — true for the rule
+   * that answers everything else, and for the one-document arm, where the
+   * board opens on a prompt somebody else wrote. An intent has no such floor:
+   * before its first wording it did not exist.
+   */
+  delivered?: boolean;
   onView: (configVersionNo: number | null) => void;
   /** Which version the board is showing, or null when it is on the newest. */
   viewingVersionNo?: number | null;
@@ -204,7 +214,31 @@ export default function IntentHistory({
       createdAt: v.createdAt,
       version: v,
     })),
+    ...(delivered
+      ? [
+          {
+            key: 'delivered',
+            versionNo: 0,
+            definition: '',
+            rule: '',
+            name: 'As delivered',
+            matches: null,
+            createdAt: null,
+            version: null,
+            floor: true,
+          },
+        ]
+      : []),
   ];
+  /**
+   * Numbered from the bottom, not from the stored count.
+   *
+   * With a floor under them the wordings are all one place further up — the
+   * prompt this chatbot ran with is v1, and the first thing anyone wrote is
+   * v2. Counting positions rather than adding an offset to a stored number
+   * keeps one rule for both kinds of list.
+   */
+  const numberOf = (i: number) => rows.length - i;
   const more = rows.length > SHOWN;
   const shown = all ? rows : rows.slice(0, SHOWN);
 
@@ -218,7 +252,9 @@ export default function IntentHistory({
       : rows.find((r) => r.version?.configVersionNo === viewingVersionNo);
 
   // Nothing written here yet — a heading over an empty box is furniture.
-  if (versions.length === 0 && !pending) return null;
+  // Unless the list has a floor, which is there from the first moment: the
+  // board opens on a prompt somebody else wrote, and that is v1.
+  if (versions.length === 0 && !pending && !delivered) return null;
 
   return (
     <div className="border-t border-[hsl(var(--border))] pt-1.5">
@@ -252,7 +288,13 @@ export default function IntentHistory({
             do about it are to keep this version or to stop reading. */}
         {viewingVersionNo != null && (
           <span className="flex shrink-0 items-center gap-1.5">
-            {onRestore && <RestoreVersion to={viewingLabel ?? 0} onRestore={onRestore} />}
+            {/* Not for the delivered one: it is where the board started
+                rather than a version somebody saved, so there is nothing to
+                make newest — going back to it means dropping everything, and
+                that is not a thing this list can say. */}
+            {onRestore && viewingVersionNo !== 0 && (
+              <RestoreVersion to={viewingLabel ?? 0} onRestore={onRestore} />
+            )}
             <button
               type="button"
               onClick={() => onView(null)}
@@ -277,11 +319,19 @@ export default function IntentHistory({
                   type="button"
                   /* Never disabled: showing a version writes nothing, and it
                      is the one thing a read-only board is still for. */
-                  onClick={() => onView(version.version?.configVersionNo ?? null)}
+                  onClick={() =>
+                    onView(
+                      version.floor
+                        ? 0
+                        : version.version?.configVersionNo ?? null
+                    )
+                  }
                   title={
-                    version.version
-                      ? 'Show the whole board as it was in this version'
-                      : 'Back to the newest, where editing happens'
+                    version.floor
+                      ? 'Show the board as this chatbot was delivered, before anything was changed'
+                      : version.version
+                        ? 'Show the whole board as it was in this version'
+                        : 'Back to the newest, where editing happens'
                   }
                   /* The row being read has to win against the row under the
                      pointer. A 5% tint lost to the hover grey, which is the
@@ -299,7 +349,7 @@ export default function IntentHistory({
                   }`}
                 >
                   <span className="shrink-0 text-2xs font-bold tabular-nums text-[hsl(var(--muted-foreground))]">
-                    v{version.versionNo}
+                    v{numberOf(rows.indexOf(version))}
                   </span>
                   {/* Blank until the model's label arrives, and for good if it
                       never does. Falling back to the time printed it twice on
@@ -327,7 +377,9 @@ export default function IntentHistory({
                         : 'text-[hsl(var(--muted-foreground))]'
                     }`}
                   >
-                    {version.createdAt == null
+                    {version.floor
+                      ? 'original'
+                      : version.createdAt == null
                       ? 'unsaved'
                       : isCurrent
                         ? viewingVersionNo == null

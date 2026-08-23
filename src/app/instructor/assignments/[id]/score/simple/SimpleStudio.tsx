@@ -1126,7 +1126,9 @@ function ConfigColumn({
         {readOnly && (
           <div className="sticky top-9 z-10 px-3 py-2 bg-[hsl(var(--muted))] border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
             <span className="text-xs text-[hsl(var(--muted-foreground))]">
-              Looking at setup {state.viewing?.displayNo}. Editing happens on the latest one.
+              {state.viewing?.versionNo === 0
+                ? 'Looking at this chatbot as it was delivered. Editing happens on the latest one.'
+                : `Looking at setup ${state.viewing?.displayNo}. Editing happens on the latest one.`}
             </span>
             {/* The two things to do about it are beside the list that put the
                 board here — this row only has to say where "here" is. */}
@@ -1282,6 +1284,7 @@ function PromptEditor({
         </div>
       )}
       <IntentHistory
+        delivered
         versions={versions}
         pending={pending}
         onView={onView}
@@ -1826,6 +1829,7 @@ function Tree({
             </div>
           )}
           <IntentHistory
+            delivered
             versions={intentVersions['0'] ?? []}
             pending={pendingFor(0)}
             onView={onView}

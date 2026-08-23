@@ -99,7 +99,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 const bodySchema = z.object({
   messageId: z.number().int(),
   /** Look at this question under an older version, without leaving the tip. */
-  versionNo: z.number().int().positive().nullable().optional(),
+  /** 0 is the configuration as delivered. */
+  versionNo: z.number().int().nonnegative().nullable().optional(),
   /** Or under one wording out of the answering intent's own history. */
   intentVersionId: z.number().int().positive().nullable().optional(),
 });

@@ -218,8 +218,21 @@ export async function getSimpleState(args: {
 
   const tip = rows.length ? rows[rows.length - 1] : null;
   const savedTip = saved.length ? saved[saved.length - 1] : null;
-  const wanted =
-    args.versionNo != null ? rows.find((r) => r.versionNo === args.versionNo) ?? tip : tip;
+  /**
+   * Version 0 is the configuration AS DELIVERED — the prompt this chatbot
+   * actually ran with, before anyone touched it.
+   *
+   * It is not a row: nobody wrote it, so there is nothing to store. But it is
+   * where every board starts and the floor its history stands on, and the
+   * reply's picker has always offered it per question ("Original (as
+   * delivered)"). This is the same fact for the whole board.
+   */
+  const asDelivered = args.versionNo === 0;
+  const wanted = asDelivered
+    ? null
+    : args.versionNo != null
+      ? rows.find((r) => r.versionNo === args.versionNo) ?? tip
+      : tip;
 
   const pins = await db
     .select({ messageId: simplePins.messageId })
@@ -227,20 +240,32 @@ export async function getSimpleState(args: {
     .where(eq(simplePins.assignmentId, assignmentId))
     .orderBy(desc(simplePins.createdAt));
 
-  const shown = wanted
-    ? parseSnapshot(wanted.snapshot, condition, seedPrompt)
-    : emptySnapshot(armOf(condition), seedPrompt);
+  const shown =
+    wanted && !asDelivered
+      ? parseSnapshot(wanted.snapshot, condition, seedPrompt)
+      : emptySnapshot(armOf(condition), seedPrompt);
+  const deliveredRow: SimpleVersion = {
+    id: 0,
+    versionNo: 0,
+    displayNo: 0,
+    name: 'As delivered',
+    summary: null,
+    createdAt: (rows[0]?.createdAt ?? new Date()).toISOString(),
+    kind: 'save',
+  };
 
   return {
     snapshot: shown,
     versions: versions.reverse(),
     moments: moments.reverse(),
-    viewing: wanted
-      ? versions.find((v) => v.versionNo === wanted.versionNo) ??
-        moments.find((v) => v.versionNo === wanted.versionNo) ??
-        null
-      : null,
-    atTip: !wanted || !tip || wanted.versionNo === tip.versionNo,
+    viewing: asDelivered
+      ? deliveredRow
+      : wanted
+        ? versions.find((v) => v.versionNo === wanted.versionNo) ??
+          moments.find((v) => v.versionNo === wanted.versionNo) ??
+          null
+        : null,
+    atTip: !asDelivered && (!wanted || !tip || wanted.versionNo === tip.versionNo),
     savedVersionNo: savedTip?.versionNo ?? null,
     deployedVersionNo:
       [...rows].reverse().find((r) => r.deployedAt != null)?.versionNo ?? null,
@@ -252,9 +277,15 @@ export async function getSimpleState(args: {
     // being true because they are looking at an older version. Read off the
     // shown snapshot it went away exactly when they went to look, taking the
     // row that offers the way back with it.
+    // Nothing saved YET is compared against the configuration as delivered,
+    // not against nothing: before the first save, everything applied is
+    // unsaved, and answering "[]" there hid the only row that leads back to
+    // it — the state a participant is in for the first minutes of a block.
     unsavedSids: unsavedAgainst(
       tip ? parseSnapshot(tip.snapshot, condition, seedPrompt) : shown,
-      savedTip ? parseSnapshot(savedTip.snapshot, condition, seedPrompt) : null
+      savedTip
+        ? parseSnapshot(savedTip.snapshot, condition, seedPrompt)
+        : emptySnapshot(armOf(condition), seedPrompt)
     ),
     pinned: pins.map((p) => p.messageId),
   };
@@ -271,8 +302,7 @@ export async function getSimpleState(args: {
  * is why the whole-configuration statement stays: it is the one case the tree
  * cannot show.
  */
-function unsavedAgainst(now: SimpleSnapshot, saved: SimpleSnapshot | null): number[] {
-  if (!saved) return [];
+function unsavedAgainst(now: SimpleSnapshot, saved: SimpleSnapshot): number[] {
   const out: number[] = [];
   if (now.arm === 'baseline') {
     if (now.prompt !== saved.prompt) out.push(0);
@@ -429,6 +459,8 @@ export async function getSimpleVersion(args: {
   seedPrompt: string;
   versionNo: number;
 }): Promise<SimpleSnapshot | null> {
+  // 0 is the configuration as delivered — no row, because nobody wrote it.
+  if (args.versionNo === 0) return emptySnapshot(armOf(args.condition), args.seedPrompt);
   const [row] = await db
     .select()
     .from(simpleConfigVersions)
