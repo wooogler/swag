@@ -10,7 +10,13 @@ import OpenAI from 'openai';
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { scoreDissections, scoreQueryEmbeddings } from '@/db/schema';
-import { MATERIAL_LABELS, type MaterialKind } from './intents';
+import {
+  DISSECTION_VERSION,
+  type DissectionResult,
+  type MaterialKind,
+  type MaterialSpan,
+} from './intents';
+import { abridgeQuery } from './prompts';
 import type { QueryRecord } from './queries';
 
 // Env-overridable (SCORE_EMBEDDING_MODEL). Because the model name is part of
@@ -18,10 +24,11 @@ import type { QueryRecord } from './queries';
 // the old model are ignored and recomputed lazily on the next edge-case sweep.
 export const EMBEDDING_MODEL = process.env.SCORE_EMBEDDING_MODEL || 'text-embedding-3-small';
 // Cache marker stored in row.model — bump the suffix when the embed-INPUT scheme
-// changes so stale rows recompute. matph-v2: the request text with pasted
-// material replaced by its kind placeholder (the ask + the presence/kind of
-// material, not the noisy pasted content).
-const EMBED_TAG = `${EMBEDDING_MODEL}#matph-v2`;
+// changes so stale rows recompute. judgeq: the message EXACTLY as the classifier
+// reads it (see buildEmbedText). The dissection version is in the tag because
+// the input is built from the dissection, so re-dissecting rebuilds the vectors
+// instead of leaving them describing a split that no longer exists.
+const EMBED_TAG = `${EMBEDDING_MODEL}#judgeq-d${DISSECTION_VERSION}`;
 
 /** Chars of query text embedded — long pasted essays add cost, not meaning,
  * beyond this (the request lives at the edges; keep head+tail like prompts.ts). */
@@ -36,43 +43,26 @@ function embedText(queryText: string): string {
 }
 
 /**
- * The text we embed: the message with pasted MATERIAL replaced by a short
- * placeholder (its kind) and the REQUEST(s) kept verbatim — so similarity
- * reflects the ASK plus the structural presence/kind of material, not the
- * material's noisy content. Falls back to the full message when there is no
- * usable dissection.
+ * The text we embed: THE SAME TEXT THE CLASSIFIER READS — the message with each
+ * pasted run replaced in place by its [KIND · extent ▸ excerpt] marker
+ * (abridgeQuery), and the raw message when no material was detected, which is
+ * also what the rating prompt sends in that case.
+ *
+ * It used to be its own scheme (requests verbatim, every material run collapsed
+ * to one bare [Own draft] placeholder). Two things were wrong with that. It
+ * threw away the excerpt, so two messages pasting completely different drafts
+ * embedded identically; and because it was driven by `requests`, a message
+ * whose only "request" was a seam orphan embedded as the orphan alone — 6% of
+ * stored vectors were things like "[Own draft] future.", which is not a point
+ * in the space so much as a hole in it. Sharing the judge's rendering also
+ * means one thing to reason about: what the sweep measures distance between is
+ * what the verdict was formed from.
  */
 export function buildEmbedText(
   queryText: string,
-  dissection: { materialKinds: MaterialKind[]; requests: string[] } | null | undefined
+  dissection: DissectionResult | null | undefined
 ): string {
-  const requests = dissection?.requests ?? [];
-  if (requests.length === 0) return queryText;
-  const spans: { start: number; end: number }[] = [];
-  let from = 0;
-  for (const req of requests) {
-    const q = req.trim();
-    if (!q) continue;
-    const idx = queryText.indexOf(q, from);
-    if (idx === -1) continue;
-    spans.push({ start: idx, end: idx + q.length });
-    from = idx + q.length;
-  }
-  if (spans.length === 0) return queryText;
-  const label =
-    dissection && dissection.materialKinds.length
-      ? dissection.materialKinds.map((k) => MATERIAL_LABELS[k]).join(' ')
-      : 'material';
-  const ph = `[${label}]`;
-  const out: string[] = [];
-  let cursor = 0;
-  for (const s of spans) {
-    if (s.start > cursor && queryText.slice(cursor, s.start).trim()) out.push(ph);
-    out.push(queryText.slice(s.start, s.end));
-    cursor = s.end;
-  }
-  if (cursor < queryText.length && queryText.slice(cursor).trim()) out.push(ph);
-  return out.join(' ').replace(/\s+/g, ' ').trim();
+  return abridgeQuery(queryText, dissection) ?? queryText;
 }
 
 let cachedClient: OpenAI | null = null;
@@ -118,12 +108,16 @@ export async function getQueryEmbeddings(
   const missing = [...wanted.values()].filter((r) => !result.has(r.messageId));
   if (missing.length === 0) return result;
 
-  // Dissections for the missing messages → build the placeholder embed text.
+  // Dissections for the missing messages → build the embed text. `materials` is
+  // loaded too, not just the kinds: the marker carries each run's own kind and
+  // extent, so without the runs abridgeQuery falls back to a coarser rendering
+  // than the judge sees and the two texts drift apart.
   const dissRows = await db
     .select({
       messageId: scoreDissections.messageId,
       materialKinds: scoreDissections.materialKinds,
       requests: scoreDissections.requests,
+      materials: scoreDissections.materials,
     })
     .from(scoreDissections)
     .where(inArray(scoreDissections.messageId, missing.map((r) => r.messageId)));
@@ -133,6 +127,7 @@ export async function getQueryEmbeddings(
       {
         materialKinds: (Array.isArray(d.materialKinds) ? d.materialKinds : []) as MaterialKind[],
         requests: (Array.isArray(d.requests) ? d.requests : []) as string[],
+        materials: (Array.isArray(d.materials) ? d.materials : []) as MaterialSpan[],
       },
     ])
   );

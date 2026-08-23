@@ -38,6 +38,7 @@ async function main() {
   const { getQueryRecords } = await import('@/lib/score/queries');
   const { DISSECTION_VERSION } = await import('@/lib/score/intents');
   const { ensureIntentTables } = await import('@/lib/score/intent-store');
+  const { CURATION_DATASETS, studyMasterToken } = await import('@/lib/study/config');
   const { ensureStudyTables } = await import('@/lib/study/store');
 
   await Promise.all([ensureIntentTables(), ensureStudyTables()]);
@@ -56,9 +57,36 @@ async function main() {
     .select({ assignmentId: studyClones.assignmentId, sourceId: studyClones.sourceAssignmentId })
     .from(studyClones);
   const sourceOf = new Map(cloneRows.map((c) => [c.assignmentId, c.sourceId]));
-  // Masters first: a clone copies whatever its master holds, so the master must
-  // already be at the current version when the copy runs.
-  const ids = [...requested].sort((a, b) => Number(sourceOf.has(a)) - Number(sourceOf.has(b)));
+  // A study MASTER is a copy too, and the copy it came from is the only place
+  // its dissections can be recomputed: build.ts makes it from the curation
+  // dataset with includeEditorEvents: false, and nothing records the link in
+  // study_clones (it is the source of clones, not one). Without this it is
+  // skipped as "no editor-event log and not a known clone" — and every clone
+  // then copies its stale rows forward, which is exactly what a version bump
+  // must not leave behind. Registered BEFORE the sort below so the ordering
+  // (masters first) puts the chain in the right order: dataset → study master
+  // → participant clone.
+  for (const dataset of CURATION_DATASETS) {
+    const [studyMaster] = await db
+      .select({ id: assignments.id })
+      .from(assignments)
+      .where(eq(assignments.shareToken, studyMasterToken(dataset.key)));
+    if (studyMaster) sourceOf.set(studyMaster.id, dataset.masterAssignmentId);
+  }
+  // Upstream first: a copy takes whatever its source holds, so the source must
+  // already be at the current version when the copy runs. The chain is three
+  // deep (dataset master → study master → participant clone), so this is a
+  // distance-from-the-root sort, not a copy/not-a-copy one.
+  const depthOf = (id: string): number => {
+    let depth = 0;
+    let cursor = sourceOf.get(id);
+    while (cursor && depth < 8) {
+      depth += 1;
+      cursor = sourceOf.get(cursor);
+    }
+    return depth;
+  };
+  const ids = [...requested].sort((a, b) => depthOf(a) - depthOf(b));
 
   /** Copy a master's dissections onto a clone. The natural key is exactly the
    * one provision.ts built its temp maps from, so the match is 1:1; a shortfall
@@ -99,6 +127,12 @@ async function main() {
     `);
     const n = copied[0]?.n ?? 0;
     const records = await getQueryRecords(cloneId);
+    // Same invalidation the master branch performs. The embed cache tag now
+    // carries DISSECTION_VERSION, so a stale vector can no longer be READ —
+    // this only stops the table keeping a copy of every generation forever.
+    await db
+      .delete(scoreQueryEmbeddings)
+      .where(eq(scoreQueryEmbeddings.assignmentId, cloneId));
     const short = records.length - n;
     console.log(
       `${cloneId}: clone of ${masterId} — copied ${n}/${records.length} dissections` +
