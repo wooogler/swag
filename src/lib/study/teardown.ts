@@ -26,6 +26,7 @@ const SCORE_TABLES_BY_ASSIGNMENT = [
   'score_intent_pins',
   'score_intent_ratings',
   'score_dissections',
+  'score_conversation_digests',
   'score_query_types',
   'score_query_embeddings',
   'score_subtype_scores',
@@ -33,6 +34,19 @@ const SCORE_TABLES_BY_ASSIGNMENT = [
   'score_chat_deploys',
   'score_config_versions',
   'score_intents',
+  // Simple condition. These were missing, and it showed: a reset left the
+  // discarded clone's snapshots, verdicts, answers and per-intent history
+  // behind with nothing pointing at them. Nothing breaks — ids are never
+  // reissued, so an orphan is dead weight rather than a wrong answer — but a
+  // clone is supposed to leave when it is deleted.
+  'simple_intent_versions',
+  'simple_intent_examples',
+  'simple_definition_anchors',
+  'simple_config_versions',
+  'simple_ratings',
+  'simple_previews',
+  'simple_pins',
+  'simple_sid_counter',
   // Baseline condition + shared study instrumentation (all keyed by assignment_id)
   'score_probe_ratings',
   'baseline_searches',
