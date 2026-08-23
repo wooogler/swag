@@ -78,7 +78,6 @@ import { logUi, useSurfaceLog } from '@/lib/study/ui-log';
 import {
   askedVersionNo,
   describeStep,
-  findIntent,
   insertBefore,
   moveIntent,
   removeIntent,
@@ -1019,7 +1018,6 @@ export default function SimpleStudio({
             messageId: selectedMessageId,
           })
         }
-        titleOf={title}
       />
     </div>
   );
@@ -1145,6 +1143,16 @@ function ConfigColumn({
             draftChanged={draftChanged}
             onApply={() => onApply(draft, null)}
             onSaveVersion={onSaveVersion}
+            versions={state.intentVersions['0'] ?? []}
+            pending={
+              state.unsavedSids.includes(0)
+                ? { name: state.dirty ? state.moments[0]?.name ?? null : null, matches: null }
+                : null
+            }
+            onView={onView}
+            viewingVersionNo={state.viewing && !state.atTip ? state.viewing.versionNo : null}
+            viewingLabel={state.viewing?.displayNo ?? null}
+            onRestore={() => state.viewing && void onRestore(state.viewing.versionNo)}
           />
         ) : (
           <Tree
@@ -1180,13 +1188,6 @@ function ConfigColumn({
         )}
       </section>
 
-      {arm === 'baseline' && (
-        <VersionList
-          versions={state.versions}
-          viewingVersionNo={state.viewing?.versionNo ?? null}
-          onView={onView}
-        />
-      )}
     </div>
   );
 }
@@ -1201,6 +1202,12 @@ function PromptEditor({
   draftChanged,
   onApply,
   onSaveVersion,
+  versions,
+  pending,
+  onView,
+  viewingVersionNo,
+  viewingLabel,
+  onRestore,
 }: {
   draft: SimpleSnapshot;
   setDraft: (s: SimpleSnapshot) => void;
@@ -1210,6 +1217,14 @@ function PromptEditor({
   draftChanged: boolean;
   onApply: () => void;
   onSaveVersion: () => Promise<void>;
+  /** This document's own history — sid 0, the same row the other arm's
+   * else-rule uses, so both arms read their past the same way. */
+  versions: IntentVersion[];
+  pending: { name: string | null; matches: number | null } | null;
+  onView: (configVersionNo: number | null) => void;
+  viewingVersionNo: number | null;
+  viewingLabel: number | null;
+  onRestore: () => void;
 }) {
   return (
     <div className="p-3 flex flex-col gap-2">
@@ -1233,25 +1248,32 @@ function PromptEditor({
         onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
         placeholder="What the chatbot should do, in your own words."
         minLines={12}
-        maxLines={Infinity}
+        maxLines={FIELD_DOC_MAX_LINES}
       />
       {/* The same row as the intent arm's, because the two arms differ in what
           a configuration IS and not in what you do with one. */}
       {!readOnly && (
         <div className="flex items-center gap-2">
           <ApplyButton saving={saving} disabled={!draftChanged} onClick={onApply} />
+          {/* The same rule as the other arm's: Save keeps what is IN EFFECT,
+              so edits sitting in the box have to be applied first. The two
+              arms differ in what a configuration IS, not in what you do with
+              one — and a Save that quietly published unapplied text here
+              would make Apply the step you could skip on one side only. */}
           <Why
             reason={
               saving
                 ? 'Waiting for the last change to land'
-                : dirty || draftChanged
-                  ? 'Keep this as a version you can come back to'
-                  : 'Nothing has changed since the last save'
+                : draftChanged
+                  ? 'Apply these edits first — Save keeps what is in effect'
+                  : dirty
+                    ? 'Keep this as a version you can come back to'
+                    : 'Nothing has changed since the last save'
             }
           >
             <button
               onClick={() => void onSaveVersion()}
-              disabled={saving || (!dirty && !draftChanged)}
+              disabled={saving || !dirty || draftChanged}
               className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-semibold hover:bg-[hsl(var(--muted))] disabled:opacity-40 disabled:hover:bg-transparent"
             >
               Save
@@ -1259,6 +1281,14 @@ function PromptEditor({
           </Why>
         </div>
       )}
+      <IntentHistory
+        versions={versions}
+        pending={pending}
+        onView={onView}
+        viewingVersionNo={viewingVersionNo}
+        viewingLabel={viewingLabel}
+        onRestore={onRestore}
+      />
     </div>
   );
 }
@@ -1284,7 +1314,6 @@ function Tree({
   api,
   intentVersions,
   unsaved,
-  applied,
   matchesNow,
   takeableFrom,
   pendingName,
@@ -1877,11 +1906,9 @@ function Accordion({
   readOnly,
   saving,
   dirty,
-  savedVersionNo,
   onChange,
   onApply,
   onSaveVersion,
-  onRevert,
   draftChanged,
   onDelete,
 }: {
@@ -2027,6 +2054,13 @@ const FIELD_BOX =
 /** Two lines to start, ten before it stops growing and starts scrolling. */
 const FIELD_MIN_LINES = 2;
 const FIELD_MAX_LINES = 10;
+/**
+ * The same idea for the box that is a whole document, with more room before
+ * the ceiling. Uncapped it pushed everything under it — the buttons, the
+ * history — off the bottom of a long document, which is exactly the reach a
+ * ceiling exists to keep.
+ */
+const FIELD_DOC_MAX_LINES = 20;
 
 // useLayoutEffect measures, so it has to run before the paint — but it does
 // not exist on the server, and this file is rendered there too.
@@ -2439,61 +2473,6 @@ function NewIntent({
  * by that configuration, not just its text. Restoring makes it current again
  * and the versions after it leave the list.
  */
-/** The document's history — the baseline arm only, where it is also the
- * configuration's. */
-function VersionList({
-  versions,
-  viewingVersionNo,
-  onView,
-}: {
-  versions: SimpleVersion[];
-  viewingVersionNo: number | null;
-  onView: (versionNo: number | null) => void;
-}) {
-  if (versions.length === 0) {
-    return (
-      <section className="shrink-0 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2">
-        <p className="text-2xs text-[hsl(var(--muted-foreground))]">
-          Saved versions will appear here.
-        </p>
-      </section>
-    );
-  }
-  return (
-    <section className="shrink-0 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
-      <ul className="max-h-[11rem] overflow-y-auto divide-y divide-[hsl(var(--border))]">
-        {versions.map((v) => (
-          <li key={v.id}>
-            <button
-              onClick={() => onView(v.versionNo)}
-              className={`w-full text-left px-3 py-1.5 hover:bg-[hsl(var(--muted))] ${
-                viewingVersionNo === v.versionNo ? 'bg-[hsl(var(--primary))]/8' : ''
-              }`}
-            >
-              <span className="flex items-baseline gap-2">
-                <span className="text-2xs font-bold tabular-nums text-[hsl(var(--muted-foreground))]">
-                  v{v.displayNo}
-                </span>
-                <span className="flex-1 truncate text-xs font-medium">
-                  {/* Until the name arrives — and forever, if it never does. */}
-                  {v.name ?? new Date(v.createdAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </span>
-              </span>
-              {v.summary && (
-                <span className="block truncate text-2xs text-[hsl(var(--muted-foreground))]">
-                  {v.summary}
-                </span>
-              )}
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
 
 /* =================================================================== */
 /* Middle: the questions                                               */
@@ -3153,7 +3132,6 @@ function ViewerColumn({
   localVersionNo,
   setLocalVersionNo,
   onLocalVersionLog,
-  titleOf,
 }: {
   api: (path: string, query?: string) => string;
   rows: ScoreQueryRow[];
@@ -3174,7 +3152,6 @@ function ViewerColumn({
   localVersionNo: number | 'original' | null;
   setLocalVersionNo: (v: number | 'original' | null) => void;
   onLocalVersionLog: (versionNo: number | null) => void;
-  titleOf: (sid: number | null) => string;
 }) {
   const [answer, setAnswer] = useState<{
     messageId: number;
@@ -3488,8 +3465,6 @@ function ViewerColumn({
                     ? 'original'
                     : 'streaming'
               }
-              owner={ownerSidNow == null ? null : titleOf(ownerSidNow)}
-              ownerSid={ownerSidNow}
               rule={knownRule ?? (answer?.messageId === row.messageId ? rule : null)}
               onPick={(next) => {
                 setLocalVersionNo(next);
@@ -3539,8 +3514,6 @@ function ReplyVersionBar({
   unsaved,
   pick,
   state,
-  owner,
-  ownerSid,
   rule,
   onPick,
 }: {
@@ -3552,10 +3525,6 @@ function ReplyVersionBar({
    * nothing — which means whatever is in effect. */
   pick: number | 'original' | null;
   state: 'idle' | 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
-  owner: string | null;
-  /** Which intent that name belongs to, for the colour it carries in the
-   * list. Null is the else branch. */
-  ownerSid: number | null;
   /** The rule this reply came out of — the one for the version above. */
   rule: string | null;
   onPick: (next: number | 'original' | null) => void;
