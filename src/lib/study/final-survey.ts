@@ -109,8 +109,12 @@ export interface FinalColumn {
   condition: StudioView;
   /** Participant-facing name (Slate / Clay). */
   name: string;
-  /** Which block they used it in — the board link, and the export's join. */
+  /** Which block they used it in — the export's join. */
   block: 1 | 2;
+  /** The workspace this column is about. Nothing on the screen links to it —
+   * the board is shut by then, and deliberately (see FinalSurvey) — but the
+   * column has to be able to say WHICH clone it is rating for anything reading
+   * these answers afterwards. */
   cloneAssignmentId: string | null;
 }
 

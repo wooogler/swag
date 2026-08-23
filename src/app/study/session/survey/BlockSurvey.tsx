@@ -14,10 +14,26 @@
  * participant who cannot see the ends of that scale has no way to know it
  * turned around, so the labels sit under every row and the facilitator says
  * "note the labels" on the way in (design §6.1).
+ *
+ * ONE BUTTON, AND IT IS CONTINUE. This screen used to ask for two clicks —
+ * Save, and then a Continue that only appeared once Save had gone through.
+ * Questionnaires do not have Save buttons; nobody arrives expecting one, and a
+ * participant who answers five questions and looks for the way forward should
+ * find the way forward. The two clicks were protecting something real, though:
+ * Continue starts the next block and cannot be taken back, so it must not be
+ * the same press that records an answer.
+ *
+ * Continue does all three jobs in the order that keeps that protection:
+ *   1. CHECK — an unanswered question stops the click and says which one. The
+ *      alternative, a disabled button, is worse: it withholds the press and
+ *      says nothing about what is missing, so the participant hunts.
+ *   2. SAVE — before the confirmation, not after, so answers are on record
+ *      even if they step back to change one and never press again.
+ *   3. CONFIRM — the beat the old Save/Continue split was really providing:
+ *      one last look before a door closes behind them.
  */
 
 import { useState } from 'react';
-import { Loader2 } from 'lucide-react';
 import PhaseAdvance from '@/components/study/PhaseAdvance';
 import type { SurveyItem } from '@/lib/study/survey-items';
 
@@ -35,16 +51,21 @@ export default function BlockSurvey({
   phase: string;
 }) {
   const [answers, setAnswers] = useState<Record<string, number>>(initial);
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(Object.keys(initial).length > 0);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Whether the gaps are being pointed at.
+   *
+   * False until Continue is pressed, so a participant working down the page in
+   * order is never told off for questions they have not reached yet. Which
+   * rows are marked is derived from `answers`, so a gap un-marks itself the
+   * moment it is filled rather than on the next press.
+   */
+  const [checking, setChecking] = useState(false);
 
-  const remaining = items.filter((i) => answers[i.key] === undefined).length;
+  const missing = items.filter((i) => answers[i.key] === undefined);
   const scale = Array.from({ length: max - min + 1 }, (_, i) => min + i);
 
-  const submit = async () => {
-    setBusy(true);
-    setError(null);
+  const save = async (): Promise<boolean> => {
     try {
       const res = await fetch('/api/study/session/survey', {
         method: 'POST',
@@ -53,16 +74,34 @@ export default function BlockSurvey({
       });
       if (!res.ok) {
         setError('Could not save that — tell your facilitator.');
-        return;
+        return false;
       }
-      setSaved(true);
-    } finally {
-      setBusy(false);
+      return true;
+    } catch {
+      setError('Could not save that — tell your facilitator.');
+      return false;
     }
   };
 
+  /** Continue's first two jobs: check, then save. False stops the click. */
+  const checkThenSave = async (): Promise<boolean> => {
+    setError(null);
+    if (missing.length > 0) {
+      setChecking(true);
+      // Take them to the first gap rather than leaving a count to be
+      // reconciled against five questions by eye.
+      scrollToRow(missing[0].key);
+      return false;
+    }
+    setChecking(false);
+    return save();
+  };
+
   return (
-    <div className="min-h-screen bg-[hsl(var(--background))] py-10 px-6">
+    // pb-40: the confirmation opens below Continue and is absolutely
+    // positioned, so it cannot push the page taller — without the room it
+    // would open past the bottom of the document.
+    <div className="min-h-screen bg-[hsl(var(--background))] pt-10 pb-40 px-6">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-xl font-semibold mb-1">A few quick questions</h1>
         {/* Design §6.4, which does the job the bare TLX stem cannot: it names
@@ -80,16 +119,30 @@ export default function BlockSurvey({
         </p>
 
         <div className="space-y-5">
-          {items.map((item, index) => (
+          {items.map((item, index) => {
+            const unanswered = checking && answers[item.key] === undefined;
+            return (
             <div
               key={item.key}
-              className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
+              id={rowId(item.key)}
+              className={`rounded-xl border bg-[hsl(var(--card))] p-5 ${
+                unanswered
+                  ? 'border-amber-400 ring-2 ring-amber-200'
+                  : 'border-[hsl(var(--border))]'
+              }`}
             >
-              {item.label && (
-                <p className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
-                  {item.label}
-                </p>
-              )}
+              <div className="flex items-baseline justify-between gap-3 mb-1.5">
+                {item.label && (
+                  <p className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                    {item.label}
+                  </p>
+                )}
+                {unanswered && (
+                  <p className="text-2xs font-bold uppercase tracking-wide text-amber-700">
+                    Not answered yet
+                  </p>
+                )}
+              </div>
               <p className={`text-base leading-relaxed ${item.note ? 'mb-1.5' : 'mb-4'}`}>
                 <span className="text-[hsl(var(--muted-foreground))] mr-2">{index + 1}.</span>
                 {item.text}
@@ -121,48 +174,36 @@ export default function BlockSurvey({
                 <span>{item.high}</span>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
-        {/* Saving and moving on stay separate clicks: moving on is what starts
-            the next block, and an answer changed after a mis-click should not
-            need the session unwound to fix. */}
-        <div className="mt-8 flex items-center gap-3">
-          <button
-            onClick={submit}
-            disabled={busy || remaining > 0}
-            className={`rounded-lg px-6 py-3 text-base font-semibold disabled:opacity-40 ${
-              saved
-                ? 'border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]'
-                : 'bg-[hsl(var(--primary))] text-white'
-            }`}
-          >
-            {busy ? 'Saving…' : saved ? 'Save again' : 'Save answers'}
-          </button>
-          {remaining > 0 && (
-            <span className="text-xs text-[hsl(var(--muted-foreground))]">
-              {remaining} left
-            </span>
-          )}
-          {busy && <Loader2 className="w-3.5 h-3.5 animate-spin text-[hsl(var(--muted-foreground))]" />}
-          {saved && remaining === 0 && !busy && (
-            <span className="text-xs text-emerald-700 font-semibold">Saved</span>
+        <div className="mt-8 pt-6 border-t border-[hsl(var(--border))]">
+          <PhaseAdvance
+            from={phase}
+            label="Continue"
+            waits
+            // True now in a way it was not before: this hand-off is where the
+            // frozen answers are awaited, and the minute just spent here is
+            // the minute the batch had to run in.
+            waitLabel="Getting the check questions ready — your chatbot is answering them now."
+            guard={checkThenSave}
+            confirm="Your answers are saved. Once you continue you will not be able to change them."
+            confirmLabel="Yes, continue"
+            // Hug the button: the confirmation is positioned against this
+            // element's centre, and a full-width one would open the question
+            // in the middle of the page instead of under what was pressed.
+            className="w-fit"
+          />
+          {checking && missing.length > 0 && (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+              {missing.length === 1
+                ? 'One question still needs an answer — it is marked above.'
+                : `${missing.length} questions still need an answer — they are marked above.`}
+            </p>
           )}
         </div>
 
-        {saved && remaining === 0 && (
-          <div className="mt-6 pt-5 border-t border-[hsl(var(--border))]">
-            <PhaseAdvance
-              from={phase}
-              label="Continue"
-              waits
-              // True now in a way it was not before: this hand-off is where the
-              // frozen answers are awaited, and the minute just spent here is
-              // the minute the batch had to run in.
-              waitLabel="Getting the check questions ready — your chatbot is answering them now."
-            />
-          </div>
-        )}
         {error && (
           <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
             {error}
@@ -171,4 +212,25 @@ export default function BlockSurvey({
       </div>
     </div>
   );
+}
+
+/** One row's anchor, so "which one is missing" has somewhere to point. */
+function rowId(key: string): string {
+  return `survey-item-${key}`;
+}
+
+/**
+ * Bring a row into view — NEXT frame, not this one.
+ *
+ * Clicking a button focuses it, and the browser scrolls a newly focused
+ * element into view on its own. Scrolling straight from the click handler puts
+ * the two in a race that the browser wins, so the smooth scroll starts and is
+ * immediately undone: the participant is told two questions are missing and
+ * left looking at the button that told them. A frame later, focus has settled
+ * and the scroll sticks.
+ */
+function scrollToRow(key: string) {
+  requestAnimationFrame(() => {
+    document.getElementById(rowId(key))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 }

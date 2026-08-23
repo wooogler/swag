@@ -17,14 +17,24 @@
  * participant starts straight-lining. Each page saves on the way out, so going
  * back shows what they actually said rather than an empty grid.
  *
- * The board links in the column headers are this app's version of "your two
- * setups are still open — feel free to look". They are the cheapest patch on
- * the weakest joint in the design, which is that this asks someone to rate
- * something they last touched forty minutes ago.
+ * NO LINKS BACK TO THE BOARDS (08-22). Each column header used to carry an
+ * "open ↗" to that version's workspace, sixteen of them down the page, and the
+ * intro told the participant to use them. They did not work: the board's phase
+ * gate allows only the clone the CURRENT phase is about, and `final_survey`
+ * allows none — every one of those links bounced to the session screen in a
+ * new tab.
+ *
+ * And the gate is right, which is why they are gone rather than fixed.
+ * Reopening a finished block's board lets someone edit a configuration the
+ * measurements are already frozen against; the score page calls that silent
+ * data corruption and redirects rather than warning. A recall aid that
+ * contradicts the invariant it is a recall aid for is not a recall aid. What
+ * remains is the honest form: they rate what they remember, and the paper says
+ * so.
  */
 
 import { useMemo, useState } from 'react';
-import { ExternalLink, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import PhaseAdvance from '@/components/study/PhaseAdvance';
 import {
   AGREE_HIGH,
@@ -49,6 +59,23 @@ type Texts = Record<string, string>;
 
 const ratingKey = (item: string, condition?: string) => `${item}:${condition ?? ''}`;
 
+/** One statement's anchor, so an unanswered one has somewhere to point. */
+const rowId = (item: string) => `final-item-${item}`;
+
+/**
+ * Bring a statement into view — NEXT frame, not this one.
+ *
+ * Clicking Next focuses it, and the browser scrolls a newly focused element
+ * into view on its own; scrolling straight from the handler loses that race
+ * and leaves the participant staring at the button that just told them
+ * something was missing. Same reason, same fix, as the workload questionnaire.
+ */
+function scrollToRow(item: string) {
+  requestAnimationFrame(() => {
+    document.getElementById(rowId(item))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
 export default function FinalSurvey({
   columns,
   initial,
@@ -61,6 +88,17 @@ export default function FinalSurvey({
   const [step, setStep] = useState<Step>('intro');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Whether Next has been pressed on a page with gaps in it.
+   *
+   * Next stays live either way — this is the same choice the workload
+   * questionnaire makes (BlockSurvey): a disabled button withholds the press
+   * and says nothing about which of eight statements was missed, and on this
+   * page half of them are two ratings wide. Pressing marks the gaps and goes
+   * to the first one. Cleared on every page turn, so a fresh page is never
+   * already scolding.
+   */
+  const [checking, setChecking] = useState(false);
 
   const [ratings, setRatings] = useState<Ratings>(() => {
     const seed: Ratings = {};
@@ -131,8 +169,32 @@ export default function FinalSurvey({
     return [];
   };
 
+  /** The first thing on this page with no answer, for the scroll. */
+  const firstGap = (s: Step): string | null => {
+    if (s === 'experience' || s === 'context') {
+      const items = s === 'experience' ? EXPERIENCE_ITEMS : CONTEXT_ITEMS;
+      return (
+        items.find((i) => columns.some((c) => ratings[ratingKey(i.key, c.condition)] === undefined))
+          ?.key ?? null
+      );
+    }
+    if (s === 'compare') {
+      return COMPARE_ITEMS.find((i) => ratings[ratingKey(i.key)] === undefined)?.key ?? null;
+    }
+    return null;
+  };
+
   const go = async (to: Step, save: Step | null) => {
     setError(null);
+    // Forward moves are the ones with something to check; Back never is, and
+    // it is `save` that tells them apart — going back saves nothing.
+    if (save && missingOn(save) > 0) {
+      setChecking(true);
+      const gap = firstGap(save);
+      if (gap) scrollToRow(gap);
+      return;
+    }
+    setChecking(false);
     if (save) {
       const answers = pageAnswers(save);
       if (answers.length > 0) {
@@ -156,15 +218,25 @@ export default function FinalSurvey({
       }
     }
     setStep(to);
+    setChecking(false);
     window.scrollTo({ top: 0 });
   };
 
   const index = STEPS.indexOf(step);
   const progress = useMemo(() => Math.round((index / (STEPS.length - 1)) * 100), [index]);
+  /**
+   * The rating pages are wider than the prose ones.
+   *
+   * Two seven-point scales have to fit side by side without either of them
+   * crushing to a row of forty-pixel squares — at 3xl they did, and the two
+   * versions ran together into one strip. The prose pages stay narrow, because
+   * a 900px paragraph is its own reading problem.
+   */
+  const grid = step === 'experience' || step === 'context' || step === 'compare';
 
   return (
     <div className="min-h-screen bg-[hsl(var(--background))] py-10 px-6">
-      <div className="max-w-3xl mx-auto">
+      <div className={`${grid ? 'max-w-5xl' : 'max-w-3xl'} mx-auto`}>
         {/* Five minutes is short enough that seeing the end matters more than
             the bar costs. */}
         {step !== 'intro' && (
@@ -184,10 +256,6 @@ export default function FinalSurvey({
               this last questionnaire we ask you to rate them separately, side by side. There are no
               right answers, and critical ratings are just as useful to us as positive ones.
             </p>
-            <p className="text-base text-[hsl(var(--muted-foreground))] leading-relaxed mb-6">
-              Both of your setups are still here — you can open either one from the column headings
-              and look around while you answer.
-            </p>
             <button onClick={() => void go('experience', null)} className={primaryButton}>
               Start
             </button>
@@ -195,7 +263,10 @@ export default function FinalSurvey({
         )}
 
         {(step === 'experience' || step === 'context') && (
-          <Card>
+          // No outer card on the rating pages. A card holding cards holding
+          // panels is three nested boxes, and the innermost one — the version
+          // being rated — is the one that has to stand out.
+          <div>
             <h1 className="text-xl font-semibold mb-1">
               {step === 'experience' ? 'Rating the two versions' : 'A few last ratings'}
             </h1>
@@ -204,7 +275,7 @@ export default function FinalSurvey({
                 ? `For each statement, please rate ${columns.map((c) => c.name).join(' and ')} separately.`
                 : 'A few last ratings, in the same way.'}
             </p>
-            <div className="space-y-4">
+            <div className="space-y-5">
               {(step === 'experience' ? EXPERIENCE_ITEMS : CONTEXT_ITEMS).map((item, i) => (
                 <RatedRow
                   key={item.key}
@@ -213,66 +284,97 @@ export default function FinalSurvey({
                   columns={columns}
                   scale={scale}
                   ratings={ratings}
+                  checking={checking}
                   onRate={setRating}
                 />
               ))}
             </div>
             <Nav
               busy={busy}
-              missing={missingOn(step)}
+              missing={checking ? missingOn(step) : 0}
               onBack={() => void go(step === 'experience' ? 'intro' : 'experience', null)}
               onNext={() => void go(step === 'experience' ? 'context' : 'compare', step)}
             />
-          </Card>
+          </div>
         )}
 
         {step === 'compare' && (
-          <Card>
+          <div>
             <h1 className="text-xl font-semibold mb-1">Comparing them directly</h1>
             <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">
               Now comparing {columns[0]?.name} and {columns[1]?.name} directly. Which one made it
               easier to…
             </p>
-            <div className="space-y-4">
-              {COMPARE_ITEMS.map((item, i) => (
+            <div className="space-y-5">
+              {COMPARE_ITEMS.map((item, i) => {
+                const unanswered = checking && ratings[ratingKey(item.key)] === undefined;
+                return (
                 <div
                   key={item.key}
-                  className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4"
+                  id={rowId(item.key)}
+                  className={`rounded-xl border bg-[hsl(var(--card))] px-5 py-4 ${
+                    unanswered ? 'border-amber-400 ring-2 ring-amber-200' : 'border-[hsl(var(--border))]'
+                  }`}
                 >
-                  <p className="text-base leading-relaxed mb-3">
-                    <span className="text-[hsl(var(--muted-foreground))] mr-2">{i + 1}.</span>…
-                    {item.text}
+                  <p className="text-base leading-relaxed mb-4">
+                    <span className="text-[hsl(var(--muted-foreground))] tabular-nums mr-2">
+                      {i + 1}.
+                    </span>
+                    …{item.text}
                   </p>
-                  <div className="flex gap-1.5">
-                    {scale.map((n) => (
-                      <button
-                        key={n}
-                        onClick={() => setRating(item.key, undefined, n)}
-                        className={choiceClass(ratings[ratingKey(item.key)] === n)}
-                      >
-                        {n === 4 ? '=' : n}
-                      </button>
-                    ))}
-                  </div>
-                  {/* Repeated on every row rather than once at the top. The
-                      only way this item fails is a participant answering it
-                      backwards, and a heading they scrolled past is exactly
-                      how that happens. */}
-                  <div className="flex justify-between mt-2 text-xs text-[hsl(var(--muted-foreground))]">
-                    <span>Much easier with {columns[0]?.name}</span>
-                    <span>No difference</span>
-                    <span>Much easier with {columns[1]?.name}</span>
+                  {/* One scale, so it gets the panel the paired page gives each
+                      version — the row still reads as a thing being answered
+                      rather than as buttons loose on a card. */}
+                  <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-3.5 pt-3 pb-3">
+                    <div className="flex gap-1.5">
+                      {scale.map((n) => (
+                        <button
+                          key={n}
+                          onClick={() => setRating(item.key, undefined, n)}
+                          aria-label={
+                            n === 4
+                              ? 'No difference'
+                              : `${n} — towards ${
+                                  n < 4 ? columns[0]?.name ?? 'the first' : columns[1]?.name ?? 'the second'
+                                }`
+                          }
+                          className={choiceClass(ratings[ratingKey(item.key)] === n)}
+                        >
+                          {n === 4 ? '=' : n}
+                        </button>
+                      ))}
+                    </div>
+                    {/* Repeated on every row rather than once at the top. The
+                        only way this item fails is a participant answering it
+                        backwards, and a heading they scrolled past is exactly
+                        how that happens. */}
+                    <div className="flex justify-between mt-2 text-2xs text-[hsl(var(--muted-foreground))]">
+                      <span>
+                        Much easier with{' '}
+                        <span className="font-semibold text-[hsl(var(--foreground))]">
+                          {columns[0]?.name}
+                        </span>
+                      </span>
+                      <span>No difference</span>
+                      <span>
+                        Much easier with{' '}
+                        <span className="font-semibold text-[hsl(var(--foreground))]">
+                          {columns[1]?.name}
+                        </span>
+                      </span>
+                    </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
             <Nav
               busy={busy}
-              missing={missingOn('compare')}
+              missing={checking ? missingOn('compare') : 0}
               onBack={() => void go('context', null)}
               onNext={() => void go('open', 'compare')}
             />
-          </Card>
+          </div>
         )}
 
         {step === 'open' && (
@@ -355,13 +457,29 @@ function Card({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** One statement, rated once per version, on one row. */
+/**
+ * One statement, rated once per version, on one row.
+ *
+ * THE TWO VERSIONS HAVE TO LOOK LIKE TWO VERSIONS. Side by side with a hairline
+ * between them, fourteen buttons in a row read as one long scale, and the
+ * answer to "which of these did I just click" stops being obvious at exactly
+ * the moment the participant is tired. Each version gets its own panel, its own
+ * name, its own endpoints and a gutter wide enough to be a boundary rather than
+ * a gap.
+ *
+ * The panels are IDENTICAL — same tint, same border, same order of controls.
+ * Anything that distinguished one column visually would be a thumb on the
+ * scale, and the column order is already the participant's own (§13 invariant
+ * 8), so a tint tied to a side would land on a different arm each session and
+ * be worse than useless.
+ */
 function RatedRow({
   item,
   number,
   columns,
   scale,
   ratings,
+  checking,
   onRate,
 }: {
   item: VersionRatedItem;
@@ -369,47 +487,58 @@ function RatedRow({
   columns: FinalColumn[];
   scale: number[];
   ratings: Ratings;
+  /** Next has been pressed with gaps on this page — show them. */
+  checking: boolean;
   onRate: (item: string, condition: string | undefined, value: number) => void;
 }) {
+  const gap = checking && columns.some((c) => ratings[ratingKey(item.key, c.condition)] === undefined);
   return (
-    <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
-      <p className="text-base leading-relaxed mb-3">
-        <span className="text-[hsl(var(--muted-foreground))] mr-2">{number}.</span>
+    <div
+      id={rowId(item.key)}
+      className={`rounded-xl border bg-[hsl(var(--card))] px-5 py-4 ${
+        gap ? 'border-amber-300' : 'border-[hsl(var(--border))]'
+      }`}
+    >
+      <p className="text-base leading-relaxed mb-4">
+        <span className="text-[hsl(var(--muted-foreground))] tabular-nums mr-2">{number}.</span>
         {item.text}
       </p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {columns.map((c) => (
-          <div key={c.condition}>
-            <div className="flex items-baseline gap-2 mb-1.5">
-              <span className="text-xs font-bold uppercase tracking-wide">{c.name}</span>
-              {c.cloneAssignmentId && (
-                <a
-                  href={`/studio/${c.cloneAssignmentId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-0.5 text-2xs text-[hsl(var(--muted-foreground))] hover:underline"
-                >
-                  open <ExternalLink className="w-2.5 h-2.5" />
-                </a>
-              )}
+      <div className="grid gap-4 sm:grid-cols-2 sm:gap-7">
+        {columns.map((c) => {
+          const value = ratings[ratingKey(item.key, c.condition)];
+          return (
+            <div
+              key={c.condition}
+              className={`rounded-lg border px-3.5 pt-2.5 pb-3 ${
+                checking && value === undefined
+                  ? 'border-amber-300 bg-amber-50/60'
+                  : 'border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30'
+              }`}
+            >
+              <div className="mb-2">
+                <span className="inline-flex items-center rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-0.5 text-2xs font-bold uppercase tracking-wide">
+                  {c.name}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                {scale.map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => onRate(item.key, c.condition, n)}
+                    aria-label={`${c.name}: ${n}`}
+                    className={choiceClass(value === n)}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <div className="flex justify-between mt-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
+                <span>{AGREE_LOW}</span>
+                <span>{AGREE_HIGH}</span>
+              </div>
             </div>
-            <div className="flex gap-1">
-              {scale.map((n) => (
-                <button
-                  key={n}
-                  onClick={() => onRate(item.key, c.condition, n)}
-                  className={choiceClass(ratings[ratingKey(item.key, c.condition)] === n)}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-            <div className="flex justify-between mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-              <span>{AGREE_LOW}</span>
-              <span>{AGREE_HIGH}</span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -437,12 +566,17 @@ function Nav({
       >
         Back
       </button>
-      <button onClick={onNext} disabled={busy || missing > 0} className={primaryButton}>
+      {/* Live even with gaps: pressing it is how the gaps get pointed at. */}
+      <button onClick={onNext} disabled={busy} className={primaryButton}>
         {nextLabel}
       </button>
       {busy && <Loader2 className="w-3.5 h-3.5 animate-spin text-[hsl(var(--muted-foreground))]" />}
       {missing > 0 && (
-        <span className="text-xs text-[hsl(var(--muted-foreground))]">{missing} left</span>
+        <span className="text-xs font-semibold text-amber-800">
+          {missing === 1
+            ? 'One rating is still missing — it is marked above.'
+            : `${missing} ratings are still missing — they are marked above.`}
+        </span>
       )}
     </div>
   );
