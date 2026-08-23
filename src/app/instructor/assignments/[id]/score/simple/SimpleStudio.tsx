@@ -1123,18 +1123,10 @@ function ConfigColumn({
             </>
           )}
         </div>
-        {readOnly && (
-          <div className="sticky top-9 z-10 px-3 py-2 bg-[hsl(var(--muted))] border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
-            <span className="text-xs text-[hsl(var(--muted-foreground))]">
-              {state.viewing?.versionNo === 0
-                ? 'Looking at this chatbot as it was delivered. Editing happens on the latest one.'
-                : `Looking at setup ${state.viewing?.displayNo}. Editing happens on the latest one.`}
-            </span>
-            {/* The two things to do about it are beside the list that put the
-                board here — this row only has to say where "here" is. */}
-          </div>
-        )}
-
+        {/* No banner. Which version is on screen is said by the row that is
+            lit in the history, the way every other selection on this board is
+            said — and what is read-only says so by having no Apply and no
+            Save under it. A sentence at the top repeated both. */}
         {arm === 'baseline' ? (
           <PromptEditor
             draft={draft}

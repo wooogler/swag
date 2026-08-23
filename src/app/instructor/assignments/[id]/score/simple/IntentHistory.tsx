@@ -249,7 +249,11 @@ export default function IntentHistory({
   const showing =
     viewingVersionNo == null
       ? rows[0]
-      : rows.find((r) => r.version?.configVersionNo === viewingVersionNo);
+      : viewingVersionNo === 0
+        ? // The delivered one holds no stored row to match against; it is the
+          // only row that is its own version number.
+          rows.find((r) => r.floor)
+        : rows.find((r) => r.version?.configVersionNo === viewingVersionNo);
 
   // Nothing written here yet — a heading over an empty box is furniture.
   // Unless the list has a floor, which is there from the first moment: the
@@ -372,7 +376,9 @@ export default function IntentHistory({
                     }`}
                   >
                     {version.floor
-                      ? 'original'
+                      ? isCurrent
+                        ? 'showing'
+                        : 'original'
                       : version.createdAt == null
                       ? 'unsaved'
                       : isCurrent
