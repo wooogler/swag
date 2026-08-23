@@ -190,6 +190,14 @@ export async function POST(req: Request) {
           prevResponseText,
           // A student is waiting: fail fast, and fall open below.
           callOptions: { timeoutMs: 15_000, maxRetries: 0 },
+          // The one path that batches. Every definition in a single call is a
+          // stricter judge than the board's one-per-call (see LiveBatching),
+          // and that difference would be a bias if anything were measured from
+          // here — nothing is. What is measured is the block test, which takes
+          // the default. Here the budget is one attempt with no retry before
+          // the reply falls open to the base prompt, and fanning out
+          // multiplies the ways that attempt misses its window.
+          batching: 'one-call',
         });
         deployed = {
           systemPrompt: route.systemPrompt,
