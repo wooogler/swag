@@ -38,7 +38,7 @@
  * is not a declared dependency here and adding it silently breaks every tsx
  * script that reaches into this directory.
  */
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { simpleIntentExamples } from '@/db/schema';
 import { callModel, extractJsonObject, isOpenAIConfigured } from '@/lib/score/classifier';
@@ -149,6 +149,40 @@ async function addTextExamples(args: {
       createdAt: now,
     }))
   );
+}
+
+/**
+ * Rewrite one written example.
+ *
+ * The set is what the list is ordered against, so the text has to be embedded
+ * again — an example whose words changed but whose vector did not would order
+ * the list by something nobody can read. A question from the log has no text
+ * of its own here and cannot be edited: what it says is what the student said.
+ */
+export async function editIntentExample(args: {
+  assignmentId: string;
+  sid: number;
+  id: number;
+  text: string;
+}): Promise<boolean> {
+  const text = args.text.trim();
+  if (text.length === 0) return false;
+  const [vector] = await embedTexts([text]).catch(() => [] as number[][]);
+  const rows = await db
+    .update(simpleIntentExamples)
+    .set({ text, embedding: vector ?? null, model: EXAMPLE_MODEL })
+    .where(
+      and(
+        eq(simpleIntentExamples.assignmentId, args.assignmentId),
+        eq(simpleIntentExamples.sid, args.sid),
+        eq(simpleIntentExamples.id, args.id),
+        // Only the written ones: a row that stands for a question from the log
+        // carries no text to rewrite.
+        isNotNull(simpleIntentExamples.text)
+      )
+    )
+    .returning({ id: simpleIntentExamples.id });
+  return rows.length > 0;
 }
 
 export async function removeIntentExample(args: {

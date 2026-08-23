@@ -8,6 +8,7 @@
  *
  * POST   { sid, messageId }   add a question from the log
  * POST   { sid, regenerate }  write a fresh set, keeping the questions
+ * POST   { sid, id, text }    rewrite one written example
  * DELETE ?sid=&id=            remove one
  */
 import { NextResponse } from 'next/server';
@@ -16,6 +17,7 @@ import { armOf } from '@/lib/study/config';
 import { logStudyEvent } from '@/lib/study/events';
 import {
   addQuestionExample,
+  editIntentExample,
   listIntentExamples,
   regenerateIntentExamples,
   removeIntentExample,
@@ -30,6 +32,9 @@ const bodySchema = z.object({
   sid: z.number().int().positive(),
   messageId: z.number().int().positive().optional(),
   regenerate: z.boolean().optional(),
+  /** Rewrite this written example. */
+  id: z.number().int().positive().optional(),
+  text: z.string().max(500).optional(),
 });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -59,6 +64,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       assignmentPrompt: seedPrompt,
     });
     await logStudyEvent(id, 'simple_examples_regenerate', { condition, sid: body.sid, written });
+  } else if (body.id != null && body.text != null) {
+    const done = await editIntentExample({
+      assignmentId: id,
+      sid: body.sid,
+      id: body.id,
+      text: body.text,
+    });
+    if (!done) return NextResponse.json({ error: 'no_such_example' }, { status: 404 });
+    await logStudyEvent(id, 'simple_example_edit', { condition, sid: body.sid, id: body.id });
   } else if (body.messageId) {
     await addQuestionExample({ assignmentId: id, sid: body.sid, messageId: body.messageId });
     await logStudyEvent(id, 'simple_example_add', {

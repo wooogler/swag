@@ -935,6 +935,16 @@ export default function SimpleStudio({
                   `sid=${selection.sid}&id=${exampleId}`
                 )
         }
+        onEditExample={
+          readOnly || selection.kind !== 'intent'
+            ? null
+            : (exampleId, text) =>
+                void editExamples({
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sid: selection.sid, id: exampleId, text }),
+                })
+        }
         onRegenerateExamples={
           readOnly || selection.kind !== 'intent'
             ? null
@@ -2484,7 +2494,88 @@ function VersionList({
  * nothing and invites a second press. The spinner belongs to this press, like
  * Apply's does, rather than to a flag shared with every other write.
  */
-function GenerateExamples({ onClick }: { onClick: () => Promise<void> }) {
+/** What the server writes when it is asked for a set — mirrors EXAMPLE_COUNT
+ * in lib/study/simple/anchors.ts, where the number and the reasons for it are. */
+const EXAMPLES_WANTED = 3;
+
+/**
+ * One invented example, which can be rewritten.
+ *
+ * The set is what the list below is ordered against, so a wording somebody
+ * disagrees with is worth a correction rather than a delete and a regenerate:
+ * the model's guess at what the category sounds like is a starting point, and
+ * the participant is the one who knows.
+ */
+function WrittenExample({
+  text,
+  onEdit,
+  onDrop,
+}: {
+  text: string;
+  onEdit: ((text: string) => void) | null;
+  onDrop: (() => void) | null;
+}) {
+  const [draft, setDraft] = useState(text);
+  const [editing, setEditing] = useState(false);
+  // The row is not editing, so it follows whatever the set says.
+  if (!editing && draft !== text) setDraft(text);
+
+  const keep = () => {
+    setEditing(false);
+    const next = draft.trim();
+    if (next.length > 0 && next !== text) onEdit?.(next);
+    else setDraft(text);
+  };
+
+  return (
+    <li className="group flex gap-2 px-3 py-2 border-b border-[hsl(var(--border))]">
+      {editing ? (
+        <textarea
+          autoFocus
+          value={draft}
+          rows={2}
+          maxLength={500}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={keep}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setDraft(text);
+              setEditing(false);
+            }
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              keep();
+            }
+            e.stopPropagation();
+          }}
+          className="flex-1 min-w-0 resize-none rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 text-sm leading-snug focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+        />
+      ) : (
+        <button
+          type="button"
+          disabled={!onEdit}
+          onClick={() => setEditing(true)}
+          title={onEdit ? 'Rewrite this example' : undefined}
+          className="flex-1 min-w-0 text-left text-sm leading-snug text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] disabled:hover:text-[hsl(var(--muted-foreground))]"
+        >
+          {text}
+        </button>
+      )}
+      {onDrop && !editing && (
+        <button
+          aria-label="Drop this example"
+          title="Drop this example"
+          onClick={onDrop}
+          className="self-start p-1 rounded opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </li>
+  );
+}
+
+function GenerateExamples({ full, onClick }: { full: boolean; onClick: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   return (
     <button
@@ -2501,7 +2592,7 @@ function GenerateExamples({ onClick }: { onClick: () => Promise<void> }) {
       className="shrink-0 inline-flex h-5 items-center gap-1 rounded border border-[hsl(var(--border))] px-1.5 text-2xs font-semibold leading-none hover:bg-[hsl(var(--muted))] disabled:opacity-60 disabled:hover:bg-transparent"
     >
       {busy && <Loader2 className="w-3 h-3 animate-spin" />}
-      {busy ? 'Writing…' : 'Generate examples'}
+      {busy ? 'Writing…' : full ? 'Update examples' : 'Generate examples'}
     </button>
   );
 }
@@ -2511,6 +2602,7 @@ function QuestionColumn({
   pinnedRows,
   exampleRows,
   onDropExample,
+  onEditExample,
   onRegenerateExamples,
   onAddExample,
   furthest,
@@ -2537,6 +2629,8 @@ function QuestionColumn({
    * ones with no row of their own. */
   exampleRows: { id: number; text: string | null; row: ScoreQueryRow | null }[];
   onDropExample: ((exampleId: number) => void) | null;
+  /** Rewrite one of the written ones. Null where nothing may be changed. */
+  onEditExample: ((exampleId: number, text: string) => void) | null;
   /** Awaited, so the button can say it is working: writing three examples is
    * a model call, and it took seconds with nothing on screen to show for it. */
   onRegenerateExamples: (() => Promise<void>) | null;
@@ -2681,12 +2775,14 @@ function QuestionColumn({
                 </span>
               )}
             {onRegenerateExamples && (
-              // "Rewrite" was wrong for the commonest set there is: an intent
-              // carved out of a question holds one question and nothing
-              // written, so the button ADDS rather than rewrites. This names
-              // the act it always performs, and the title carries what happens
-              // to any written ones already there.
-              <GenerateExamples onClick={onRegenerateExamples} />
+              // The press does two different things and should say which. With
+              // room left it writes into the gap; with the set full every
+              // written one is replaced. "Rewrite" was wrong for the first
+              // case and "Generate" is wrong for the second.
+              <GenerateExamples
+                full={exampleRows.length >= EXAMPLES_WANTED}
+                onClick={onRegenerateExamples}
+              />
             )}
           </div>
           <ul className="flex-1 min-h-0 overflow-y-auto">
@@ -2706,24 +2802,12 @@ function QuestionColumn({
                   onDropExample={onDropExample ? () => onDropExample(example.id) : null}
                 />
               ) : (
-                <li
+                <WrittenExample
                   key={`ex-${example.id}`}
-                  className="group flex gap-2 px-3 py-2 border-b border-[hsl(var(--border))]"
-                >
-                  <span className="flex-1 min-w-0 text-sm leading-snug text-[hsl(var(--muted-foreground))]">
-                    {example.text}
-                  </span>
-                  {onDropExample && (
-                    <button
-                      aria-label="Drop this example"
-                      title="Drop this example"
-                      onClick={() => onDropExample(example.id)}
-                      className="self-start p-1 rounded opacity-0 group-hover:opacity-100 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--background))]"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </li>
+                  text={example.text ?? ''}
+                  onEdit={onEditExample ? (text) => onEditExample(example.id, text) : null}
+                  onDrop={onDropExample ? () => onDropExample(example.id) : null}
+                />
               )
             )}
           </ul>
