@@ -1323,6 +1323,28 @@ async function main() {
       added > 0 && fresh === 0,
       `${added} verdict(s) added, ${fresh} of them freshly rated for “${pick.title}”`
     );
+  } else if (prepared.length > 0) {
+    // The one-document arm reads the same library, as a way of reading the log
+    // rather than a way of writing an intent: it filters the list to a set's
+    // questions. So what has to hold here is not "nothing is prepared" — that
+    // was the old shape of this branch, and it failed the moment the baseline
+    // ran on a master that HAS verdicts — but that the questions it filters to
+    // are exactly the ones the count claims.
+    const pick = prepared.sort((a, b) => b.count - a.count)[0];
+    const withQuestions = (await call('starters', {}, 'withQuestions=1')).body as {
+      groups?: {
+        whole: { title: string; count: number; messageIds?: number[] };
+        items: { title: string; count: number; messageIds?: number[] }[];
+      }[];
+    };
+    const found = (withQuestions.groups ?? [])
+      .flatMap((g) => [g.whole, ...g.items])
+      .find((i) => i.title === pick.title);
+    check(
+      'the categories the baseline reads by carry their questions',
+      found != null && (found.messageIds?.length ?? 0) === pick.count,
+      `“${pick.title}” said ${pick.count}, listed ${found?.messageIds?.length ?? '—'}`
+    );
   } else {
     check(
       'the library reports zero where nothing is prepared',

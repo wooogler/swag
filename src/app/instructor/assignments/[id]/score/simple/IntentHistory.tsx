@@ -221,7 +221,7 @@ export default function IntentHistory({
             versionNo: 0,
             definition: '',
             rule: '',
-            name: 'As delivered',
+            name: 'Original (as delivered)',
             matches: null,
             createdAt: null,
             version: null,
@@ -230,15 +230,14 @@ export default function IntentHistory({
         ]
       : []),
   ];
-  /**
-   * Numbered from the bottom, not from the stored count.
+  /*
+   * The floor is v0, so nothing above it moves.
    *
-   * With a floor under them the wordings are all one place further up — the
-   * prompt this chatbot ran with is v1, and the first thing anyone wrote is
-   * v2. Counting positions rather than adding an offset to a stored number
-   * keeps one rule for both kinds of list.
+   * It was v1 for a while, which pushed every wording up one and made the
+   * first thing anybody wrote "v2" — a number that matches nothing stored and
+   * nothing anyone did. Zero says what it is: the state before the first
+   * version, which is exactly how it is stored.
    */
-  const numberOf = (i: number) => rows.length - i;
   const more = rows.length > SHOWN;
   const shown = all ? rows : rows.slice(0, SHOWN);
 
@@ -347,7 +346,7 @@ export default function IntentHistory({
                   }`}
                 >
                   <span className="shrink-0 text-2xs font-bold tabular-nums text-[hsl(var(--muted-foreground))]">
-                    v{numberOf(rows.indexOf(version))}
+                    v{version.versionNo}
                   </span>
                   {/* Blank until the model's label arrives, and for good if it
                       never does. Falling back to the time printed it twice on
@@ -378,7 +377,7 @@ export default function IntentHistory({
                     {version.floor
                       ? isCurrent
                         ? 'showing'
-                        : 'original'
+                        : ''
                       : version.createdAt == null
                       ? 'unsaved'
                       : isCurrent

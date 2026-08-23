@@ -2845,12 +2845,13 @@ function QuestionColumn({
 
       <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
       <div className="shrink-0 px-3 py-2 border-b border-[hsl(var(--border))]">
-      {/* Two rows, because they answer different questions: what this list is,
-          and what to do to it. Sharing one row, the controls took the width
-          first and the name of the list — the one thing that has to be
-          readable — came out as "Provide Exa…". */}
-      <div className="flex items-baseline gap-2">
-        <span className="text-sm font-semibold">{label}</span>
+      {/* One row where one row fits, and the name of the list never shrinks:
+          the controls give way, and the search drops to a line of its own
+          rather than squeezing down to "Sea…". It was two fixed rows when the
+          picker was called "Question types" and the search was pinned at
+          160px, which between them left the title reading "Provide Exa…". */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <span className="shrink-0 text-sm font-semibold">{label}</span>
         <span className="shrink-0 whitespace-nowrap text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
           {rows.length} of {allCount}
         </span>
@@ -2866,9 +2867,6 @@ function QuestionColumn({
             <Loader2 className="w-3 h-3 animate-spin" /> working out where questions go
           </span>
         )}
-        <span className="flex-1" />
-      </div>
-      <div className="mt-1.5 flex items-center gap-2">
         {/* The prepared categories, as a way of reading rather than a way of
             writing. This arm has no intents to slice its log with, and the
             categories are knowledge about the log — what students ask and how
@@ -2876,12 +2874,12 @@ function QuestionColumn({
             changes what is listed and nothing else. */}
         {onPickType && (
           <span className="shrink-0 flex items-center gap-1">
-            {/* A constant label. The chosen set's name is the title of the
-                list two inches to the left — printing it here too spent the
-                width the title needed and left it reading "Factual Look…". */}
+            {/* Short, and constant. The chosen set's name is the title of the
+                list two inches to the left; printing it here too spent the
+                width the title needed. */}
             <StarterPicker
               api={api}
-              label="Question types"
+              label="Types"
               withQuestions
               onPick={(item) => onPickType(item)}
             />
@@ -2901,7 +2899,10 @@ function QuestionColumn({
         {/* An ordinary search box, over the students' own words. Everything
             else on this board is about what the configuration does; this is
             the one control for finding a question you remember. */}
-        <label className="relative flex flex-1 items-center">
+        {/* Wide enough to read its own placeholder, or on its own line. A
+            flex-1 spacer used to sit in front of it and split the free space
+            with it, which is how the box came out at "Sea…". */}
+        <label className="relative flex min-w-[11rem] flex-1 basis-44 items-center">
           <Search className="pointer-events-none absolute left-1.5 w-3 h-3 text-[hsl(var(--muted-foreground))]" />
           <input
             value={query}
@@ -3572,9 +3573,10 @@ function ViewerColumn({
  * not a version — it reads "Now (unsaved)", which is what the tree and the card
  * say about it too.
  *
- * "Original (as delivered)" is not a version and is offered as its own answer:
- * it is the reply the student was actually given, which no configuration can
- * produce and which is the only fixed point to compare the rest against.
+ * "v0 · Original (as delivered)" is the floor, worded and numbered exactly as
+ * the card words and numbers it. It is the reply the student was actually
+ * given — the fixed point the rest are compared against — and reading it here
+ * under one name and there under another made two lists out of one history.
  */
 function ReplyVersionBar({
   versions,
@@ -3690,11 +3692,11 @@ function ReplyVersionBar({
             {v.name ? ` · ${v.name}` : ''}
           </option>
         ))}
-        {/* Last, because it is the oldest thing here — older than v1, since it
-            is what the chatbot said before any of this was written. It used to
-            head the list as the "not a version" option, which put the oldest
-            answer above the newest and then ran back down through the rest. */}
-        <option value="original">Original (as delivered)</option>
+        {/* Last, because it is the oldest thing here — the state before the
+            first version, which is why it is v0 and why the card calls it that
+            too. It used to head the list, which put the oldest answer above
+            the newest and then ran back down through the rest. */}
+        <option value="original">v0 · Original (as delivered)</option>
       </select>
     </div>
     {/* The rule itself, under the version it belongs to. Two lines by default
