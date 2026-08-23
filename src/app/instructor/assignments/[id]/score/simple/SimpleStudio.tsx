@@ -2614,6 +2614,34 @@ function GenerateExamples({ full, onClick }: { full: boolean; onClick: () => Pro
   );
 }
 
+/**
+ * The words a list is a list OF, in two lines until they are asked for.
+ *
+ * They run to a paragraph — the starters spell out three examples each — and
+ * a header that gives them all the room they want pushes the questions off the
+ * screen. Clamped they were unreadable past the second line, with only a
+ * hover tooltip behind them, which is not somewhere to read a paragraph from.
+ */
+function Definition({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen((v) => !v)}
+      title={open ? 'Show less' : 'Show all of it'}
+      className="mt-1 block w-full text-left"
+    >
+      <span
+        className={`text-2xs leading-relaxed text-[hsl(var(--muted-foreground))] ${
+          open ? 'block' : 'line-clamp-2'
+        }`}
+      >
+        {text}
+      </span>
+    </button>
+  );
+}
+
 function QuestionColumn({
   api,
   rows,
@@ -2874,9 +2902,12 @@ function QuestionColumn({
             changes what is listed and nothing else. */}
         {onPickType && (
           <span className="shrink-0 flex items-center gap-1">
+            {/* A constant label. The chosen set's name is the title of the
+                list two inches to the left — printing it here too spent the
+                width the title needed and left it reading "Factual Look…". */}
             <StarterPicker
               api={api}
-              label={typeFilter ? typeFilter.title : 'Question types'}
+              label="Question types"
               withQuestions
               onPick={(item) => onPickType(item)}
             />
@@ -2925,14 +2956,7 @@ function QuestionColumn({
           to read them from while looking at what they caught — the question is
           always "do these words describe these questions", and it cannot be
           asked with the two halves in different columns. */}
-      {shownDefinition.trim().length > 0 && (
-        <p
-          title={shownDefinition}
-          className="mt-1 line-clamp-2 text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]"
-        >
-          {shownDefinition}
-        </p>
-      )}
+      {shownDefinition.trim().length > 0 && <Definition text={shownDefinition} />}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -3716,8 +3740,8 @@ function RuleUnderReply({ rule }: { rule: string }) {
       className="mt-1 block w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 py-1 text-left"
     >
       <span
-        className={`block whitespace-pre-wrap text-xs leading-relaxed text-[hsl(var(--foreground))] ${
-          open ? '' : 'line-clamp-2'
+        className={`whitespace-pre-wrap text-xs leading-relaxed text-[hsl(var(--foreground))] ${
+          open ? 'block' : 'line-clamp-2'
         }`}
       >
         {rule}
