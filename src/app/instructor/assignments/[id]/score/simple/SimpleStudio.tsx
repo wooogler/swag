@@ -1212,7 +1212,7 @@ function PromptEditor({
   onSaveVersion: () => Promise<void>;
 }) {
   return (
-    <div className="p-3 flex flex-col gap-2 h-full">
+    <div className="p-3 flex flex-col gap-2">
       <div className="flex items-baseline justify-between">
         <span className="text-2xs font-bold uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
           Rules
@@ -1221,13 +1221,19 @@ function PromptEditor({
           {draft.prompt.length} / {STUDY_PROMPT_CHAR_LIMIT}
         </span>
       </div>
-      <textarea
+      {/* The same box as the other arm's, sized the same way: as tall as what
+          is written in it. It is a whole document rather than one rule, so it
+          has no ceiling — it grows and the column scrolls, instead of a fixed
+          window that scrolled inside a column that also scrolled and left the
+          buttons under it half off the screen. */}
+      <AutoTextarea
         value={draft.prompt}
         readOnly={readOnly}
         maxLength={STUDY_PROMPT_CHAR_LIMIT}
         onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
         placeholder="What the chatbot should do, in your own words."
-        className="flex-1 min-h-[24rem] w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:opacity-60"
+        minLines={12}
+        maxLines={Infinity}
       />
       {/* The same row as the intent arm's, because the two arms differ in what
           a configuration IS and not in what you do with one. */}
@@ -2041,8 +2047,15 @@ const useMeasure = typeof window === 'undefined' ? useEffect : useLayoutEffect;
  */
 function AutoTextarea({
   className = '',
+  minLines = FIELD_MIN_LINES,
+  maxLines = FIELD_MAX_LINES,
   ...props
-}: React.ComponentPropsWithoutRef<'textarea'>) {
+}: React.ComponentPropsWithoutRef<'textarea'> & {
+  minLines?: number;
+  /** Infinity for a box that is a whole document: it grows and the column
+   * around it scrolls, rather than scrolling inside a window of its own. */
+  maxLines?: number;
+}) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useMeasure(() => {
     const el = ref.current;
@@ -2055,12 +2068,12 @@ function AutoTextarea({
     el.style.height = 'auto';
     const wanted = el.scrollHeight + border;
     const height = Math.min(
-      Math.max(wanted, line * FIELD_MIN_LINES + frame),
-      line * FIELD_MAX_LINES + frame
+      Math.max(wanted, line * minLines + frame),
+      line * maxLines + frame
     );
     el.style.height = `${height}px`;
     el.style.overflowY = wanted > height ? 'auto' : 'hidden';
-  }, [props.value]);
+  }, [props.value, minLines, maxLines]);
   return <textarea ref={ref} className={`${FIELD_BOX} ${className}`.trim()} {...props} />;
 }
 
