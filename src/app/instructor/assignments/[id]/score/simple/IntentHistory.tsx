@@ -288,13 +288,7 @@ export default function IntentHistory({
             do about it are to keep this version or to stop reading. */}
         {viewingVersionNo != null && (
           <span className="flex shrink-0 items-center gap-1.5">
-            {/* Not for the delivered one: it is where the board started
-                rather than a version somebody saved, so there is nothing to
-                make newest — going back to it means dropping everything, and
-                that is not a thing this list can say. */}
-            {onRestore && viewingVersionNo !== 0 && (
-              <RestoreVersion to={viewingLabel ?? 0} onRestore={onRestore} />
-            )}
+            {onRestore && <RestoreVersion to={viewingLabel ?? 0} onRestore={onRestore} />}
             <button
               type="button"
               onClick={() => onView(null)}
@@ -411,7 +405,11 @@ function RestoreVersion({ to, onRestore }: { to: number; onRestore: () => void }
       <button
         type="button"
         onClick={() => setAsking(true)}
-        title={`Make setup ${to} the newest again, dropping everything saved or applied after it`}
+        title={
+          to === 0
+            ? 'Start again from this chatbot as it was delivered, dropping everything since'
+            : `Make setup ${to} the newest again, dropping everything saved or applied after it`
+        }
         className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
       >
         Restore
@@ -421,7 +419,9 @@ function RestoreVersion({ to, onRestore }: { to: number; onRestore: () => void }
   return (
     <span className="flex shrink-0 items-center gap-1.5">
       <span className="text-2xs text-[hsl(var(--muted-foreground))]">
-        Back to setup {to}, dropping what came after?
+        {to === 0
+          ? 'Back to the delivered chatbot, dropping everything since?'
+          : `Back to setup ${to}, dropping what came after?`}
       </span>
       <button
         type="button"

@@ -17,7 +17,8 @@ import { getSimpleTip, restoreSimpleVersion } from '@/lib/study/simple/store';
 
 export const dynamic = 'force-dynamic';
 
-const bodySchema = z.object({ versionNo: z.number().int().positive() });
+/** 0 is the configuration as delivered — the floor everything sits on. */
+const bodySchema = z.object({ versionNo: z.number().int().nonnegative() });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

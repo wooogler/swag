@@ -569,17 +569,22 @@ export async function restoreSimpleVersion(args: {
   assignmentId: string;
   versionNo: number;
 }): Promise<{ hidden: number } | null> {
-  const [target] = await db
-    .select()
-    .from(simpleConfigVersions)
-    .where(
-      and(
-        eq(simpleConfigVersions.assignmentId, args.assignmentId),
-        eq(simpleConfigVersions.versionNo, args.versionNo),
-        isNull(simpleConfigVersions.hiddenAt)
-      )
-    );
-  if (!target) return null;
+  // 0 is the configuration as delivered: no row to find, and everything is
+  // after it. Starting over from what the chatbot came with is a place to go
+  // back to like any other — the difference is only that it is the floor.
+  if (args.versionNo !== 0) {
+    const [target] = await db
+      .select()
+      .from(simpleConfigVersions)
+      .where(
+        and(
+          eq(simpleConfigVersions.assignmentId, args.assignmentId),
+          eq(simpleConfigVersions.versionNo, args.versionNo),
+          isNull(simpleConfigVersions.hiddenAt)
+        )
+      );
+    if (!target) return null;
+  }
   const hidden = await db
     .update(simpleConfigVersions)
     .set({ hiddenAt: new Date() })
