@@ -133,23 +133,6 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
       condition: studioView,
       seedPrompt,
     });
-    // A block ends when there is a saved version to measure. There is no
-    // deploy step here — a save is the whole of publishing — so "have they
-    // published anything" is "have they saved".
-    //
-    // And it has to be the LATEST thing they did: the block test reads the
-    // save, so finishing with applied-but-unsaved changes would measure a
-    // configuration they had already moved past, and nothing in the answers
-    // would look wrong. The server refuses that case too; this puts the fix
-    // in front of the click instead of behind it.
-    // "I'm done" only exists once there is something deployed to be done
-    // WITH, exactly as the full version's does — it is the step after
-    // publishing, not an alternative to it.
-    const deployedSomething = initialState.deployedVersionNo != null;
-    const simpleBlockDone =
-      participant && deployedSomething
-        ? { phase: currentPhase(participant), waits: advanceWaits(currentPhase(participant)) }
-        : null;
     // Deploy IS the end of the block for a participant. The briefing says
     // "when you feel it's ready, deploy it" and stops there, and the step
     // after deploying was a second button that had to be found — so the press
@@ -215,29 +198,13 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                   />
                 )
               }
-              blockDone={
-                simpleBlockDone ? (
-                  <PhaseAdvance
-                    compact
-                    from={simpleBlockDone.phase}
-                    label="I'm done"
-                    blocked={
-                      initialState.dirty ||
-                      initialState.deployedVersionNo !== initialState.viewing?.versionNo
-                        ? {
-                            reason:
-                              'You have changed things since you deployed. The questions coming next are about the setup you deployed — deploy this one first.',
-                            actionLabel: 'Deploy and finish',
-                            actionUrl: `/api/instructor/assignments/${id}/score/simple/deploy`,
-                          }
-                        : null
-                    }
-                    waits={simpleBlockDone.waits}
-                    waitLabel="Your chatbot is answering the check questions now."
-                    confirm="This ends the setup for this chatbot. There are a few quick questions next, then you will check what it answers. You will not be able to come back and change it."
-                  />
-                ) : null
-              }
+              /* No second exit. Deploy ends the block — it asks, deploys and
+                 carries them through — so an "I'm done" beside it was a
+                 button doing the same thing under a different name. It was
+                 kept as a fallback for a deploy that lands while the hand-off
+                 fails; pressing Deploy again covers that, because deploying
+                 what is already deployed only re-stamps it. */
+              blockDone={null}
             />
           }
         >
