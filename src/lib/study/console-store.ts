@@ -114,17 +114,24 @@ function conditionOf(clone: { condition: string }): StudioArm {
 /** Exported because the participant's own advance checks it too (advance.ts). */
 export async function deployStateFor(clone: {
   assignmentId: string;
-  condition: string;
+  /** The whole view, not the arm: which store holds the deployed
+   * configuration is a fact about the family, and an arm passed here reads as
+   * "not simple" and finds nothing. Typed so that mistake cannot compile. */
+  condition: StudioView;
 }): Promise<{ deployed: boolean; label: string | null; unsaved?: boolean }> {
-  // The simple version has no deploy step. What it has instead is a save, and
-  // two things have to hold before a block can end on it: there is one, and
-  // nothing has been applied since. The second matters because the block test
-  // measures the SAVE — letting someone finish with unsaved changes would
+  // The simple version deploys by saving: deploy IS the final save, and the
+  // block test reads what was deployed. Two things have to hold before a block
+  // can end — something has been deployed, and it is still what the board is
+  // answering with. The second matters because finishing after more work would
   // measure a configuration they had already moved on from, and nothing about
   // the answers would look wrong.
   if (viewFamily(clone.condition as StudioView) === 'simple') {
     const rows = await db
-      .select({ versionNo: simpleConfigVersions.versionNo, kind: simpleConfigVersions.kind })
+      .select({
+        versionNo: simpleConfigVersions.versionNo,
+        kind: simpleConfigVersions.kind,
+        deployedAt: simpleConfigVersions.deployedAt,
+      })
       .from(simpleConfigVersions)
       .where(
         and(
@@ -132,14 +139,15 @@ export async function deployStateFor(clone: {
           isNull(simpleConfigVersions.hiddenAt)
         )
       )
-      .orderBy(desc(simpleConfigVersions.versionNo))
-      .limit(1);
+      .orderBy(desc(simpleConfigVersions.versionNo));
     const tip = rows[0];
     if (!tip) return { deployed: false, label: null };
-    if (tip.kind !== 'save') {
-      return { deployed: false, label: 'unsaved changes', unsaved: true };
+    const live = rows.find((r) => r.deployedAt != null) ?? null;
+    if (!live) return { deployed: false, label: 'never deployed', unsaved: true };
+    if (live.versionNo !== tip.versionNo) {
+      return { deployed: false, label: 'changed since deploy', unsaved: true };
     }
-    return { deployed: true, label: `v${tip.versionNo}` };
+    return { deployed: true, label: `v${live.versionNo}` };
   }
   if (conditionOf(clone) === 'baseline') {
     const [live] = await db
@@ -260,7 +268,7 @@ async function workFor(assignmentId: string, family: StudioFamily): Promise<Clon
   };
 }
 
-/** Block-test progress for one clone: rated items over the bank's size. */
+/** Block-test progress for one clone: judged items over the bank's size. */
 async function answeredFor(
   cloneAssignmentId: string,
   datasetKey: string
@@ -276,7 +284,10 @@ async function answeredFor(
     .where(
       and(
         eq(studyTestAnswers.cloneAssignmentId, cloneAssignmentId),
-        isNotNull(studyTestAnswers.rating),
+        // Q5 is the item's own headline judgement, and the first of the two
+        // Pass 2 answers — an item with it is an item the participant has
+        // been through.
+        isNotNull(studyTestAnswers.desirable),
         inArray(
           studyTestAnswers.bankItemId,
           bank.map((b) => b.id)
@@ -358,7 +369,10 @@ export async function getParticipantStatus(
 
   const cloneStatuses: CloneStatus[] = await Promise.all(
     clones.map(async (clone) => {
-      const deploy = await deployStateFor(clone);
+      const deploy = await deployStateFor({
+        assignmentId: clone.assignmentId,
+        condition: clone.condition as StudioView,
+      });
       const block = plan.find((p) => p.datasetKey === clone.datasetKey)?.block ?? null;
       // A block test asks the clone's OWN dataset, and only that.
       const test = await isGenerationCurrent({
@@ -516,31 +530,45 @@ export async function allowedAssignmentIds(participant: StudyParticipant): Promi
 export const GENERATION_KINDS: BankKind[] = ['test'];
 
 /**
- * Per-question prediction outcomes for one block — the facilitator's probe list.
+ * Per-question outcomes for one block — what the facilitator reads afterwards.
  *
- * 문항지 §3 ④ probes only the questions where the prediction missed, which the
- * facilitator has to know DURING the session. Half of it they can see over the
- * participant's shoulder (a "yes" followed by a 2). The other half they cannot:
- * whether the pointing matched the intent that actually fired is a comparison
- * against `applied` in the response record, which appears on no screen. Without
- * it the choice is probe everything, which the 90-minute session has no room
- * for, or probe by guesswork.
+ * The participant's own screen now decides what to probe (BLOCK_TEST v3 §4 ③:
+ * Q5 ≤ 3 or Q6 ≤ 3 opens it), so this is no longer a probe list to act on in
+ * the room. It is the block read back: the two judgements, the prediction error
+ * between Q4 and Q5, and the one comparison that appears on no participant
+ * screen at all — the intent they pointed at against the intent that fired.
  *
- * The verdicts are the export's, deliberately — a probe decided by one rule in
- * the room and analysed by another would not be about the same items. The fold
- * is the questionnaire's: a rating of 3 or less reads as "no".
+ * The verdicts are the export's, deliberately — a number read in the room and a
+ * column read afterwards have to be about the same items. `pointingCorrect` is
+ * literally the same function. The fold is the instrument's: 1-3 negative.
  */
 export interface PredictionRow {
   /** 1-based in the participant's own presentation order, not the bank's. */
   number: number;
   question: string;
-  guess: boolean | null;
-  rating: number | null;
-  /** Null while either half is still missing. */
-  guessMissed: boolean | null;
+  /** Q3, Q4 — 6-point, from Pass 1. */
+  confidence: number | null;
+  expectDesirable: number | null;
+  /** Q5, Q6 — 6-point, from Pass 2. */
+  desirable: number | null;
+  follows: number | null;
+  /** |Q4 − Q5|, 0-5. Null while either is missing. */
+  predError: number | null;
+  /**
+   * Did the desirability prediction land on the wrong side of the fold?
+   *
+   * The direction matters more than the flag: fold(Q4) positive with fold(Q5)
+   * negative is a BLIND SPOT (they did not see it coming), and the reverse is
+   * a pessimism miss. Null while either half is missing.
+   */
+  foldMissed: boolean | null;
+  /** fold(Q6) positive with fold(Q5) negative — the code C5 case: the rule was
+   * followed and the rule was not what they wanted. */
+  selfModelError: boolean | null;
   pointedLabel: string | null;
   appliedLabel: string | null;
-  /** SCORE only; null for baseline, and for "not sure", which has no verdict. */
+  /** SCORE only; null for baseline, and for "I don't know", which has no
+   * verdict — it is a real answer, scored as its own rate. */
   pointingMissed: boolean | null;
   /** 'intent' = one of their sets claimed it; 'type_default' = none did. */
   outcome: 'intent' | 'type_default' | null;
@@ -569,10 +597,15 @@ export interface BlockResults {
   datasetKey: string;
   condition: 'score' | 'baseline';
   rows: PredictionRow[];
-  /** Rated items and the mean over them. */
+  /** Judged items (both Q5 and Q6 in) and the mean of Q5 over them. */
   rated: number;
   total: number;
   mean: number | null;
+  /** Mean of Q6 — whether the responses followed what they wrote. */
+  meanFollows: number | null;
+  /** Mean |Q4 − Q5| over the items where both are in: the prediction error
+   * RQ2 rests on, before it is folded into a hit rate. */
+  meanError: number | null;
   /**
    * The same ratings split by whether a non-empty rule answered.
    *
@@ -583,15 +616,28 @@ export interface BlockResults {
    */
   covered: { n: number; mean: number | null } | null;
   uncovered: { n: number; mean: number | null } | null;
-  /** Predicted yes/no vs the rating folded at 4 (design v2 §6). */
+  /** Q4 against Q5, both folded at 3/4 — how often the desirability call was
+   * on the right side. */
   predictionHits: number;
   predictionScored: number;
   /** SCORE only — pointing against the intent that actually fired. */
   pointingHits: number | null;
   pointingScored: number | null;
-  /** Confidence calibration: how many they said yes to, how many actually fit. */
-  saidYes: number;
-  fits: number;
+  /** How often they answered Q2 with "I don't know" — coverage awareness, and
+   * the denominator that makes a low pointing score readable. */
+  dontKnow: number;
+  /**
+   * The two quadrants of §1.3, as counts.
+   *
+   * `blindSpots` is the prediction quadrant's dangerous cell: they expected it
+   * to be desirable and it was not. `selfModelErrors` is the execution
+   * quadrant's: the response followed their setup and they still did not want
+   * it — a wrong model of their own rule, which no other measure catches.
+   */
+  blindSpots: number;
+  selfModelErrors: number;
+  /** Confidence, mean of Q3 — read against the two hit rates above. */
+  meanConfidence: number | null;
   /** The block's questionnaire answers, in the instrument's own order. */
   survey: { key: string; label: string; value: number | null }[];
   surveyScaleMax: number;
@@ -607,7 +653,7 @@ export async function getBlockPredictions(
     .where(eq(studyClones.assignmentId, cloneAssignmentId));
   if (!clone) return [];
 
-  const { deployedConfigFor, getTestItems } = await import('./measure-store');
+  const { deployedConfigFor, getTestItems, pointingCorrect } = await import('./measure-store');
   const [items, config, generated] = await Promise.all([
     getTestItems(participant, clone),
     deployedConfigFor({
@@ -635,21 +681,19 @@ export async function getBlockPredictions(
   return items.map((item, i) => {
     const applied = appliedByItem.get(item.bankItemId) ?? null;
     const point = item.pointing;
+    const correct = pointingCorrect(point, applied);
 
     let pointedLabel: string | null = null;
-    let pointingMissed: boolean | null = null;
     if (point?.kind === 'intent') {
       pointedLabel = titleById.get(point.intentId) ?? `#${point.intentId} (deleted)`;
-      pointingMissed = !(applied?.outcome === 'intent' && applied?.intentId === point.intentId);
     } else if (point?.kind === 'none') {
-      pointedLabel = 'None of them';
-      pointingMissed = !(applied == null || applied.outcome === 'type_default');
+      pointedLabel = 'Default rule';
     } else if (point?.kind === 'span') {
       pointedLabel = `“${point.text.length > 80 ? `${point.text.slice(0, 80)}…` : point.text}”`;
     } else if (point?.kind === 'nothing') {
-      pointedLabel = 'Nothing specific';
+      pointedLabel = 'Nothing in particular';
     } else if (point?.kind === 'not_sure') {
-      pointedLabel = 'Not sure';
+      pointedLabel = "Didn't know";
     }
 
     let appliedLabel: string | null = null;
@@ -663,16 +707,27 @@ export async function getBlockPredictions(
     }
 
     const appliedFull = applied as { rule?: string } | null;
+    // The instrument's fold, restated (see getBlockResults for why it is not
+    // imported): 1-3 negative, 4-6 positive.
+    const isNegative = (v: number | null) => v !== null && v <= 3;
+    const both = item.expectDesirable !== null && item.desirable !== null;
     return {
       number: i + 1,
       question: item.question.length > 90 ? `${item.question.slice(0, 90)}…` : item.question,
-      guess: item.guess,
-      rating: item.rating,
-      guessMissed:
-        item.guess === null || item.rating === null ? null : item.guess !== item.rating >= 4,
+      confidence: item.confidence,
+      expectDesirable: item.expectDesirable,
+      desirable: item.desirable,
+      follows: item.follows,
+      predError: both ? Math.abs((item.expectDesirable ?? 0) - (item.desirable ?? 0)) : null,
+      foldMissed: both ? isNegative(item.expectDesirable) !== isNegative(item.desirable) : null,
+      selfModelError:
+        item.follows === null || item.desirable === null
+          ? null
+          : !isNegative(item.follows) && isNegative(item.desirable),
       pointedLabel,
       appliedLabel,
-      pointingMissed: conditionOf(clone) === 'score' ? pointingMissed : null,
+      pointingMissed:
+        conditionOf(clone) === 'score' && correct !== null ? !correct : null,
       outcome:
         applied?.outcome === 'intent' || applied?.outcome === 'type_default'
           ? applied.outcome
@@ -707,11 +762,12 @@ export async function getBlockResults(
     getSurveyConfig(),
   ]);
 
-  const rated = rows.filter((r) => r.rating !== null);
-  const mean = (list: PredictionRow[]) =>
-    list.length === 0
-      ? null
-      : list.reduce((sum, r) => sum + (r.rating ?? 0), 0) / list.length;
+  const rated = rows.filter((r) => r.desirable !== null);
+  const meanOf = (list: PredictionRow[], pick: (r: PredictionRow) => number | null) => {
+    const values = list.map(pick).filter((v): v is number => v !== null);
+    return values.length === 0 ? null : values.reduce((sum, v) => sum + v, 0) / values.length;
+  };
+  const mean = (list: PredictionRow[]) => meanOf(list, (r) => r.desirable);
 
   // "Covered" is about the RULE, not the routing: an intent matching a question
   // and then contributing an empty rule leaves the chatbot uninstructed just as
@@ -719,8 +775,12 @@ export async function getBlockResults(
   const covered = rated.filter((r) => (r.ruleChars ?? 0) > 0);
   const uncovered = rated.filter((r) => (r.ruleChars ?? 0) === 0);
 
-  const scoredPredictions = rows.filter((r) => r.guessMissed !== null);
+  const scoredPredictions = rows.filter((r) => r.foldMissed !== null);
   const scoredPointing = rows.filter((r) => r.pointingMissed !== null);
+  // Same fold as the instrument, restated here rather than imported: this file
+  // reads measure-store through a dynamic import (below) and a one-line
+  // predicate is not worth making that one asynchronous.
+  const isNegative = (v: number | null) => v !== null && v <= 3;
 
   const surveyRows = await db
     .select({ itemKey: studySurveyAnswers.itemKey, value: studySurveyAnswers.value })
@@ -741,14 +801,18 @@ export async function getBlockResults(
     rated: rated.length,
     total: rows.length,
     mean: mean(rated),
+    meanFollows: meanOf(rows, (r) => r.follows),
+    meanError: meanOf(rows, (r) => r.predError),
     covered: condition === 'score' ? { n: covered.length, mean: mean(covered) } : null,
     uncovered: condition === 'score' ? { n: uncovered.length, mean: mean(uncovered) } : null,
-    predictionHits: scoredPredictions.filter((r) => !r.guessMissed).length,
+    predictionHits: scoredPredictions.filter((r) => !r.foldMissed).length,
     predictionScored: scoredPredictions.length,
     pointingHits: condition === 'score' ? scoredPointing.filter((r) => !r.pointingMissed).length : null,
     pointingScored: condition === 'score' ? scoredPointing.length : null,
-    saidYes: rows.filter((r) => r.guess === true).length,
-    fits: rated.filter((r) => (r.rating ?? 0) >= 4).length,
+    dontKnow: rows.filter((r) => r.pointedLabel === "Didn't know").length,
+    blindSpots: rows.filter((r) => r.foldMissed && !isNegative(r.expectDesirable)).length,
+    selfModelErrors: rows.filter((r) => r.selfModelError).length,
+    meanConfidence: meanOf(rows, (r) => r.confidence),
     // The instrument's own order first — then anything answered under a key
     // the instrument no longer has. A questionnaire reworded between the pilot
     // and the study would otherwise make the pilot's answers disappear from

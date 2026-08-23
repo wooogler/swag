@@ -38,6 +38,7 @@ import {
   flattenStoredIntents,
 } from '../../src/lib/study/simple/chain';
 import { intentDefHash } from '../../src/lib/score/intents';
+import type { StudioView } from '../../src/lib/study/config';
 
 const BASE = process.env.SWAG_URL ?? 'http://localhost:3030';
 
@@ -812,7 +813,7 @@ async function main() {
     // The gate the whole split depends on.
     const gate = await deployStateFor({
       assignmentId,
-      condition: view ?? 'simple_score',
+      condition: (view ?? 'simple_score') as StudioView,
     });
     check('a block cannot end on unsaved changes', !gate.deployed && gate.unsaved === true,
       `deployed=${gate.deployed} unsaved=${gate.unsaved} (${gate.label})`);
@@ -852,7 +853,7 @@ async function main() {
     // configuration nobody stood behind, however carefully it was saved.
     const gateSaved = await deployStateFor({
       assignmentId,
-      condition: view ?? 'simple_score',
+      condition: (view ?? 'simple_score') as StudioView,
     });
     check(
       'saving is not deploying',
@@ -873,7 +874,7 @@ async function main() {
     );
     const gateAfter = await deployStateFor({
       assignmentId,
-      condition: view ?? 'simple_score',
+      condition: (view ?? 'simple_score') as StudioView,
     });
     check('and the block can end now', gateAfter.deployed, `${gateAfter.label}`);
 
@@ -890,7 +891,7 @@ async function main() {
     });
     const gateMoved = await deployStateFor({
       assignmentId,
-      condition: view ?? 'simple_score',
+      condition: (view ?? 'simple_score') as StudioView,
     });
     check(
       'and goes back up once they work on past it',
@@ -906,7 +907,7 @@ async function main() {
     );
     const gateCaught = await deployStateFor({
       assignmentId,
-      condition: view ?? 'simple_score',
+      condition: (view ?? 'simple_score') as StudioView,
     });
     check('and stands behind it', gateCaught.deployed, `${gateCaught.label}`);
   }

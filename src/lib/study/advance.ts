@@ -114,7 +114,15 @@ export async function advanceParticipant(
     // too, not only the work — the console can force a phase, and a jump past
     // the work would otherwise reach generation with nothing deployed and
     // report it as something going wrong on our side.
-    const { deployed, unsaved, label } = await deployStateFor(clone);
+    // `clone.condition` from cloneForBlock is the ARM; this needs the whole
+    // view, because which store holds the deployed configuration is a fact
+    // about the FAMILY. Handed the arm, the simple family fell through to the
+    // full version's tables, found nothing, and told every simple participant
+    // that nothing had been set up.
+    const { deployed, unsaved, label } = await deployStateFor({
+      assignmentId: clone.assignmentId,
+      condition: clone.view,
+    });
     if (!deployed) {
       // Three ways of not being ready, and each one has to name the button
       // that fixes it and the state it is in. The simple board's said "save"
