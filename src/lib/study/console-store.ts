@@ -687,9 +687,15 @@ export async function getBlockPredictions(
     if (point?.kind === 'intent') {
       pointedLabel = titleById.get(point.intentId) ?? `#${point.intentId} (deleted)`;
     } else if (point?.kind === 'none') {
-      pointedLabel = 'Default rule';
+      // What the participant clicked, named as they saw it.
+      pointedLabel = 'Uncategorized';
     } else if (point?.kind === 'span') {
-      pointedLabel = `“${point.text.length > 80 ? `${point.text.slice(0, 80)}…` : point.text}”`;
+      // The first quotation and a count of the rest: the console row is one
+      // line, and a participant may have pointed at four places.
+      const first = point.spans[0]?.text ?? '';
+      const quote = first.length > 70 ? `${first.slice(0, 70)}…` : first;
+      pointedLabel =
+        point.spans.length > 1 ? `“${quote}” +${point.spans.length - 1}` : `“${quote}”`;
     } else if (point?.kind === 'nothing') {
       pointedLabel = 'Nothing in particular';
     } else if (point?.kind === 'not_sure') {

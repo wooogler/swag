@@ -634,12 +634,14 @@ export async function buildParticipantTrail(
       point?: number;
       pointFirst?: number;
       pointChanges?: number;
-      expectStart?: number;
-      expectEnd?: number;
-      guess?: number;
+      idealStart?: number;
+      idealEnd?: number;
+      confidence?: number;
+      expectDesirable?: number;
       submit?: number;
       reveal?: number;
-      rate?: number;
+      desirable?: number;
+      follows?: number;
     } | null;
     if (a.guessedAt) {
       raw.push({
@@ -649,14 +651,19 @@ export async function buildParticipantTrail(
         intentId: a.pointedIntentId ?? null,
         messageId: null,
         detail:
-          `q${q ?? a.bankItemId} · ${a.guess ? 'yes' : 'no'} · pointed ${a.pointedKind ?? '—'}` +
+          `q${q ?? a.bankItemId} · pointed ${a.pointedKind ?? '—'}` +
+          // Q3 and Q4 as a pair: how sure they were, and what they expected of
+          // it. The gap between them and Q5 is the whole of RQ2.
+          (a.confidence !== null ? ` · anticipate ${a.confidence}/6` : '') +
+          (a.expectDesirable !== null ? ` · expect ${a.expectDesirable}/6` : '') +
           // How long the pointing took, which is the step that asks them to
           // READ the configuration rather than to judge it.
           (typeof t?.point === 'number' ? ` · pointed in ${(t.point / 1000).toFixed(1)}s` : '') +
           (t?.pointChanges ? ` · changed ${t.pointChanges}×` : ''),
         payload: {
           bankItemId: a.bankItemId,
-          guess: a.guess,
+          confidence: a.confidence,
+          expectDesirable: a.expectDesirable,
           pointedKind: a.pointedKind,
           timing: t,
         },
@@ -671,11 +678,18 @@ export async function buildParticipantTrail(
         intentId: null,
         messageId: null,
         detail:
-          `q${q ?? a.bankItemId} · ${a.rating}/5${a.whatsOff ? ' · what’s off' : ''}${a.probe ? ' · probed' : ''}` +
-          (typeof t?.rate === 'number' && typeof t?.reveal === 'number'
-            ? ` · read for ${((t.rate - t.reveal) / 1000).toFixed(1)}s`
+          `q${q ?? a.bankItemId} · desirable ${a.desirable ?? '—'}/6 · follows ${
+            a.followsSetup ?? '—'
+          }/6${a.probe ? ' · probed' : ''}${a.repair ? ' · repair' : ''}` +
+          (typeof t?.desirable === 'number' && typeof t?.reveal === 'number'
+            ? ` · read for ${((t.desirable - t.reveal) / 1000).toFixed(1)}s`
             : ''),
-        payload: { bankItemId: a.bankItemId, rating: a.rating, timing: t },
+        payload: {
+          bankItemId: a.bankItemId,
+          desirable: a.desirable,
+          follows: a.followsSetup,
+          timing: t,
+        },
         assignmentId: a.cloneAssignmentId,
       });
     }

@@ -41,9 +41,10 @@ async function main() {
     deployedConfigFor,
     getTestItems,
     predictionsComplete,
+    probeOpens,
+    recordJudgement,
     recordPrediction,
     recordProbe,
-    recordRating,
   } = await import('../../src/lib/study/measure-store');
   const { buildChatDeploySnapshot, recordChatDeploy } = await import(
     '../../src/lib/score/deploy-store'
@@ -156,9 +157,10 @@ async function main() {
       participant,
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
-      expectation: 'asks what they have tried instead of writing it',
-      guess: true,
+      ideal: 'asks what they have tried instead of writing it',
       pointing: { kind: 'not_sure' },
+      confidence: 5,
+      expectDesirable: 5,
     });
     console.log(`   prediction recorded: ${JSON.stringify(predicted)}`);
 
@@ -170,14 +172,14 @@ async function main() {
       `   after 1 of ${items.length} predicted: responses present = ${afterOne} (expect 0)${afterOne === 0 ? ' ✓' : ' ✗'}`
     );
 
-    // Rating cannot slip in ahead of the reveal.
-    const early = await recordRating({
+    // A judgement cannot slip in ahead of the reveal.
+    const early = await recordJudgement({
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: items[1].bankItemId,
-      rating: 5,
+      desirable: 5,
     });
     console.log(
-      `   rating an unpredicted item refused = ${!early.ok}${!early.ok ? ' ✓' : ' ✗'}`
+      `   judging an unpredicted item refused = ${!early.ok}${!early.ok ? ' ✓' : ' ✗'}`
     );
 
     // ── 1b. a prediction keeps its first answer, and replays on reload ──
@@ -185,15 +187,16 @@ async function main() {
       participant,
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
-      expectation: 'CHANGED MY MIND',
-      guess: false,
-      pointing: { kind: 'span', start: 0, end: 4, text: 'late' },
+      ideal: 'CHANGED MY MIND',
+      pointing: { kind: 'span', spans: [{ start: 0, end: 4, text: 'late' }] },
+      confidence: 1,
+      expectDesirable: 1,
     });
     items = await getTestItems(participant, clone1);
     const kept = items.find((i) => i.bankItemId === first.bankItemId);
-    const heldFirst = kept?.pointing?.kind === 'not_sure' && kept?.guess === true;
+    const heldFirst = kept?.pointing?.kind === 'not_sure' && kept?.expectDesirable === 5;
     console.log(
-      `   re-predict kept the first = ${heldFirst}${heldFirst ? ' ✓' : ' ✗'} (guess=${kept?.guess}, pointing=${JSON.stringify(kept?.pointing)}, expectation="${kept?.expectation}")`
+      `   re-predict kept the first = ${heldFirst}${heldFirst ? ' ✓' : ' ✗'} (Q4=${kept?.expectDesirable}, pointing=${JSON.stringify(kept?.pointing)}, ideal="${kept?.ideal}")`
     );
 
     // ── 1c. the whole block unlocks at once, and only then ──────────────
@@ -203,9 +206,10 @@ async function main() {
         participant,
         cloneAssignmentId: clone1.assignmentId,
         bankItemId: it.bankItemId,
-        expectation: 'short answer, no prose',
-        guess: true,
+        ideal: 'short answer, no prose',
         pointing: { kind: 'not_sure' },
+        confidence: 4,
+        expectDesirable: 5,
       });
     }
     const complete = await predictionsComplete(clone1);
@@ -217,55 +221,66 @@ async function main() {
       }`
     );
 
-    // ── 2. the probe opens only where the prediction missed ─────────────
+    // ── 2. the probe opens on a negative judgement, and only then ───────
+    // Q5 alone is not enough: the panel needs BOTH judgements, because it
+    // carries the Matched chip and one of them is what earns it.
+    const halfJudged = await recordJudgement({
+      cloneAssignmentId: clone1.assignmentId,
+      bankItemId: first.bankItemId,
+      desirable: 2,
+    });
+    const halfOpen = probeOpens(halfJudged.desirable, halfJudged.follows);
+    console.log(
+      `2. Q5 alone (2/6) opens the probe = ${halfOpen} (expect false)${!halfOpen ? ' ✓' : ' ✗'}`
+    );
     for (const it of items) {
-      await recordRating({
+      await recordJudgement({
         cloneAssignmentId: clone1.assignmentId,
         bankItemId: it.bankItemId,
-        rating: 2,
-        whatsOff: 'wrote the paragraph for them',
+        desirable: 2,
+        follows: 5,
       });
     }
     items = await getTestItems(participant, clone1);
-    // Every guess above was 'yes' and every rating a 2, so every item folds to
-    // a miss — the probe must be open on all of them.
-    const missed = items.filter((i) => i.missed).length;
+    // Q5 = 2 folds negative on every item, so the panel is owed on all of them
+    // — and with it the Matched chip.
+    const open = items.filter((i) => probeOpens(i.desirable, i.follows)).length;
+    const chips = items.filter((i) => i.matched !== null).length;
     console.log(
-      `2. guessed yes, rated 2 → probe opens on ${missed} of ${items.length}${missed === items.length ? ' ✓' : ' ✗'}`
-    );
-    const kept2 = items.find((i) => i.bankItemId === first.bankItemId);
-    console.log(
-      `   what's off stored = "${kept2?.whatsOff ?? ''}"${kept2?.whatsOff ? ' ✓' : ' ✗'}`
+      `   Q5 2/6, Q6 5/6 → probe opens on ${open} of ${items.length}${open === items.length ? ' ✓' : ' ✗'}, Matched chip released on ${chips}`
     );
     const probed = await recordProbe({
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
       probe: 'I thought the rule covered that phrasing',
+      repair: 'narrow the definition so it stops claiming this',
     });
-    console.log(`   probe stored = ${probed.ok}${probed.ok ? ' ✓' : ' ✗'}`);
-    // Above the fold there is no "what's off" to keep.
-    await recordRating({
+    console.log(`   probe + repair stored = ${probed.ok}${probed.ok ? ' ✓' : ' ✗'}`);
+
+    // A revision patches one judgement and leaves the other alone.
+    const revised = await recordJudgement({
       cloneAssignmentId: clone1.assignmentId,
       bankItemId: first.bankItemId,
-      rating: 5,
+      desirable: 5,
     });
-    items = await getTestItems(participant, clone1);
-    const cleared = items.find((i) => i.bankItemId === first.bankItemId)?.whatsOff;
     console.log(
-      `   re-rating to 5 clears what's off = ${cleared === null}${cleared === null ? ' ✓' : ' ✗'}`
+      `   revising Q5 kept Q6 = ${revised.follows === 5}${revised.follows === 5 ? ' ✓' : ' ✗'} (Q5=${revised.desirable}, Q6=${revised.follows})`
+    );
+    items = await getTestItems(participant, clone1);
+    const closed = !probeOpens(
+      items.find((i) => i.bankItemId === first.bankItemId)?.desirable ?? null,
+      items.find((i) => i.bankItemId === first.bankItemId)?.follows ?? null
+    );
+    console.log(
+      `   both above the fold closes the panel = ${closed}${closed ? ' ✓' : ' ✗'}`
     );
 
-    await recordRating({
-      cloneAssignmentId: clone1.assignmentId,
-      bankItemId: first.bankItemId,
-      rating: 4,
-    });
     const [rated] = await db
       .select()
       .from(studyTestAnswers)
       .where(eq(studyTestAnswers.bankItemId, first.bankItemId));
     console.log(
-      `   rating stored = ${rated.rating}, guessed_at < rated_at = ${
+      `   judgements stored = Q5 ${rated.desirable} / Q6 ${rated.followsSetup}, guessed_at < rated_at = ${
         rated.guessedAt && rated.ratedAt ? rated.guessedAt < rated.ratedAt : 'n/a'
       } ✓`
     );

@@ -7,6 +7,41 @@
  */
 import { toCsv } from './csv';
 import { buildParticipantTrail, type ParticipantTrail } from './trail';
+import { pointingCorrect, readPointing } from './measure-store';
+
+/**
+ * One cell of a 2×2, as a word.
+ *
+ * BLOCK_TEST v3 §1.3 builds two of these — fold(Q4)×fold(Q5) for what they saw
+ * coming, and fold(Q6)×fold(Q5) for whether their own setup produced it — and
+ * they are NOT interchangeable: the first crosses Q5 with a prediction, the
+ * second with an attribution. Both are named here rather than in a notebook so
+ * every reader of the export cuts them the same way, and `axis` keeps the
+ * labels honest about which grid a column belongs to.
+ *
+ * The fold is the instrument's: 1-3 negative, 4-6 positive (§3.3).
+ */
+function quadrant(
+  axis: number | null,
+  desirable: number | null,
+  axisName: 'expected' | 'followed'
+): string {
+  if (axis == null || desirable == null) return '';
+  const axisPositive = axis >= 4;
+  const wanted = desirable >= 4;
+  if (axisName === 'expected') {
+    if (axisPositive && wanted) return 'as_expected_good';
+    // The cell the design cares most about: no warning, bad result.
+    if (axisPositive && !wanted) return 'blind_spot';
+    if (!axisPositive && wanted) return 'pleasant_surprise';
+    return 'known_failure';
+  }
+  if (axisPositive && wanted) return 'setup_worked';
+  // C5: it did what they wrote, and what they wrote was not what they wanted.
+  if (axisPositive && !wanted) return 'rule_not_want';
+  if (!axisPositive && wanted) return 'lucky_success';
+  return 'departed_and_bad';
+}
 
 export type TrailFiles = Record<string, string>;
 
@@ -421,6 +456,7 @@ export async function buildTrailFiles(participantId: string): Promise<{
     } | null;
     const t = (a.timing ?? null) as Record<string, number> | null;
     const ms = (v: number | undefined) => (typeof v === 'number' ? Math.round(v) : '');
+    const correct = pointingCorrect(readPointing(a), applied);
     return {
       participant: trail.participant.number,
       block: b?.block ?? '',
@@ -429,14 +465,39 @@ export async function buildTrailFiles(participantId: string): Promise<{
       bank_item: a.bankItemId,
       position: item?.position ?? '',
       question: item?.question ?? '',
-      expectation: a.expectation ?? '',
-      guess: a.guess === null ? '' : a.guess ? 'yes' : 'no',
+      // Pass 1 — Q1 through Q4 (BLOCK_TEST v3 §4).
+      ideal: a.ideal ?? '',
       pointed_kind: a.pointedKind ?? '',
       pointed_intent_id: a.pointedIntentId ?? '',
+      /** Every stretch they highlighted, joined — baseline's whole answer. */
       pointed_text: a.pointedText ?? '',
-      rating: a.rating ?? '',
-      whats_off: a.whatsOff ?? '',
+      /** How many places in the prompt they pointed at. One number, and it is
+       * the one the "monolithic prompts scatter" claim is about. */
+      pointed_span_count: Array.isArray(a.pointedSpans) ? a.pointedSpans.length : '',
+      pointed_spans_json: a.pointedSpans ? JSON.stringify(a.pointedSpans) : '',
+      confidence: a.confidence ?? '',
+      expect_desirable: a.expectDesirable ?? '',
+      // Pass 2 — Q5, Q6, and the two boxes the negative half opens.
+      desirable: a.desirable ?? '',
+      follows_setup: a.followsSetup ?? '',
       probe: a.probe ?? '',
+      repair: a.repair ?? '',
+      // Derived, so the two headline analyses do not need recomputing per
+      // reader. `pred_error` is |Q4 − Q5| (§5); the quadrants are §1.3's two
+      // grids, which cross the SAME Q5 with two different axes and must not be
+      // collapsed into one.
+      pred_error:
+        a.expectDesirable == null || a.desirable == null
+          ? ''
+          : Math.abs(a.expectDesirable - a.desirable),
+      quadrant_prediction: quadrant(a.expectDesirable, a.desirable, 'expected'),
+      quadrant_execution: quadrant(a.followsSetup, a.desirable, 'followed'),
+      // The v2 instrument, blank on anything collected after 2026-08-21 and
+      // kept so the pilot's rows export at all.
+      legacy_expectation: a.expectation ?? '',
+      legacy_guess: a.guess === null ? '' : a.guess ? 'yes' : 'no',
+      legacy_rating: a.rating ?? '',
+      legacy_whats_off: a.whatsOff ?? '',
       // What answered it. `routed_outcome` is 'intent' when one of their sets
       // claimed the question and 'type_default' when the chain ran out — and a
       // type default with an empty rule means the chatbot answered with no
@@ -446,19 +507,11 @@ export async function buildTrailFiles(participantId: string): Promise<{
       routed_intent_title: applied?.intentTitle ?? '',
       routed_type: applied?.type ?? '',
       routed_rule_chars: applied ? (applied.rule ?? '').trim().length : '',
-      /** Was the pointing right? Blank for baseline, which has no routing. */
+      /** Was the pointing right? Blank for baseline, which has no routing, and
+       * blank for "I don't know", which is scored as its own rate rather than
+       * as a wrong answer. */
       pointing_correct:
-        b?.condition !== 'score' || !a.pointedKind
-          ? ''
-          : a.pointedKind === 'intent'
-            ? applied?.outcome === 'intent' && applied.intentId === a.pointedIntentId
-              ? 'yes'
-              : 'no'
-            : a.pointedKind === 'none'
-              ? applied == null || applied.outcome === 'type_default'
-                ? 'yes'
-                : 'no'
-              : '',
+        b?.condition !== 'score' || correct === null ? '' : correct ? 'yes' : 'no',
       /** Every set the chain judged, so a near miss is distinguishable. */
       candidates: (applied?.candidates ?? [])
         .map((c) => `${c.intentId}:${c.rating}`)
@@ -466,15 +519,25 @@ export async function buildTrailFiles(participantId: string): Promise<{
       response: gen?.response ?? '',
       // Per-step durations (ms from when the question appeared). ms_point is
       // the pointing step — the one that asks them to read their setup.
+      ms_ideal_start: ms(t?.idealStart),
+      ms_ideal_end: ms(t?.idealEnd),
       ms_point_first: ms(t?.pointFirst),
       ms_point: ms(t?.point),
       point_changes: t?.pointChanges ?? '',
-      ms_expect_start: ms(t?.expectStart),
-      ms_expect_end: ms(t?.expectEnd),
-      ms_guess: ms(t?.guess),
+      ms_confidence: ms(t?.confidence),
+      ms_expect_desirable: ms(t?.expectDesirable),
       ms_submit: ms(t?.submit),
       ms_reveal: ms(t?.reveal),
-      ms_rate: ms(t?.rate),
+      ms_desirable: ms(t?.desirable),
+      ms_follows: ms(t?.follows),
+      // How often each judgement was revised — §10-5's probe-avoidance drift
+      // would show up here before it shows up anywhere else.
+      desirable_changes: t?.desirableChanges ?? '',
+      follows_changes: t?.followsChanges ?? '',
+      probe_opened: t?.probeOpened === undefined ? '' : 'yes',
+      ms_probe: ms(t?.probe),
+      probe_chars: t?.probeChars ?? '',
+      repair_chars: t?.repairChars ?? '',
       guessed_at: a.guessedAt?.toISOString() ?? '',
       rated_at: a.ratedAt?.toISOString() ?? '',
     };

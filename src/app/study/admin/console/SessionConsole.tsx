@@ -667,7 +667,7 @@ function BlockResultsPanel({
   };
 
   const rows = results?.rows ?? [];
-  const missed = rows.filter((r) => r.guessMissed || r.pointingMissed);
+  const missed = rows.filter((r) => r.foldMissed || r.pointingMissed || r.selfModelError);
 
   return (
     <div className="pt-1">
@@ -709,7 +709,7 @@ function BlockResultsPanel({
   );
 }
 
-/** Mean fit, split by whether a rule was reached, then the three accuracies. */
+/** Mean desirability, split by whether a rule was reached, then the accuracies. */
 function ResultsSummary({ results }: { results: BlockResults }) {
   const fmt = (v: number | null) => (v === null ? '—' : v.toFixed(1));
   const cov = results.covered;
@@ -717,9 +717,16 @@ function ResultsSummary({ results }: { results: BlockResults }) {
   return (
     <div className="px-2.5 py-2 bg-[hsl(var(--muted))]/40 border-b border-[hsl(var(--border))] flex flex-wrap items-center gap-x-4 gap-y-1.5">
       <Stat
-        label="Mean fit"
+        label="Desirable"
         value={fmt(results.mean)}
-        sub={`of 5 · ${results.rated}/${results.total} rated`}
+        sub={`Q5, of 6 · ${results.rated}/${results.total} judged`}
+        title="Q5 — “the response is educationally desirable”, by their own teaching standards."
+      />
+      <Stat
+        label="Follows setup"
+        value={fmt(results.meanFollows)}
+        sub="Q6, of 6"
+        title="Q6 — “the response follows what I set up”, judged against the configuration on screen."
       />
       {cov && unc && (
         <Stat
@@ -730,28 +737,45 @@ function ResultsSummary({ results }: { results: BlockResults }) {
           // with no instruction of theirs, so a low score there is a gap in
           // the configuration, not a rule that behaved badly.
           tone={unc.n > 0 ? 'warn' : 'plain'}
-          title="Mean fit where a non-empty rule answered, versus where none did. A question with no rule is answered by the bare model."
+          title="Mean Q5 where a non-empty rule answered, versus where none did. A question with no rule is answered by the bare model."
         />
       )}
       <Stat
         label="Predicted"
         value={`${results.predictionHits}/${results.predictionScored}`}
-        sub="yes/no vs rating"
-        title="Their yes/no against the rating they then gave, folded at 4."
+        sub={`Q4 vs Q5 · err ${fmt(results.meanError)}`}
+        title="How often the desirability call landed on the right side of the fold, and the mean |Q4 − Q5| behind it."
       />
       {results.pointingScored !== null && (
         <Stat
           label="Pointed"
           value={`${results.pointingHits}/${results.pointingScored}`}
-          sub="vs what fired"
-          title="Did the intent they pointed at turn out to be the one that answered?"
+          sub={`vs what fired · ${results.dontKnow} unsure`}
+          title="Did the intent they pointed at turn out to be the one that answered? “I don't know” is a real answer and is counted separately, not as a miss."
         />
       )}
       <Stat
-        label="Calibration"
-        value={`${results.saidYes} → ${results.fits}`}
-        sub="said yes → actually fit"
-        title="How many they expected to be right, against how many were (rated 4 or 5). Pass 1 gets no feedback, so every guess is uninformed."
+        label="Confidence"
+        value={fmt(results.meanConfidence)}
+        sub="Q3, of 6"
+        title="Q3 — “I can anticipate how the chatbot will respond”. Read against the two hit rates beside it: that pair is the calibration."
+      />
+      {/* The two quadrants, and the reason they are separate numbers: one is
+          about foresight and one is about their own rule. A block can be clean
+          on the first and full of the second. */}
+      <Stat
+        label="Blind spots"
+        value={String(results.blindSpots)}
+        sub="expected good, wasn’t"
+        tone={results.blindSpots > 0 ? 'warn' : 'plain'}
+        title="Q4 positive and Q5 negative — the failures they did not see coming."
+      />
+      <Stat
+        label="Rule ≠ want"
+        value={String(results.selfModelErrors)}
+        sub="followed setup, still bad"
+        tone={results.selfModelErrors > 0 ? 'warn' : 'plain'}
+        title="Q6 positive and Q5 negative — the response did what their setup said and they still did not want it (code C5)."
       />
     </div>
   );
@@ -797,9 +821,10 @@ function Stat({
 const RATING_TONE: Record<number, string> = {
   1: 'bg-rose-500',
   2: 'bg-orange-400',
-  3: 'bg-amber-300',
-  4: 'bg-emerald-300',
-  5: 'bg-emerald-500',
+  3: 'bg-amber-400',
+  4: 'bg-emerald-200',
+  5: 'bg-emerald-400',
+  6: 'bg-emerald-600',
 };
 
 /** The same scale for a question no rule answered — present, but not claimed. */
@@ -809,14 +834,16 @@ const RATING_TONE_FADED: Record<number, string> = {
   3: 'bg-amber-100',
   4: 'bg-emerald-100',
   5: 'bg-emerald-100',
+  6: 'bg-emerald-100',
 };
 
 /**
- * The eight items as one row of blocks — the block's shape before its detail.
+ * The block's items as one row — its shape before its detail.
  *
- * Fill is the rating, the ring marks a prediction that missed, and a hollow
- * block is a question that reached no rule at all. Reading left to right
- * usually answers "was this a bad configuration or an absent one" on its own.
+ * Fill is Q5, the ring marks a desirability call that landed on the wrong side
+ * of the fold, and a hollow block is a question that reached no rule at all.
+ * Reading left to right usually answers "was this a bad configuration or an
+ * absent one" on its own.
  */
 function ItemStrip({ rows }: { rows: PredictionRow[] }) {
   return (
@@ -826,18 +853,20 @@ function ItemStrip({ rows }: { rows: PredictionRow[] }) {
         return (
           <div key={r.number} className="flex flex-col items-center gap-0.5">
             <span
-              title={`Q${r.number} · rated ${r.rating ?? '—'}/5 · ${
-                noRule ? 'no rule reached' : r.appliedLabel ?? 'answered'
-              }${r.guessMissed ? ' · prediction missed' : ''}`}
+              title={`Q${r.number} · desirable ${r.desirable ?? '—'}/6 · follows setup ${
+                r.follows ?? '—'
+              }/6 · ${noRule ? 'no rule reached' : r.appliedLabel ?? 'answered'}${
+                r.foldMissed ? ' · prediction missed' : ''
+              }`}
               className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold ${
-                r.rating === null
+                r.desirable === null
                   ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
                   : noRule
-                    ? `${RATING_TONE_FADED[r.rating]} text-[hsl(var(--foreground))] border border-dashed border-[hsl(var(--muted-foreground))]`
-                    : `${RATING_TONE[r.rating]} text-white`
-              } ${r.guessMissed ? 'ring-2 ring-offset-1 ring-amber-500' : ''}`}
+                    ? `${RATING_TONE_FADED[r.desirable]} text-[hsl(var(--foreground))] border border-dashed border-[hsl(var(--muted-foreground))]`
+                    : `${RATING_TONE[r.desirable]} text-white`
+              } ${r.foldMissed ? 'ring-2 ring-offset-1 ring-amber-500' : ''}`}
             >
-              {r.rating ?? '·'}
+              {r.desirable ?? '·'}
             </span>
             <span className="text-[8px] text-[hsl(var(--muted-foreground))] tabular-nums">
               {r.number}
@@ -846,7 +875,7 @@ function ItemStrip({ rows }: { rows: PredictionRow[] }) {
         );
       })}
       <span className="ml-2 text-[9px] leading-snug text-[hsl(var(--muted-foreground))]">
-        fill = fit rating · ring = prediction missed
+        fill = Q5 desirable · ring = prediction missed
         <br />
         dashed = no rule reached
       </span>
@@ -856,7 +885,7 @@ function ItemStrip({ rows }: { rows: PredictionRow[] }) {
 
 /** One question: what they said, what fired, and whether either missed. */
 function ItemRow({ row: r }: { row: PredictionRow }) {
-  const miss = r.guessMissed || r.pointingMissed;
+  const miss = r.foldMissed || r.pointingMissed || r.selfModelError;
   return (
     <div
       className={`px-2.5 py-1.5 border-b last:border-b-0 border-[hsl(var(--border))] ${
@@ -865,15 +894,24 @@ function ItemRow({ row: r }: { row: PredictionRow }) {
     >
       <div className="flex items-center gap-1.5 flex-wrap text-[10.5px]">
         <span className="font-bold tabular-nums w-4">{r.number}</span>
-        {r.rating !== null && (
+        {r.desirable !== null && (
           <span
-            className={`w-4 h-4 rounded-sm text-white text-[9px] font-bold flex items-center justify-center ${RATING_TONE[r.rating]}`}
+            title="Q5 — educationally desirable"
+            className={`w-4 h-4 rounded-sm text-white text-[9px] font-bold flex items-center justify-center ${RATING_TONE[r.desirable]}`}
           >
-            {r.rating}
+            {r.desirable}
           </span>
         )}
-        {r.guess !== null && (
-          <Chip tone={r.guessMissed ? 'warn' : 'plain'}>said {r.guess ? 'yes' : 'no'}</Chip>
+        {r.expectDesirable !== null && (
+          <Chip tone={r.foldMissed ? 'warn' : 'plain'}>
+            expected {r.expectDesirable}/6
+            {r.predError !== null && r.predError > 0 ? ` (±${r.predError})` : ''}
+          </Chip>
+        )}
+        {r.follows !== null && (
+          <Chip tone={r.selfModelError ? 'warn' : 'plain'} title="Q6 — follows what I set up">
+            follows {r.follows}/6
+          </Chip>
         )}
         {r.pointedLabel && (
           <Chip tone={r.pointingMissed ? 'warn' : 'plain'}>→ {r.pointedLabel}</Chip>

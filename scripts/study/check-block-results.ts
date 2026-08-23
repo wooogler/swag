@@ -28,15 +28,23 @@ async function main() {
     if (!r) continue;
     const f = (v: number | null) => (v === null ? '—' : v.toFixed(2));
     console.log(`\nBlock ${r.block} · ${r.datasetKey} · ${r.condition}`);
-    console.log(`  mean fit        ${f(r.mean)} of 5   (${r.rated}/${r.total} rated)`);
+    console.log(`  desirable (Q5)  ${f(r.mean)} of 6   (${r.rated}/${r.total} judged)`);
+    console.log(`  follows (Q6)    ${f(r.meanFollows)} of 6`);
     if (r.covered && r.uncovered) {
       console.log(
         `  rule reached    ${f(r.covered.mean)} (n=${r.covered.n})  vs  no rule ${f(r.uncovered.mean)} (n=${r.uncovered.n})`
       );
     }
-    console.log(`  predicted       ${r.predictionHits}/${r.predictionScored}`);
+    console.log(
+      `  predicted       ${r.predictionHits}/${r.predictionScored}  (mean |Q4−Q5| ${f(r.meanError)})`
+    );
     if (r.pointingScored !== null) console.log(`  pointed         ${r.pointingHits}/${r.pointingScored}`);
-    console.log(`  calibration     said yes ${r.saidYes} → actually fit ${r.fits}`);
+    console.log(
+      `  confidence      ${f(r.meanConfidence)} of 6   (${r.dontKnow} × "I don't know")`
+    );
+    console.log(
+      `  quadrants       blind spots ${r.blindSpots} · rule≠want ${r.selfModelErrors}`
+    );
     console.log(
       `  survey          ${r.survey
         .filter((s) => s.value !== null)
@@ -45,7 +53,7 @@ async function main() {
     );
     console.log(
       `  items           ${r.rows
-        .map((x) => `${x.rating ?? '·'}${x.ruleChars === 0 ? '∅' : ''}${x.guessMissed ? '!' : ''}`)
+        .map((x) => `${x.desirable ?? '·'}${x.ruleChars === 0 ? '∅' : ''}${x.foldMissed ? '!' : ''}`)
         .join(' ')}`
     );
   }

@@ -35,7 +35,8 @@ async function main() {
     getTestItems,
     recordPrediction,
     recordProbe,
-    recordRating,
+    probeOpens,
+    recordJudgement,
   } = await import('../../src/lib/study/measure-store');
   type Pointing = import('../../src/lib/study/measure-store').Pointing;
   const { buildChatDeploySnapshot, recordChatDeploy } = await import(
@@ -147,40 +148,55 @@ async function main() {
               ? { kind: 'intent', intentId: firstIntent.id }
               : { kind: i % 3 === 1 ? 'none' : 'not_sure' }
             : i % 2 === 0
-              ? { kind: 'span', start: 0, end: 12, text: (config?.rules ?? 'rules text').slice(0, 12) }
+              ? {
+                  kind: 'span',
+                  spans: [
+                    { start: 0, end: 12, text: (config?.rules ?? 'rules text').slice(0, 12) },
+                    // Two of them, because two is the case the single-span
+                    // shape could not hold.
+                    { start: 20, end: 32, text: (config?.rules ?? 'rules text').slice(20, 32) },
+                  ],
+                }
               : { kind: 'nothing' };
         await recordPrediction({
           participant: current,
           cloneAssignmentId: clone.assignmentId,
           bankItemId: item.bankItemId,
-          expectation: `expects it to handle question ${i + 1} the short way`,
-          guess: i % 2 === 0,
+          ideal: `points them at the criteria for question ${i + 1} without rewriting it`,
           pointing,
+          confidence: ((i * 2) % 6) + 1,
+          expectDesirable: i % 2 === 0 ? 5 : 2,
         });
       }
       const released = (await getTestItems(current, clone)).filter(
         (x) => x.response !== null
       ).length;
-      // Pass 2: rate them all, and answer the probe wherever it opened.
+      // Pass 2: judge them all twice, and answer the probe wherever the two
+      // judgements opened it.
       for (const [i, item] of items.entries()) {
-        const rating = ((i * 2) % 5) + 1;
-        await recordRating({
+        await recordJudgement({
           cloneAssignmentId: clone.assignmentId,
           bankItemId: item.bankItemId,
-          rating,
-          whatsOff: rating <= 3 ? 'too long, and it wrote the sentence for them' : undefined,
+          desirable: ((i * 2) % 6) + 1,
+          follows: ((i * 3) % 6) + 1,
         });
       }
-      const rated = await getTestItems(current, clone);
-      for (const item of rated.filter((x) => x.missed)) {
+      const judged = await getTestItems(current, clone);
+      const opened = judged.filter((x) => probeOpens(x.desirable, x.follows));
+      for (const item of opened) {
         await recordProbe({
           cloneAssignmentId: clone.assignmentId,
           bankItemId: item.bankItemId,
           probe: 'I thought the wording covered it',
+          ...(item.desirable !== null && item.desirable <= 3
+            ? { repair: 'tighten the rule so it says what to do instead' }
+            : {}),
         });
       }
       console.log(
-        `   probe opened on ${rated.filter((x) => x.missed).length} of ${rated.length} item(s)`
+        `   probe opened on ${opened.length} of ${judged.length} item(s), Matched chip on ${
+          judged.filter((x) => x.matched !== null).length
+        }`
       );
       console.log(`   answered ${items.length}, responses released ${released}`);
 

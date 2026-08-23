@@ -135,8 +135,10 @@ async function main() {
       type?: string;
     } | null;
 
-    // Fit ≤3 reads as "not what I intended" (design §6).
-    const met = a.rating === null ? null : a.rating >= 4;
+    // The fold: 1-3 negative, 4-6 positive (BLOCK_TEST v3 §3.3).
+    const negative = (v: number | null) => (v === null ? null : v <= 3);
+    const wanted = negative(a.desirable) === null ? null : !negative(a.desirable);
+    const expected = negative(a.expectDesirable) === null ? null : !negative(a.expectDesirable);
     return {
       participant: participant?.participantNumber ?? '',
       block,
@@ -145,11 +147,23 @@ async function main() {
       bank_item: a.bankItemId,
       query_type: item?.queryType ?? '',
       subtype: item?.subtype ?? '',
-      guess: a.guess === null ? '' : a.guess ? 'yes' : 'no',
-      rating: a.rating ?? '',
-      met_intent: met === null ? '' : met ? 'yes' : 'no',
-      // The RQ2 measure: did the prediction match what they then judged?
-      prediction_correct: a.guess === null || met === null ? '' : a.guess === met ? 1 : 0,
+      // Pass 1 · Q3, Q4. Pass 2 · Q5, Q6. All on the 6-point agreement scale.
+      confidence: a.confidence ?? '',
+      expect_desirable: a.expectDesirable ?? '',
+      desirable: a.desirable ?? '',
+      follows_setup: a.followsSetup ?? '',
+      // RQ2's first measure, in both forms: the signed distance, and whether
+      // the call landed on the right side of the fold.
+      pred_error:
+        a.expectDesirable === null || a.desirable === null
+          ? ''
+          : Math.abs(a.expectDesirable - a.desirable),
+      prediction_correct: expected === null || wanted === null ? '' : expected === wanted ? 1 : 0,
+      // The two quadrants of §1.3 — the same Q5 crossed with two different
+      // axes, which is why they are two columns and not one.
+      blind_spot: expected === null || wanted === null ? '' : expected && !wanted ? 1 : 0,
+      rule_not_want:
+        a.followsSetup === null || wanted === null ? '' : !negative(a.followsSetup) && !wanted ? 1 : 0,
       // SCORE only: which of their own sets answered, or the type default.
       applied_outcome: applied?.outcome ?? '',
       applied_intent_id: applied?.intentId ?? '',
@@ -159,15 +173,16 @@ async function main() {
       // Where they expected it to come from, before they saw it.
       pointed_kind: a.pointedKind ?? '',
       pointed_intent_id: a.pointedIntentId ?? '',
-      pointed_span_start: a.pointedSpanStart ?? '',
-      pointed_span_end: a.pointedSpanEnd ?? '',
+      /** Baseline: how many places in the prompt they pointed at, and their
+       * text. One span or six, it is one answer. */
+      pointed_span_count: Array.isArray(a.pointedSpans) ? a.pointedSpans.length : '',
       pointed_text: a.pointedText ?? '',
       pointing_correct: pointingCorrect(clone?.condition, a, applied),
-      // The three written answers (문항지 §3, 08-15). V3's coding reads
-      // `expectation` against the response; the other two are RQ3 material.
-      expectation: a.expectation ?? '',
-      whats_off: a.whatsOff ?? '',
+      // The written answers. `ideal` is the Desire anchor, coded against the
+      // response; P and F are the §7 codebook's material.
+      ideal: a.ideal ?? '',
       probe: a.probe ?? '',
+      repair: a.repair ?? '',
       generation_outcome: gen?.outcome ?? '',
       guessed_at: a.guessedAt?.toISOString() ?? '',
       pointed_at: a.pointedAt?.toISOString() ?? '',
@@ -176,12 +191,17 @@ async function main() {
   });
   write('block_test.csv', testRows);
 
-  // ── misalignment coding sheet: only the items they said were off ────
-  // The design asks for a human pass over "what's off about it" (v2 §6), and
-  // that pass needs the item beside the prediction that missed it — not a
-  // filter someone has to rebuild in a spreadsheet.
+  // ── the coding sheet: the items a probe opened on ───────────────────
+  // §7's codebook is applied by a human to P and F, and that pass needs the
+  // response beside the prediction it disappointed — not a filter someone has
+  // to rebuild in a spreadsheet. The rows are the ones the probe panel opened
+  // on: Q5 ≤ 3 OR Q6 ≤ 3 (§4 ③).
   const misalignedRows = testRows
-    .filter((r) => typeof r.rating === 'number' && r.rating <= 3)
+    .filter(
+      (r) =>
+        (typeof r.desirable === 'number' && r.desirable <= 3) ||
+        (typeof r.follows_setup === 'number' && r.follows_setup <= 3)
+    )
     .map((r) => ({
       participant: r.participant,
       block: r.block,
@@ -194,21 +214,30 @@ async function main() {
       response: generatedByKey.get(
         `${testAnswers.find((a) => a.bankItemId === r.bank_item)?.cloneAssignmentId}:${r.bank_item}`
       )?.response ?? '',
-      rating: r.rating,
-      guess: r.guess,
+      desirable: r.desirable,
+      follows_setup: r.follows_setup,
+      expect_desirable: r.expect_desirable,
+      confidence: r.confidence,
+      pred_error: r.pred_error,
       prediction_correct: r.prediction_correct,
+      blind_spot: r.blind_spot,
+      rule_not_want: r.rule_not_want,
       pointed_kind: r.pointed_kind,
       pointed_intent_id: r.pointed_intent_id,
+      pointed_span_count: r.pointed_span_count,
       pointed_text: r.pointed_text,
       applied_outcome: r.applied_outcome,
       applied_intent_title: r.applied_intent_title,
       pointing_correct: r.pointing_correct,
       // What they wrote, on the sheet the coding happens on — the whole point
       // of taking these as text was that the coder reads them, not a summary.
-      expectation: r.expectation,
-      whats_off: r.whats_off,
+      ideal: r.ideal,
       probe: r.probe,
-      misalignment_type: '', // filled by the coder
+      repair: r.repair,
+      // §7 C1-C6, and the F dimensions. Filled by the coder.
+      misalignment_code: '',
+      repair_target: '',
+      repair_scope: '',
       note: '',
     }));
   write('misalignment.csv', misalignedRows);
@@ -222,6 +251,11 @@ async function main() {
     const key = `${r.participant}|${r.block}`;
     byBlock.set(key, [...(byBlock.get(key) ?? []), r]);
   }
+  /** Mean over the values that are actually there — '' is not a zero. */
+  const mean = (values: (number | string)[]): number | '' => {
+    const nums = values.filter((v): v is number => typeof v === 'number');
+    return nums.length === 0 ? '' : Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100;
+  };
   const calibrationRows = [...byBlock.values()]
     .filter((rows) => rows.length > 0)
     .map((rows) => {
@@ -233,13 +267,22 @@ async function main() {
         condition: rows[0].condition,
         dataset: rows[0].dataset,
         items: rows.length,
-        guessed_yes: rows.filter((r) => r.guess === 'yes').length,
-        met_intent: rows.filter((r) => r.met_intent === 'yes').length,
+        // Means over the block, on the 6-point scale.
+        mean_desirable: mean(rows.map((r) => r.desirable)),
+        mean_follows: mean(rows.map((r) => r.follows_setup)),
+        mean_confidence: mean(rows.map((r) => r.confidence)),
+        mean_error: mean(rows.map((r) => r.pred_error)),
         prediction_correct: scored.filter((r) => r.prediction_correct === 1).length,
         prediction_scored: scored.length,
         pointing_correct: pointed.filter((r) => r.pointing_correct === 1).length,
         pointing_scored: pointed.length,
-        not_sure: rows.filter((r) => r.pointed_kind === 'not_sure').length,
+        // The two quadrant cells worth counting per block, and the coverage
+        // signal: "I don't know" is a real answer to Q2, not a missing one.
+        blind_spots: rows.filter((r) => r.blind_spot === 1).length,
+        rule_not_want: rows.filter((r) => r.rule_not_want === 1).length,
+        dont_know: rows.filter((r) => r.pointed_kind === 'not_sure').length,
+        /** Baseline: how scattered the pointing was, averaged over the block. */
+        mean_spans: mean(rows.map((r) => r.pointed_span_count)),
       };
     });
   write('block_summary.csv', calibrationRows);
