@@ -2,9 +2,9 @@
  * Which questions each definition describes.
  *
  * The same judge the full version uses (rateMessageIntents — one call per
- * question covering every definition that needs one, with the deterministic
- * material/request split fed in as context), with one difference that matters:
- * the cache is keyed by the definition TEXT, not by an intent row.
+ * (question, definition), with the deterministic material/request split fed in
+ * as context), with one difference that matters: the cache is keyed by the
+ * definition TEXT, not by an intent row.
  *
  * That key is the whole performance story of this version (§6.2). Editing one
  * definition re-rates that definition and nothing else. Reordering the tree,
@@ -38,7 +38,7 @@ import {
   type PromptDissection,
   type RatingLevel,
 } from '@/lib/score/intents';
-import { MAX_INTENTS_PER_CALL } from '@/lib/score/intent-prompts';
+import { chunkForRating, MAX_INTENTS_PER_CALL } from '@/lib/score/intent-prompts';
 import { logStudyEvent } from '../events';
 
 /** Same budget shape as the full version's rating route. */
@@ -272,14 +272,18 @@ export async function judgeBatch(args: {
     doneByHash.set(row.defHash, set);
   }
 
-  // One call per QUESTION covering every definition that still needs it, which
-  // is what makes a full first pass cost one call per question rather than one
-  // per pair.
+  // One call per (QUESTION, DEFINITION). It used to be one per question
+  // covering every definition that still needed it, which was cheaper and
+  // wrong: the verdict moved with how many definitions rode along in the call
+  // (INTENTS_PER_RATING_CALL carries the numbers), so a participant with four
+  // definitions got stricter verdicts than one with two, and both got looser
+  // ones than the prepared sets they adopt from. A definition has to be judged
+  // on its own words or the board is not showing what its words catch.
   const priority = new Map((args.priorityMessageIds ?? []).map((id, i) => [id, i]));
   const outstanding: { record: QueryRecord; tasks: DefinitionTask[] }[] = [];
   for (const record of records) {
     const missing = tasks.filter((t) => !doneByHash.get(t.defHash)?.has(record.messageId));
-    if (missing.length > 0) outstanding.push({ record, tasks: missing });
+    for (const chunk of chunkForRating(missing)) outstanding.push({ record, tasks: chunk });
   }
   outstanding.sort((a, b) => {
     const pa = priority.get(a.record.messageId) ?? Number.MAX_SAFE_INTEGER;
@@ -371,7 +375,10 @@ export async function judgeBatch(args: {
       definitions: tasks.length,
       rated: ratedThisBatch,
       remaining: total - ratedPairs,
-      questions: batch.length,
+      // Distinct questions touched, not batch.length — a batch entry is now one
+      // (question, definition) call, so the two stopped being the same number.
+      questions: new Set(batch.map((b) => b.record.messageId)).size,
+      calls: batch.length,
     });
   }
 

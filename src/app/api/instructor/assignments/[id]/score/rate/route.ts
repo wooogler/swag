@@ -4,8 +4,9 @@
  * Same client-driven batch contract as classify/route.ts: POST processes a
  * call-bounded batch and reports remaining; the client loops until 0.
  *
- * One LLM call covers ONE message: dissection (only when stale) + ratings for
- * every stale intent of that message. Staleness is per (message, intent) via
+ * One LLM call covers ONE (message, intent) pair — see INTENTS_PER_RATING_CALL
+ * for the measurement that forced that, and why the batch below is bounded by
+ * calls rather than by messages. Staleness is per (message, intent) via
  * intentDefHash — editing one intent (or its pins) re-rates only that intent.
  * Exclusive assignment is NOT stored: it is derived at read time by the
  * deterministic resolver (intents.ts), so link edits re-assign instantly with
@@ -48,6 +49,7 @@ import {
   type MaterialSpan,
   type PromptDissection,
 } from '@/lib/score/intents';
+import { chunkForRating } from '@/lib/score/intent-prompts';
 import { createLimiter, SCORE_CONCURRENCY } from '@/lib/score/limiter';
 import { getDefaultScoreModel } from '@/lib/score/models';
 import { ensureScoreTable, getQueryRecords, type QueryRecord } from '@/lib/score/queries';
@@ -515,10 +517,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     body.messageIds ?? null
   );
 
-  // Call-bounded batch: 1 call per message job (always at least one job so we
-  // make progress even when a single job exceeds the leftover budget).
+  // Call-bounded batch. A rating call now carries ONE intent
+  // (INTENTS_PER_RATING_CALL), so a single message can be thirty calls and
+  // slicing by message count would make a POST's real size depend on how many
+  // intents happened to go stale. Count the calls instead — and always take at
+  // least one job, so a job bigger than the whole budget still makes progress
+  // rather than deadlocking the client's loop.
   const messageLimit = body.limit ?? DEFAULT_MESSAGE_LIMIT;
-  const batch = status.jobs.slice(0, Math.min(messageLimit, CALLS_PER_BATCH));
+  const batch: MessageJob[] = [];
+  let plannedCalls = 0;
+  for (const job of status.jobs) {
+    if (batch.length >= messageLimit) break;
+    const calls = chunkForRating(job.staleIntents).length + (job.needsType ? 1 : 0);
+    if (batch.length > 0 && plannedCalls + calls > CALLS_PER_BATCH) break;
+    batch.push(job);
+    plannedCalls += calls;
+  }
 
   const now = new Date();
 
@@ -570,6 +584,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // judgment (see type-classifier.ts: keeping the rating prompt byte-identical
   // is what avoids an INTENT_RATING_VERSION bump).
   const ratingJobs = batch.filter((j) => j.staleIntents.length > 0);
+  // One entry per CALL, not per message: the same job appears once for each of
+  // its stale intents.
+  const ratingCalls = ratingJobs.flatMap((job) =>
+    chunkForRating(job.staleIntents).map((intents) => ({ job, intents }))
+  );
   const typeJobs = batch.filter((j) => j.needsType);
   let failed = 0;
   const limit = createLimiter(SCORE_CONCURRENCY);
@@ -654,7 +673,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   await Promise.all([
     ...typeWave,
-    ...ratingJobs.map((job) =>
+    ...ratingCalls.map(({ job, intents }) =>
       limit(async () => {
         const rec = job.record;
         try {
@@ -662,7 +681,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             queryText: rec.queryText,
             prevQueryText: rec.prevQueryText,
             prevResponseText: rec.prevResponseText,
-            intents: job.staleIntents.map((p) => ({
+            intents: intents.map((p) => ({
               id: p.intent.id,
               definition: p.intent.definition,
             })),
@@ -673,7 +692,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
           const writes: Promise<unknown>[] = [];
           let ratingWrites = 0;
-          for (const p of job.staleIntents) {
+          for (const p of intents) {
             const rating = result.ratings.get(p.intent.id);
             if (!rating) continue; // invalid/missing → stays stale, retried next POST
             ratingWrites += 1;
@@ -754,6 +773,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
   }
   return NextResponse.json({
+    // processed/succeeded are MESSAGES (the progress bar's unit); `failed`
+    // counts CALLS, and one message is now one call per stale intent, so the
+    // two are no longer on the same denominator. Deliberate: a message where 29
+    // of 30 ratings landed has both progressed and lost something, and the
+    // client's stall detector keys off `succeeded`, which stays per-message.
     processed: batch.length,
     succeeded,
     failed,

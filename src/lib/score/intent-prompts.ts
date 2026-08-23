@@ -174,3 +174,39 @@ export function buildIntentSchema(intentIds: number[], includeDissection: boolea
 /** Sanity cap: keep a single call's intent list from blowing up the prompt.
  * v6 assumes a small intent space (~dozens); warn-level guard only. */
 export const MAX_INTENTS_PER_CALL = 40;
+
+/**
+ * How many intents one rating call may carry.
+ *
+ * ONE — and that is a measurement, not a preference. RATING_INSTRUCTIONS above
+ * tells the judge to rate each intent strictly by ITS OWN definition and not to
+ * balance ratings across them. It does not. Measured on 15 questions × 30
+ * starter definitions with nothing changed but the batching:
+ *
+ *     intents/call     1      3      5     10     30
+ *     rated IN     25.8%  22.2%  18.2%  11.1%  10.4%   (effort 'none')
+ *                  21.1%  17.1%  14.4%  10.9%   7.3%   (effort 'low')
+ *
+ * Monotonic, 2.5× end to end, and raising the effort does not flatten it. A
+ * verdict that moves with how many OTHER definitions happened to be stale in
+ * the same call is not a verdict about the definition — and it put the study's
+ * two paths on different points of that curve, since prepared sets were rated
+ * 30-at-a-time while a participant's own two or three definitions go
+ * 3-at-a-time. Adopting a starter therefore looked stricter than writing the
+ * same thing yourself.
+ *
+ * The cost is calls: a message with N stale intents now takes N of them.
+ * Callers bound their batches by CALL count rather than message count for that
+ * reason, and one intent's prompt is small enough that the system half — the
+ * shared instructions, which dominate it — stays prompt-cached across the fan.
+ */
+export const INTENTS_PER_RATING_CALL = 1;
+
+/** Split one message's stale intents into the calls that will rate them. */
+export function chunkForRating<T>(intents: T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < intents.length; i += INTENTS_PER_RATING_CALL) {
+    out.push(intents.slice(i, i + INTENTS_PER_RATING_CALL));
+  }
+  return out;
+}
