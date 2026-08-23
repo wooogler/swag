@@ -240,8 +240,14 @@ export const INTENT_RATING_VERSION = RATING_VERSION_BY_MODE[MATERIAL_PROMPT_MODE
  * v5: a chat paste is attributed by CONTENT, not by the recorded area. The
  *     paste log's 'chat' means "from the chat panel" — the bot's replies, the
  *     student's own turns and the input box alike — so it used to label every
- *     one of them a bot reply; the student's own turns are now their own kind. */
-export const DISSECTION_VERSION = 5;
+ *     one of them a bot reply; the student's own turns are now their own kind.
+ * v6: SEAM ORPHANS are no longer requests (dissect.ts, isSeamOrphan). A run's
+ *     last clause left outside it ("future.") used to be reported as the
+ *     student's typed request, and the rating prompt states that split as
+ *     authoritative — so a message that is pure pasted material was claimed by
+ *     whichever intent the orphan happened to look like. Measured on the
+ *     "Complete Text" definition: 6/6 clearly_in before, 0/6 after. */
+export const DISSECTION_VERSION = 6;
 
 /* ------------------------------------------------------------------ */
 /* v7 type layer                                                       */
@@ -357,10 +363,19 @@ export function selectPromptPins(pins: PromptPin[]): PromptPin[] {
 
 /**
  * Content hash of everything that affects one intent's rating in isolation:
- * the shared rating-prompt version + the intent definition. Mirrors
- * subtypeDefHash in config.ts — deliberately independent of SIBLING intents,
- * so editing one intent re-rates only that intent. Stored on each
- * (message, intent) rating row; mismatch vs the current config means "re-rate".
+ * the shared rating-prompt version, the DISSECTION version, and the intent
+ * definition. Mirrors subtypeDefHash in config.ts — deliberately independent of
+ * SIBLING intents, so editing one intent re-rates only that intent. Stored on
+ * each (message, intent) rating row; mismatch vs the current config means
+ * "re-rate".
+ *
+ * The dissection is in here because it is PART OF THE PROMPT: renderDissection
+ * puts the Material/Request split in front of the judge as authoritative, so a
+ * change to how the split is computed changes what the judge reads exactly as
+ * a reworded instruction would. It used not to be, and the v5→v6 seam-orphan
+ * fix is what that cost: the dissector's output changed under 122k cached
+ * verdicts, every one of them stayed marked fresh, and the wrong ones were
+ * copied on into every study clone by seedFromPreparedSets.
  *
  * Labels are NOT in here any more. They used to be, because they were
  * few-shot examples in the prompt — and hashing them meant the hash depended
@@ -370,7 +385,9 @@ export function selectPromptPins(pins: PromptPin[]): PromptPin[] {
  * hash sees, which is also the only thing the judge sees.
  */
 export function intentDefHash(definition: string): string {
-  return stableHash(JSON.stringify([`r${INTENT_RATING_VERSION}`, definition]));
+  return stableHash(
+    JSON.stringify([`r${INTENT_RATING_VERSION}`, `d${DISSECTION_VERSION}`, definition])
+  );
 }
 
 /* ------------------------------------------------------------------ */

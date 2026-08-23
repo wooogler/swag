@@ -28,6 +28,66 @@ const FALLBACK_STEP = 12;
 const GAP_MERGE = 24; // merge material spans separated by ≤ this (window/step slack)
 const MIN_REQUEST = 6; // drop request gaps shorter than this once trimmed
 
+/** Words a leftover clause can be and still be one.
+ *
+ * The split errs at the SEAM of a pasted run: the run's last clause ends up
+ * outside it ("future.", "that make us human.", "jobs that"), and a bare clause
+ * sitting beside a Material marker reads as an imperative — the judge then
+ * rates a request the student never typed, and a message that is pure pasted
+ * material gets claimed by an intent. The rating prompt already describes the
+ * shape (intent-prompts.ts, MATERIAL_NOTATION) and asks the model to see
+ * through it; this drops it at the source instead, so `requests` is empty and
+ * the prompt's no-request rule applies with nothing to argue against. */
+const MAX_ORPHAN_WORDS = 4;
+
+/** What makes a SHORT segment a real ask rather than a leftover clause. These
+ * are the openers of the short referential asks the dissection has to keep —
+ * "make it longer", "keep going", "is this better" — so the guard below can be
+ * blind to everything else about the words. */
+const REQUEST_OPENER =
+  /^(add|again|are|be|can|check|complete|continue|could|do|does|expand|explain|finish|fix|give|help|how|is|keep|less|make|more|please|rephrase|review|reword|rewrite|shorten|should|show|summarize|translate|try|use|what|when|where|which|who|why|write)\b/i;
+
+const SENTENCE_END = /[.!?:;]["'’”)]?$/;
+
+/**
+ * Is this gap the tail (or head) of the pasted run beside it, rather than
+ * something the student typed?
+ *
+ * Shape decides it, because shape is all the seam leaves behind: a short
+ * segment that runs INTO its neighbouring material with no sentence boundary
+ * between the two. A segment on its own line, one that closes a sentence
+ * before the paste begins ("This is my essay:"), or one that opens like an
+ * instruction is the student writing, and is kept.
+ */
+function isSeamOrphan(
+  text: string,
+  /** The gap WITH its whitespace — a line break beside it is the evidence that
+   * the student started something of their own. */
+  raw: string,
+  prevEnd: number | null,
+  hasNext: boolean
+): boolean {
+  const seg = raw.trim();
+  if (seg.split(/\s+/).length > MAX_ORPHAN_WORDS) return false;
+  // The opener list is written in plain stems, so a contraction has to be
+  // normalised before it is consulted — "shouldn't this be: …" is an ask, and
+  // one that leads straight into the paste it is asking about.
+  if (REQUEST_OPENER.test(seg.replace(/^([A-Za-z]+)n['’]t\b/, '$1'))) return false;
+  if (seg.includes('?')) return false;
+  // Continues the run before it: nothing but spaces between them, and that run
+  // stopped mid-sentence.
+  const lead = raw.slice(0, raw.length - raw.trimStart().length);
+  if (prevEnd !== null && !lead.includes('\n')) {
+    if (!SENTENCE_END.test(text.slice(0, prevEnd).trimEnd())) return true;
+  }
+  // Runs into the run after it: the segment itself does not close a sentence.
+  const trail = raw.slice(raw.trimEnd().length);
+  if (hasNext && !trail.includes('\n')) {
+    if (!SENTENCE_END.test(seg)) return true;
+  }
+  return false;
+}
+
 function normalize(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
@@ -192,21 +252,25 @@ function mergeRuns(spans: Span[], gap: number): Span[] {
 
 /** Requests = the material-free segments of the ORIGINAL text (verbatim), so the
  * viewer can locate each with a plain substring search. Fragments (too short or
- * word-less) are dropped. */
+ * word-less) are dropped, and so are the seam orphans above — a message that is
+ * pure pasted material must report NO request rather than its own last clause. */
 function gapsToRequests(text: string, spans: Span[]): string[] {
   const reqs: string[] = [];
   let cursor = 0;
+  let prevEnd: number | null = null;
+  const take = (start: number, end: number, hasNext: boolean) => {
+    const raw = text.slice(start, end);
+    const seg = raw.trim();
+    if (seg.length < MIN_REQUEST || !/\w/.test(seg)) return;
+    if (isSeamOrphan(text, raw, prevEnd, hasNext)) return;
+    reqs.push(seg);
+  };
   for (const s of spans) {
-    if (s.start > cursor) {
-      const seg = text.slice(cursor, s.start).trim();
-      if (seg.length >= MIN_REQUEST && /\w/.test(seg)) reqs.push(seg);
-    }
+    if (s.start > cursor) take(cursor, s.start, true);
     cursor = Math.max(cursor, s.end);
+    prevEnd = cursor;
   }
-  if (cursor < text.length) {
-    const seg = text.slice(cursor).trim();
-    if (seg.length >= MIN_REQUEST && /\w/.test(seg)) reqs.push(seg);
-  }
+  if (cursor < text.length) take(cursor, text.length, false);
   return reqs;
 }
 
