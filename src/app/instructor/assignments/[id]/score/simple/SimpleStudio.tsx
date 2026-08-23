@@ -998,7 +998,8 @@ export default function SimpleStudio({
         owners={state.owners}
         seedPrompt={seedPrompt}
         atTip={state.atTip}
-        moments={state.moments}
+        intentVersions={state.intentVersions}
+        unsavedSids={state.unsavedSids}
         viewingVersionNo={state.viewing?.versionNo ?? null}
         localVersionNo={localVersionNo}
         setLocalVersionNo={setLocalVersionNo}
@@ -1117,7 +1118,7 @@ function ConfigColumn({
         {readOnly && (
           <div className="sticky top-9 z-10 px-3 py-2 bg-[hsl(var(--muted))] border-b border-[hsl(var(--border))] flex items-center justify-between gap-2">
             <span className="text-xs text-[hsl(var(--muted-foreground))]">
-              Looking at v{state.viewing?.displayNo}. Editing happens on the latest one.
+              Looking at setup {state.viewing?.displayNo}. Editing happens on the latest one.
             </span>
             {/* The two things to do about it are beside the list that put the
                 board here — this row only has to say where "here" is. */}
@@ -1143,9 +1144,6 @@ function ConfigColumn({
             applied={state.snapshot}
             matchesNow={state.matchesNow ?? {}}
             takeableFrom={takeableFrom}
-            /* One axis for the whole board: the next save's number, which is
-               what the reply's picker will call it too. */
-            nextVersionNo={(state.versions[0]?.displayNo ?? 0) + 1}
             pendingName={state.dirty ? state.moments[0]?.name ?? null : null}
             draft={draft}
             setDraft={setDraft}
@@ -1272,7 +1270,6 @@ function Tree({
   unsaved,
   applied,
   matchesNow,
-  nextVersionNo,
   takeableFrom,
   pendingName,
   draft,
@@ -1309,8 +1306,6 @@ function Tree({
   applied: SimpleSnapshot;
   /** sid → what its wording catches right now. */
   matchesNow: Record<string, number | null>;
-  /** What the next save will be called. */
-  nextVersionNo: number;
   /** The questions an intent read before this row could take. */
   takeableFrom: (beforeSid: number | null) => number[];
   draft: SimpleSnapshot;
@@ -1609,8 +1604,7 @@ function Tree({
               api={api}
               ruleSources={ruleSources(intent.sid)}
               versions={intentVersions[String(intent.sid)] ?? []}
-              nextVersionNo={nextVersionNo}
-              onView={onView}
+                onView={onView}
               viewingVersionNo={viewingVersionNo}
               viewingLabel={viewingLabel}
               onRestore={onRestore}
@@ -1788,7 +1782,6 @@ function Tree({
           )}
           <IntentHistory
             versions={intentVersions['0'] ?? []}
-            nextVersionNo={nextVersionNo}
             pending={pendingFor(0)}
             onView={onView}
             viewingVersionNo={viewingVersionNo}
@@ -1858,7 +1851,6 @@ function Accordion({
   api,
   ruleSources,
   versions,
-  nextVersionNo,
   onView,
   viewingVersionNo,
   viewingLabel,
@@ -1882,8 +1874,6 @@ function Accordion({
   ruleSources: RuleSource[];
   /** This intent's own history, newest first. */
   versions: IntentVersion[];
-  /** What the next save will be called. */
-  nextVersionNo: number;
   /** Show the whole board as it was in a version, or the newest when null. */
   onView: (configVersionNo: number | null) => void;
   /** Which version the board is showing, or null when it is on the newest. */
@@ -1994,7 +1984,6 @@ function Accordion({
           hidden behind a number. */}
       <IntentHistory
         versions={versions}
-        nextVersionNo={nextVersionNo}
         pending={pending}
         onView={onView}
         viewingVersionNo={viewingVersionNo}
@@ -3061,7 +3050,8 @@ function ViewerColumn({
   owners,
   seedPrompt,
   atTip,
-  moments,
+  intentVersions,
+  unsavedSids,
   viewingVersionNo,
   localVersionNo,
   setLocalVersionNo,
@@ -3079,8 +3069,10 @@ function ViewerColumn({
   owners: Record<string, Owner>;
   seedPrompt: string;
   atTip: boolean;
-  /** Every version, newest first. */
-  moments: SimpleVersion[];
+  /** sid → that intent's own history, newest first ('0' = the else-rule). */
+  intentVersions: Record<string, IntentVersion[]>;
+  /** Which intents have a wording applied and not saved. */
+  unsavedSids: number[];
   viewingVersionNo: number | null;
   localVersionNo: number | 'original' | null;
   setLocalVersionNo: (v: number | 'original' | null) => void;
@@ -3109,7 +3101,13 @@ function ViewerColumn({
   // "As delivered" is not a version, so it resolves to no version at all and
   // short-circuits the round trip: the reply it asks for is already below.
   const asDelivered = localVersionNo === 'original';
-  const versionNo = askedVersionNo({ pick: localVersionNo, atTip, viewingVersionNo });
+  /** A wording chosen off the answering intent's own list, by row id. */
+  const pickedVersionId = typeof localVersionNo === 'number' ? localVersionNo : null;
+  const versionNo = askedVersionNo({
+    pick: pickedVersionId != null ? null : localVersionNo,
+    atTip,
+    viewingVersionNo,
+  });
 
   /**
    * The rule this reply came out of.
@@ -3131,11 +3129,11 @@ function ViewerColumn({
    * Null means "not known without asking", not "no rule".
    */
   const knownRule = useMemo(() => {
-    if (!row || !atTip || versionNo != null) return null;
+    if (!row || !atTip || versionNo != null || pickedVersionId != null) return null;
     const owner = owners[String(row.messageId)];
     if (snapshot.arm === 'score' && (!owner || owner.outcome === 'pending')) return null;
     return ruleForOwner(snapshot, snapshot.arm === 'score' ? owner?.sid ?? null : null);
-  }, [atTip, owners, row, snapshot, versionNo]);
+  }, [atTip, owners, pickedVersionId, row, snapshot, versionNo]);
 
   /**
    * Whether the answer here IS the delivered one.
@@ -3199,7 +3197,9 @@ function ViewerColumn({
       const res = await fetch(
         api(
           'respond',
-          `messageId=${row.messageId}${versionNo != null ? `&versionNo=${versionNo}` : ''}`
+          `messageId=${row.messageId}${versionNo != null ? `&versionNo=${versionNo}` : ''}${
+            pickedVersionId != null ? `&intentVersionId=${pickedVersionId}` : ''
+          }`
         )
       );
       if (!res.ok || cancelled) return;
@@ -3209,7 +3209,7 @@ function ViewerColumn({
     return () => {
       cancelled = true;
     };
-  }, [api, knownRule, row, versionNo]);
+  }, [api, knownRule, pickedVersionId, row, versionNo]);
 
   useEffect(() => {
     if (!row) {
@@ -3258,7 +3258,7 @@ function ViewerColumn({
         const res = await fetch(api('respond'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messageId, versionNo }),
+          body: JSON.stringify({ messageId, versionNo, intentVersionId: pickedVersionId }),
           signal: controller.signal,
         });
         if (!res.ok) {
@@ -3319,7 +3319,7 @@ function ViewerColumn({
     })();
 
     return () => controller.abort();
-  }, [api, asDelivered, knownOriginal, owners, row, snapshot.arm, versionNo]);
+  }, [api, asDelivered, knownOriginal, owners, pickedVersionId, row, snapshot.arm, versionNo]);
 
   if (!row) {
     return (
@@ -3373,9 +3373,12 @@ function ViewerColumn({
             // full version puts the same picker on the same reply, for the
             // same reason.
             <ReplyVersionBar
-              moments={moments}
+              /* The wordings THIS intent has had. A whole configuration is a
+                 different count and lives on the left; what a reader wants
+                 here is "what did this rule say before". */
+              versions={intentVersions[String(ownerSidNow ?? 0)] ?? []}
+              unsaved={unsavedSids.includes(ownerSidNow ?? 0)}
               pick={localVersionNo}
-              current={versionNo}
               /* What is known at RENDER beats what an effect is about to set.
                  The effect runs after the paint, so on the frame a new
                  question arrives the answer still belongs to the old one and
@@ -3420,36 +3423,37 @@ function ViewerColumn({
  * question that was selected; the turns around it are context, delivered as
  * they were. The full version puts the same picker in the same place.
  *
- * EVERY version is offered, not only the saves. The timeline on the left is a
- * list of places to go back to, and only a save is one of those; this is a
- * list of moments to look at, and an apply is as much a moment as a save —
- * most of the moments an intent's own history points at ARE applies, and
- * listing only saves meant a wording that history offered could not be looked
- * at.
+ * WHAT IT OFFERS IS THIS INTENT'S OWN WORDINGS — v1, v2, the same numbers its
+ * card carries. The whole configuration is counted too, but that count is the
+ * left column's business; the question here is "what did this rule say
+ * before", and answering it with a configuration number made the reader map
+ * one onto the other in their head.
  *
- * A save reads "v3 · what it did". What is applied on top of the newest save
- * has no number, because an apply is not a version — it reads "Now (unsaved)",
- * which is also what the tree and the card say about it.
+ * What is applied on top of the newest save has no number, because an apply is
+ * not a version — it reads "Now (unsaved)", which is what the tree and the card
+ * say about it too.
  *
  * "Original (as delivered)" is not a version and is offered as its own answer:
  * it is the reply the student was actually given, which no configuration can
  * produce and which is the only fixed point to compare the rest against.
  */
 function ReplyVersionBar({
-  moments,
+  versions,
+  unsaved,
   pick,
-  current,
   state,
   owner,
   ownerSid,
   rule,
   onPick,
 }: {
-  moments: SimpleVersion[];
-  /** What was chosen here: a version, the delivered reply, or nothing yet. */
+  /** This intent's own history, newest first. */
+  versions: IntentVersion[];
+  /** Its wording is applied and not saved, which is a thing to look at too. */
+  unsaved: boolean;
+  /** What was chosen here: one of those rows by id, the delivered reply, or
+   * nothing — which means whatever is in effect. */
   pick: number | 'original' | null;
-  /** The version actually in force, once `pick` has been resolved. */
-  current: number | null;
   state: 'idle' | 'streaming' | 'ready' | 'pending' | 'failed' | 'original';
   owner: string | null;
   /** Which intent that name belongs to, for the colour it carries in the
@@ -3491,7 +3495,13 @@ function ReplyVersionBar({
   const value =
     pick === 'original' || (pick == null && asDelivered)
       ? 'original'
-      : String(current ?? moments[0]?.versionNo ?? '');
+      : pick != null
+        ? String(pick)
+        : // Nothing chosen: what is in effect, which is the unsaved wording
+          // when there is one and otherwise the newest saved.
+          unsaved
+          ? 'now'
+          : String(versions[0]?.id ?? 'now');
 
   /**
    * And when there is nothing else this reply could be, no box at all.
@@ -3502,7 +3512,7 @@ function ReplyVersionBar({
    * moment is where a real comparison begins, because an older one may have
    * caught this question when the newest does not.
    */
-  const nothingToCompare = asDelivered && pick == null && moments.length <= 1;
+  const nothingToCompare = asDelivered && pick == null && versions.length <= 1 && !unsaved;
   if (nothingToCompare) {
     return (
       <p className="mb-1 text-2xs text-[hsl(var(--muted-foreground))]">
@@ -3511,7 +3521,10 @@ function ReplyVersionBar({
     );
   }
   return (
-    <div className="mb-1">
+    /* w-full, because the column it sits in lays its children out from the
+       start edge: without it this block is as wide as its widest line, and a
+       short rule left the box stopping halfway across the reply it explains. */
+    <div className="mb-1 w-full">
     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs text-[hsl(var(--muted-foreground))]">
       {state === 'streaming' && <Loader2 className="w-3 h-3 shrink-0 animate-spin" />}
       <span>
@@ -3526,17 +3539,21 @@ function ReplyVersionBar({
         onChange={(e) => {
           const next = e.target.value;
           if (next === 'original') return onPick('original');
-          const no = Number(next);
-          onPick(no === moments[0]?.versionNo ? null : no);
+          // "now" and the newest saved row both mean "whatever is in effect",
+          // which is the state that needs no version named for it.
+          if (next === 'now') return onPick(null);
+          const id = Number(next);
+          onPick(!unsaved && id === versions[0]?.id ? null : id);
         }}
         className="rounded border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5 text-2xs font-medium text-[hsl(var(--foreground))]"
       >
-        {/* A save is "v3 · what it did"; the applied-but-unsaved state has no
+        {/* A save is "v3 · what it did"; what is applied on top of it has no
             number because it is not a version. The name is what someone is
             scanning for — the number only says where it sits. */}
-        {moments.map((v) => (
-          <option key={v.id} value={v.versionNo}>
-            {v.kind === 'save' ? `v${v.displayNo}` : 'Now (unsaved)'}
+        {unsaved && <option value="now">Now (unsaved)</option>}
+        {versions.map((v) => (
+          <option key={v.id} value={v.id}>
+            v{v.versionNo}
             {v.name ? ` · ${v.name}` : ''}
           </option>
         ))}

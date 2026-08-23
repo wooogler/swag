@@ -23,6 +23,12 @@
  * the button row above. Everything older is one click away, which is the right
  * price for a question people ask far less often.
  *
+ * NUMBERED PER INTENT. v1 is this intent's first wording, whatever the rest of
+ * the setup had done by then, and a new intent starts at v1 on a board that
+ * has saved ten times. The whole setup has its own count — the reply's picker
+ * and the banner call those "setup 3" — because two things counting different
+ * runs of events cannot both be "v".
+ *
  * A version is the WHEN and the THEN together. They are one thought here, and
  * the same rule text can be right or wrong depending on what it was scoped to,
  * so restoring one without the other would hand back a half-sentence.
@@ -116,7 +122,6 @@ function ago(iso: string, now: number): string {
 
 export default function IntentHistory({
   versions,
-  nextVersionNo,
   pending = null,
   onView,
   viewingVersionNo = null,
@@ -124,9 +129,6 @@ export default function IntentHistory({
   viewingLabel = null,
 }: {
   versions: IntentVersion[];
-  /** What the next save will be called — the timeline's number, not a private
-   * count of this intent's own edits. */
-  nextVersionNo: number;
   /**
    * There is something applied and not saved for this intent.
    *
@@ -176,7 +178,9 @@ export default function IntentHistory({
       ? [
           {
             key: 'pending',
-            versionNo: nextVersionNo,
+            // This intent's next, not the setup's: the number belongs to the
+            // wording, and a save writes at most one per intent.
+            versionNo: (versions[0]?.versionNo ?? 0) + 1,
             definition: '',
             rule: '',
             matches: pending.matches,
@@ -192,7 +196,7 @@ export default function IntentHistory({
       : []),
     ...versions.map((v) => ({
       key: String(v.id),
-      versionNo: v.displayNo ?? v.versionNo,
+      versionNo: v.versionNo,
       definition: v.definition,
       rule: v.rule,
       name: v.name,
@@ -355,7 +359,7 @@ function RestoreVersion({ to, onRestore }: { to: number; onRestore: () => void }
       <button
         type="button"
         onClick={() => setAsking(true)}
-        title={`Make v${to} the newest again, dropping everything saved or applied after it`}
+        title={`Make setup ${to} the newest again, dropping everything saved or applied after it`}
         className="shrink-0 rounded border border-[hsl(var(--border))] px-2 py-0.5 text-2xs font-semibold hover:bg-[hsl(var(--muted))]"
       >
         Restore
@@ -365,7 +369,7 @@ function RestoreVersion({ to, onRestore }: { to: number; onRestore: () => void }
   return (
     <span className="flex shrink-0 items-center gap-1.5">
       <span className="text-2xs text-[hsl(var(--muted-foreground))]">
-        Back to v{to}, dropping what came after — the whole setup?
+        Back to setup {to}, dropping what came after?
       </span>
       <button
         type="button"

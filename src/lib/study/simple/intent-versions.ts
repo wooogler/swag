@@ -273,6 +273,26 @@ export async function currentMatches(
   return out;
 }
 
+/**
+ * One stored version by its id, for answering a question under it.
+ *
+ * The reply's picker offers an intent's own wordings, so the rule it asks for
+ * is named by a row rather than by a whole configuration. Scoped to the
+ * assignment: an id from somewhere else is not a rule this board may run.
+ */
+export async function getIntentVersion(
+  assignmentId: string,
+  id: number
+): Promise<{ sid: number; versionNo: number; definition: string; rule: string } | null> {
+  const [row] = await db
+    .select()
+    .from(simpleIntentVersions)
+    .where(and(eq(simpleIntentVersions.assignmentId, assignmentId), eq(simpleIntentVersions.id, id)));
+  return row
+    ? { sid: row.sid, versionNo: row.versionNo, definition: row.definition, rule: row.rule }
+    : null;
+}
+
 /** The version immediately before this one, for naming its diff. */
 export async function previousIntentVersion(
   assignmentId: string,

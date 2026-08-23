@@ -8,7 +8,9 @@
  *
  * Which rule applies is resolved HERE, from the same chain compiler the board
  * draws with, so what is shown is what would be sent. The client does not get
- * to name a rule: it names a question and a version.
+ * to name a rule: it names a question, and either a configuration to resolve
+ * it under or one of the intent's own stored versions to answer it with. Both
+ * are rows this board wrote; neither is text from the client.
  *
  * A rule still identical to the assignment's own prompt is answered by the
  * conversation that is already on the screen. That prompt is what produced the
@@ -30,6 +32,8 @@ import {
 } from '@/lib/study/simple/chain';
 import { definitionTasks, readMatches } from '@/lib/study/simple/judge';
 import { readCachedResponses, simpleRuleHash, streamResponse } from '@/lib/study/simple/respond';
+import type { StudioView } from '@/lib/study/config';
+import { getIntentVersion } from '@/lib/study/simple/intent-versions';
 import { simpleContext } from '@/lib/study/simple/route-context';
 import { getSimpleTip, getSimpleVersion } from '@/lib/study/simple/store';
 
@@ -57,6 +61,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (!Number.isFinite(messageId)) {
     return NextResponse.json({ error: 'invalid_query' }, { status: 400 });
   }
+  // A wording from the intent's own history, chosen on the reply itself.
+  const askedVersion = Number(url.searchParams.get('intentVersionId'));
+  if (Number.isFinite(askedVersion) && askedVersion > 0) {
+    const row = await getIntentVersion(id, askedVersion);
+    if (!row) return NextResponse.json({ error: 'no_such_version' }, { status: 404 });
+    return NextResponse.json({ sid: row.sid === 0 ? null : row.sid, rule: row.rule });
+  }
+
   const versionParam = url.searchParams.get('versionNo');
   const snapshot =
     versionParam != null
@@ -88,6 +100,8 @@ const bodySchema = z.object({
   messageId: z.number().int(),
   /** Look at this question under an older version, without leaving the tip. */
   versionNo: z.number().int().positive().nullable().optional(),
+  /** Or under one wording out of the answering intent's own history. */
+  intentVersionId: z.number().int().positive().nullable().optional(),
 });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -104,6 +118,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const tip = await getSimpleTip({ assignmentId: id, condition, seedPrompt });
+
+  // Asked for one of the intent's own wordings: that IS the rule, and no chain
+  // has to be resolved — the reader picked it off that intent's list.
+  if (body.intentVersionId != null) {
+    const row = await getIntentVersion(id, body.intentVersionId);
+    if (!row) return NextResponse.json({ error: 'no_such_version' }, { status: 404 });
+    return answerWith({
+      assignmentId: id,
+      condition,
+      seedPrompt,
+      messageId: body.messageId,
+      rule: row.rule,
+      sid: row.sid === 0 ? null : row.sid,
+      outcome: row.sid === 0 ? 'root' : 'intent',
+      versionNo: null,
+    });
+  }
+
   const snapshot =
     body.versionNo != null
       ? await getSimpleVersion({ assignmentId: id, condition, seedPrompt, versionNo: body.versionNo })
@@ -131,12 +163,41 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     outcome = ownership.outcome;
   }
 
-  const rule = ruleForOwner(snapshot, sid);
+  return answerWith({
+    assignmentId: id,
+    condition,
+    seedPrompt,
+    messageId: body.messageId,
+    rule: ruleForOwner(snapshot, sid),
+    sid,
+    outcome,
+    versionNo: body.versionNo ?? tip.version?.versionNo ?? null,
+  });
+}
+
+/**
+ * The half that answers: cache, then stream, and say which rule it was.
+ *
+ * Shared by the two ways of naming a rule — resolving a configuration, and
+ * being handed one of an intent's own versions — so a hit, a miss and the
+ * untouched-prompt shortcut behave the same whichever way the reader got here.
+ */
+async function answerWith(args: {
+  assignmentId: string;
+  condition: StudioView;
+  seedPrompt: string;
+  messageId: number;
+  rule: string;
+  sid: number | null;
+  outcome: string;
+  versionNo: number | null;
+}): Promise<Response> {
+  const { assignmentId: id, condition, seedPrompt, messageId, rule, sid, outcome, versionNo } = args;
   if (rule === seedPrompt) {
     await logStudyEvent(id, 'simple_response_view', {
       condition,
-      messageId: body.messageId,
-      versionNo: body.versionNo ?? tip.version?.versionNo ?? null,
+      messageId,
+      versionNo,
       sid,
       outcome,
       cacheHit: true,
@@ -146,13 +207,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const ruleHash = simpleRuleHash(rule);
-  const cached = await readCachedResponses([{ messageId: body.messageId, ruleHash }]);
-  const hit = cached.get(`${body.messageId}:${ruleHash}`);
+  const cached = await readCachedResponses([{ messageId, ruleHash }]);
+  const hit = cached.get(`${messageId}:${ruleHash}`);
 
   await logStudyEvent(id, 'simple_response_view', {
     condition,
-    messageId: body.messageId,
-    versionNo: body.versionNo ?? tip.version?.versionNo ?? null,
+    messageId,
+    versionNo,
     sid,
     outcome,
     cacheHit: !!hit,
@@ -165,7 +226,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'openai_not_configured' }, { status: 503 });
   }
 
-  const streamed = await streamResponse({ assignmentId: id, messageId: body.messageId, rule });
+  const streamed = await streamResponse({ assignmentId: id, messageId, rule });
   if (!streamed) return NextResponse.json({ error: 'no_such_question' }, { status: 404 });
   return new Response(streamed.stream, {
     headers: {

@@ -71,6 +71,7 @@ interface StateBody {
   intentVersions: Record<
     string,
     {
+      id: number;
       versionNo: number;
       displayNo: number | null;
       definition: string;
@@ -917,10 +918,14 @@ async function main() {
     // the other; either way it has a history, and it has been edited by now.
     const rootHistory = now.intentVersions['0'] ?? [];
     check('the else-rule keeps its own history', rootHistory.length > 0, `${rootHistory.length} version(s)`);
-    // Numbered by the SAVE each one belongs to, which is the one version axis
-    // this board has: a private per-intent count read as a version number and
-    // disagreed on screen with the picker beside it, which counts saves. Gaps
-    // are the point — they say which saves touched this intent.
+    // Numbered per intent: v1 is this intent's first wording whatever the rest
+    // of the setup had done by then. The setup keeps its own count, and the
+    // board calls those "setup 3" so the two are never both "v".
+    check(
+      'numbered from 1, newest first',
+      rootHistory[0]?.versionNo === rootHistory.length,
+      rootHistory.map((v) => `v${v.versionNo}`).join(' ')
+    );
     check(
       'each row carries the number of the save it belongs to',
       rootHistory.every((v) => typeof v.displayNo === 'number' && v.displayNo > 0),
@@ -1001,6 +1006,29 @@ async function main() {
         newest != null && typeof newest.matches === 'number',
         `${newest?.matches ?? 'null'}`
       );
+
+      // The reply's picker names a wording out of an intent's own history,
+      // so the answering route takes a ROW id as well as a configuration. It
+      // is still not the client naming a rule: both are rows this board wrote.
+      {
+        const row = (after.intentVersions[String(target.sid)] ?? [])[0];
+        const asked = await call(
+          'respond',
+          { method: 'GET' },
+          `messageId=${Number(Object.keys(after.owners)[0] ?? 0)}&intentVersionId=${row.id}`
+        );
+        check(
+          'a reply can be asked for under one of an intent’s own wordings',
+          asked.status === 200 && asked.body.rule === row.rule,
+          `${asked.status} ${String(asked.body.rule).slice(0, 30)}`
+        );
+        const bogus = await call(
+          'respond',
+          { method: 'GET' },
+          `messageId=${Number(Object.keys(after.owners)[0] ?? 0)}&intentVersionId=999999999`
+        );
+        check('and an id from nowhere is refused', bogus.status === 404, `${bogus.status}`);
+      }
 
       // And a reorder, which changes no text at all, versions nobody.
       const beforeReorder = Object.fromEntries(

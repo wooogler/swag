@@ -78,10 +78,11 @@ export default function SimpleDeployButton({
   return (
     <div className="flex items-center gap-2">
       <span className="hidden sm:inline text-2xs text-[hsl(var(--muted-foreground))]">
+        {/* The setup's own count. "v3" belongs to an intent's wording. */}
         {live
-          ? `Deployed v${deployed}`
+          ? `Deployed setup ${deployed}`
           : behind
-            ? `Changed since v${deployed}`
+            ? `Changed since setup ${deployed}`
             : 'Not deployed yet'}
       </span>
       <button
