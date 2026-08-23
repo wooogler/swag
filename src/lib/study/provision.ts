@@ -331,6 +331,36 @@ export async function cloneStarterSet(
   `);
   counts.score_query_types = await assignmentCount(tx, 'score_query_types', newAssignmentId);
 
+  // 10c) score_conversation_digests — message-scoped, and the one the
+  //      participant WAITS on. A digest stands in for the turns before its
+  //      anchor when a rule is previewed against a question mid-thread
+  //      (conversation-digest.ts, read by simple/respond.ts and
+  //      preview-service.ts), so a clone without one pays a model call before
+  //      the answer can even start streaming. That is 43 of 60 curated
+  //      questions on the swag master and 44 of 60 on nirvana — the ones with
+  //      prior turns — and every clone was paying for them separately, over
+  //      the same conversations, to arrive at the same text.
+  //
+  //      Copying is exact, not an approximation. A digest is a function of the
+  //      turns BEFORE its anchor (getConversationHistories stops at the
+  //      anchor) plus the anchor's own text, and build.ts cuts each thread at
+  //      its LAST curated question — so every turn any curated digest was
+  //      computed over is present in the clone, verbatim, under a remapped id.
+  //      `version` rides along unchanged so a later CONVERSATION_DIGEST_VERSION
+  //      bump still marks cloned rows stale, exactly as it does on the master.
+  await tx.execute(sql`
+    INSERT INTO score_conversation_digests
+      (assignment_id, message_id, digest, model, version, created_at)
+    SELECT ${newAssignmentId}, mm.new_id, cd.digest, cd.model, cd.version, cd.created_at
+    FROM score_conversation_digests cd JOIN _msg_map mm ON mm.old_id = cd.message_id
+    WHERE cd.assignment_id = ${sourceAssignmentId}
+  `);
+  counts.score_conversation_digests = await assignmentCount(
+    tx,
+    'score_conversation_digests',
+    newAssignmentId
+  );
+
   // 11) score_query_embeddings — message-scoped.
   await tx.execute(sql`
     INSERT INTO score_query_embeddings (assignment_id, message_id, embedding, model, created_at)

@@ -16,6 +16,7 @@
     "export:participants": "tsx --env-file-if-exists=.env scripts/export-participants.ts",
     "study:reset": "tsx --env-file-if-exists=.env scripts/study/reset-participants.ts",
     "study:deprovision": "tsx --env-file-if-exists=.env scripts/study/deprovision-participants.ts",
+    "study:warm-digests": "tsx --env-file-if-exists=.env scripts/study/warm-master-digests.ts",
     "db:local:up": "docker compose -f docker-compose.local.yml up -d",
     "db:local:down": "docker compose -f docker-compose.local.yml down",
     "db:local:logs": "docker compose -f docker-compose.local.yml logs -f postgres"
