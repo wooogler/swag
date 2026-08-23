@@ -41,6 +41,9 @@ export interface StarterItem {
   count: number;
   /** Whether it describes the question this intent was started from. */
   contains: boolean;
+  /** Which questions it describes. Sent only to the arm that reads its log
+   * through these rather than through intents. */
+  messageIds?: number[];
 }
 
 export interface StarterGroup {
@@ -57,6 +60,8 @@ export default function StarterPicker({
   disabled = false,
   forMessageId = null,
   within = null,
+  withQuestions = false,
+  label = 'Starter sets',
 }: {
   /** Builds a URL for the simple routes, carrying any preview `?view=`. */
   api: (path: string, query?: string) => string;
@@ -71,6 +76,11 @@ export default function StarterPicker({
    * whole log it promises questions an intent above has already taken.
    */
   within?: number[] | null;
+  /** Ask for the questions each set describes, not only how many. */
+  withQuestions?: boolean;
+  /** What the control is called where it stands. The one-document arm has no
+   * "when" to start from, so over there these are types to read by. */
+  label?: string;
 }) {
   const [groups, setGroups] = useState<StarterGroup[] | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | undefined>(undefined);
@@ -82,7 +92,7 @@ export default function StarterPicker({
   // thinking about something. The one thing that can change it is which
   // question the dots are about, so that is what invalidates it.
   const scope = (within ?? []).join(',');
-  const key = `${forMessageId ?? ''}|${scope}`;
+  const key = `${forMessageId ?? ''}|${scope}|${withQuestions ? 'q' : ''}`;
   useEffect(() => {
     if (!everOpened || (groups && loadedFor === key)) return;
     let cancelled = false;
@@ -90,6 +100,7 @@ export default function StarterPicker({
       const query = [
         forMessageId ? `forMessageId=${forMessageId}` : null,
         scope ? `within=${scope}` : null,
+        withQuestions ? 'withQuestions=1' : null,
       ]
         .filter(Boolean)
         .join('&');
@@ -103,12 +114,12 @@ export default function StarterPicker({
     return () => {
       cancelled = true;
     };
-  }, [api, everOpened, forMessageId, groups, key, loadedFor, scope]);
+  }, [api, everOpened, forMessageId, groups, key, loadedFor, scope, withQuestions]);
 
   return (
     <div onMouseDown={() => setEverOpened(true)}>
       <PickerPopover
-        label="Starter sets"
+        label={label}
         disabled={disabled}
         listWidth={304}
         tipWidth={272}

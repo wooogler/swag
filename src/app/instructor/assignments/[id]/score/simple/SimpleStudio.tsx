@@ -69,7 +69,7 @@ import {
 import { ConversationThread } from '../conversation';
 import { QuerySnippet } from '../materials';
 import type { ScoreQueryRow } from '../IntentBoard';
-import StarterPicker from './StarterPicker';
+import StarterPicker, { type StarterItem } from './StarterPicker';
 import RulePicker, { type RuleSource } from './RulePicker';
 import IntentHistory, { type IntentVersion } from './IntentHistory';
 import QuestionCount, { questionsThat } from './QuestionCount';
@@ -232,6 +232,15 @@ export default function SimpleStudio({
    * from any version, and the only one no configuration can answer.
    */
   const [localVersionNo, setLocalVersionNo] = useState<number | 'original' | null>(null);
+  /**
+   * A prepared category the one-document arm is reading its log through.
+   *
+   * Not a configuration: it changes what is listed and nothing else, and the
+   * arm that has intents does not have it — over there a category becomes an
+   * intent, and the list follows from that. This is the same knowledge in the
+   * form the other arm can use, which is the parity the baseline is for.
+   */
+  const [typeFilter, setTypeFilter] = useState<StarterItem | null>(null);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.messageId, r])), [rows]);
   // What the board is ABOUT. Every list, count and pin works off this; only
@@ -766,7 +775,11 @@ export default function SimpleStudio({
   );
 
   const listed = useMemo(() => {
-    if (arm === 'baseline') return material;
+    if (arm === 'baseline') {
+      if (!typeFilter?.messageIds) return material;
+      const inType = new Set(typeFilter.messageIds);
+      return material.filter((r) => inType.has(r.messageId));
+    }
     if (selection.kind === 'root') {
       return material.filter((r) => ownerOf(r.messageId)?.sid === null);
     }
@@ -798,7 +811,7 @@ export default function SimpleStudio({
         (at.get(a.messageId) ?? Number.MAX_SAFE_INTEGER) -
         (at.get(b.messageId) ?? Number.MAX_SAFE_INTEGER)
     );
-  }, [arm, material, ownerOf, ranked, selection]);
+  }, [arm, material, ownerOf, ranked, selection, typeFilter]);
 
   /**
    * Whatever the middle column is showing, narrowed to the student's own
@@ -922,6 +935,7 @@ export default function SimpleStudio({
       />
 
       <QuestionColumn
+        api={api}
         rows={searched}
         pinnedRows={pinnedRows}
         exampleRows={exampleRows}
@@ -989,6 +1003,21 @@ export default function SimpleStudio({
         onSelect={setSelectedMessageId}
         onTogglePin={togglePin}
         onCreateIntent={readOnly || arm === 'baseline' ? null : startIntentFrom}
+        /* Only the one-document arm reads by category: the other one reads by
+           intent, and a second way to slice the same list would be two
+           answers to "what am I looking at". */
+        typeFilter={arm === 'baseline' ? typeFilter : null}
+        onPickType={
+          arm === 'baseline'
+            ? (item) => {
+                setTypeFilter(item);
+                logUi(assignmentId, 'simple_type_filter', {
+                  key: item?.key ?? null,
+                  count: item?.messageIds?.length ?? null,
+                });
+              }
+            : null
+        }
         pinned={state.pinned}
         ownerOf={ownerOf}
         titleOf={title}
@@ -2586,6 +2615,7 @@ function GenerateExamples({ full, onClick }: { full: boolean; onClick: () => Pro
 }
 
 function QuestionColumn({
+  api,
   rows,
   pinnedRows,
   exampleRows,
@@ -2605,12 +2635,15 @@ function QuestionColumn({
   onSelect,
   onTogglePin,
   onCreateIntent,
+  typeFilter,
+  onPickType,
   pinned,
   ownerOf,
   titleOf,
   arm,
   judging,
 }: {
+  api: (path: string, query?: string) => string;
   rows: ScoreQueryRow[];
   pinnedRows: ScoreQueryRow[];
   /** What the open intent stands for: questions from the log, or written
@@ -2640,6 +2673,10 @@ function QuestionColumn({
   /** Null where there is nothing to carve out of — the one-document arm, or
    * an older version being read. */
   onCreateIntent: ((id: number) => void) | null;
+  /** The prepared category this list is being read through, on the arm that
+   * reads by category. Null on the arm that reads by intent. */
+  typeFilter: StarterItem | null;
+  onPickType: ((item: StarterItem | null) => void) | null;
   pinned: number[];
   ownerOf: (id: number) => Owner | null;
   titleOf: (sid: number | null) => string;
@@ -2658,12 +2695,16 @@ function QuestionColumn({
   );
   const liftedOut = rows.length - listed.length;
 
-  const label =
-    arm === 'baseline'
+  const label = typeFilter
+    ? typeFilter.title
+    : arm === 'baseline'
       ? 'All questions'
       : selection.kind === 'root'
         ? 'Uncategorized'
         : titleOf(selection.sid);
+  /* The words this list is a list OF, wherever they come from: an intent's
+     own on one arm, the category being read through on the other. */
+  const shownDefinition = typeFilter ? typeFilter.definition : definition;
 
   return (
     <div className="min-h-0 flex flex-col gap-3">
@@ -2826,6 +2867,32 @@ function QuestionColumn({
             least like what I meant" — and the row it lands on has the button
             to make an intent out of it. */}
         <span className="flex-1" />
+        {/* The prepared categories, as a way of reading rather than a way of
+            writing. This arm has no intents to slice its log with, and the
+            categories are knowledge about the log — what students ask and how
+            much of it — rather than part of the mechanism under study. It
+            changes what is listed and nothing else. */}
+        {onPickType && (
+          <span className="shrink-0 flex items-center gap-1">
+            <StarterPicker
+              api={api}
+              label={typeFilter ? typeFilter.title : 'Question types'}
+              withQuestions
+              onPick={(item) => onPickType(item)}
+            />
+            {typeFilter && (
+              <button
+                type="button"
+                aria-label="Show every question again"
+                title="Show every question again"
+                onClick={() => onPickType(null)}
+                className="p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </span>
+        )}
         {/* An ordinary search box, over the students' own words. Everything
             else on this board is about what the configuration does; this is
             the one control for finding a question you remember. */}
@@ -2858,12 +2925,12 @@ function QuestionColumn({
           to read them from while looking at what they caught — the question is
           always "do these words describe these questions", and it cannot be
           asked with the two halves in different columns. */}
-      {definition.trim().length > 0 && (
+      {shownDefinition.trim().length > 0 && (
         <p
-          title={definition}
+          title={shownDefinition}
           className="mt-1 line-clamp-2 text-2xs leading-relaxed text-[hsl(var(--muted-foreground))]"
         >
-          {definition}
+          {shownDefinition}
         </p>
       )}
       </div>

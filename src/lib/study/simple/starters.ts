@@ -46,6 +46,9 @@ export interface StarterItem {
   /** Whether it describes the one question this intent is being started from.
    * False whenever there is no such question. */
   contains: boolean;
+  /** Which questions it describes. Sent only to the arm that reads its log
+   * through these rather than through intents. */
+  messageIds?: number[];
 }
 
 export interface StarterGroup {
@@ -80,8 +83,31 @@ export async function countsByDefinition(
    */
   within?: Set<number> | null
 ): Promise<Map<string, number>> {
-  const counts = new Map<string, number>();
-  if (definitions.length === 0) return counts;
+  const found = await messagesByDefinition(assignmentId, definitions, within);
+  return new Map([...found].map(([definition, ids]) => [definition, ids.length]));
+}
+
+/**
+ * WHICH questions each definition describes, not just how many.
+ *
+ * The counts are the sizes of these, so they are read once and shared. The
+ * one-document arm asks for the lists too: it has no intents to slice its log
+ * with, and the prepared categories are knowledge about the log rather than
+ * part of the machinery the other arm gets — see the note in the starters
+ * route.
+ */
+export async function messagesByDefinition(
+  assignmentId: string,
+  definitions: string[],
+  within?: Set<number> | null
+): Promise<Map<string, number[]>> {
+  const found = new Map<string, Set<number>>();
+  if (definitions.length === 0) return new Map();
+  const add = (definition: string, messageId: number) => {
+    const set = found.get(definition) ?? new Set<number>();
+    set.add(messageId);
+    found.set(definition, set);
+  };
 
   // Counted over the questions the board actually lists. A study master also
   // holds the earlier turns of each thread, and counting those would have the
@@ -128,7 +154,7 @@ export async function countsByDefinition(
       const [intentId, messageId] = key.split(':').map(Number);
       if (!inScope(messageId)) continue;
       const definition = byIntent.get(intentId);
-      if (definition) counts.set(definition, (counts.get(definition) ?? 0) + 1);
+      if (definition) add(definition, messageId);
     }
   }
 
@@ -149,19 +175,24 @@ export async function countsByDefinition(
         inArray(simpleRatings.defHash, [...hashes.keys()])
       )
     );
-  const ownCounts = new Map<string, number>();
+  // A wording the participant has worked with is answered from the simple
+  // version's own verdicts instead, so a starter they adopted and then edited
+  // back to its original words still reads the same.
+  const ownFound = new Map<string, Set<number>>();
   const ownSeen = new Set<string>();
   for (const row of own) {
     const definition = hashes.get(row.defHash);
     if (!definition || !inScope(row.messageId)) continue;
     ownSeen.add(definition);
     if (isIncludedRating(row.rating as RatingLevel)) {
-      ownCounts.set(definition, (ownCounts.get(definition) ?? 0) + 1);
+      const set = ownFound.get(definition) ?? new Set<number>();
+      set.add(row.messageId);
+      ownFound.set(definition, set);
     }
   }
-  for (const definition of ownSeen) counts.set(definition, ownCounts.get(definition) ?? 0);
+  for (const definition of ownSeen) found.set(definition, ownFound.get(definition) ?? new Set());
 
-  return counts;
+  return new Map([...found].map(([definition, ids]) => [definition, [...ids]]));
 }
 
 /**
@@ -256,7 +287,10 @@ export async function loadStarters(
   assignmentId: string,
   forMessageId?: number | null,
   /** The questions this intent could take — see countsByDefinition. */
-  within?: Set<number> | null
+  within?: Set<number> | null,
+  /** Also say WHICH questions each set describes. The one-document arm reads
+   * its log through these; the intent arm only needs the numbers. */
+  withQuestions = false
 ): Promise<StarterGroup[]> {
   const config = await getScoreConfig();
   const suggestions = buildJelsonSuggestions(config);
@@ -298,8 +332,8 @@ export async function loadStarters(
     });
   }
 
-  const [counts, containing] = await Promise.all([
-    countsByDefinition(
+  const [found, containing] = await Promise.all([
+    messagesByDefinition(
       assignmentId,
       seeds.map((s) => s.item.definition),
       within
@@ -312,11 +346,15 @@ export async function loadStarters(
           seeds.map((s) => s.item.definition)
         ),
   ]);
-  const withCount = (item: Omit<StarterItem, 'count' | 'contains'>): StarterItem => ({
-    ...item,
-    count: counts.get(item.definition.trim()) ?? 0,
-    contains: containing.has(item.definition.trim()),
-  });
+  const withCount = (item: Omit<StarterItem, 'count' | 'contains'>): StarterItem => {
+    const ids = found.get(item.definition.trim()) ?? [];
+    return {
+      ...item,
+      count: ids.length,
+      contains: containing.has(item.definition.trim()),
+      ...(withQuestions ? { messageIds: ids } : {}),
+    };
+  };
 
   return [...groups].map(([key, meta]) => ({
     key,

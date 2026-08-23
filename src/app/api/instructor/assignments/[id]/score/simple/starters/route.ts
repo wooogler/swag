@@ -5,9 +5,18 @@
  * behind the counts were prepared when the clone was provisioned, and nothing
  * here calls a model or writes anything (lib/study/simple/starters.ts).
  *
- * Only the intent arm asks for it — the one-document arm has no "when" to
- * start from — but it is not refused there, because refusing would make the
- * researcher's own side-by-side preview lopsided for no reason.
+ * BOTH ARMS ask for it, for different things. The intent arm starts a WHEN
+ * from a set. The one-document arm has no "when" to start, and reads its log
+ * through them instead — which is why it also asks which questions each set
+ * describes.
+ *
+ * That is deliberate and it is not the machinery leaking across. A set holds
+ * two things: knowledge about this log — what students ask and how much of it
+ * — and a way to turn that into an intent. The second is the mechanism under
+ * study and stays on one side. The first is domain knowledge the researchers
+ * put there, and giving it to one arm only would make the comparison "with
+ * the mechanism AND with a map" against "without either", with no way to say
+ * afterwards which half did the work.
  */
 import { NextResponse } from 'next/server';
 import { simpleContext } from '@/lib/study/simple/route-context';
@@ -34,7 +43,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     groups: await loadStarters(
       id,
       Number.isFinite(forMessageId) && forMessageId > 0 ? forMessageId : null,
-      within.length > 0 ? new Set(within) : null
+      within.length > 0 ? new Set(within) : null,
+      params2.get('withQuestions') === '1'
     ),
   });
 }
