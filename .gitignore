@@ -44,3 +44,7 @@ next-env.d.ts
 # Participant data written by scripts/study/export-metrics.ts. Research
 # output, regenerable, and not the repository's to carry.
 export/
+
+# Throwaway Playwright drivers written at the repo root while checking a screen
+# by hand. Hard-coded local session cookies and assignment ids; nothing to carry.
+/*-drive.mjs
