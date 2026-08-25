@@ -52,7 +52,9 @@ function firstInstructorId() {
 
 const errors = [];
 const browser = await chromium.launch({ args: ['--no-sandbox'] });
-const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+// SWAG_VIEWPORT=1920x1080 matches the demo-video filming spec; default unchanged.
+const [vpW, vpH] = (process.env.SWAG_VIEWPORT || '1600x1000').split('x').map(Number);
+const ctx = await browser.newContext({ viewport: { width: vpW, height: vpH } });
 const page = await ctx.newPage();
 page.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text().slice(0, 300)}`));
 page.on('pageerror', (e) => errors.push(`pageerror: ${String(e).slice(0, 300)}`));

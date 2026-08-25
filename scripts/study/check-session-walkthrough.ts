@@ -44,7 +44,6 @@ async function main() {
   );
   const { ensureTypeRoots } = await import('../../src/lib/score/intent-store');
   const { deployBaselineVersion } = await import('../../src/lib/study/baseline-store');
-  const { STUDY_DATASETS } = await import('../../src/lib/study/config');
   const { blockPlan, nextPhase } = await import('../../src/lib/study/phases');
   const { getSurveyItems } = await import('../../src/lib/study/survey-store');
   const { COMPARE_ITEMS, CONTEXT_ITEMS, EXPERIENCE_ITEMS, OPEN_ITEM_KEY } = await import(

@@ -32,8 +32,12 @@ import { stableHash } from './config';
  * v4: the prior thread is fed as a DIGEST brief instead of replayed turns —
  *     replay made the model imitate its old-rule outputs over the new rule,
  *     and deploy-after-term means future conversations start fresh anyway
- *     (preview ≈ FUTURE runtime; see preview-service + plan §9). */
-export const PREVIEW_VERSION = 4;
+ *     (preview ≈ FUTURE runtime; see preview-service + plan §9).
+ * v5: the digest no longer quotes a "current working draft" that is really the
+ *     anchor question restated (37 of 354 stored digests did). Every preview
+ *     generated against one of those was answering with the student's own
+ *     request presented as their draft — see conversation-digest.ts. */
+export const PREVIEW_VERSION = 5;
 
 /**
  * The injected system prompt IS the rule, verbatim — nothing is concatenated,

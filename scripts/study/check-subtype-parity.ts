@@ -17,7 +17,7 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import { scoreIntentRatings, scoreIntents } from '../../src/db/schema';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { SOURCE_LOGS } from '../../src/lib/study/config';
 import { getScoreConfig } from '../../src/lib/score/config-store';
 import { buildJelsonSuggestions, jelsonToIntent } from '../../src/lib/score/jelson-suggest';
 import { intentDefHash, INTENT_RATING_VERSION, MATERIAL_PROMPT_MODE } from '../../src/lib/score/intents';
@@ -31,7 +31,7 @@ async function main() {
   console.log(`mode=${MATERIAL_PROMPT_MODE}  INTENT_RATING_VERSION=r${INTENT_RATING_VERSION}`);
   console.log(`chooser subtypes: ${chooser.size}\n`);
 
-  for (const ds of CURATION_DATASETS) {
+  for (const ds of SOURCE_LOGS) {
     const templates = await db
       .select({ id: scoreIntents.id, title: scoreIntents.title, definition: scoreIntents.definition })
       .from(scoreIntents)

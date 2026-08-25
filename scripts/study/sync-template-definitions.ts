@@ -19,7 +19,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import { scoreIntents } from '../../src/db/schema';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { SOURCE_LOGS } from '../../src/lib/study/config';
 import { getScoreConfig } from '../../src/lib/score/config-store';
 import { buildJelsonSuggestions, jelsonToIntent } from '../../src/lib/score/jelson-suggest';
 
@@ -33,7 +33,7 @@ async function main() {
     })
   );
 
-  for (const ds of CURATION_DATASETS) {
+  for (const ds of SOURCE_LOGS) {
     const templates = await db
       .select({ id: scoreIntents.id, title: scoreIntents.title, definition: scoreIntents.definition })
       .from(scoreIntents)

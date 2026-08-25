@@ -306,12 +306,12 @@ export default function BlockTest({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError('Could not save that — tell your facilitator.');
+        setError('Could not save that — message the researcher on the Zoom call.');
         return null;
       }
       return data as Record<string, unknown>;
     } catch {
-      setError('Could not save that — tell your facilitator.');
+      setError('Could not save that — message the researcher on the Zoom call.');
       return null;
     } finally {
       setBusy(false);

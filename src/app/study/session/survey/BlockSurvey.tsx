@@ -73,12 +73,12 @@ export default function BlockSurvey({
         body: JSON.stringify({ answers }),
       });
       if (!res.ok) {
-        setError('Could not save that — tell your facilitator.');
+        setError('Could not save that — message the researcher on the Zoom call.');
         return false;
       }
       return true;
     } catch {
-      setError('Could not save that — tell your facilitator.');
+      setError('Could not save that — message the researcher on the Zoom call.');
       return false;
     }
   };

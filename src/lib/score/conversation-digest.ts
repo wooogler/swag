@@ -28,7 +28,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { scoreConversationDigests } from '@/db/schema';
-import { callModel } from './classifier';
+import { callModel, extractJsonObject } from './classifier';
 import { createLimiter, SCORE_CONCURRENCY } from './limiter';
 import { getDefaultScoreModel } from './models';
 import type { ChatTurn } from './queries';
@@ -36,15 +36,80 @@ import type { ChatTurn } from './queries';
 /** Bump when the digest prompt or rendering changes — cached rows below this
  * version regenerate. Callers should also bump PREVIEW_VERSION (injection.ts)
  * when the change affects preview output. */
-export const CONVERSATION_DIGEST_VERSION = 1;
+export const CONVERSATION_DIGEST_VERSION = 2;
 
 const DIGEST_SYSTEM = [
   "Summarize a student-chatbot conversation as CONTEXT for answering the student's NEXT message.",
-  'Include: the assignment/topic, what the student has been working on, and what the next message refers to.',
-  "When the next message refers to a specific piece of text, include that text VERBATIM, labeled as the student's current working draft.",
+  'context: the assignment/topic, what the student has been working on, and what the next message refers to. At most 250 words.',
+  "working_draft: the text the next message asks the chatbot to work on — the student's own draft, or the piece of it under discussion — copied VERBATIM. Null whenever the next message points at no existing text: a fresh request, a question, a greeting, an instruction with nothing to revise yet. Never put the next message itself here, and never put text the chatbot wrote.",
   "Never reproduce the chatbot's own wording, framing, offers, or reply style — describe what happened neutrally (e.g. 'a draft conclusion was produced') without quoting how the chatbot talked.",
-  'Be compact: at most 250 words plus the quoted draft text.',
+  // Stated in the prompt as well as the schema: callModel drops the schema and
+  // retries free-form on a model that rejects strict Structured Outputs, and on
+  // that path this line is the only thing naming the shape.
+  'Answer with a JSON object holding exactly these two fields: context, working_draft.',
 ].join('\n');
+
+/**
+ * Two fields, not one prose block — because the draft slot got filled whether
+ * or not there was a draft.
+ *
+ * The instruction above was conditional from the start ("when the next message
+ * refers to a specific piece of text"), and the model treated the section as
+ * mandatory: measured over the 354 digests this corpus had produced, 37 of them
+ * quoted the ANCHOR QUESTION back as the student's working draft — "Write the
+ * second paragraph", "Are you working?" — and 8 more quoted a fragment too
+ * short to work on. Roughly one preview in eight was told the student's draft
+ * was their own request.
+ *
+ * Same lesson propose-prompt.ts already paid for (§2026-08-20): a condition
+ * written into the prose is applied always or never, so the condition moves
+ * into code. Here the model gets a slot it may leave empty, and
+ * `usableDraft` throws away the answers that are the question restated.
+ */
+const DIGEST_SCHEMA = {
+  name: 'conversation_digest',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['context', 'working_draft'],
+    properties: {
+      context: { type: 'string', description: 'at most 250 words' },
+      working_draft: {
+        type: ['string', 'null'],
+        description: 'verbatim text the next message works on, or null when there is none',
+      },
+    },
+  },
+} as const;
+
+const normalize = (text: string): string =>
+  text.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * The draft, or nothing — dropping the two shapes that are never worth sending.
+ *
+ * A draft that CONTAINS the next message is the failure above: the model had
+ * nothing to quote and quoted the request. A draft the next message contains is
+ * a paste the student made in that same message, which buildInput already sends
+ * verbatim right underneath — quoting it here only spends the context twice.
+ */
+function usableDraft(draft: string | null | undefined, queryText: string): string {
+  const text = (draft ?? '').trim();
+  if (!text) return '';
+  const a = normalize(text);
+  const b = normalize(queryText);
+  if (!a || !b) return text;
+  if (a.includes(b) || b.includes(a)) return '';
+  return text;
+}
+
+/** The stored digest text. Same shape the one-block prompt used to emit, so
+ * nothing downstream has to learn about the split. */
+function renderDigest(context: string, draft: string): string {
+  const body = context.trim();
+  if (!draft) return body;
+  return `${body}\n\nStudent's current working draft:\n"${draft}"`;
+}
 
 /** The digest cap keeps one pathological thread from blowing up the digest
  * call itself; ~40k chars ≈ the longest NIRVANA threads. Head+tail, since the
@@ -105,17 +170,26 @@ export async function getConversationDigests(
       .map((t) =>
         limit(async () => {
           try {
-            const digest = (
-              await callModel(
-                DIGEST_SYSTEM,
-                `CONVERSATION:\n${renderTranscript(t.history)}\n\nSTUDENT'S NEXT MESSAGE (for reference — do not answer it):\n${t.queryText}`,
-                model,
-                'low',
-                undefined,
-                { timeoutMs: 60_000, maxRetries: 1 }
-              )
-            ).trim();
-            if (!digest) throw new Error('empty digest');
+            const raw = await callModel(
+              DIGEST_SYSTEM,
+              `CONVERSATION:\n${renderTranscript(t.history)}\n\nSTUDENT'S NEXT MESSAGE (for reference — do not answer it):\n${t.queryText}`,
+              model,
+              'low',
+              DIGEST_SCHEMA,
+              { timeoutMs: 60_000, maxRetries: 1 }
+            );
+            // callModel self-heals to free-form JSON on a model that rejects
+            // strict schemas, so parse rather than assume.
+            const parsed = extractJsonObject(raw) as
+              | { context?: unknown; working_draft?: unknown }
+              | null;
+            const context = typeof parsed?.context === 'string' ? parsed.context : '';
+            const draft = usableDraft(
+              typeof parsed?.working_draft === 'string' ? parsed.working_draft : null,
+              t.queryText
+            );
+            const digest = renderDigest(context, draft);
+            if (!digest.trim()) throw new Error('empty digest');
             await db
               .insert(scoreConversationDigests)
               .values({

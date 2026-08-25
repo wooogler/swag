@@ -21,7 +21,7 @@ import { TYPE_CLASSIFIER_VERSION, intentDefHash, INTENT_RATING_VERSION, MATERIAL
 import { buildTypeSystemPrompt } from '../../src/lib/score/type-prompts';
 import { getScoreConfig } from '../../src/lib/score/config-store';
 import { buildJelsonSuggestions, jelsonToIntent } from '../../src/lib/score/jelson-suggest';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { SOURCE_LOGS } from '../../src/lib/study/config';
 
 async function main() {
   /* ── 1. code ── */
@@ -48,7 +48,7 @@ async function main() {
   );
 
   /* ── 3. per assignment ── */
-  const masterIds = new Set(CURATION_DATASETS.map((d) => d.masterAssignmentId));
+  const masterIds = new Set(SOURCE_LOGS.map((d) => d.masterAssignmentId));
   const rows = await db.execute(sql`
     select a.id, a.title, a.share_token,
            count(distinct t.id) filter (where t.is_template) as templates,

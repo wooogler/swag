@@ -1269,7 +1269,7 @@ function PromptEditor({
         readOnly={readOnly}
         maxLength={STUDY_PROMPT_CHAR_LIMIT}
         onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
-        placeholder="What the chatbot should do, in your own words."
+        placeholder="What the chatbot should do, in your own words. If you tell it not to do something, say what it does instead."
         minLines={12}
         maxLines={FIELD_DOC_MAX_LINES}
       />
@@ -2008,7 +2008,7 @@ function Accordion({
           readOnly={readOnly}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => onChange({ rule: e.target.value })}
-          placeholder="What the chatbot should do with those questions."
+          placeholder="What the chatbot should do with those questions. If you tell it not to do something, say what it does instead."
         />
       </Field>
       {!readOnly && (
@@ -2447,6 +2447,7 @@ function NewIntent({
           readOnly={busy}
           maxLength={STUDY_PROMPT_CHAR_LIMIT}
           onChange={(e) => setRule(e.target.value)}
+          placeholder="What the chatbot should do with those questions. If you tell it not to do something, say what it does instead."
           className={busy ? 'opacity-60' : ''}
         />
       </Field>
@@ -2695,6 +2696,39 @@ function QuestionColumn({
   );
   const liftedOut = rows.length - listed.length;
 
+  /**
+   * Where the list was standing before a search narrowed it.
+   *
+   * A search is a way of looking, not a move: clearing it should give back
+   * the list the reader had scrolled to, not drop them at the top of it. The
+   * position has to be taken as the FIRST character is typed — one render
+   * later the list is short and the browser has already clamped the scroll —
+   * so it is read in the change handler, before the state that narrows it.
+   */
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const scrollBeforeSearch = useRef<number | null>(null);
+  const changeQuery = (next: string) => {
+    if (query.trim().length === 0 && next.trim().length > 0) {
+      scrollBeforeSearch.current = listRef.current?.scrollTop ?? null;
+    }
+    setQuery(next);
+  };
+  // Before the paint, or the reader gets one frame of the top of the list on
+  // the way back. Whoever cleared the box — the ×, Escape, or the last
+  // backspace — lands here.
+  useMeasure(() => {
+    if (query.trim().length > 0) return;
+    const at = scrollBeforeSearch.current;
+    scrollBeforeSearch.current = null;
+    if (at != null && listRef.current) listRef.current.scrollTop = at;
+  }, [query]);
+  // The remembered place belongs to the list it was taken in. Open another
+  // intent (or read through another category) while searching and there is
+  // nothing left to go back to.
+  useEffect(() => {
+    scrollBeforeSearch.current = null;
+  }, [selection, typeFilter]);
+
   const label = typeFilter
     ? typeFilter.title
     : arm === 'baseline'
@@ -2906,7 +2940,7 @@ function QuestionColumn({
           <Search className="pointer-events-none absolute left-1.5 w-3 h-3 text-[hsl(var(--muted-foreground))]" />
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => changeQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') setQuery('');
               e.stopPropagation();
@@ -2940,7 +2974,7 @@ function QuestionColumn({
       )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto">
         <ul>
           {listed.map((row) => (
             <QuestionRow

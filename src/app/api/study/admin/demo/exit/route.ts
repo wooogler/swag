@@ -12,7 +12,11 @@ import { db } from '@/db/db';
 import { instructors } from '@/db/schema';
 import { isAdministrator } from '@/lib/auth';
 import { STUDY_SESSION_MAX_AGE_SECONDS } from '@/lib/study/config';
-import { ADMIN_RETURN_COOKIE } from '@/lib/study/demo';
+import {
+  ADMIN_RETURN_COOKIE,
+  ADMIN_RETURN_TO_COOKIE,
+  isAdminReturnPath,
+} from '@/lib/study/demo';
 import { redirectTo } from '@/lib/redirect';
 
 export const dynamic = 'force-dynamic';
@@ -21,8 +25,14 @@ export async function GET() {
   const cookieStore = await cookies();
   const returning = cookieStore.get(ADMIN_RETURN_COOKIE)?.value;
 
+  const returnTo = cookieStore.get(ADMIN_RETURN_TO_COOKIE)?.value;
+  // Bounded here rather than where it was written: this is the only place it
+  // becomes a redirect, so this is where it has to be an admin page.
+  const destination = isAdminReturnPath(returnTo) ? returnTo : '/study/admin/curation';
+
   if (!returning) return redirectTo('/study/admin');
   cookieStore.delete(ADMIN_RETURN_COOKIE);
+  cookieStore.delete(ADMIN_RETURN_TO_COOKIE);
 
   const account = await db.query.instructors.findFirst({ where: eq(instructors.id, returning) });
   // Re-checked, not trusted: the cookie is only ever a shortcut back to a role
@@ -36,5 +46,5 @@ export async function GET() {
     maxAge: STUDY_SESSION_MAX_AGE_SECONDS,
     path: '/',
   });
-  return redirectTo('/study/admin/curation');
+  return redirectTo(destination);
 }

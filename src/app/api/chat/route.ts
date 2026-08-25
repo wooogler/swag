@@ -243,12 +243,32 @@ export async function POST(req: Request) {
       sequenceNumber: existingMessages.length,
     });
 
-    // Format messages for OpenAI Responses API (requires 'msg' prefix for IDs)
-    const formattedMessages = messages.map((msg: { id?: string; role: string; content: string }, idx: number) => ({
-      id: msg.id?.startsWith('msg') ? msg.id : `msg_${Date.now()}_${idx}`,
-      role: msg.role,
-      content: msg.content,
-    }));
+    // The thread the model answers from is the SERVER's record plus the message
+    // just stored — not the `messages` array the client sent.
+    //
+    // The routing above already refuses that array, and says why: a student can
+    // fabricate turns to steer the classifier. The GENERATION was still reading
+    // it, so the same fabricated history could steer the reply that the injected
+    // rule is supposed to govern — the half that actually reaches the student.
+    // A rule is only worth measuring if the context under it is the one the
+    // board can see, so both halves read the same source now.
+    //
+    // Behaviour is unchanged for an honest client: chatStore sends
+    // `[...messages, userMessage]` with no truncation, which is exactly this.
+    // Roles other than user/assistant and blank turns are dropped, matching
+    // getConversationHistories (score/queries.ts) — the same thread the board's
+    // preview reads, so preview = runtime holds for the context and not just
+    // the prompt.
+    const formattedMessages = [
+      ...ordered
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim())
+        .map((m) => ({
+          id: `msg_${m.id}`,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        })),
+      { id: `msg_${conversationId}_${existingMessages.length}`, role: 'user' as const, content: userMessageContent },
+    ];
 
     const openai = createOpenAIClient();
     if (!openai) {

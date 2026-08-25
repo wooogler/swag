@@ -42,7 +42,7 @@ export default async function BlockTestPage() {
         <div className="max-w-md text-center">
           <h1 className="text-lg font-semibold mb-2">Not ready yet</h1>
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
-            Your facilitator needs to prepare this step. Hold on a moment.
+            This step is still being prepared. Message the researcher on the Zoom call.
           </p>
         </div>
       </div>

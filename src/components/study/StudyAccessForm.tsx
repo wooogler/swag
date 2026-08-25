@@ -57,8 +57,8 @@ export default function StudyAccessForm({
             {notice === 'done'
               ? 'This study session is finished — thank you. There is nothing more to do here.'
               : notice === 'invalid'
-                ? 'That link did not work. Ask your facilitator to send it again, or sign in below.'
-                : 'Enter your participant ID and the study passcode. Your facilitator has both.'}
+                ? 'That link did not work. Ask the researcher to send it again, or sign in below.'
+                : 'Enter your participant ID and the study passcode. The researcher has both.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -118,7 +118,7 @@ export default function StudyAccessForm({
         </CardContent>
         <CardFooter className="justify-center border-t border-[hsl(var(--border))] pt-6">
           <p className="text-sm text-[hsl(var(--muted-foreground))] text-center">
-            Trouble signing in? Ask the study facilitator for your ID and passcode.
+            Trouble signing in? Ask the researcher on the Zoom call for your ID and passcode.
           </p>
         </CardFooter>
       </Card>

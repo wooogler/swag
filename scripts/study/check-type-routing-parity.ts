@@ -50,7 +50,7 @@ import {
   studyQuestionBank,
 } from '../../src/db/schema';
 import { isScoreQueryType, TYPE_CLASSIFIER_VERSION } from '../../src/lib/score/intents';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { SOURCE_LOGS } from '../../src/lib/study/config';
 
 async function main() {
   const bank = await db
@@ -135,7 +135,7 @@ async function main() {
   // two remaps. A text carrying more than one verdict on the master is skipped
   // and named — it is a master-side ambiguity, not a clone problem.
   const masterByText = await typesByText(
-    CURATION_DATASETS.map((d) => d.masterAssignmentId)
+    SOURCE_LOGS.map((d) => d.masterAssignmentId)
   );
 
   for (const clone of clones) {

@@ -135,6 +135,15 @@ export default function FinalSurvey({
     if (s === 'compare') {
       return COMPARE_ITEMS.filter((i) => ratings[ratingKey(i.key)] === undefined).length;
     }
+    if (s === 'open') {
+      // Required since the interview came out of the protocol — this is now the
+      // only place anyone says why. Whitespace does not count, but one word
+      // does: the ask is a sentence, not an essay, and a gate that argued about
+      // length would be the interview all over again.
+      return columns.filter(
+        (c) => (texts[ratingKey(OPEN_ITEM_KEY, c.condition)] ?? '').trim().length === 0
+      ).length;
+    }
     return 0;
   };
 
@@ -181,6 +190,12 @@ export default function FinalSurvey({
     if (s === 'compare') {
       return COMPARE_ITEMS.find((i) => ratings[ratingKey(i.key)] === undefined)?.key ?? null;
     }
+    if (s === 'open') {
+      const c = columns.find(
+        (col) => (texts[ratingKey(OPEN_ITEM_KEY, col.condition)] ?? '').trim().length === 0
+      );
+      return c ? `${OPEN_ITEM_KEY}-${c.condition}` : null;
+    }
     return null;
   };
 
@@ -206,11 +221,11 @@ export default function FinalSurvey({
             body: JSON.stringify({ answers }),
           });
           if (!res.ok) {
-            setError('Could not save that — tell your facilitator.');
+            setError('Could not save that — message the researcher on the Zoom call.');
             return;
           }
         } catch {
-          setError('Could not save that — tell your facilitator.');
+          setError('Could not save that — message the researcher on the Zoom call.');
           return;
         } finally {
           setBusy(false);
@@ -381,11 +396,12 @@ export default function FinalSurvey({
           <Card>
             <h1 className="text-xl font-semibold mb-1">In your own words</h1>
             <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6">
-              Two short questions, and then we are done. Neither is required.
+              Two short questions, and then we are done. A sentence each is plenty — even a
+              few words help.
             </p>
             <div className="space-y-5">
               {columns.map((c) => (
-                <div key={c.condition}>
+                <div key={c.condition} id={rowId(`${OPEN_ITEM_KEY}-${c.condition}`)}>
                   <label
                     className="block text-base leading-relaxed mb-2"
                     htmlFor={`ft-${c.condition}`}
@@ -403,14 +419,20 @@ export default function FinalSurvey({
                         [ratingKey(OPEN_ITEM_KEY, c.condition)]: e.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-[hsl(var(--border))] px-3 py-2.5 text-base leading-relaxed resize-none focus:outline-none focus:border-[hsl(var(--primary))]"
+                    placeholder="A sentence is enough."
+                    className={`w-full rounded-lg border px-3 py-2.5 text-base leading-relaxed resize-none focus:outline-none focus:border-[hsl(var(--primary))] ${
+                      checking && (texts[ratingKey(OPEN_ITEM_KEY, c.condition)] ?? '').trim() === ''
+                        ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5'
+                        : 'border-[hsl(var(--border))]'
+                    }`}
                   />
                 </div>
               ))}
             </div>
             <Nav
               busy={busy}
-              missing={0}
+              missing={checking ? missingOn('open') : 0}
+              missingNoun="answer"
               onBack={() => void go('compare', null)}
               onNext={() => void go('done', 'open')}
               nextLabel="Finish"
@@ -422,7 +444,7 @@ export default function FinalSurvey({
           <Card>
             <h1 className="text-xl font-semibold mb-2">Thank you</h1>
             <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-              That is the last of the questions. Your facilitator will take it from here.
+              That is the last of the questions. Let the researcher know on the Zoom call.
             </p>
             <PhaseAdvance from={phase} label="Continue" />
           </Card>
@@ -547,12 +569,17 @@ function RatedRow({
 function Nav({
   busy,
   missing,
+  missingNoun = 'rating',
   onBack,
   onNext,
   nextLabel = 'Next',
 }: {
   busy: boolean;
   missing: number;
+  /** What the gaps on this page ARE. Every page but the last asks for ratings;
+   * the last one asks for two sentences, and "one rating is still missing"
+   * sends someone hunting for a scale that is not on the screen. */
+  missingNoun?: string;
   onBack: () => void;
   onNext: () => void;
   nextLabel?: string;
@@ -574,8 +601,8 @@ function Nav({
       {missing > 0 && (
         <span className="text-xs font-semibold text-amber-800">
           {missing === 1
-            ? 'One rating is still missing — it is marked above.'
-            : `${missing} ratings are still missing — they are marked above.`}
+            ? `One ${missingNoun} is still missing — it is marked above.`
+            : `${missing} ${missingNoun}s are still missing — they are marked above.`}
         </span>
       )}
     </div>

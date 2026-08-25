@@ -26,14 +26,14 @@ import { getDefaultScoreModel } from '../../src/lib/score/models';
 import { intentDefHash, type MaterialKind, type MaterialSpan } from '../../src/lib/score/intents';
 import { getScoreConfig } from '../../src/lib/score/config-store';
 import { buildJelsonSuggestions, jelsonToIntent } from '../../src/lib/score/jelson-suggest';
-import { curationDataset } from '../../src/lib/study/config';
+import { sourceLog } from '../../src/lib/study/config';
 
 const IN = new Set(['clearly_in', 'probably_in']);
 
 async function main() {
   const wantTitle = process.argv[2] ?? 'Give Feedback';
   const n = Number(process.argv[3] ?? 30);
-  const assignmentId = curationDataset('swag')!.masterAssignmentId;
+  const assignmentId = sourceLog('swag')!.masterAssignmentId;
 
   const config = await getScoreConfig();
   const chooser = new Set(

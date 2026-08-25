@@ -118,12 +118,22 @@ export interface FinalColumn {
   cloneAssignmentId: string | null;
 }
 
-/** Every answer this survey requires before it can be finished. */
+/**
+ * Every answer this survey requires before it can be finished.
+ *
+ * The free text is in here, which it was not. It was optional when a recorded
+ * interview came after it; with the interview dropped from the protocol it is
+ * the ONLY place a participant says why, for either version, and an optional
+ * box at the end of eight minutes of rating scales is a box a good share of
+ * people scroll past. Required does not mean long — the page asks for a
+ * sentence and says so.
+ */
 export function requiredKeys(columns: FinalColumn[]): { key: string; condition: string | null }[] {
   const rated = [...EXPERIENCE_ITEMS, ...CONTEXT_ITEMS].flatMap((i) =>
     columns.map((c) => ({ key: i.key, condition: c.condition as string | null }))
   );
-  return [...rated, ...COMPARE_ITEMS.map((i) => ({ key: i.key, condition: null }))];
+  const open = columns.map((c) => ({ key: OPEN_ITEM_KEY, condition: c.condition as string | null }));
+  return [...rated, ...COMPARE_ITEMS.map((i) => ({ key: i.key, condition: null })), ...open];
 }
 
 export const FINAL_PAGES: { key: FinalPageKey; title: string; instruction: string }[] = [
@@ -145,6 +155,6 @@ export const FINAL_PAGES: { key: FinalPageKey; title: string; instruction: strin
   {
     key: 'open',
     title: 'In your own words',
-    instruction: 'Two short questions, and then we are done. Neither is required.',
+    instruction: 'Two short questions, and then we are done. A sentence each is plenty.',
   },
 ];

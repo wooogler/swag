@@ -128,8 +128,13 @@ export async function missingFinalAnswers(participant: StudyParticipant): Promis
     finalColumns(participant),
     getFinalAnswers(participant.id),
   ]);
+  // An answer counts if it carries EITHER a rating or text: the scales store a
+  // value and the free text stores a string, and requiring a value would make
+  // the text items permanently missing now that they are required.
   const have = new Set(
-    answers.filter((a) => a.value !== null).map((a) => `${a.itemKey}:${a.condition ?? ''}`)
+    answers
+      .filter((a) => a.value !== null || (a.text !== null && a.text.trim().length > 0))
+      .map((a) => `${a.itemKey}:${a.condition ?? ''}`)
   );
   return requiredKeys(columns).filter((r) => !have.has(`${r.key}:${r.condition ?? ''}`)).length;
 }

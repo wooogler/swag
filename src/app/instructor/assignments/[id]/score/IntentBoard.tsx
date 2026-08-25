@@ -18,7 +18,14 @@
  * nothing is stored, so an edit re-derives the whole board instantly after
  * router.refresh().
  */
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   compileChains,
@@ -1152,6 +1159,11 @@ function DeployVersionBoard({
   );
 }
 
+// Putting a scroll position back has to happen before the paint, or the
+// reader sees one frame of the top of the list first. useLayoutEffect does
+// that, and does not exist on the server, where this file is rendered too.
+const useBeforePaint = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
 export default function IntentBoard({
   assignmentId,
   rows,
@@ -1935,6 +1947,75 @@ export default function IntentBoard({
         : null,
     [selectedRow, sortedRows]
   );
+
+  /** Which list is open, as one value — what the two effects below watch for
+   * a MOVE. Comparing selection objects field by field at each of them is how
+   * a new selection kind gets missed. */
+  const selectionKey = useMemo(() => {
+    switch (selection.kind) {
+      case 'intent':
+        return `intent:${selection.id}`;
+      case 'type':
+        return `type:${selection.typeKey}`;
+      case 'residue':
+        return `residue:${selection.scopeId}`;
+      case 'shadowed':
+        return `shadowed:${selection.id}`;
+      case 'search':
+        return selection.key;
+      default:
+        return selection.kind;
+    }
+  }, [selection]);
+
+  /**
+   * A question stops being selected once a move leaves it off the list.
+   *
+   * The viewer on the right is this list's detail. Left standing after the
+   * left column moved, it is the only thing on screen with no row behind it —
+   * a conversation that reads as belonging to the intent now open, while
+   * every count and chip around it describes a different set.
+   *
+   * Only on a MOVE. The search box narrows the same list rather than changing
+   * the subject, so a conversation closing itself mid-keystroke would be its
+   * own surprise; searching and then clearing leaves the selection alone.
+   */
+  const lastSelectionKey = useRef(selectionKey);
+  useEffect(() => {
+    if (lastSelectionKey.current === selectionKey) return;
+    lastSelectionKey.current = selectionKey;
+    if (selectedMessageId === null) return;
+    if (!sortedRows.some((r) => r.messageId === selectedMessageId)) setSelectedMessageId(null);
+  }, [selectionKey, sortedRows, selectedMessageId]);
+
+  /**
+   * Where the question list was standing before a search narrowed it.
+   *
+   * A search is a way of looking, not a move: clearing it should give back
+   * the list the reader had scrolled to, not drop them at the top of it. The
+   * position has to be taken as the FIRST character is typed — one render
+   * later the list is short and the browser has already clamped the scroll —
+   * so it is read in the change handler, before the state that narrows it.
+   */
+  const middleColRef = useRef<HTMLDivElement | null>(null);
+  const scrollBeforeSearch = useRef<number | null>(null);
+  const changeSearch = (next: string) => {
+    if (search.trim().length === 0 && next.trim().length > 0) {
+      scrollBeforeSearch.current = middleColRef.current?.scrollTop ?? null;
+    }
+    setSearch(next);
+  };
+  useBeforePaint(() => {
+    if (search.trim().length > 0) return;
+    const at = scrollBeforeSearch.current;
+    scrollBeforeSearch.current = null;
+    if (at != null && middleColRef.current) middleColRef.current.scrollTop = at;
+  }, [search]);
+  // The remembered place belongs to the list it was taken in. Move somewhere
+  // else while a search is open and there is nothing left to go back to.
+  useEffect(() => {
+    scrollBeforeSearch.current = null;
+  }, [selectionKey]);
 
   // ---- Viewer rule-version dropdown ---------------------------------------
   // The owning intent's rule versions for the SELECTED message, each with its
@@ -3071,7 +3152,10 @@ export default function IntentBoard({
         </div>
 
         {/* MIDDLE — question group */}
-        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto">
+        <div
+          ref={middleColRef}
+          className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-y-auto"
+        >
           <div className="sticky top-0 z-10 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))]">
           <div className="px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
@@ -3085,7 +3169,7 @@ export default function IntentBoard({
                 <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
                 <input
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => changeSearch(e.target.value)}
                   placeholder="Search query text…"
                   className="w-44 pl-7 pr-7 py-1 text-xs border border-[hsl(var(--border))] rounded bg-[hsl(var(--background))] text-[hsl(var(--foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
                 />

@@ -38,7 +38,7 @@ async function main() {
   const { getQueryRecords } = await import('@/lib/score/queries');
   const { DISSECTION_VERSION } = await import('@/lib/score/intents');
   const { ensureIntentTables } = await import('@/lib/score/intent-store');
-  const { CURATION_DATASETS, studyMasterToken } = await import('@/lib/study/config');
+  const { SOURCE_LOGS, studyMasterToken } = await import('@/lib/study/config');
   const { ensureStudyTables } = await import('@/lib/study/store');
 
   await Promise.all([ensureIntentTables(), ensureStudyTables()]);
@@ -66,7 +66,7 @@ async function main() {
   // must not leave behind. Registered BEFORE the sort below so the ordering
   // (masters first) puts the chain in the right order: dataset → study master
   // → participant clone.
-  for (const dataset of CURATION_DATASETS) {
+  for (const dataset of SOURCE_LOGS) {
     const [studyMaster] = await db
       .select({ id: assignments.id })
       .from(assignments)
