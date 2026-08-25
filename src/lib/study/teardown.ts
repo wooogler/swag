@@ -15,6 +15,7 @@ import {
   studyParticipants,
   type StudyParticipant,
 } from '@/db/schema';
+import { deleteRecordingsFor } from './recording-store';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -143,6 +144,11 @@ export async function deleteParticipantCloneByDataset(
 /** Full teardown: clones + account + instructor. Use for deprovision. */
 export async function deleteParticipant(participant: StudyParticipant): Promise<number> {
   const n = await deleteParticipantClones(participant);
+  // Recordings have no foreign key to follow — study_events does not either,
+  // and it is the reason a deprovisioned participant still leaves rows behind.
+  // Video is the one kind of orphan worth being explicit about: it is the only
+  // thing here measured in hundreds of megabytes.
+  await deleteRecordingsFor(participant.id);
   await db.transaction(async (tx) => {
     await tx.delete(studyParticipants).where(eq(studyParticipants.id, participant.id));
     await tx.delete(instructors).where(eq(instructors.id, participant.instructorId));

@@ -34,6 +34,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { recorderActive, stopRecording } from '@/lib/study/recorder';
 
 export default function PhaseAdvance({
   from,
@@ -44,6 +45,7 @@ export default function PhaseAdvance({
   confirmLabel = "Yes, I'm done",
   guard,
   blocked = null,
+  exitTo = null,
   compact = false,
   className = '',
 }: {
@@ -70,6 +72,20 @@ export default function PhaseAdvance({
    * the hand-off are one click, not a trip back to find the right control.
    */
   blocked?: { reason: string; actionLabel: string; actionUrl: string } | null;
+  /**
+   * Leave instead of advancing, and go here.
+   *
+   * For the demo, which is a participant in every respect the films depend on
+   * — same account, same board, same controls in the same places — but is not
+   * a session. Pressing the control that ends a block still asks the same
+   * question and still reads the same, because a button that behaved
+   * differently would be teaching a frame the session does not have; what
+   * changes is only what happens after the confirmation. Nothing is deployed,
+   * no phase moves, and the researcher lands back where they started the demo
+   * from. Each demo run rebuilds the workspace anyway (demo.ts), so there was
+   * never anything here worth keeping.
+   */
+  exitTo?: string | null;
   /** Header sizing: small button, messages in a popover rather than in flow. */
   compact?: boolean;
   className?: string;
@@ -95,21 +111,37 @@ export default function PhaseAdvance({
     return () => cancelAnimationFrame(id);
   }, [asking]);
 
-  /** Do the blocking thing, then carry on into the hand-off. */
+  /**
+   * Do the blocking thing, then carry on into the hand-off.
+   *
+   * A refusal shows the SERVER's sentence when it has one. It used to show one
+   * fixed line — "that did not go through, tell someone" — and the commonest
+   * way to reach it is not a fault at all: pressing Deploy on a board where
+   * nothing has been set up yet is refused, correctly, and the participant was
+   * being told our side had broken and to go and find a researcher. Every
+   * refusal a participant can act on themselves already carries wording that
+   * says what to do; this only stopped it reaching them.
+   *
+   * The generic line survives for the cases with nothing to say — a network
+   * that never answered, or a refusal with no message on it.
+   */
   const resolveThenGo = async () => {
+    if (exitTo) return go();
     if (!blocked) return go();
     setBusy(true);
     setError(null);
+    const fallback = 'That did not go through — message the researcher on the Zoom call.';
     try {
       const res = await fetch(blocked.actionUrl, { method: 'POST' });
       if (!res.ok) {
-        setError('That did not go through — tell your facilitator.');
+        const data = await res.json().catch(() => ({}));
+        setError(typeof data?.message === 'string' && data.message ? data.message : fallback);
         setBusy(false);
         setAsking(false);
         return;
       }
     } catch {
-      setError('That did not go through — tell your facilitator.');
+      setError(fallback);
       setBusy(false);
       setAsking(false);
       return;
@@ -142,6 +174,29 @@ export default function PhaseAdvance({
     setAsking(false);
     setBusy(true);
     setError(null);
+    if (exitTo) {
+      window.location.assign(exitTo);
+      return;
+    }
+    /**
+     * Close the screen recording before anything navigates.
+     *
+     * This is the ONLY control that leaves a board, so it is the only place a
+     * recording can be flushed: the next line is a full page load, and a
+     * MediaStream and MediaRecorder's own buffer both die with the document.
+     * Unconditional rather than gated on the work phases — `stopRecording`
+     * returns immediately when nothing is running, so it costs nothing on the
+     * questionnaire and test screens, and a future exit path cannot silently
+     * skip the flush.
+     *
+     * Capped inside `stopRecording`, and its failure is not this button's
+     * business: someone at the end of a block must not be held on a dead
+     * screen by a network that is not coming back. What is still queued is
+     * lost, and the row says so by declaring more chunks than it stored.
+     */
+    if (recorderActive()) {
+      await stopRecording('finished');
+    }
     try {
       const res = await fetch('/api/study/session/advance', {
         method: 'POST',
@@ -150,7 +205,7 @@ export default function PhaseAdvance({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok && data.error !== 'phase_moved') {
-        setError(data.message ?? 'Could not move on — tell your facilitator.');
+        setError(data.message ?? 'Could not move on — message the researcher on the Zoom call.');
         setBusy(false);
         return;
       }
@@ -158,7 +213,7 @@ export default function PhaseAdvance({
       // before the new page paints just invites a second click.
       window.location.assign('/study/session');
     } catch {
-      setError('Could not move on — tell your facilitator.');
+      setError('Could not move on — message the researcher on the Zoom call.');
       setBusy(false);
     }
   };

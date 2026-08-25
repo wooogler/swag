@@ -103,7 +103,7 @@ export async function advanceParticipant(
     const clone = await cloneForBlock(participant, block);
     if (!clone) {
       return refuse(participant, phase, 'no_clone', {
-        message: 'Your workspace could not be found — tell your facilitator.',
+        message: 'Your workspace could not be found — message the researcher on the Zoom call.',
         detail: { block },
       });
     }
@@ -173,7 +173,7 @@ export async function advanceParticipant(
       // researcher's and the console already reports it as "no bank items".
       if (thrown === 'empty_bank') {
         return refuse(participant, phase, 'bank_empty', {
-          message: 'This step has no questions loaded yet — tell your facilitator.',
+          message: 'This step has no questions loaded yet — message the researcher on the Zoom call.',
           detail: { datasetKey, kind: prep.kind },
         });
       }
@@ -182,7 +182,7 @@ export async function advanceParticipant(
       // not recoverable from that side of the app.
       if (thrown !== null || failed !== 0) {
         return refuse(participant, phase, 'generation_failed', {
-          message: 'Something went wrong preparing the next step — tell your facilitator.',
+          message: 'Something went wrong preparing the next step — message the researcher on the Zoom call.',
           detail: { datasetKey, kind: prep.kind, failed, thrown },
         });
       }

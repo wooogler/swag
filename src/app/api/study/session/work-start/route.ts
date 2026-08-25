@@ -1,11 +1,15 @@
 /**
- * The task screen's [Start] — the moment the 25 minutes begin (design §6.2).
+ * The briefing dialog's [Start] — the moment the 25 minutes begin.
  *
  * Separate from the phase advance on purpose. The advance happens when the
- * participant presses through the tutorial card, and the task screen sits
- * after it; charging the reading of the task to the budget the reading exists
- * to inform is exactly backwards. So the phase moves there and the clock
- * starts here.
+ * participant presses through the walkthrough card; what sits after it is a
+ * redirect, a board render and the briefing they read the task in, and
+ * charging all of that to the budget the reading exists to inform is exactly
+ * backwards. So the phase moves there and the clock starts here.
+ *
+ * It used to be the task screen's [Start]. That screen is gone — it carried
+ * the same sentences the briefing carries, one screen earlier — and the stamp
+ * moved into the dialog with them.
  *
  * Refuses outside a work phase rather than logging anyway — a stray POST from
  * a stale tab would otherwise restart the clock in the middle of a block test.
@@ -28,8 +32,9 @@ export async function POST() {
     return NextResponse.json({ error: 'not_work_phase', phase }, { status: 409 });
   }
 
-  // `started` false = they had already begun and came back to this screen.
-  // Not an error: the caller opens the board either way.
-  const started = await markWorkStarted(participant.id);
-  return NextResponse.json({ success: true, started });
+  // A null-op when they had already begun and merely reopened the briefing;
+  // either way the caller gets the zero this block is measured from, which is
+  // what its readout needs.
+  const startedAt = await markWorkStarted(participant.id);
+  return NextResponse.json({ success: true, startedAt: startedAt?.toISOString() ?? null });
 }

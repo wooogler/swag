@@ -46,9 +46,19 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Dialog, DialogPanel, DialogTitle } from '@headlessui/react';
-import { Bot, ClipboardList, FileText, Info, X } from 'lucide-react';
+import { Bot, ClipboardList, FileText, Info, Loader2, Video, X } from 'lucide-react';
 import { instructionToPlainText } from '@/lib/instruction-content';
 import TaskGoal from '@/components/study/TaskGoal';
+import SharePickerHint from '@/components/study/SharePickerHint';
+import {
+  recorderActive,
+  recordingSupported,
+  reportRecordingEvent,
+  requestScreen,
+  startRecording,
+  surfaceOf,
+  surfaceOk,
+} from '@/lib/study/recorder';
 
 /** Per assignment, not per participant: the two study blocks are two different
  * assignments, so a participant is briefed once at the start of each — which is
@@ -62,6 +72,8 @@ export default function AssignmentBriefing({
   basePrompt,
   includesInstructions,
   showTask = false,
+  stampWorkStart = false,
+  record = false,
 }: {
   assignmentId: string;
   assignmentTitle: string;
@@ -76,21 +88,72 @@ export default function AssignmentBriefing({
   /** Participants only. A researcher opening the board is not doing the task,
    * and the section would sit in every screenshot. */
   showTask?: boolean;
+  /**
+   * Whether pressing Start here is the moment the block's clock begins.
+   *
+   * It is, for a participant in a configure phase, because this dialog is now
+   * where the task is read. The task screen that used to carry [[Start]] is
+   * gone — it said the same sentences this dialog says, one screen earlier —
+   * so the stamp it owned moves here with it (design §10.3).
+   *
+   * Charging the reading of the task to the budget the reading exists to
+   * inform is backwards, and under parallel breakout rooms it is also
+   * load-dependent: the phase advance happens on the walkthrough card, and
+   * everything between it and this dialog is a redirect and a board render
+   * that gets slower the more participants are working at once. Left as the
+   * zero, that would quietly subtract minutes from whoever the server was
+   * busiest for.
+   */
+  stampWorkStart?: boolean;
+  /**
+   * Whether pressing Start also takes the screen.
+   *
+   * Separate from `stampWorkStart`, which it otherwise tracks exactly, because
+   * of the demo. A demo IS a participant — same account, same phase, same
+   * board, deliberately no branch anywhere (demo.ts) — so it is on the clock
+   * and stamps like one. But it exists to be filmed, and a demo that also
+   * recorded would upload the researcher's own screen into the participants'
+   * recording table on every take.
+   *
+   * The dialog keeps the participant's SHAPE either way — Start is still the
+   * only way out — because what the films teach has to be the frame the session
+   * actually has.
+   */
+  record?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [arming, setArming] = useState(false);
+  const [armError, setArmError] = useState<string | null>(null);
 
   // In an effect, not in the initial state: localStorage does not exist on the
   // server, and seeding state from it would make the first client render
   // disagree with the HTML. The cost is that the dialog arrives a frame late.
   useEffect(() => {
+    // For a participant in a configure block this dialog is the arming step,
+    // so what decides whether it opens is whether this DOCUMENT is recording,
+    // not whether the briefing has been read before: a mid-block reload has
+    // the "seen" key set and no recorder, and left to localStorage it would
+    // sail past the dialog and record nothing for the rest of the block. With
+    // no recorder to arm — the demo — the key is the right test again.
+    if (stampWorkStart && record) {
+      if (!recorderActive()) setOpen(true);
+      return;
+    }
     try {
       if (!window.localStorage.getItem(seenKey(assignmentId))) setOpen(true);
     } catch {
-      // Storage blocked (private mode, embedded webview). Not opening is the
-      // safe failure — the info button is still there, whereas a briefing that
-      // reopened on every navigation would be a modal nobody can get rid of.
+      // Storage blocked (private mode, embedded webview). Which way to fail
+      // depends on who is looking. For a researcher, not opening is safe — the
+      // info button is still there, and a briefing that reopened on every
+      // navigation would be a modal nobody can get rid of. For a participant
+      // it is not: this dialog is the only place the task is written down
+      // since the task screen was deleted, and a participant who never sees it
+      // is doing an unstated task, which is the 08-18 pilot's failure and the
+      // thing §5.2 exists to prevent. So they get it, once per page load,
+      // dismissable as always.
+      if (showTask) setOpen(true);
     }
-  }, [assignmentId]);
+  }, [assignmentId, record, showTask, stampWorkStart]);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -99,7 +162,83 @@ export default function AssignmentBriefing({
     } catch {
       /* see above — dismissal simply does not persist */
     }
-  }, [assignmentId]);
+    if (!stampWorkStart) return;
+    // Not awaited, and nothing waits on it: the board is already open behind
+    // this dialog, so there is nothing to hold back. The server refuses the
+    // stamp outside a work phase and ignores a second one (markWorkStarted),
+    // which is what makes a reopened briefing harmless.
+    void fetch('/api/study/session/work-start', { method: 'POST' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        // The elapsed readout in the header is a sibling from the server
+        // render, so it is still counting from the phase advance. Same bridge
+        // the simple board already uses for the same reason — without it the
+        // participant's number and the console's would disagree by however
+        // long this dialog was open.
+        if (data?.startedAt) {
+          window.dispatchEvent(
+            new CustomEvent('study:work-started', { detail: { startedAt: data.startedAt } })
+          );
+        }
+      })
+      .catch(() => {
+        /* The clock falls back to the phase advance, which is the old
+           behaviour and off by the reading of this dialog. Not worth putting
+           an error in front of someone about to start a timed block. */
+      });
+  }, [assignmentId, stampWorkStart]);
+
+  /**
+   * Start, for a participant on the clock: take the screen, then close.
+   *
+   * `requestScreen` runs FIRST and with nothing awaited in front of it. The
+   * click carries about five seconds of transient activation and the display
+   * picker consumes it, so a network round trip in front — the clock stamp, for
+   * instance — would spend the gesture on a loaded server and fail as
+   * `InvalidStateError`, which reads like a bug rather than like a permission.
+   *
+   * A refusal leaves the dialog open with the reason and a second try. It never
+   * traps: `Continue without recording` appears after the first failure,
+   * because a lost recording costs the study less than a lost participant does.
+   */
+  const closeViaStart = useCallback(async () => {
+    if (!stampWorkStart) return close();
+    // The demo lands here: participant shape, no capture.
+    if (!record) return close();
+    if (!recordingSupported()) {
+      void reportRecordingEvent('unsupported_browser');
+      setArmError('This browser cannot record the screen. Tell the researcher on the Zoom call.');
+      return;
+    }
+    setArming(true);
+    setArmError(null);
+    try {
+      const stream = await requestScreen();
+      const surface = surfaceOf(stream);
+      if (!surfaceOk(surface)) {
+        stream.getTracks().forEach((t) => t.stop());
+        void reportRecordingEvent('wrong_surface');
+        setArmError(
+          'That shared a single tab rather than the window. Press Start again and choose Window — the one showing this page.'
+        );
+        return;
+      }
+      await startRecording({ stream });
+      close();
+    } catch {
+      void reportRecordingEvent('permission_denied');
+      setArmError(
+        'The window was not shared. Press Start again and choose the window showing this page — the recording is how we see what you did.'
+      );
+    } finally {
+      setArming(false);
+    }
+  }, [close, record, stampWorkStart]);
+
+  const skipRecording = useCallback(() => {
+    void reportRecordingEvent('check_skipped', { where: 'block_start' });
+    close();
+  }, [close]);
 
   const prompt = instructionToPlainText(instructions).trim();
   const base = basePrompt.trim();
@@ -124,7 +263,17 @@ export default function AssignmentBriefing({
         {showTask ? 'Your task' : 'Assignment'}
       </button>
 
-      <Dialog open={open} onClose={close} className="relative z-50">
+      {/* For a participant on the clock, Esc and the backdrop do NOT close this.
+          Not to trap them — Start and the skip below are both right there —
+          but because the display picker needs a real click to authorise it,
+          and HeadlessUI's onClose cannot tell a backdrop click from a keypress.
+          A dialog that could be dismissed without arming would leave someone
+          working, unrecorded, with nothing on screen saying so. */}
+      <Dialog
+        open={open}
+        onClose={stampWorkStart ? () => {} : close}
+        className="relative z-50"
+      >
         <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
         <div className="fixed inset-0 flex items-center justify-center p-4">
           {/* max-w-2xl, not 3xl: the prose grew, and at the old width a line
@@ -140,16 +289,42 @@ export default function AssignmentBriefing({
                   {assignmentTitle}
                 </p>
               </div>
-              <button
-                onClick={close}
-                className="shrink-0 p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                aria-label="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              {!stampWorkStart && (
+                <button
+                  onClick={close}
+                  className="shrink-0 p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                  aria-label="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-6">
+              {/* Who the participant is in this, said once, ABOVE the task and
+                  never inside it.
+
+                  The four task sentences below are §6.2 verbatim because the
+                  facilitator reads the same ones out loud (§6.1), and how much
+                  of the log someone covers versus changes is RQ1's primary
+                  measure — so nothing on this screen may lean on effort. This
+                  lede therefore states only the standing situation (whose
+                  chatbot, answering whom, and what a setup is for) and asks
+                  for nothing: no amount, no standard, no encouragement.
+
+                  It is the same sentence the walkthrough video opens on, so
+                  the two layers arrive in one voice rather than two. Byte
+                  identical in both arms, like the rest of the shell, and shown
+                  only where there is a task — outside the study this modal is
+                  an instructor reading their own course, and none of it
+                  applies. */}
+              {showTask && (
+                <p className="text-base leading-relaxed text-[hsl(var(--muted-foreground))]">
+                  Students in this course wrote with a chatbot, and it answered them
+                  without you in the room. What you set up here is what it answers with.
+                </p>
+              )}
+
               {/* First, because it is the only section that asks for anything.
                   The two below it are the material it is a task about. */}
               {showTask && (
@@ -216,22 +391,73 @@ export default function AssignmentBriefing({
                   from here replaces it for the questions you write it for.
                 </p>
               </section>
+
+              {/* Last, and only when Start is going to ask for the screen.
+                  The browser cannot carry a capture across a page load, so the
+                  dialog comes back at the start of each round however many
+                  times it has already been answered — which makes it worth
+                  showing the answer rather than only naming it. */}
+              {record && (
+                <section className="space-y-2">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] border-b border-[hsl(var(--border))] pb-2">
+                    <Video className="w-4 h-4" />
+                    Before you start
+                  </h3>
+                  <p className="text-base leading-relaxed text-[hsl(var(--foreground))]">
+                    Pressing Start asks your browser what to share, the same way it did at the
+                    beginning. Only this browser window is recorded.
+                  </p>
+                  <SharePickerHint compact />
+                </section>
+              )}
             </div>
 
             <div className="shrink-0 flex items-center justify-between gap-3 px-6 py-4 border-t border-[hsl(var(--border))]">
-              {/* Names the button it is actually talking about, which is now
-                  the participant's way back to the task. */}
-              <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                Reopen this any time from{' '}
-                <span className="font-medium">{showTask ? 'Your task' : 'Assignment'}</span> in the
-                header.
-              </p>
-              <button
-                onClick={close}
-                className="shrink-0 rounded bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-[hsl(var(--primary-foreground))] hover:opacity-90"
-              >
-                Start
-              </button>
+              <div className="min-w-0">
+                {armError ? (
+                  <p className="text-sm font-semibold text-amber-800">{armError}</p>
+                ) : (
+                  /* Names the button it is actually talking about, which is
+                     now the participant's way back to the task. */
+                  <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                    {stampWorkStart && record ? (
+                      <>
+                        Reopen this any time from{' '}
+                        <span className="font-medium">Your task</span> in the header.
+                      </>
+                    ) : (
+                      <>
+                        Reopen this any time from{' '}
+                        <span className="font-medium">
+                          {showTask ? 'Your task' : 'Assignment'}
+                        </span>{' '}
+                        in the header.
+                      </>
+                    )}
+                  </p>
+                )}
+              </div>
+              <div className="shrink-0 flex items-center gap-3">
+                {/* Only after a refusal. Offered up front it becomes the easy
+                    path and the recording stops happening; withheld entirely
+                    it costs the study a whole cell over a picker. */}
+                {stampWorkStart && armError && (
+                  <button
+                    onClick={skipRecording}
+                    className="text-sm font-medium text-[hsl(var(--muted-foreground))] underline underline-offset-2"
+                  >
+                    Continue without recording
+                  </button>
+                )}
+                <button
+                  onClick={() => (stampWorkStart ? void closeViaStart() : close())}
+                  disabled={arming}
+                  className="inline-flex items-center gap-2 rounded bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-[hsl(var(--primary-foreground))] hover:opacity-90 disabled:opacity-60"
+                >
+                  {arming && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {armError ? 'Try again' : 'Start'}
+                </button>
+              </div>
             </div>
           </DialogPanel>
         </div>

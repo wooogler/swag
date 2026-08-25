@@ -9,8 +9,8 @@ import { blockPlan, isStudyPhase, phaseAccess, type StudyPhase } from '@/lib/stu
 import { demoSegmentsFor } from '@/lib/study/config';
 import { displayParticipantNumber } from '@/lib/study/demo';
 import TutorialStep from '@/components/study/TutorialStep';
-import TaskGoal from '@/components/study/TaskGoal';
-import WorkStart from '@/components/study/WorkStart';
+import RecordingCheck from '@/components/study/RecordingCheck';
+import { equipmentCheckPassed } from '@/lib/study/recording-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +51,23 @@ export default async function StudySessionPage() {
     workAssignmentId = clone?.assignmentId ?? null;
   }
 
+  /* A work phase has no screen of its own any more.
+   *
+   * There used to be a task card here — the task, then [Start], then the
+   * board. Its whole job was to say what the activity was before the clock
+   * started, and the board's briefing modal now says the same sentences
+   * (AssignmentBriefing, showTask) in front of the material they are about.
+   * Two screens carrying one paragraph is two chances for them to drift apart,
+   * and the second one arrives after the participant has already read it.
+   *
+   * So the phase IS the board. The clock is stamped from the briefing's Start
+   * button, which is where the old [Start] went (design §10.3).
+   *
+   * `redirect` throws, so nothing below runs for a work phase; the fallback
+   * card at the bottom is what a work phase with no clone still lands on,
+   * which is the one case a participant cannot fix themselves. */
+  if (workAssignmentId) redirect(`/studio/${workAssignmentId}`);
+
   // How far into the block test they are, so a participant who came back on
   // their link is told they are resuming rather than being offered "Start" for
   // work they have already half done.
@@ -66,6 +83,17 @@ export default async function StudySessionPage() {
       };
     }
   }
+
+  // Whether they have already proved the recording pipeline once. Read from
+  // the stored runs rather than from anything in the browser: the fix for a
+  // denied capture on macOS is to quit the browser and come back, so a check
+  // remembered client-side is forgotten by exactly the participant who needed
+  // it. Only asked at the step that shows the check.
+  const checkPassed = phase === 'not_started' ? await equipmentCheckPassed(participant.id) : false;
+  // Their own way back in, for the failure that tells them to quit the browser.
+  const accessUrl = participant.accessToken
+    ? `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3030'}/study/s/${participant.accessToken}`
+    : null;
 
   // The walkthrough steps carry a video, so they get room the one-line cards
   // do not need.
@@ -87,65 +115,40 @@ export default async function StudySessionPage() {
         </div>
 
         {phase === 'not_started' ? (
-          <TutorialStep
-            title="Before you start"
-            body="A short walkthrough of what you will be using. Watch it through — your facilitator will take questions after."
-            segments={demoSegmentsFor(1, conditionForBlock(1))}
-            fromPhase={phase}
-            buttonLabel="Start"
-          />
+          /* The equipment check goes in FRONT of the walkthrough rather than
+             into a phase of its own. Every member of STUDY_PHASES is stamped
+             on participant rows and on every phase_advance payload the pilot
+             left behind, and `not_started` is additionally the column default
+             and the "this cell can still be reassigned" sentinel — so a new
+             phase costs a migration's worth of risk to buy a gate a wrapper
+             already gives. Keeping the check inside `not_started` also keeps
+             the cell reassignable while people are still wrestling with system
+             settings, which is exactly when a researcher might want it. */
+          <RecordingCheck passed={checkPassed} accessUrl={accessUrl}>
+            <TutorialStep
+              /* Says who they are about to be before it says what to watch.
+                 The task itself is stated later, on the board's briefing, in
+                 the §6.2 sentences the facilitator also reads aloud — nothing
+                 here may add to them, so this only names the standing
+                 situation. */
+              title="Before you start"
+              body="You are about to set up the chatbot that students wrote with in a real course. First, a short walkthrough of the version you will be using. Watch it through to the end — if anything is unclear, ask on the Zoom call before you go on."
+              segments={demoSegmentsFor(1, conditionForBlock(1))}
+              fromPhase={phase}
+              buttonLabel="Start"
+            />
+          </RecordingCheck>
         ) : phase === 'break' ? (
           <TutorialStep
             title="Second part"
-            body="Take a moment first. The second chatbot is set up with a different version of the tool — here is a walkthrough of that one."
+            body="Another course, another group of students, and a different version of the tool. Here is a walkthrough of that one — watch it through to the end."
             segments={demoSegmentsFor(2, conditionForBlock(2))}
             fromPhase={phase}
             buttonLabel="I'm ready"
           />
         ) : (
           <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 text-center">
-            {workAssignmentId ? (
-              <>
-                {/* Design §6.2, verbatim, and verbatim for a reason: the
-                    facilitator says these same sentences out loud (§6.1), and
-                    a task that arrives in two wordings is two tasks. Both
-                    conditions get the identical string — this is shell parity,
-                    so no example or hint may be added for either arm.
-
-                    What it may say is the BOUNDARY (what the activity is,
-                    where it ends, that there is no set amount) and never the
-                    CRITERION (how many to read, how many to change, what a
-                    good rule looks like). How much of the log someone covers
-                    is RQ1's primary measure; a screen that suggests a number
-                    deletes that measurement.
-
-                    Left-aligned below the heading: three sentences of task
-                    definition centred are harder to read, and this is the one
-                    screen whose whole purpose is that they are read. */}
-                <h1 className="text-xl font-semibold mb-3">Your task in this round</h1>
-                <div className="text-left mx-auto max-w-md">
-                  <p className="text-base text-[hsl(var(--muted-foreground))] mb-3 leading-relaxed">
-                    <TaskGoal>Look through the conversations</TaskGoal> students in this course
-                    had with the chatbot. Whenever a chatbot response is not what you would
-                    want, <TaskGoal>adjust the setup so that it responds the way you want.</TaskGoal>
-                    When you feel it&apos;s ready, <TaskGoal>deploy it.</TaskGoal>
-                  </p>
-                  <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
-                    There is no set amount to cover — how much you look at, and how much you
-                    change, is <TaskGoal>entirely up to you.</TaskGoal>
-                  </p>
-                </div>
-                {/* Not a link: pressing this is when the 25 minutes start, so
-                    it stamps the clock before opening the board (§6.2 — the
-                    task screen sits BEFORE the timer). The budget itself is no
-                    longer stated here; the facilitator gives it out loud and
-                    the board's elapsed readout carries the "/ 25", so it is
-                    still known before it is spent — which was the point. */}
-                {/* The neutral alias (next.config rewrites) — the real path
-                    names the treatment. */}
-                <WorkStart href={`/studio/${workAssignmentId}`} />
-              </>
-            ) : access.testBlock ? (
+            {access.testBlock ? (
               <>
                 <h1 className="text-xl font-semibold mb-2">Check your chatbot</h1>
                 <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
@@ -181,7 +184,7 @@ export default async function StudySessionPage() {
                 <h1 className="text-xl font-semibold mb-2">One last questionnaire</h1>
                 <p className="text-base text-[hsl(var(--muted-foreground))] mb-6 leading-relaxed">
                   Both rounds are done. This last one asks you to rate the two versions side by
-                  side — about five minutes.
+                  side — about eight minutes.
                 </p>
                 <a
                   href="/study/session/final"
@@ -194,7 +197,7 @@ export default async function StudySessionPage() {
               <>
                 <h1 className="text-xl font-semibold mb-2">All done — thank you</h1>
                 <p className="text-base text-[hsl(var(--muted-foreground))] leading-relaxed">
-                  That is the end of the session. Your facilitator will take it from here.
+                  That is the end of the session. Let the researcher know on the Zoom call.
                 </p>
               </>
             ) : (
@@ -203,7 +206,7 @@ export default async function StudySessionPage() {
               <>
                 <h1 className="text-xl font-semibold mb-2">One moment</h1>
                 <p className="text-base text-[hsl(var(--muted-foreground))] leading-relaxed">
-                  This step is not ready on our side. Let your facilitator know.
+                  This step is not ready on our side. Message the researcher on the Zoom call.
                 </p>
               </>
             )}
@@ -211,7 +214,7 @@ export default async function StudySessionPage() {
         )}
 
         <p className="mt-6 text-center text-xs text-[hsl(var(--muted-foreground))]">
-          Go at your own pace — your facilitator is watching along and can help at any point.
+          Go at your own pace. If anything goes wrong, message the researcher on the Zoom call.
         </p>
       </div>
     </div>

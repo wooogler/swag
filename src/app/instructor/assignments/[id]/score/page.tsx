@@ -143,6 +143,15 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
     const simpleDeploy = participant
       ? { phase: currentPhase(participant), waits: advanceWaits(currentPhase(participant)) }
       : null;
+    // On the clock only while they are IN a configure block: a researcher
+    // opening the same board is not, and the briefing's Start must not stamp
+    // anything for them.
+    const simpleOnWorkClock =
+      !!participant &&
+      (currentPhase(participant) === 'block1_work' || currentPhase(participant) === 'block2_work');
+    // A demo is on the clock and is never recorded, and its way out of the
+    // block is a way out of the demo — see PhaseAdvance's `exitTo`.
+    const simpleDemoExit = participant?.isDemo ? '/study/admin' : null;
     return (
       <div className="h-screen flex flex-col bg-[hsl(var(--background))]">
         <StudioShell
@@ -155,10 +164,11 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               basePrompt={seedPrompt}
               includesInstructions={assignment.includeInstructionInPrompt ?? false}
               showTask={!!participant}
+              stampWorkStart={simpleOnWorkClock}
+              record={simpleOnWorkClock && !participant?.isDemo}
               backHref={participant ? null : `/instructor/assignments/${id}`}
               phaseStartedAt={
-                participant && (currentPhase(participant) === 'block1_work' ||
-                  currentPhase(participant) === 'block2_work')
+                simpleOnWorkClock
                   ? (await currentPhaseStartedAt(participant.id))?.toISOString() ?? null
                   : null
               }
@@ -175,6 +185,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
                 simpleDeploy ? (
                   <PhaseAdvance
                     compact
+                    exitTo={simpleDemoExit}
                     from={simpleDeploy.phase}
                     label="Deploy"
                     waits={simpleDeploy.waits}
@@ -578,6 +589,8 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
             // Participants only: a researcher opening the board is not doing
             // the task, and the section would sit in every screenshot.
             showTask={!!participant}
+            stampWorkStart={onWorkClock}
+            record={onWorkClock && !participant?.isDemo}
             backHref={backHref}
             phaseStartedAt={phaseStartedAt ? phaseStartedAt.toISOString() : null}
             accountLabel={
@@ -617,6 +630,7 @@ export default async function ScorePage({ params, searchParams }: PageProps) {
               studyBlockDone ? (
                 <PhaseAdvance
                   compact
+                  exitTo={participant?.isDemo ? '/study/admin' : null}
                   from={studyBlockDone.phase}
                   label="I'm done"
                   // False out of the work phase since 08-18: the answers are

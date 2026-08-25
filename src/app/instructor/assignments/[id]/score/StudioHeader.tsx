@@ -18,8 +18,9 @@ import { ChevronLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import InstructorHeaderActions from '@/components/instructor/InstructorHeaderActions';
 import WorkElapsed from '@/components/study/WorkElapsed';
+import RecordingChip from '@/components/study/RecordingChip';
 import AssignmentBriefing from './AssignmentBriefing';
-import { STUDY_WORK_MINUTES } from '@/lib/study/config';
+import { STUDY_WORK_MINUTES, STUDY_WORK_WARNING_MINUTES } from '@/lib/study/config';
 
 export default function StudioHeader({
   assignmentId,
@@ -29,6 +30,8 @@ export default function StudioHeader({
   basePrompt,
   includesInstructions,
   showTask,
+  stampWorkStart = false,
+  record = false,
   backHref,
   phaseStartedAt,
   accountLabel,
@@ -44,6 +47,12 @@ export default function StudioHeader({
   basePrompt: string;
   includesInstructions: boolean;
   showTask: boolean;
+  /** Whether the briefing's Start begins this block's clock — participants in
+   * a configure phase only. */
+  stampWorkStart?: boolean;
+  /** Whether this session actually captures the screen — a demo is on the
+   * clock but is never recorded (see AssignmentBriefing). */
+  record?: boolean;
   /** Null for a participant: see the note where the caller computes it. */
   backHref: string | null;
   phaseStartedAt: string | null;
@@ -96,10 +105,21 @@ export default function StudioHeader({
         basePrompt={basePrompt}
         includesInstructions={includesInstructions}
         showTask={showTask}
+        stampWorkStart={stampWorkStart}
+        record={record}
       />
       {phaseStartedAt && (
-        <WorkElapsed startedAt={phaseStartedAt} budgetMinutes={STUDY_WORK_MINUTES} />
+        <WorkElapsed
+          startedAt={phaseStartedAt}
+          budgetMinutes={STUDY_WORK_MINUTES}
+          warnMinutes={STUDY_WORK_WARNING_MINUTES}
+        />
       )}
+      {/* Beside the clock. Gated on `record`, not on the clock: a demo is on
+          the clock and is deliberately not recorded, and a chip offering to
+          resume a recording that was never meant to run would be in every
+          frame of the films. */}
+      {record && <RecordingChip />}
       {publish}
       {/* Finishing the block sits next to whatever publishes, because
           publishing is what makes it possible: it appears the moment there is

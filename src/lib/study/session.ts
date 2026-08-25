@@ -75,13 +75,14 @@ export async function currentPhaseStartedAt(participantId: string): Promise<Date
  * block. So it only counts if nothing has started this phase yet, which is
  * exactly "the latest clock event is still the phase_advance".
  *
- * Returns whether it wrote, for the caller to log or ignore; navigation
- * happens either way, because a participant returning to the board is not an
- * error.
+ * Returns the zero this block is measured from — the row it just wrote, or
+ * the clock event that already stood — so the caller can hand it straight to
+ * the readout instead of reloading the board to find out. Null only when
+ * nothing has started at all, which cannot happen from a work phase.
  */
-export async function markWorkStarted(participantId: string): Promise<boolean> {
+export async function markWorkStarted(participantId: string): Promise<Date | null> {
   const [latest] = await db
-    .select({ eventType: studyEvents.eventType })
+    .select({ eventType: studyEvents.eventType, createdAt: studyEvents.createdAt })
     .from(studyEvents)
     .where(
       and(
@@ -91,7 +92,7 @@ export async function markWorkStarted(participantId: string): Promise<boolean> {
     )
     .orderBy(desc(studyEvents.createdAt))
     .limit(1);
-  if (latest?.eventType !== 'phase_advance') return false;
+  if (latest?.eventType !== 'phase_advance') return latest?.createdAt ?? null;
   await logParticipantEvent(participantId, 'work_started');
-  return true;
+  return currentPhaseStartedAt(participantId);
 }
