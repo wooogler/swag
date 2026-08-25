@@ -1,8 +1,10 @@
 # ⓐ Getting around — 샷리스트 + 내레이션 (Simple 공통)
 
-> 목표 **70 s ± 5**. 블록 1에서 자기 버전 앞에 재생. **두 테이크**(Slate 보드 / Clay 보드), **VO는 하나** — 두 테이크의 클릭·타이밍을 맞춘다. 시작 상태: `Run demo · Simple SCORE`(또는 `· Simple Baseline`) 직후, 브리핑 모달 열림, 경과 0–1분.
+> 목표 **75 s ± 5**. 블록 1에서 자기 버전 앞에 재생. **두 테이크**(Slate 보드 / Clay 보드), **VO는 하나**. 시작 상태: `Run demo · Simple SCORE`(또는 `· Simple Baseline`) 직후, 브리핑 모달 열림, 경과 0–1분.
 >
-> 참고: `shots/a01_briefing.png`(모달) · `b01_slate_board.png` / `c01_clay_board.png`(두 보드) · `a04_kept_in_view.png`(핀 선반).
+> ⚠ **08-23 개정.** 두 테이크는 이제 **같은 프레임이 아니다** — Slate는 리스트 제목이 `Uncategorized`이고 모든 행에 소속 칩이 붙고, Clay는 `All questions`에 헤더의 `Types` 버튼이 하나 더 있다. **맞추는 것은 프레임이 아니라 클릭·타이핑·멈춤**이고, VO는 리스트 제목도 헤더 버튼도 부르지 않는다.
+>
+> 참고 화면: `shots/a01_briefing.png` · `a02_search.png` · `a03_delivered_line.png` · `a04_kept_in_view.png` · 두 보드는 `b01_slate_board.png` / `c01_clay_board.png`(08-23 재촬영).
 
 ---
 
@@ -17,14 +19,16 @@
 
 ## A2 · 질문 리스트와 검색 (0:16–0:30)
 
-- **화면**: 가운데 **All questions · 103 of 103**. 한 행(P19 · 2)에 커서 — 학생 ID · 몇 번째 질문 · 본문 · 붙여넣기 태그([OWN DRAFT · 316 words · 100%]류). **Search questions**에 `spell` 타이핑 → 줄어든 목록 → ✕.
+- **화면**: 가운데 리스트 헤더 — **Slate 테이크는 `Uncategorized · 103 of 103`, Clay 테이크는 `All questions · 103 of 103`**(같은 자리, 같은 숫자, 같은 103행). 한 행(P19 · 2)에 커서 — 학생 ID · 몇 번째 질문 · 본문 · 붙여넣기 태그(`[OWN DRAFT · 316 words · 100%]`류). **Search questions**에 `spell` 타이핑 → 줄어든 목록 → ✕.
 - **VO**: *"The middle column lists every question students asked the chatbot — one row per question, with the student's ID and which turn it was. Text they pasted in is tagged. The search box narrows this list by the student's own words."*
-- **메모**: Slate 테이크에서는 행에 소속 칩이 없다(intent가 아직 없다) — 두 테이크가 같은 프레임.
+- **메모 [08-23]**: 두 테이크의 프레임은 더 이상 같지 않다.
+  - **Slate**: 제목이 `Uncategorized`이고 **모든 행에 회색 점 + `Uncategorized` 소속 칩**이 붙는다(아직 아무것도 만들지 않았으므로 전부 같은 칩). VO는 이 칩을 설명하지 않는다 — 설명하면 Clay 테이크와 비대칭이 생기고 금지어에 걸린다. ⓑ B4에서 제대로 가르친다.
+  - **Clay**: 제목이 `All questions`이고 헤더에 **`Types`** 버튼이 하나 더 있다. **이 세그먼트에서는 누르지 않고 커서도 그 위를 지나가지 않는다**(왼쪽에 붙여 동선을 짠다) — 누르면 목록이 좁아져 VO의 "lists every question"이 그 순간 거짓이 된다. Types는 ⓒ C5에서 가르친다.
 
 ## A3 · 대화 뷰어 (0:30–0:46)
 
-- **화면**: P19 · 2 클릭 → 오른쪽 **Conversation**, 그 질문 강조. 위 어시스턴트 줄: **This reply is [Original (as delivered) ▾] — nothing here has been changed yet**에 커서 1초. **show pasted text** 접힘 하나 펼쳤다 접기. 질문 옆 **⌃ n/5 ⌄**로 한 번 이동 후 복귀.
-- **VO**: *"Click a question and the whole conversation opens on the right, with that question highlighted. Original, as delivered, is what the student actually received. Pasted text folds away, and these arrows step through the student's other questions."*
+- **화면**: P19 · 2 클릭 → 오른쪽 **Conversation**, 그 질문 강조. 어시스턴트 응답 위 회색 한 줄 **This reply is the one that was delivered.** 에 커서 1초 — **이 시점에는 비교할 버전이 없어 드롭다운이 아예 없다**(첫 Apply 뒤에 생긴다). **show pasted text** 접힘 하나를 펼쳤다 접는다(`👁 show pasted text` ↔ `hide pasted text`; 본문에 박힌 `[OWN DRAFT · 316 words · 100%]` 태그도 클릭하면 펼쳐진다). 질문 옆 **⌃ n/5 ⌄**로 한 번 이동 후 복귀.
+- **VO**: *"Click a question and the whole conversation opens on the right, with that question highlighted. Above the reply, a line marks the one the student actually received. Text they pasted in folds away, and these arrows step through the student's other questions."*
 
 ## A4 · Pin — Kept in view (0:46–0:59)
 
@@ -32,18 +36,19 @@
 - **VO**: *"Pin a question to keep it in view — it moves into its own shelf above the list, and stays there whatever you select or change later. Pin it again to let it go."*
 - **메모**: 해제까지 보여 준다(버전 세그먼트가 각자 다시 핀을 쓰거나 안 쓰므로 0개로 돌려 놓는다).
 
-## A5 · 헤더 (0:59–1:10)
+## A5 · 헤더 (0:59–1:15)
 
-- **화면**: **n / 25 min** 칩 호버(툴팁 1초) → **Deploy**(비활성, *Not deployed yet*)에 커서 — 누르지 않는다. 마지막 프레임 2초 홀드.
-- **VO**: *"And at the top: how many minutes you've been working this round, and Deploy — which sends your setup to the student chat when you decide it's ready. The next video shows how a setup is made."*
+- **화면**: **n / 25 min** 칩 호버(툴팁 1초) → **Deploy**에 커서만 올린다(**항상 활성**이고 옆에 상태 문구가 없다). 마지막 프레임 2초 홀드.
+- **VO**: *"And at the top: how many minutes you've been working this round, and Deploy — which sends your setup to the student chat, and ends the round, when you decide it's ready. It asks once before it does. The next video shows how a setup is made."*
+- ⚠ **누르지 않는다.** 한 번 누르면 팝오버가 열리고(*This deploys the setup you have now and ends it. …* · **Not yet** / **Deploy and finish**), **Deploy and finish**까지 가면 데모 세션이 끝나 보드로 돌아올 수 없다. 실수로 열렸으면 **Not yet**으로 닫고 이 비트를 다시 찍는다.
 
 ---
 
 ## 두 테이크 맞추기
 
-- 같은 순서·같은 멈춤. A2의 타이핑 속도, A3의 스크롤 양, A4의 핀 행(P19 · 2)까지 동일.
+- 같은 순서·같은 멈춤. A2의 타이핑 속도, A3의 스크롤 양, A4의 핀 행(P19 · 2)까지 동일. **프레임은 다르다**(§머리말) — 맞추는 것은 동작과 타이밍이다.
 - 파일: `getting-around-simple-slate.mp4` → `NEXT_PUBLIC_STUDY_DEMO_COMMON_SIMPLE_SCORE`, `getting-around-simple-clay.mp4` → `…_COMMON_SIMPLE_BASELINE`.
 
 ## 단어 수
 
-VO ≈ 200 단어 → 70 s ± 5.
+VO **205 단어**(08-23 실측) → **75 s ± 5**. 비트별: A1 41 · A2 41 · A3 42 · A4 34 · A5 47.

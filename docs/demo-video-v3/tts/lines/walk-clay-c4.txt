@@ -1,0 +1,1 @@
+So you write the rule in the document: a word question receives one or two lines, the word and one example. Try it, and the new answer follows that rule.

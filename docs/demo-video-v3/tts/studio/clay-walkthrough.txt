@@ -1,0 +1,19 @@
+A student asks how to spell a word. The answer is one line.
+
+Here is the same kind of question, and here the chatbot spells the word out letter by letter. Same question, two different answers. You want one way.
+
+Pin that question so it stays nearby and you can check it again while you work.
+
+So you write the rule in the document: a word question receives one or two lines, the word and one example. Try it, and the new answer follows that rule.
+
+But this one is not a word question. It asks what a term means. And it now receives the same two lines. You did not write those lines for this kind of question.
+
+You can make the rule narrower, and you do. The answer is still two lines. Nothing in the document says what a definition should receive, so the chatbot copies the format of the sentence that is already there.
+
+So you write what a definition should receive: three or four sentences, and one example of the word in use. Now it answers that way. The spelling question you pinned earlier still answers the way you asked. Two paragraphs in one document, and the chatbot reads both every time.
+
+Now you continue reading the list. Here a student asks the chatbot to make their own paragraph shorter, and the chatbot writes a shorter version for them.
+
+The list can be narrowed to that one kind of request, and the category explains what it includes, so you have words to start from. You write the third rule from them: do not rewrite the text, show which sentences could be removed. Try it, and it does. Then remove the category filter. Choosing a category changed what you were reading, not what you wrote.
+
+Save keeps this version. And when you are ready, Deploy asks you to confirm once. Confirming ends the round, and from then on your students use the chatbot you set up.

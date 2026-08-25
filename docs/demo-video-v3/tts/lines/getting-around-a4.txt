@@ -1,0 +1,1 @@
+Pin a question to keep it visible. It moves to a separate area above the list, and it stays there no matter what you select or change later. Click the pin again to remove it.

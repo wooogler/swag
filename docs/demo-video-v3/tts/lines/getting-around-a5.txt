@@ -1,0 +1,1 @@
+And at the top: how many minutes you have worked in this round, and Deploy, which sends your setup to the student chat and ends the round, when you decide it is ready. It asks you to confirm first. The next part shows how to build a setup.

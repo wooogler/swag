@@ -206,6 +206,23 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 
 세션/대화/메시지 전부, `is_template` intent만(rule 비움) + 그 판정, dissection, **query type**(양 조건 동일 분류의 근원), embeddings, 구 분류층 데이터, 템플릿 pin·프리뷰. **복사 안 하는 것**: type root와 prompt-holder(클론별 lazy 생성), 버전·배포·probe 캐시·digest·이벤트(빈 상태에서 시작). 마스터 삭제 방지 가드 있음.
 
+### 5.5 데이터셋 레지스트리 (2026-08-25)
+
+**데이터셋 = 한 로그의 한 큐레이션**이며, 코드 상수가 아니라 `study_datasets` 행이다.
+
+| | 이전 | 지금 |
+|---|---|---|
+| 큐레이트 가능한 것 | `CURATION_DATASETS` 상수 2개 | `study_datasets` 행 N개 (`SOURCE_LOGS`는 원본 로그 2개로 고정) |
+| 한 로그당 큐레이션 | 1개 (다시 만들려면 기존 세트를 지워야 함) | 여러 개 — 각자 세트·확정(lock)·빌드를 따로 가짐 |
+| 세트 크기 | 타입별 목표 15/2 + 미달 시 lock 차단 | **없음.** 세트는 연구자가 정한 크기 그대로 (검증에 남은 것: 데모 격리 위반·미분류 질문) |
+| 스터디 재료 | `STUDY_DATASETS` 상수 | `slot` 1·2를 쥔 두 데이터셋 — 콘솔에서 지정 |
+| 참가자의 블록 | `planForCell`이 상수에서 매번 재계산 | 생성 시각의 쌍을 `study_participants.block_order`에 각인, 이후 그것만 읽음 |
+
+- 셀(1~4)은 데이터셋 **이름**이 아니라 **슬롯**을 가리킨다(`CELL_FIRST`). 그래서 쌍을 바꿔도 같은 4셀이 그대로 카운터밸런싱된다.
+- 쌍 변경은 **다음 참가자부터**. 진행 중인 참가자의 블록은 각인된 값이라 움직이지 않는다.
+- 빌드는 **보고 있는 데이터셋 한 개**를 대상으로 한다(축소 마스터 + 그 데이터셋의 문제은행). 은행 삭제/재작성도 그 키로만 범위가 잡힌다.
+- 소유는 공유 모델: `owner_code`는 만든 사람을 기록할 뿐 접근을 제한하지 않는다. 시드된 `swag`/`nirvana`는 삭제 불가, 나머지는 슬롯을 쥐고 있거나 참가자 클론이 있으면 삭제가 거부된다.
+
 ---
 
 ## 6. AI 패리티 대차대조표
@@ -225,7 +242,8 @@ Type root 4개는 SCORE **뷰** 진입 시 lazy 생성(`ensureTypeRoots`) — ba
 **코어**: instructors · assignments · student_sessions · editor_events · chat_conversations/messages.
 **구 viewer 층** (태깅으로 강등, 데이터 유지): score_classifications · score_subtype_scores · score_config.
 **Intent 층**: score_intents(kind/type/parent/position; type_root 부분 유니크) · score_intent_ratings(전 해시 세대 보존 → 즉시 checkout) · score_intent_pins(pending/consumed) · score_config_versions · score_rule_previews · score_conversation_digests · score_query_embeddings · score_dissections · score_query_types · score_chat_deploys · score_rule_versions(+responses).
-**스터디/Baseline**: study_participants · study_clones(condition) · score_probe_ratings · baseline_searches(name·type — UI는 Filter, 서버는 search 유지) · baseline_prompt_versions · baseline_previews(고아) · review_set_items(**미사용** — 검토 세트는 워크벤치 탭으로 대체됨) · study_events.
+**스터디/Baseline**: study_participants(cell·block_order·condition_family) · study_clones(condition) · score_probe_ratings · baseline_searches(name·type — UI는 Filter, 서버는 search 유지) · baseline_prompt_versions · baseline_previews(고아) · review_set_items(**미사용** — 검토 세트는 워크벤치 탭으로 대체됨) · study_events.
+**큐레이션**: study_datasets(§5.5 레지스트리; key·source_key·clone_title·owner_code·slot) · study_set_members · study_curation_meta · study_question_bank · study_generated_responses. study_set_targets는 **폐기**(세트 크기 목표 삭제) — 남아 있는 물리 테이블은 아무도 읽지 않는다.
 
 전부 런타임 DDL(`ADD COLUMN IF NOT EXISTS` 패턴). FK 없는 테이블 다수 — 체인은 코드에서 컴파일.
 

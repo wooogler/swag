@@ -1,0 +1,19 @@
+A student asks how to spell a word. The answer is one line.
+
+Here is the same kind of question, and here the chatbot spells the word out letter by letter. Same question, two different answers. You want one way.
+
+So you start an intent from the question you are reading. You describe the kind: a spelling, a synonym, how to use a term. And you write the rule: one or two lines, the word and one example. Then the tool compares every question in the log with your description.
+
+The questions it collected are ordered by that first example. Reverse the order, and the top row answers a different question: of everything your words collected, which one is least like what you meant?
+
+Some of these ask what a term means. Your words collected them too. You can rewrite the description, and you do. But rewriting moves the whole boundary. The definitions leave, and others you did not intend arrive. There is another way, so you return to the wording you had.
+
+Instead you start an intent from the definition question itself. Because you started from a question the first intent already answers, the new one is placed above it. Above means it is read first. The definitions come here now, and the rest stays where it was.
+
+And it answers the way you asked.
+
+Then you read the questions that are left. Here a student asks the chatbot to make their own paragraph shorter, and the chatbot writes a shorter version. Pin it, and this time start an intent without choosing a question first.
+
+The starter sets contain descriptions that are already written. You choose the one for this request, so you only write the rule: do not rewrite the text, show which sentences could be removed. Add it, and the question you pinned is answered by this intent.
+
+Save keeps this version. And when you are ready, Deploy asks you to confirm once. Confirming ends the round, and from then on your students use the chatbot you set up.

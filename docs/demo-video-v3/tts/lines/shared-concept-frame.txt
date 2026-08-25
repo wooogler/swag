@@ -1,0 +1,1 @@
+Students in this course wrote with a chatbot. You do not answer their questions. You write the instructions for the chatbot that answers them, the way you would instruct a teaching assistant who works without you in the room. What you write decides what students receive.

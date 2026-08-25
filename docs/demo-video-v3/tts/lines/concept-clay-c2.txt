@@ -1,0 +1,1 @@
+In Clay, your instructions are a single document, written in your own words. There are no forms and no fields. You write sentences, and those sentences are the whole setup.

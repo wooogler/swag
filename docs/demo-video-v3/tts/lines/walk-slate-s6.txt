@@ -1,0 +1,1 @@
+Instead you start an intent from the definition question itself. Because you started from a question the first intent already answers, the new one is placed above it. Above means it is read first. The definitions come here now, and the rest stays where it was.

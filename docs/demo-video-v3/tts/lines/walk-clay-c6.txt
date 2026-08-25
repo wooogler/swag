@@ -1,0 +1,1 @@
+You can make the rule narrower, and you do. The answer is still two lines. Nothing in the document says what a definition should receive, so the chatbot copies the format of the sentence that is already there.

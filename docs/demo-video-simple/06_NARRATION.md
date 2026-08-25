@@ -3,6 +3,8 @@
 > 읽을 것만. 대응 샷은 `03/04/05_SCRIPT_*`의 같은 번호. **영어로 녹음**, ⓐ·ⓑ·ⓒ 한 세션에서. 규칙은 전과 동일: 분당 155–165 단어 · 평탄한 톤 · 도구 명사(intent, rules, pin)에 강세 금지 · 비트마다 끊고 3초 · 괄호 지시는 읽지 않는다 · 화면 라벨은 대소문자 그대로.
 >
 > **LLM이 붙이는 이름(intent 제목·버전 이름)은 절대 읽지 않는다** — 매런 다르다.
+>
+> ⚠ **08-23 개정.** A3(배달본 문구) · B5(정렬 이름·사라진 색) · B6(버튼 이름) · B7·C7(**I'm done 소멸, Deploy가 한 번 묻는다**) · C1(히스토리가 비어 있지 않다) · C5(**Types 비트 신설**) · C6(드롭다운 순서)이 바뀌었다. 대체 문장 표에서 두 행이 빠졌다 — 분기가 아니라 본문이 되었기 때문이다.
 
 ---
 
@@ -15,13 +17,13 @@
 > The middle column lists every question students asked the chatbot — one row per question, with the student's ID and which turn it was. Text they pasted in is tagged. The search box narrows this list by the student's own words.
 
 **A3**
-> Click a question and the whole conversation opens on the right, with that question highlighted. Original, as delivered, is what the student actually received. Pasted text folds away, and these arrows step through the student's other questions.
+> Click a question and the whole conversation opens on the right, with that question highlighted. Above the reply, a line marks the one the student actually received. Text they pasted in folds away, and these arrows step through the student's other questions.
 
 **A4**
 > Pin a question to keep it in view — it moves into its own shelf above the list, and stays there whatever you select or change later. Pin it again to let it go.
 
 **A5**
-> And at the top: how many minutes you've been working this round, and Deploy — which sends your setup to the student chat when you decide it's ready. The next video shows how a setup is made.
+> And at the top: how many minutes you've been working this round, and Deploy — which sends your setup to the student chat, and ends the round, when you decide it's ready. It asks once before it does. The next video shows how a setup is made.
 
 ---
 
@@ -37,23 +39,23 @@
 > Reading a question and deciding it should be handled differently is the move this board is built around — so an intent starts from the question. The form opens right where the intent will sit, quoting what you started from; starter sets are there if you want a ready-made description, marked where this question already belongs. You write the description and the rule in your own words, and Add.
 
 **B4**
-> The tool then reads every question against your description — you can watch it work out where questions go, and each row gets a mark saying which intent now answers it. Open the intent and the question you started from sits at the top as its first example. The list below is ordered by these examples, most typical first — and a title has been written for you; the pencil changes it.
+> The tool then reads every question against your description — you can watch it work out where questions go, and each row gets a mark saying which intent now answers it. The intent opens on what you just made, with the question you started from at the top as its first example. The list below is ordered by those examples, closest first — and a title has been written for you; the pencil changes it.
 
 **B5**
-> Any question can be made another example — it changes the order, it does not move the question. Flip the order to Least like these and the top row answers a different question: of everything your words caught, what is least like what you meant? If something there isn't yours, you fix it the only way this board fixes anything — by rewriting the description — and Apply re-reads the log: rows leaving fade out red, rows arriving come in green.
+> Any question can be made another example — it changes the order, it does not move the question. Flip the order to Furthest first and the top row answers a different question: of everything your words caught, what is least like what you meant? If something there isn't yours, you fix it the only way this board fixes anything — by rewriting the description — and Apply re-reads the log, so the mark on each row settles again, and the one that isn't yours now says Uncategorized.
 
 **B6**
-> An intent doesn't need a question on screen — New intent starts one from scratch. Since you pointed at nothing, the tool writes three example questions from your description — they mirror what your words mean, they are not part of the setup, and Rewrite redoes them. The arrows change the order intents are read in — a question goes to the first one that claims it.
+> An intent doesn't need a question on screen — New intent starts one from scratch. Since you pointed at nothing, the tool writes three example questions from your description — they mirror what your words mean, they are not part of the setup, and Update examples redoes them. The arrows change the order intents are read in — a question goes to the first one that claims it.
 
 **B7**
-> Save keeps this point — versions are named for you, and each intent keeps its own history of what moved, the description or the rule. When you're ready, Deploy saves what's in effect and stamps it as the setup you stand behind — and an I'm done button appears for the end of the round.
+> Save keeps this point — versions are named for you, and each intent keeps its own history: every wording you kept, and how many questions that wording catches. When you're ready, Deploy asks once before it happens — it saves what's in effect, stamps it as the setup you stand behind, and ends the round.
 
 ---
 
 ## ⓒ Clay (≈425 단어 · 165 s)
 
 **C1**
-> In Clay, the left column is where the setup lives: one Rules document, in your own words, that says how the chatbot responds to every question. Below it, the versions you save will build up.
+> In Clay, the left column is where the setup lives: one Rules document, in your own words, that says how the chatbot responds to every question. Under it is its history, which starts from the chatbot as it was delivered — every version you save is kept there.
 
 **C2**
 > Say you've noticed students asking quick word questions — a spelling, a synonym — and the chatbot answering them unevenly: one word here, a whole paragraph there. You want these answered one way.
@@ -65,13 +67,13 @@
 > Apply, and the reply is worked out again under what you just wrote — you can read the exact text it ran under, right above the answer. The pinned questions are one click away, so checking the second one is immediate. This is the loop: write, apply, look.
 
 **C5**
-> A different kind of question — here the chatbot simply wrote the paragraphs. The same document answers this question too, so you add to it: a second paragraph, applied the same way. One document, so every change applies to every question — which is why the pinned ones are worth a look after each apply.
+> The middle column can also be read through prepared categories — pick one and the list narrows to it, with what that category covers written under the title. Here, the requests to write something outright. Open one and the same document you just wrote answers this question too: it still writes the paragraphs, because you haven't said anything about these yet. So you add to the document — a second paragraph, applied the same way. Then clear the category, and the question you pinned earlier is still answered the way you asked. You can narrow what you read; what you write applies to every question.
 
 **C6**
-> Save keeps this point — versions are named for you and listed on the left. On any reply you can switch what it's read under: any moment you've written, or Original, as delivered — the one answer no setup can reproduce, and the fixed point to compare against.
+> Save keeps this point — versions are named for you and kept under the document. On any reply you can switch what it's read under: any moment you've written, or at the bottom of the list, Original, as delivered — the one answer no setup can reproduce, and the fixed point to compare against.
 
 **C7**
-> When you're ready, Deploy saves what's in effect and stamps it as the setup you stand behind — and an I'm done button appears for the end of the round.
+> When you're ready, Deploy saves what's in effect and stamps it as the setup you stand behind. It asks once before it does, and confirming ends the round.
 
 ---
 
@@ -80,18 +82,20 @@
 | 언제 | 대체할 곳 | 읽을 문장 |
 |---|---|---|
 | ⓑ B5 — 경계 질문이 안 잡혀 When 수정을 생략할 때 | B5 후반 두 문장 | *"If something there isn't yours, rewriting the description is how you'd fix it — Apply re-reads the log."* |
-| ⓑ B5 — diff 색이 안 보일 때 | 마지막 절 | *"…and Apply re-reads the log against the new wording."* |
+| ⓑ B5 — 소속이 실제로 안 바뀔 때 | 마지막 절 | *"…and Apply re-reads the log against the new wording."* |
 | ⓑ B4 — 제목 생성이 5 s 넘게 늦을 때 | 마지막 절 삭제 | (연필 언급 없이 끝) |
+| ⓒ C5 — Drafting 분류를 못 쓰게 될 때 | 첫 세 문장 삭제 | *"A different kind of question — here the chatbot simply wrote the paragraphs. The same document answers this question too, so you add to it…"* (구 C5 도입부로 되돌린다) |
 | ⓒ C5 — P11·1 대신 P30·3/P56·1을 쓸 때 | 해당 없음 | VO는 질문을 지칭하지 않는다 |
-| ⓑ B7/ⓒ C7 — I'm done을 빼기로 할 때 | 마지막 절 | *"…the setup you stand behind."* 로 끝(두 편 동일하게) |
 | ⓐ A5 — 단독 재생용 | 마지막 문장 삭제 | |
 
 ## 검수 체크 (녹음 후)
 
-- [ ] ⓑ·ⓒ 길이 차 ≤ 7 s
+- [ ] ⓑ·ⓒ 길이 차 ≤ 20 s(`01_PLAN` §4 [08-23 완화] — 초 단위로 맞추지 않는다)
 - [ ] ⓒ 트랙에 "intent" 0회
 - [ ] SCORE / baseline / treatment / control / Prolific / 연구팀 0회
 - [ ] 비교급·가치어 0회 · 기준(몇 개, 좋은 rule) 0회 · 이름 뜻 설명 0회
 - [ ] LLM이 붙인 제목·버전 이름을 읽지 않았다
-- [ ] B2와 C2가 같은 문장이다(관찰의 패리티) · B7과 C7의 Deploy 문장이 같다
+- [ ] B2와 C2가 같은 문장이다(관찰의 패리티) · B7과 C7이 **같은 사실**을 말한다(Deploy가 한 번 묻고, 확인이 라운드를 끝낸다)
+- [ ] **"I'm done" 0회**(버튼이 없어졌다) · **"Original (as delivered)"를 ⓐ에서 읽지 않았다**(그 시점 화면에 없다)
+- [ ] ⓒ 트랙이 Types를 **읽는 방법**으로만 말했다 — "이 분류로 규칙을 만든다" 류 0회
 - [ ] "warning" 계열 표현 0회 — 사실 진술만(§13 불변식 + Simple 원칙 4)

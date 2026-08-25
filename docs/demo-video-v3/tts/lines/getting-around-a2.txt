@@ -1,0 +1,1 @@
+The middle column lists every question students asked the chatbot. One row for each question, with the student's ID and which turn it was. Text the student pasted in is marked. The search box shows only the questions that contain the words you type.

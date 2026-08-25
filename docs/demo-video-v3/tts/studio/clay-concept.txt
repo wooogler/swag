@@ -1,0 +1,9 @@
+Students in this course wrote with a chatbot. You do not answer their questions. You write the instructions for the chatbot that answers them, the way you would instruct a teaching assistant who works without you in the room. What you write decides what students receive.
+
+In Clay, your instructions are a single document, written in your own words. There are no forms and no fields. You write sentences, and those sentences are the whole setup.
+
+Whatever a student asks, the chatbot reads your whole document. Not a selected part of it. The whole document, every time. Nothing narrows it to the kind of question that has arrived.
+
+So a paragraph you write for one kind of question is also read when a different kind of question arrives. Nothing selects which paragraph applies. All of them are present, all of the time.
+
+You work in a loop. Write, try it, and read the answer it now gives to a question students already asked. Save any version you might want later. When you are ready, you deploy. That ends the round, and from then on your students use the chatbot you set up.

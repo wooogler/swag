@@ -1,0 +1,1 @@
+Whatever a student asks, the chatbot reads your whole document. Not a selected part of it. The whole document, every time. Nothing narrows it to the kind of question that has arrived.

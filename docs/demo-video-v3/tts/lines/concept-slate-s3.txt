@@ -1,0 +1,1 @@
+Before it answers, the chatbot checks your list from top to bottom. Each question belongs to exactly one intent: the first description that matches it. The rest are not used, and the rule of that intent writes the reply.

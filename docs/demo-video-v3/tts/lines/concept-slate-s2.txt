@@ -1,0 +1,1 @@
+In Slate, your instructions are a list of intents. An intent has two parts: a description of one kind of question, and the rule for answering that kind. A when, and a then.

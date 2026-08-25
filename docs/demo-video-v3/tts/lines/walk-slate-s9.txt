@@ -1,0 +1,1 @@
+The starter sets contain descriptions that are already written. You choose the one for this request, so you only write the rule: do not rewrite the text, show which sentences could be removed. Add it, and the question you pinned is answered by this intent.

@@ -1,0 +1,1 @@
+This is the Chatbot Studio. It starts with a short briefing: your task for this round, the assignment the students were given, and the prompt the chatbot began with. You can open it again any time from Your task, in the header.

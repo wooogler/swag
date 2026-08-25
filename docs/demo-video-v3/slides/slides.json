@@ -1,0 +1,24 @@
+{
+  "order": [
+    "clay-part-1-how-it-works",
+    "clay-part-2-getting-around",
+    "clay-part-3-worked-example",
+    "clay-1-brief",
+    "clay-2-document",
+    "clay-3-every-question",
+    "clay-4-read-for-all",
+    "clay-5-loop",
+    "slate-part-1-how-it-works",
+    "slate-part-2-getting-around",
+    "slate-part-3-worked-example",
+    "slate-1-brief",
+    "slate-2-intents",
+    "slate-3-first-match",
+    "slate-4-leftover",
+    "slate-5-loop"
+  ],
+  "duplicates": {
+    "slate-1-brief": "clay-1-brief",
+    "slate-5-loop": "clay-5-loop"
+  }
+}

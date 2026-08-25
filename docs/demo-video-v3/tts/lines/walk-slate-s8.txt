@@ -1,0 +1,1 @@
+Then you read the questions that are left. Here a student asks the chatbot to make their own paragraph shorter, and the chatbot writes a shorter version. Pin it, and this time start an intent without choosing a question first.

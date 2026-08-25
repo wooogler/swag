@@ -1,0 +1,1 @@
+You work in a loop. Write, try it, and read the answer it now gives to a question students already asked. Save any version you might want later. When you are ready, you deploy. That ends the round, and from then on your students use the chatbot you set up.

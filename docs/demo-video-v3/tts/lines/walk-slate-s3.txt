@@ -1,0 +1,1 @@
+So you start an intent from the question you are reading. You describe the kind: a spelling, a synonym, how to use a term. And you write the rule: one or two lines, the word and one example. Then the tool compares every question in the log with your description.

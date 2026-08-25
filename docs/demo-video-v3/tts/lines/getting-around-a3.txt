@@ -1,0 +1,1 @@
+Click a question and the whole conversation opens on the right, with that question highlighted. A line above the reply marks the answer the student actually received. Pasted text is hidden until you open it, and these arrows move to the student's other questions.

@@ -1,0 +1,9 @@
+Students in this course wrote with a chatbot. You do not answer their questions. You write the instructions for the chatbot that answers them, the way you would instruct a teaching assistant who works without you in the room. What you write decides what students receive.
+
+In Slate, your instructions are a list of intents. An intent has two parts: a description of one kind of question, and the rule for answering that kind. A when, and a then.
+
+Before it answers, the chatbot checks your list from top to bottom. Each question belongs to exactly one intent: the first description that matches it. The rest are not used, and the rule of that intent writes the reply.
+
+The last place in the list holds every question that did not belong to any intent above it. It has a rule but no description, so it answers everything that remains.
+
+You work in a loop. Write, try it, and read the answer it now gives to a question students already asked. Save any version you might want later. When you are ready, you deploy. That ends the round, and from then on your students use the chatbot you set up.

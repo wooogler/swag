@@ -341,6 +341,25 @@ change, is entirely up to you.
 
 > **금지 2개.** 양 조건에 **문자 그대로 동일한 문구**여야 한다(셸 패리티). **남은 시간 카운트다운을 표시하지 않는다.**
 
+**역할 한 줄 (리드, 과제 문장 위) [2026-08-23 신설 · 구현]**
+
+시작 화면 맨 위, **네 문장 바깥**에 한 줄이 선다:
+- EN: *"Students in this course wrote with a chatbot, and it answered them without you in the room. What you set up here is what it answers with."*
+- 국문: "이 수업의 학생들은 챗봇과 함께 글을 썼고, 챗봇은 선생님이 없는 자리에서 답했습니다. 여기서 설정하시는 것이 그 챗봇이 답하는 근거가 됩니다."
+
+> **왜 문장 안이 아니라 위인가.** 네 문장은 §6.1의 진행자 발화와 **글자 그대로 같아야** 하고(두 벌로 오면 과제가 둘이 된다), 얼마나 읽고 얼마나 고치는가는 **RQ1의 주 측정값**이라 화면이 노력에 기울면 안 된다. 리드는 **서 있는 상황만** 말한다 — 누구의 챗봇이고, 누구에게 답했고, 설정이 무엇을 위한 것인지. 분량도, 기준도, 격려도 없다.
+>
+> **개념 영상과 같은 문장 계열이다.** 워크스루 앞에 붙는 개념 덱 1장(`docs/demo-video-v3/02_CONCEPT_SLIDES.md` C1/S1)이 같은 사실을 같은 어휘로 연다 — 영상과 화면이 두 목소리로 도착하지 않게 하려는 것이다.
+>
+> 양 조건 동일. 스터디 밖(연구자가 자기 과제를 여는 경우)에서는 렌더되지 않는다.
+
+**영상 단계 문구** (`TutorialStep`, 과제 화면 **이전**) [2026-08-23 개정 · 구현]
+- 블록 1 — 제목 *"Before you start"* / 본문 *"You are about to set up the chatbot that students wrote with in a real course. First, a short walkthrough of the version you will be using. Watch it through to the end — if anything is unclear, ask on the Zoom call before you go on."*
+- 블록 2 — 제목 *"Second part"* / 본문 *"Another course, another group of students, and a different version of the tool. Here is a walkthrough of that one — watch it through to the end."*
+- 여기도 같은 규율을 받는다: 역할과 상황만, 분량·기준·격려 0.
+
+> ⚠ **§6.1의 "about {four/three} minutes"는 낡았다.** 데모 영상 v3(개념 슬라이드 + Getting around + 워크스루)은 블록 1 ≈ **7분**, 블록 2 ≈ **5분 50초**다(`docs/demo-video-v3/01_PLAN.md` §1-2). 진행자 런북의 그 숫자를 고쳐야 한다.
+
 ### 6.3 블록 테스트 UI 문구 [구현]
 
 문항 화면 = **직전 대화 턴들 + 학생 질문**. 참가자의 설정 화면은 내내 열려 있다.

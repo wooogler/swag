@@ -1,0 +1,9 @@
+This is the Chatbot Studio. It starts with a short briefing: your task for this round, the assignment the students were given, and the prompt the chatbot began with. You can open it again any time from Your task, in the header.
+
+The middle column lists every question students asked the chatbot. One row for each question, with the student's ID and which turn it was. Text the student pasted in is marked. The search box shows only the questions that contain the words you type.
+
+Click a question and the whole conversation opens on the right, with that question highlighted. A line above the reply marks the answer the student actually received. Pasted text is hidden until you open it, and these arrows move to the student's other questions.
+
+Pin a question to keep it visible. It moves to a separate area above the list, and it stays there no matter what you select or change later. Click the pin again to remove it.
+
+And at the top: how many minutes you have worked in this round, and Deploy, which sends your setup to the student chat and ends the round, when you decide it is ready. It asks you to confirm first. The next part shows how to build a setup.
