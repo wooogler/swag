@@ -63,6 +63,18 @@ import { ensureStudyTables } from './store';
 
 /** Generous next to the runtime's 15s/0 — a batch may wait, a student may not. */
 const CALL_OPTIONS = { timeoutMs: 45_000, maxRetries: 2 };
+/**
+ * The generation leg, which writes prose rather than a verdict and so gets
+ * longer — but is capped, which it was not.
+ *
+ * It ran on the SDK's own defaults while the classifier leg beside it was
+ * budgeted, so one hung turn could hold the whole batch, and this batch is
+ * awaited inside the hand-off a participant clicks. Fail fast beats waiting:
+ * a turn that times out is retried by FAIL_OPEN_RETRIES below, and a batch
+ * that cannot finish is refused rather than stored, so the cost of a tight
+ * budget is a retry and the cost of no budget is a stranded session.
+ */
+const CHAT_CALL_OPTIONS = { timeoutMs: 60_000, maxRetries: 1 };
 /** Retries of the WHOLE resolve+generate step when it fails open. */
 const FAIL_OPEN_RETRIES = 2;
 
@@ -121,6 +133,38 @@ function priorExchange(context: BankContext): {
     }
   }
   return { prevQueryText, prevResponseText };
+}
+
+/**
+ * Did the model emit its whole reply twice?
+ *
+ * Seen in the wild while auditing rule-following: 2 of 360 generations came
+ * back as an exact doubling with no separator — "What would you write or say in
+ * response to that question?What would you write or say in response to that
+ * question?". Both were under the shortest rule in that battery (a single
+ * question back to the student, ~15 words), and the other 348 replies showed
+ * nothing like it, so it looks like a short-output artefact rather than
+ * anything the configuration did.
+ *
+ * It matters here and not on the board: a doubled reply on the board is a bad
+ * screen someone regenerates, while a doubled reply HERE is written to
+ * study_generated_responses and scored as what the participant's configuration
+ * produces. Cheaper to retry than to explain in the analysis.
+ *
+ * Exact halves only. Anything looser risks throwing away a legitimate reply
+ * that repeats a phrase.
+ */
+function isSelfDuplicated(text: string): boolean {
+  const s = text.trim();
+  if (s.length < 40) return false;
+  // Two cuts, so a reply doubled across a single separator character (a
+  // newline, a space) is caught as well as one doubled with nothing between.
+  for (const cut of [Math.floor(s.length / 2), Math.ceil(s.length / 2)]) {
+    const head = s.slice(0, cut).trim();
+    const tail = s.slice(cut).trim();
+    if (head.length >= 20 && head === tail) return true;
+  }
+  return false;
 }
 
 export async function getBankItems(
@@ -324,10 +368,19 @@ export async function generateForClone(args: {
               outcome = resolved.outcome;
             }
 
-            const response = await runChatTurn(systemPrompt, messages);
+            const response = await runChatTurn(systemPrompt, messages, CHAT_CALL_OPTIONS);
             if (!response.trim()) {
               if (attempt === FAIL_OPEN_RETRIES) {
                 results.push({ bankItemId: item.id, status: 'failed', reason: 'empty_response' });
+                return;
+              }
+              continue;
+            }
+            // Same posture as an empty reply: retry, and fail the item rather
+            // than store a doubled one as the configuration's output.
+            if (isSelfDuplicated(response)) {
+              if (attempt === FAIL_OPEN_RETRIES) {
+                results.push({ bankItemId: item.id, status: 'failed', reason: 'duplicated_response' });
                 return;
               }
               continue;

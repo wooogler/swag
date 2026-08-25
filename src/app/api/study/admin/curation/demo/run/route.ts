@@ -20,7 +20,12 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { requireAdmin } from '@/lib/study/admin-guard';
-import { ADMIN_RETURN_COOKIE, ensureDemoWorkspace } from '@/lib/study/demo';
+import {
+  ADMIN_RETURN_COOKIE,
+  ADMIN_RETURN_TO_COOKIE,
+  ensureDemoWorkspace,
+  isAdminReturnPath,
+} from '@/lib/study/demo';
 import {
   STUDIO_VIEWS,
   STUDY_SESSION_MAX_AGE_SECONDS,
@@ -40,6 +45,8 @@ const bodySchema = z.object({
    * survey, the blind A/B — which is a different recording.
    */
   start: z.enum(['session', 'board']).default('board'),
+  /** Which admin page to come back to. Bounded on the way out, not here. */
+  returnTo: z.string().optional(),
 });
 
 export async function POST(req: Request) {
@@ -80,6 +87,14 @@ export async function POST(req: Request) {
     ...common,
     maxAge: STUDY_SESSION_MAX_AGE_SECONDS,
   });
+  if (isAdminReturnPath(parsed.returnTo)) {
+    cookieStore.set(ADMIN_RETURN_TO_COOKIE, parsed.returnTo, {
+      ...common,
+      maxAge: STUDY_SESSION_MAX_AGE_SECONDS,
+    });
+  } else {
+    cookieStore.delete(ADMIN_RETURN_TO_COOKIE);
+  }
   cookieStore.set('user_session', workspace.participant.instructorId, {
     ...common,
     maxAge: STUDY_SESSION_MAX_AGE_SECONDS,

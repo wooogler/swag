@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 import { listParticipantStatuses } from '@/lib/study/console-store';
 import { STUDY_PHASES } from '@/lib/study/phases';
-import { STUDY_DATASETS } from '@/lib/study/config';
+import { activeStudyPair, listStudyDatasets } from '@/lib/study/datasets';
 import { requireAdmin } from '@/lib/study/admin-guard';
 import { ensureStudyTables } from '@/lib/study/store';
 
@@ -17,7 +17,11 @@ export async function GET() {
     return NextResponse.json({
       participants: await listParticipantStatuses(),
       phases: STUDY_PHASES,
-      datasets: STUDY_DATASETS.map((d) => ({ key: d.key, label: d.label })),
+      // Every dataset, plus which two the study is currently made of: the
+      // console both LISTS them (a participant's clone may be any of them) and
+      // POINTS the study at a pair.
+      datasets: await listStudyDatasets(),
+      studyPair: (await activeStudyPair()).map((d) => d.key),
       actor: gate.actor.code,
     });
   } catch (err) {

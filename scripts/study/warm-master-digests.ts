@@ -43,7 +43,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import { scoreConversationDigests, studySetMembers } from '../../src/db/schema';
-import { STUDY_DATASETS, type StudyDataset } from '../../src/lib/study/config';
+import { listStudyDatasets, type StudyDataset } from '../../src/lib/study/datasets';
 import {
   CONVERSATION_DIGEST_VERSION,
   getConversationDigests,
@@ -152,8 +152,8 @@ async function plansFor(dataset: StudyDataset): Promise<Plan[]> {
   ];
   // Same id means no study master has been built yet — resolveMasterAssignmentId
   // fell back to the full one, and there is only one assignment to warm.
-  if (studyMasterId !== dataset.assignmentId) {
-    targets.push({ label: `${dataset.key} full master`, assignmentId: dataset.assignmentId });
+  if (studyMasterId !== dataset.sourceAssignmentId) {
+    targets.push({ label: `${dataset.key} source log`, assignmentId: dataset.sourceAssignmentId });
   }
 
   const plans: Plan[] = [];
@@ -174,10 +174,11 @@ async function plansFor(dataset: StudyDataset): Promise<Plan[]> {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const only = typeof args.dataset === 'string' ? args.dataset : null;
-  const datasets = only ? STUDY_DATASETS.filter((d) => d.key === only) : STUDY_DATASETS;
+  const all = await listStudyDatasets();
+  const datasets = only ? all.filter((d) => d.key === only) : all;
   if (datasets.length === 0) {
     console.error(
-      `No dataset named "${only}". Known: ${STUDY_DATASETS.map((d) => d.key).join(', ')}`
+      `No dataset named "${only}". Known: ${all.map((d) => d.key).join(', ')}`
     );
     process.exit(1);
   }

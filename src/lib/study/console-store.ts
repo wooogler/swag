@@ -7,7 +7,7 @@
  * is the study's, not the UI's: a test phase entered without current answers
  * would measure a configuration the participant no longer has.
  */
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import {
   baselinePromptVersions,
@@ -40,6 +40,7 @@ import {
 } from './phases';
 import { logParticipantEvent } from './events';
 import { getSurveyConfig, getSurveyItems } from './survey-store';
+import { recordingsFor } from './recording-store';
 
 /**
  * What a participant has actually BUILT in one workspace, read out of the
@@ -92,12 +93,35 @@ export interface ParticipantStatus {
   clones: CloneStatus[];
   /** Blocking reasons for advancing out of the CURRENT phase, if any. */
   blockers: string[];
-  /** When the facilitator moved them into the current phase, and how long ago —
-   * the 30-minute work cap is watched with this. */
+  /** When the current phase began — in a configure block, when they pressed
+   * [Start] rather than when they were moved in (session.ts, same rule). */
   phaseSince: string | null;
-  phaseMinutes: number | null;
+  /** Minutes spent in each phase so far, summed over every visit, the current
+   * one included and still running. Absent = never entered. This is the whole
+   * of the console's clock now: the elapsed minutes used to be one number for
+   * the current phase (`phaseMinutes`), which could say how long someone had
+   * been where they were and nothing about how they got there. */
+  phaseSpent: Partial<Record<StudyPhase, number>>;
   /** The most recent trace of them doing anything at all. */
   lastActivityAt: string | null;
+  /** Screen recording, per run. With nobody watching a shared screen this is
+   * the only way to know a participant is actually being recorded — and the
+   * check row (block 0) is how a researcher knows they can start at all. */
+  recordings: RecordingStatus[];
+}
+
+export interface RecordingStatus {
+  /** The download's address — the console links straight at the file. */
+  id: string;
+  /** 0 = the equipment check, 1 | 2 = a configure block. */
+  block: number;
+  segment: number;
+  chunksStored: number;
+  chunksDeclared: number | null;
+  bytes: number;
+  /** Open, or how it closed. */
+  endReason: string | null;
+  lastChunkAt: string | null;
 }
 
 /**
@@ -297,10 +321,24 @@ async function answeredFor(
   return { answered: row?.n ?? 0, total: bank.length };
 }
 
-/** When the facilitator last moved them — the clock the 30-minute cap runs on. */
-async function lastPhaseChange(participantId: string): Promise<Date | null> {
-  const [row] = await db
-    .select({ createdAt: studyEvents.createdAt })
+/**
+ * Every clock event a participant has, oldest first.
+ *
+ * One read, two answers: when the current phase began, and how long each
+ * earlier phase actually took. It used to be a single-row query for the latest
+ * event, which could answer the first and nothing at all about the steps
+ * behind it. A session has a dozen of these rows, so reading the whole trail
+ * costs nothing the one row did not.
+ */
+async function clockEvents(
+  participantId: string
+): Promise<{ eventType: string; payload: unknown; createdAt: Date }[]> {
+  return db
+    .select({
+      eventType: studyEvents.eventType,
+      payload: studyEvents.payload,
+      createdAt: studyEvents.createdAt,
+    })
     .from(studyEvents)
     .where(
       and(
@@ -310,12 +348,63 @@ async function lastPhaseChange(participantId: string): Promise<Date | null> {
         // the participant's own readout runs out, and that readout starts at
         // the task screen's [Start], not at the advance into the phase
         // (session.ts, same two types).
+        //
+        // `phase_forced` is deliberately absent: it is logged ALONGSIDE the
+        // phase_advance that actually moved them (participants/phase route),
+        // so counting it would double the transition.
         inArray(studyEvents.eventType, ['phase_advance', 'work_started'])
       )
     )
-    .orderBy(desc(studyEvents.createdAt))
-    .limit(1);
-  return row?.createdAt ?? null;
+    .orderBy(asc(studyEvents.createdAt));
+}
+
+/**
+ * How long each phase took, summed over every visit to it.
+ *
+ * Built from the same events the participant's own readout is derived from,
+ * on the same two rules, so the two sides can never disagree about when
+ * someone is late:
+ *
+ *  - a phase runs from the advance INTO it until the next advance out;
+ *  - a configure block runs from the participant's own [Start] instead, so
+ *    the minutes on the bar are the minutes on task — the same budget the
+ *    20/25 thresholds are set against (config.ts). The wait between landing on
+ *    the task screen and pressing [Start] belongs to no phase's total, which
+ *    is the point of measuring it that way.
+ *
+ * Visits are SUMMED because a facilitator can step someone back and forward
+ * again; "how long did block 1 take" then has to mean all of it, not the last
+ * try. The open segment is added last, from `since`, so the phase they are in
+ * right now carries its own running count rather than waiting for the advance
+ * that closes it.
+ */
+function phaseDurations(
+  events: { eventType: string; payload: unknown; createdAt: Date }[],
+  current: StudyPhase,
+  since: Date | null,
+  now: number
+): Partial<Record<StudyPhase, number>> {
+  const spent: Partial<Record<StudyPhase, number>> = {};
+  const add = (phase: StudyPhase, ms: number) => {
+    if (ms > 0) spent[phase] = (spent[phase] ?? 0) + ms;
+  };
+  let open: StudyPhase | null = null;
+  for (let i = 0; i < events.length - 1; i += 1) {
+    const e = events[i];
+    if (e.eventType !== 'work_started') {
+      const to = (e.payload as { to?: string } | null)?.to;
+      open = isStudyPhase(to) ? to : null;
+    }
+    // A segment that ENDS at a [Start] is the reading of the task screen: the
+    // phase has begun but its clock has not.
+    if (open && events[i + 1].eventType !== 'work_started') {
+      add(open, events[i + 1].createdAt.getTime() - e.createdAt.getTime());
+    }
+  }
+  if (since) add(current, now - since.getTime());
+  return Object.fromEntries(
+    Object.entries(spent).map(([phase, ms]) => [phase, Math.floor(ms / 60_000)])
+  );
 }
 
 /**
@@ -411,10 +500,13 @@ export async function getParticipantStatus(
     })
   );
 
-  const [phaseSince, lastActivityAt] = await Promise.all([
-    lastPhaseChange(participant.id),
+  const [clock, lastActivityAt, recordings] = await Promise.all([
+    clockEvents(participant.id),
     lastActivityFor(participant, cloneStatuses),
+    recordingsFor(participant.id),
   ]);
+  const now = Date.now();
+  const phaseSince = clock.length > 0 ? clock[clock.length - 1].createdAt : null;
 
   return {
     id: participant.id,
@@ -428,8 +520,18 @@ export async function getParticipantStatus(
     clones: cloneStatuses.sort((a, b) => (a.block ?? 9) - (b.block ?? 9)),
     blockers: advanceBlockers(phase, cloneStatuses),
     phaseSince: phaseSince ? phaseSince.toISOString() : null,
-    phaseMinutes: phaseSince ? Math.floor((Date.now() - phaseSince.getTime()) / 60_000) : null,
+    phaseSpent: phaseDurations(clock, phase, phaseSince, now),
     lastActivityAt: lastActivityAt ? lastActivityAt.toISOString() : null,
+    recordings: recordings.map((r) => ({
+      id: r.id,
+      block: r.block,
+      segment: r.segment,
+      chunksStored: r.chunksStored,
+      chunksDeclared: r.chunksDeclared,
+      bytes: r.bytes,
+      endReason: r.endReason,
+      lastChunkAt: r.lastChunkAt ? r.lastChunkAt.toISOString() : null,
+    })),
   };
 }
 

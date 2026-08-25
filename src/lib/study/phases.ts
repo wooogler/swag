@@ -3,15 +3,18 @@
  * in, and where they are in the two-block protocol.
  *
  * The participant drives the phase themselves (advance.ts), one step forward at
- * a time; the session is watched over a shared screen rather than gated, and
- * the console keeps the moves — back, jump, force — that only exist to recover
- * a run. So this module owns the ordering rules and the app only renders what
- * the current phase allows.
+ * a time, and since the study went to parallel breakout rooms that is the only
+ * thing driving it: nobody is watching a shared screen, so every step has to be
+ * completable from the screen alone. The console keeps the moves — back, jump,
+ * force — but they are now recovery a researcher has to be TOLD to make rather
+ * than something they see. So this module owns the ordering rules and the app
+ * only renders what the current phase allows.
  */
-// STUDY_DATASETS, not the curation masters: a block is over what the
-// participant actually holds a clone of.
+// The SEED datasets, not the curation sources: a block is over what the
+// participant actually holds a clone of, and the seeds are what every row that
+// predates the dataset registry was made of.
 import {
-  STUDY_DATASETS,
+  SEED_DATASETS,
   viewFor,
   type StudioArm,
   type StudioFamily,
@@ -43,6 +46,11 @@ export const STUDY_PHASES = [
   'block1_work',
   'block1_survey',
   'block1_test',
+  // Named `break` because that is what it was, and the string is stamped on
+  // every row and every phase_advance payload the pilot left behind. It is not
+  // a break any more: it is the second walkthrough, and under breakout rooms a
+  // screen that invites someone to step away is a screen nobody comes back
+  // from on time. PHASE_LABELS below carries what it now is.
   'break',
   'block2_work',
   'block2_survey',
@@ -64,7 +72,7 @@ export const PHASE_LABELS: Record<StudyPhase, string> = {
   block1_work: 'Block 1 · configure',
   block1_survey: 'Block 1 · workload',
   block1_test: 'Block 1 · test',
-  break: 'Break',
+  break: 'Block 2 · walkthrough',
   block2_work: 'Block 2 · configure',
   block2_survey: 'Block 2 · workload',
   block2_test: 'Block 2 · test',
@@ -128,25 +136,57 @@ export interface BlockPlanEntry {
 /**
  * Block 1 of each cell; block 2 is the other dataset in the other ARM.
  *
- * The cell carries the arm, not the whole condition. Which build of the tools
- * those arms come in — the full board or the simple one — is a property of the
- * participant (`condition_family`), because it does not vary within a session:
- * a participant does both blocks in one family, and crossing it into the cells
- * would make eight of them for a design that still counterbalances four
- * things.
+ * The cell carries the arm and a SLOT, not a dataset name. Which dataset is
+ * block 1's material is a property of the study as it is currently configured
+ * (datasets.ts) and the cell only says which of the two a participant meets
+ * first — so pointing the study at a different pair re-counterbalances the same
+ * four cells instead of orphaning them.
+ *
+ * Which build of the tools those arms come in — the full board or the simple
+ * one — is a property of the participant (`condition_family`), because it does
+ * not vary within a session: a participant does both blocks in one family, and
+ * crossing it into the cells would make eight of them for a design that still
+ * counterbalances four things.
  */
-const CELL_FIRST: Record<StudyCell, { datasetKey: string; arm: StudioArm }> = {
-  1: { datasetKey: 'swag', arm: 'baseline' },
-  2: { datasetKey: 'swag', arm: 'score' },
-  3: { datasetKey: 'nirvana', arm: 'score' },
-  4: { datasetKey: 'nirvana', arm: 'baseline' },
+const CELL_FIRST: Record<StudyCell, { slot: 1 | 2; arm: StudioArm }> = {
+  1: { slot: 1, arm: 'baseline' },
+  2: { slot: 1, arm: 'score' },
+  3: { slot: 2, arm: 'score' },
+  4: { slot: 2, arm: 'baseline' },
 };
 
-export function planForCell(cell: StudyCell, family: StudioFamily = 'full'): BlockPlanEntry[] {
+/** The pair every row that predates the registry was made of. */
+const SEED_PAIR = [...SEED_DATASETS].sort((a, b) => a.slot - b.slot).map((d) => d.key);
+
+/**
+ * The plan a cell implies over a given pair of datasets.
+ *
+ * `pair` is [block-slot-1, block-slot-2] — the study's current material, read
+ * from the registry by whoever is CREATING a participant. Everything after that
+ * reads the plan off the participant's own row (blockPlanFromOrder), because a
+ * study that repoints mid-session must not retitle the blocks of someone
+ * already in one.
+ */
+export function planForCell(
+  cell: StudyCell,
+  family: StudioFamily = 'full',
+  pair: string[] = SEED_PAIR
+): BlockPlanEntry[] {
   const first = CELL_FIRST[cell];
-  const keys = STUDY_DATASETS.map((d) => d.key);
-  const firstKey = keys.includes(first.datasetKey) ? first.datasetKey : keys[0] ?? first.datasetKey;
+  const keys = pair.length >= 2 ? pair : SEED_PAIR;
+  const firstKey = keys[first.slot - 1] ?? keys[0];
   const secondKey = keys.find((k) => k !== firstKey) ?? firstKey;
+  return planFor(cell, family, firstKey, secondKey);
+}
+
+/** The two blocks, given which dataset each one is. */
+function planFor(
+  cell: StudyCell,
+  family: StudioFamily,
+  firstKey: string,
+  secondKey: string
+): BlockPlanEntry[] {
+  const first = CELL_FIRST[cell];
   const secondArm: StudioArm = first.arm === 'score' ? 'baseline' : 'score';
   return [
     { block: 1, datasetKey: firstKey, condition: viewFor(family, first.arm) },
@@ -155,8 +195,12 @@ export function planForCell(cell: StudyCell, family: StudioFamily = 'full'): Blo
 }
 
 /** What a cell reads as, for the console and the runbook. */
-export function cellLabel(cell: StudyCell, family: StudioFamily = 'full'): string {
-  return planForCell(cell, family)
+export function cellLabel(
+  cell: StudyCell,
+  family: StudioFamily = 'full',
+  pair: string[] = SEED_PAIR
+): string {
+  return planForCell(cell, family, pair)
     .map((p) => `${p.condition}(${p.datasetKey})`)
     .join(' → ');
 }
@@ -187,6 +231,14 @@ export interface CellSource {
   /** 'simple' puts both blocks on the stripped-down board; anything else (and
    * every row that predates the column) runs the full one. */
   conditionFamily?: string | null;
+  /**
+   * The two dataset keys, in block order, stamped when the participant was
+   * created (provision.ts). THE authority on what their blocks are made of: the
+   * study's current pair can be repointed at any time, and a participant's
+   * blocks cannot move under them when it is. Null on rows made before the
+   * column existed, which ran the seed pair.
+   */
+  blockOrder?: string | null;
 }
 
 export function cellOf(p: CellSource): StudyCell {
@@ -200,17 +252,34 @@ export function familyOf(p: CellSource): StudioFamily {
 
 /** Which dataset this participant works on FIRST. */
 export function firstDatasetFor(p: CellSource): string {
-  return planForCell(cellOf(p), familyOf(p))[0].datasetKey;
+  return blockPlan(p)[0].datasetKey;
 }
 
-/** Dataset order for the two blocks, and the condition each one carries. */
+/**
+ * Dataset order for the two blocks, and the condition each one carries.
+ *
+ * Read from the participant's stamp when there is one — the pair they were
+ * created against — and only otherwise from the seeds. Deliberately sync and
+ * deliberately not a registry read: this is called on every phase check, and it
+ * must return the same answer during a session no matter what the console has
+ * since been pointed at.
+ */
 export function blockPlan(p: CellSource): BlockPlanEntry[] {
-  return planForCell(cellOf(p), familyOf(p));
+  const cell = cellOf(p);
+  const family = familyOf(p);
+  const stamped = (p.blockOrder ?? '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean);
+  if (stamped.length === 2) return planFor(cell, family, stamped[0], stamped[1]);
+  return planForCell(cell, family);
 }
 
 /** Human-readable cell description for the console and the runbook. */
 export function cellSummary(p: CellSource): string {
-  return cellLabel(cellOf(p), familyOf(p));
+  return blockPlan(p)
+    .map((b) => `${b.condition}(${b.datasetKey})`)
+    .join(' → ');
 }
 
 /* ------------------------------------------------------------------ */

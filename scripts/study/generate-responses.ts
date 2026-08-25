@@ -16,7 +16,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../src/db/db';
 import { studyClones, studyParticipants } from '../../src/db/schema';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { activeStudyKeys } from '../../src/lib/study/datasets';
 import { generateForClone, isGenerationCurrent, type BankKind } from '../../src/lib/study/generate';
 
 function argValue(flag: string): string | null {
@@ -49,7 +49,7 @@ async function main() {
     // Block test = the clone's own dataset. A/B = both, which is what makes a
     // configuration answer the OTHER dataset's questions (home/away).
     const datasetKeys =
-      kind === 'test' ? [clone.datasetKey] : CURATION_DATASETS.map((d) => d.key);
+      kind === 'test' ? [clone.datasetKey] : await activeStudyKeys();
 
     for (const datasetKey of datasetKeys) {
       const where = `${participant.participantNumber} · ${clone.datasetKey} (${clone.condition}) · ${kind} · ${datasetKey}`;

@@ -10,7 +10,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { studyClones, studyParticipants, type StudyClone, type StudyParticipant } from '@/db/schema';
-import { PARTICIPANT_NUMBER_RE } from './config';
+import { PARTICIPANT_NUMBER_RE, SEED_DATASETS } from './config';
 
 let ensured: Promise<void> | null = null;
 
@@ -400,22 +400,41 @@ export async function ensureStudyTables(): Promise<void> {
         sql`ALTER TABLE "study_curation_meta" ADD COLUMN IF NOT EXISTS "demo_participants" jsonb`
       );
 
-      // Set sizes, editable by a researcher. Singleton: the design requires the
-      // two datasets to carry matching set sizes, so this is deliberately NOT
-      // per-dataset — a per-dataset figure could silently break that.
+      // The dataset registry, and the two datasets the study has always run.
+      //
+      // Seeded rather than assumed: every keyed table above already holds rows
+      // filed under 'swag' and 'nirvana', so the registry has to start out
+      // agreeing with them or the first read would report the study's own
+      // material as belonging to no dataset. ON CONFLICT DO NOTHING because
+      // this runs on every boot and the row is the researcher's after the
+      // first one — a later label edit must not be reverted by a restart.
       await db.execute(sql`
-        CREATE TABLE IF NOT EXISTS "study_set_targets" (
-          "id" integer PRIMARY KEY NOT NULL DEFAULT 1,
-          "review" integer NOT NULL,
-          "test" integer NOT NULL,
-          "updated_at" timestamp NOT NULL,
-          "updated_by" text,
-          CONSTRAINT "study_set_targets_singleton" CHECK (id = 1)
+        CREATE TABLE IF NOT EXISTS "study_datasets" (
+          "key" text PRIMARY KEY NOT NULL,
+          "label" text NOT NULL,
+          "source_key" text NOT NULL,
+          "clone_title" text NOT NULL,
+          "owner_code" text,
+          "slot" integer,
+          "created_at" timestamp NOT NULL
         )`);
-      // Design v2 dropped the blind A/B, so the third target has nothing to
-      // size. NOT NULL with no default, so it has to go rather than be ignored:
-      // an insert that omitted it would fail at the database, not the type.
-      await db.execute(sql`ALTER TABLE "study_set_targets" DROP COLUMN IF EXISTS "ab"`);
+      // NULLs are distinct in a Postgres unique index, so this constrains only
+      // the datasets actually IN the study: one holder per block, any number
+      // idle.
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_datasets_slot_unique" ON "study_datasets" ("slot")`
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "study_datasets_source_idx" ON "study_datasets" ("source_key")`
+      );
+      for (const seed of SEED_DATASETS) {
+        await db.execute(sql`
+          INSERT INTO "study_datasets"
+            ("key", "label", "source_key", "clone_title", "owner_code", "slot", "created_at")
+          VALUES (${seed.key}, ${seed.label}, ${seed.sourceKey}, ${seed.cloneTitle}, NULL,
+                  ${seed.slot}, now())
+          ON CONFLICT ("key") DO NOTHING`);
+      }
 
       // The questionnaire, as a researcher currently has it worded. Singleton
       // JSON rather than a row per item: the whole instrument is edited and
@@ -570,6 +589,40 @@ export async function ensureStudyTables(): Promise<void> {
       // condition — could each be inserted twice and the upsert would never
       // find the row it meant to update.
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_final_survey_answers_unique" ON "study_final_survey_answers" ("participant_id","item_key",COALESCE("condition",''))`);
+
+      // ── Screen recording (browser-side capture, one row per recorder run) ─
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_recordings" (
+          "id" text PRIMARY KEY NOT NULL,
+          "participant_id" text NOT NULL,
+          "block" integer NOT NULL,
+          "segment" integer NOT NULL DEFAULT 1,
+          "assignment_id" text,
+          "phase" text,
+          "mime_type" text NOT NULL,
+          "started_at" timestamp NOT NULL,
+          "ended_at" timestamp,
+          "end_reason" text,
+          "chunks_declared" integer,
+          "chunks_stored" integer NOT NULL DEFAULT 0,
+          "bytes" integer NOT NULL DEFAULT 0,
+          "last_chunk_at" timestamp,
+          "client" jsonb
+        )`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "study_recordings_participant_idx" ON "study_recordings" ("participant_id")`);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "study_recording_chunks" (
+          "recording_id" text NOT NULL,
+          "seq" integer NOT NULL,
+          "data" bytea NOT NULL,
+          "created_at" timestamp NOT NULL
+        )`);
+      // The primary key is also the retry key: a chunk re-posted after a failed
+      // response collides with itself instead of doubling the file.
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "study_recording_chunks_pk" ON "study_recording_chunks" ("recording_id","seq")`);
+      // WebM is already compressed; letting TOAST try to compress it again
+      // spends CPU per chunk to save nothing.
+      await db.execute(sql`ALTER TABLE "study_recording_chunks" ALTER COLUMN "data" SET STORAGE EXTERNAL`);
 
       // FK-column indexes on core tables that Postgres does NOT auto-create.
       // Without them, deleting a clone's sessions/conversations/messages forces

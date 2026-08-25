@@ -32,20 +32,15 @@ import {
 } from '@/db/schema';
 import { ensureScoreTable } from '@/lib/score/queries';
 import { ensureIntentTables } from '@/lib/score/intent-store';
-import {
-  STUDY_DATASETS,
-  STUDY_EMAIL_DOMAIN,
-  studyMasterToken,
-  type StudioFamily,
-  type StudyDataset,
-} from './config';
+import { STUDY_EMAIL_DOMAIN, studyMasterToken, type StudioFamily } from './config';
+import { activeStudyKeys, requireStudyDataset, type StudyDataset } from './datasets';
 import {
   ensureStudyTables,
   getParticipantByNumber,
   normalizeParticipantNumber,
 } from './store';
 import { deleteParticipantClones, deleteParticipantCloneByDataset } from './teardown';
-import { blockPlan, cellOf, isStudyCell, planForCell, type StudyCell } from './phases';
+import { blockPlan, cellOf, familyOf, isStudyCell, planForCell, type StudyCell } from './phases';
 
 export type CloneCounts = Record<string, number>;
 
@@ -456,6 +451,11 @@ async function createAccount(
   const instructorId = randomUUID();
   const participantId = randomUUID();
   const email = `${number.toLowerCase()}@${STUDY_EMAIL_DOMAIN}`;
+  // The pair as it stands NOW, written onto the row. Everything afterwards
+  // reads the plan from this stamp (phases.blockPlan), so repointing the study
+  // at different material changes what the next participant is made of and
+  // nothing about anyone already running.
+  const pair = await activeStudyKeys();
   return db.transaction(async (tx) => {
     // Real instructor-role account (getInstructor gates only on role); no
     // password — participants sign in via /study with the shared passcode.
@@ -479,7 +479,7 @@ async function createAccount(
         accessToken: newAccessToken(),
         ...(family ? { conditionFamily: family } : {}),
         ...(cell
-          ? { cell, blockOrder: planForCell(cell, family).map((b) => b.datasetKey).join(',') }
+          ? { cell, blockOrder: planForCell(cell, family, pair).map((b) => b.datasetKey).join(',') }
           : {}),
         createdAt: new Date(),
       })
@@ -517,20 +517,25 @@ export function newAccessToken(): string {
 
 /**
  * The master a clone is actually made from: the reduced study master once one
- * has been built, otherwise the full log named in STUDY_DATASETS.
+ * has been built, otherwise the dataset's whole source log.
  *
- * Resolved by share token at provision time rather than by editing config.ts
- * after each build. A rebuild mints a NEW assignment id, so a hard-coded id
- * would have to be corrected by hand every time — and a source edit that has
- * to follow a button is the step that gets forgotten, silently handing the
- * next participant the whole 507-message log.
+ * Resolved by share token at provision time rather than by storing an id on the
+ * dataset. A rebuild mints a NEW assignment id, so a stored id would have to be
+ * corrected after every build — and a source edit that has to follow a button
+ * is the step that gets forgotten, silently handing the next participant the
+ * whole 507-message log.
+ *
+ * The fallback is the source log itself, which is what an uncurated (or
+ * unbuilt) dataset can offer. That is the right failure for a dev preview and
+ * the wrong material for a session, so the console says which one a dataset is
+ * currently on.
  */
 export async function resolveMasterAssignmentId(dataset: StudyDataset): Promise<string> {
   const [built] = await db
     .select({ id: assignments.id })
     .from(assignments)
     .where(eq(assignments.shareToken, studyMasterToken(dataset.key)));
-  return built?.id ?? dataset.assignmentId;
+  return built?.id ?? dataset.sourceAssignmentId;
 }
 
 async function provisionClone(participant: StudyParticipant, dataset: StudyDataset): Promise<StudyClone> {
@@ -589,8 +594,13 @@ export async function ensureClone(participant: StudyParticipant, dataset: StudyD
 
 /**
  * Entry point for the /study login: ensure the participant account exists and
- * has a clone of every configured dataset, provisioning whatever is missing
- * (first sign-in provisions all clones; returning sign-ins are instant).
+ * has a clone of each dataset in THEIR block plan, provisioning whatever is
+ * missing (first sign-in provisions both clones; returning sign-ins are
+ * instant).
+ *
+ * Their plan, not the study's current pair: a participant who was created
+ * against earlier material and comes back after the console was repointed must
+ * be handed the boards they have been working in, not two new empty ones.
  */
 export async function ensureParticipantSetup(
   participantNumber: string,
@@ -605,8 +615,8 @@ export async function ensureParticipantSetup(
   const account = await ensureParticipantAccount(number, cell, family);
   const participant = await recordCounterbalancing(account);
   const clones: StudyClone[] = [];
-  for (const dataset of STUDY_DATASETS) {
-    clones.push(await ensureClone(participant, dataset));
+  for (const entry of blockPlan(participant)) {
+    clones.push(await ensureClone(participant, await requireStudyDataset(entry.datasetKey)));
   }
   return { participant, clones };
 }
@@ -624,7 +634,9 @@ async function recordCounterbalancing(participant: StudyParticipant): Promise<St
   if (!isStudyCell(participant.cell) || !participant.blockOrder) {
     const cell = cellOf(participant);
     patch.cell = cell;
-    patch.blockOrder = planForCell(cell).map((b) => b.datasetKey).join(',');
+    patch.blockOrder = planForCell(cell, familyOf(participant), await activeStudyKeys())
+      .map((b) => b.datasetKey)
+      .join(',');
   }
   if (!participant.accessToken) patch.accessToken = newAccessToken();
   if (Object.keys(patch).length === 0) return participant;
@@ -657,8 +669,7 @@ export async function resetParticipantDataset(
   participant: StudyParticipant,
   datasetKey: string
 ): Promise<StudyClone> {
-  const dataset = STUDY_DATASETS.find((d) => d.key === datasetKey);
-  if (!dataset) throw new Error(`Unknown dataset: ${datasetKey}`);
+  const dataset = await requireStudyDataset(datasetKey);
   await ensureStudyTables();
   await deleteParticipantCloneByDataset(participant, datasetKey);
   return ensureClone(participant, dataset);

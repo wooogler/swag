@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { studyClones, studyParticipants } from '@/db/schema';
 import { generateForClone } from '@/lib/study/generate';
-import { STUDY_DATASETS } from '@/lib/study/config';
+
 import { blockPlan } from '@/lib/study/phases';
 import { requireAdmin } from '@/lib/study/admin-guard';
 
@@ -58,10 +58,11 @@ export async function POST(req: Request) {
 
   const reports = [];
   for (const clone of targets) {
-    // Block test = this clone's own dataset. A/B = both datasets, which is how
-    // a configuration comes to answer the other dataset's questions.
+    // Block test = this clone's own dataset. A/B = both of the participant's,
+    // which is how a configuration comes to answer the other dataset's
+    // questions.
     const datasetKeys =
-      parsed.kind === 'test' ? [clone.datasetKey] : STUDY_DATASETS.map((d) => d.key);
+      parsed.kind === 'test' ? [clone.datasetKey] : clones.map((c) => c.datasetKey);
     for (const datasetKey of datasetKeys) {
       try {
         const report = await generateForClone({

@@ -5,8 +5,8 @@ import { assignments, scoreDissections, studentSessions } from '@/db/schema';
 import { getInstructor, isAdministrator } from '@/lib/auth';
 import { getQueryRecords } from '@/lib/score/queries';
 import { DISSECTION_VERSION, type MaterialKind, type MaterialSpan } from '@/lib/score/intents';
-import { CURATION_DATASETS, curationDataset } from '@/lib/study/config';
-import { getCurationState, getSetTargets, validateCuration } from '@/lib/study/curation';
+import { getCurationState, validateCuration } from '@/lib/study/curation';
+import { listStudyDatasets, sourceLogOptions } from '@/lib/study/datasets';
 import { adminCodeOf } from '@/lib/study/admin';
 import type { ScoreQueryRow } from '@/app/instructor/assignments/[id]/score/IntentBoard';
 import CurationBoard from './CurationBoard';
@@ -33,15 +33,14 @@ export default async function CurationPage({
   if (!isAdministrator(instructor)) notFound();
 
   const params = await searchParams;
-  const datasetKey = params.ds ?? CURATION_DATASETS[0]?.key;
-  const dataset = datasetKey ? curationDataset(datasetKey) : undefined;
+  const datasets = await listStudyDatasets();
+  const dataset = datasets.find((d) => d.key === params.ds) ?? datasets[0];
   if (!dataset) notFound();
 
-  const assignmentId = dataset.masterAssignmentId;
-  const [assignment, state, targets, records, sessions, dissectionRows] = await Promise.all([
+  const assignmentId = dataset.sourceAssignmentId;
+  const [assignment, state, records, sessions, dissectionRows] = await Promise.all([
     db.query.assignments.findFirst({ where: eq(assignments.id, assignmentId) }),
     getCurationState(dataset.key),
-    getSetTargets(),
     getQueryRecords(assignmentId),
     db
       .select({ id: studentSessions.id, participantToken: studentSessions.participantToken })
@@ -124,9 +123,9 @@ export default async function CurationPage({
         key={dataset.key}
         rows={rows}
         initialState={state}
-        initialViolations={validateCuration(state, targets)}
-        datasets={CURATION_DATASETS.map((d) => ({ key: d.key, label: d.label }))}
-        targets={targets}
+        initialViolations={validateCuration(state)}
+        datasets={datasets}
+        sources={sourceLogOptions()}
         actor={adminCodeOf(instructor)}
         isNirvana={assignment.shareToken === 'nirvana-dataset'}
       />

@@ -14,14 +14,19 @@
  * exactly where it stopped.
  */
 import { getReRateStatus, isLocked, reRateSubtypes } from '../../src/lib/study/curation';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { listStudyDatasets } from '../../src/lib/study/datasets';
 
 const BATCH = 500;
 
 async function main() {
   const apply = process.argv.includes('--apply');
-  const only = process.argv.find((a) => !a.startsWith('--') && CURATION_DATASETS.some((d) => d.key === a));
-  const datasets = only ? CURATION_DATASETS.filter((d) => d.key === only) : CURATION_DATASETS;
+  const all = await listStudyDatasets();
+  // One re-rate per SOURCE LOG, not per dataset: the verdicts live on the
+  // master's template intents, so two datasets curating the same log would rate
+  // the same pairs twice for one set of rows.
+  const perSource = all.filter((d, i) => all.findIndex((x) => x.sourceKey === d.sourceKey) === i);
+  const only = process.argv.find((a) => !a.startsWith('--') && all.some((d) => d.key === a));
+  const datasets = only ? all.filter((d) => d.key === only) : perSource;
 
   for (const ds of datasets) {
     const status = await getReRateStatus(ds.key);

@@ -1,5 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, text, timestamp, boolean, serial, jsonb, index, uniqueIndex, integer, doublePrecision, smallint } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, serial, jsonb, index, uniqueIndex, integer, doublePrecision, smallint, customType } from 'drizzle-orm/pg-core';
+
+/** `bytea`, which drizzle's pg-core does not ship. postgres-js maps a Buffer
+ * to it directly, so the driver value is what the column holds. */
+const customBytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
 import { DEFAULT_ASSIGNMENT_AI_GUIDANCE } from '../lib/assignment-ai';
 
 // Instructor table for Phase 2
@@ -814,6 +820,59 @@ export const studyEvents = pgTable('study_events', {
 }));
 
 // ---------------------------------------------------------------------------
+// Screen recording.
+//
+// The session used to be recorded by the Zoom host over a shared screen. With
+// participants alone in breakout rooms there is no host in the room, so the
+// participant's own browser captures instead and posts the bytes here.
+//
+// One row per MediaRecorder run. A run cannot outlive its document — every
+// study navigation is a full page load and a MediaStream does not survive one —
+// so a run is exactly one board page load: normally one per block, and a second
+// one with the next `segment` if the participant reloads or restarts sharing.
+// `block = 0` is the equipment check taken before the session starts.
+// ---------------------------------------------------------------------------
+export const studyRecordings = pgTable('study_recordings', {
+  // Minted by the client so the first chunk can be posted without waiting for
+  // a round trip to learn its own name.
+  id: text('id').primaryKey(),
+  participantId: text('participant_id').notNull(),
+  /** 0 = equipment check, 1 | 2 = the configure blocks. Derived server-side
+   * from the phase; never taken from the client. */
+  block: integer('block').notNull(),
+  /** Which run this is within the block, from 1. */
+  segment: integer('segment').notNull().default(1),
+  assignmentId: text('assignment_id'),
+  phase: text('phase'),
+  mimeType: text('mime_type').notNull(),
+  startedAt: timestamp('started_at').notNull(),
+  endedAt: timestamp('ended_at'),
+  /** How it ended: 'finished' | 'track_ended' | 'unload' | 'probe' | 'error'. */
+  endReason: text('end_reason'),
+  /** What the client believes it sent, so a short file is detectable. */
+  chunksDeclared: integer('chunks_declared'),
+  chunksStored: integer('chunks_stored').notNull().default(0),
+  bytes: integer('bytes').notNull().default(0),
+  lastChunkAt: timestamp('last_chunk_at'),
+  /** ua, screen size, displaySurface, codec — what the file cannot say itself. */
+  client: jsonb('client'),
+}, (table) => ({
+  participantIdx: index('study_recordings_participant_idx').on(table.participantId),
+}));
+
+// The bytes, in arrival order. Concatenating `data` by `seq` IS the file: a
+// MediaRecorder timeslice is not independently playable (only seq 0 carries the
+// WebM header), so byte concatenation is both necessary and sufficient.
+export const studyRecordingChunks = pgTable('study_recording_chunks', {
+  recordingId: text('recording_id').notNull(),
+  seq: integer('seq').notNull(),
+  data: customBytea('data').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  pk: uniqueIndex('study_recording_chunks_pk').on(table.recordingId, table.seq),
+}));
+
+// ---------------------------------------------------------------------------
 // Set curation (researcher admin tool, docs/CURATION_ADMIN_UI_PLAN.md).
 // Rows key MASTER questions — the participant clones never see these tables;
 // the curated sets reach them by being BUILT INTO the reduced study masters.
@@ -924,16 +983,29 @@ export const studySurveyConfig = pgTable('study_survey_config', {
   updatedBy: text('updated_by'),
 });
 
-// Per-type size of each curated set, as a researcher currently has it. One row
-// (id = 1): the design requires both datasets to carry matching set sizes, so
-// a per-dataset figure would be a way to break that by accident.
-export const studySetTargets = pgTable('study_set_targets', {
-  id: integer('id').primaryKey().default(1),
-  review: integer('review').notNull(),
-  test: integer('test').notNull(),
-  updatedAt: timestamp('updated_at').notNull(),
-  updatedBy: text('updated_by'),
-});
+// The datasets a study can be made of.
+//
+// Everything curated, built or cloned is filed under a dataset KEY, and this is
+// where a key comes from. It used to be a constant of exactly two entries in
+// config.ts, which meant a log could hold one curation at a time: assembling a
+// smaller set meant destroying the set already there. `slot` is the study's own
+// use of them — block 1 and block 2 — and at most one dataset may hold each.
+export const studyDatasets = pgTable('study_datasets', {
+  key: text('key').primaryKey(),
+  label: text('label').notNull(),
+  // Which raw log (SOURCE_LOGS) the sets are drawn from. Several datasets may
+  // curate the same one, which is the whole point of the table.
+  sourceKey: text('source_key').notNull(),
+  // Participant-facing assignment title for clones of this dataset.
+  cloneTitle: text('clone_title').notNull(),
+  // Researcher code that created it; null for the two seeded datasets.
+  ownerCode: text('owner_code'),
+  slot: integer('slot'),
+  createdAt: timestamp('created_at').notNull(),
+}, (table) => ({
+  slotUniq: uniqueIndex('study_datasets_slot_unique').on(table.slot),
+  sourceIdx: index('study_datasets_source_idx').on(table.sourceKey),
+}));
 
 // The curated review set, per STUDY assignment (a reduced master and every
 // clone of it). A reduced master keeps whole threads so each curated question

@@ -2,10 +2,16 @@
  * SCORE user-study configuration.
  *
  * Self-service flow: a participant opens /study, types a participant number +
- * the shared passcode below. On first sign-in, one clone of EACH dataset in
- * STUDY_DATASETS is created for them (reusing each master's pre-computed
+ * the shared passcode below. On first sign-in, one clone of each dataset in
+ * their block plan is created for them (reusing each master's pre-computed
  * "Run all" starter set), and they land on their instructor dashboard showing
- * all of their dataset boards. No pre-provisioning command.
+ * their dataset boards. No pre-provisioning command.
+ *
+ * WHICH datasets those are is no longer written here. A dataset is a row in
+ * `study_datasets` (datasets.ts) so a researcher can assemble a second, smaller
+ * curation of the same log without editing this file and redeploying — which
+ * is what "only one curation per log" used to force. What stays constant is
+ * the two SOURCE LOGS below: the raw material every dataset is curated FROM.
  */
 
 // ⬇⬇⬇  THE SHARED STUDY PASSCODE  ⬇⬇⬇
@@ -13,32 +19,43 @@
 // STUDY_PASSCODE in the environment) before running a study.
 export const STUDY_PASSCODE = process.env.STUDY_PASSCODE ?? 'score-study-2026';
 
-export interface StudyDataset {
-  key: string; // stable slug used in share tokens / clone keys
-  label: string; // operator-facing dataset name (e.g. in reset button labels)
-  assignmentId: string; // the master to clone (only its template starter set is copied)
-  // Participant-facing assignment title for the clone. Kept apart from the
-  // master's (researcher-facing) title so participants see a plain, plausible
-  // assignment name rather than an internal "… Dataset" label.
+/**
+ * The two datasets every install starts with — the study as it has been run.
+ *
+ * Seeded into `study_datasets` on first boot and then owned by the table:
+ * editing these values does not move a dataset that already exists, because a
+ * curation in progress must not change under a redeploy. They are the seed, not
+ * the definition.
+ */
+export interface SeedDataset {
+  key: string;
+  label: string;
+  /** Which SOURCE_LOG the sets are drawn from. */
+  sourceKey: string;
+  /**
+   * Participant-facing assignment title for the clone. Kept apart from the
+   * master's (researcher-facing) title so participants see a plain, plausible
+   * assignment name rather than an internal "… Dataset" label.
+   */
   cloneTitle: string;
+  /** Which block of the running study this is the material for. */
+  slot: 1 | 2;
 }
 
-// The datasets a participant gets a clone of. Add/remove entries to change what
-// each participant works on. Each master only needs its "Run all" starter set
-// (template intents + ratings); any active intents / rules / deploy history on
-// the master are IGNORED — every participant starts from the clean starter set.
-export const STUDY_DATASETS: StudyDataset[] = [
+export const SEED_DATASETS: SeedDataset[] = [
   {
     key: 'swag',
     label: 'SWAG Dataset',
-    assignmentId: '03201d5d-08c7-4db1-8e5c-f5edc6563d9a',
+    sourceKey: 'swag',
     cloneTitle: 'Personal Use of AI in Everyday Life',
+    slot: 1,
   },
   {
     key: 'nirvana',
     label: 'NIRVANA Dataset',
-    assignmentId: 'ea905a40-ad5d-4fe5-bbf8-91d6b1998331',
+    sourceKey: 'nirvana',
     cloneTitle: 'Intelligent Machines',
+    slot: 2,
   },
 ];
 
@@ -72,46 +89,48 @@ export const STUDY_ADMIN_PASSCODE = process.env.STUDY_ADMIN_PASSCODE ?? '';
 export const ADMIN_EMAIL_DOMAIN = 'admin.score.local';
 
 /**
- * The masters curation reads from — deliberately SEPARATE from STUDY_DATASETS.
- * Curation always works on the FULL logs (507/348); STUDY_DATASETS points at
- * whatever participants clone, which becomes the reduced study masters once
- * they are built. Pointing curation at STUDY_DATASETS would silently re-scope
- * it to the 60-question subset after that switch.
+ * The raw logs a dataset can be curated from — deliberately SEPARATE from the
+ * datasets themselves. Curation always works on the FULL logs (507/348); a
+ * dataset points at whatever was BUILT from a curation of one, which becomes a
+ * reduced master. Pointing curation at the built masters would silently
+ * re-scope it to its own output.
+ *
+ * Fixed in code because these are the two corpora the study owns: a new dataset
+ * is a new curation of one of them, not a new corpus. (A genuinely new corpus
+ * is an import, and lands here.)
  */
-export interface CurationDataset {
+export interface SourceLog {
   key: string;
   label: string;
   masterAssignmentId: string;
 }
 
-export const CURATION_DATASETS: CurationDataset[] = [
+export const SOURCE_LOGS: SourceLog[] = [
   { key: 'swag', label: 'SWAG', masterAssignmentId: '03201d5d-08c7-4db1-8e5c-f5edc6563d9a' },
   { key: 'nirvana', label: 'NIRVANA', masterAssignmentId: 'ea905a40-ad5d-4fe5-bbf8-91d6b1998331' },
 ];
 
-export function curationDataset(key: string): CurationDataset | undefined {
-  return CURATION_DATASETS.find((d) => d.key === key);
+export function sourceLog(key: string): SourceLog | undefined {
+  return SOURCE_LOGS.find((d) => d.key === key);
 }
 
 /**
- * Per-QUERY-TYPE size of each curated set (design §4) — the SEED value only.
- * The live figures are settings a researcher edits (study_set_targets): the
- * design marks review-set size and A/B item count as things the pilot settles,
- * and a pilot that needs a redeploy to try 12 instead of 16 will not try it.
+ * The two sets a curation assembles.
+ *
+ * There used to be a per-type SIZE beside this — 15 review + 2 test per query
+ * type, editable, and checked by the confirm button. It is gone: the sets are
+ * whatever the researcher decides they are. The design's numbers were written
+ * for one dataset built once, and the moment a second, smaller dataset became
+ * possible a fixed target stopped describing anything — it only stood between
+ * a researcher and a set they had deliberately made smaller. What confirm
+ * still checks is what a set can be WRONG about (an isolated student in it, an
+ * unclassified question), not how big it is.
  */
-export const DEFAULT_SET_TARGETS = { review: 15, test: 2 } as const;
-export type CurationSetKind = keyof typeof DEFAULT_SET_TARGETS;
-export type SetTargets = Record<CurationSetKind, number>;
-export const CURATION_SET_KINDS = Object.keys(DEFAULT_SET_TARGETS) as CurationSetKind[];
-
-/** Sanity bounds for the editable targets. */
-export const SET_TARGET_LIMITS: Record<CurationSetKind, { min: number; max: number }> = {
-  review: { min: 1, max: 40 },
-  test: { min: 1, max: 10 },
-};
+export const CURATION_SET_KINDS = ['review', 'test'] as const;
+export type CurationSetKind = (typeof CURATION_SET_KINDS)[number];
 
 export function isCurationSetKind(v: unknown): v is CurationSetKind {
-  return typeof v === 'string' && (CURATION_SET_KINDS as string[]).includes(v);
+  return typeof v === 'string' && (CURATION_SET_KINDS as readonly string[]).includes(v);
 }
 
 // Study session cookie lifetime. Short (1 day) vs the 30-day instructor
@@ -192,15 +211,18 @@ export const STUDY_PROMPT_CHAR_LIMIT = Number(process.env.STUDY_PROMPT_CHAR_LIMI
  * The configure block's time budget, in minutes (design v2 §5: "0:08 블록 1 —
  * 설정 작업 (25분 상한)", with a verbal warning five minutes out).
  *
- * NOT enforced anywhere — the facilitator runs the clock, and a hard cutoff at
- * 25:00 would truncate someone mid-edit and damage the final artifact RQ1
- * analyses. These numbers only drive what is DISPLAYED: the participant's own
- * elapsed readout and the console chip the facilitator watches. They live here
- * because the console's threshold had drifted to 30 — the old cap, from before
- * v2 cut it — so the facilitator's cue was arriving five minutes late.
+ * NOT enforced anywhere, and a hard cutoff at 25:00 would truncate someone
+ * mid-edit and damage the final artifact RQ1 analyses. These numbers only drive
+ * what is DISPLAYED — but since the study went to parallel breakout rooms that
+ * display is the whole of the cue. There is no facilitator running the clock
+ * and none to speak the twenty-minute warning, so the same two thresholds now
+ * colour the PARTICIPANT's readout (WorkElapsed) as well as the console chip a
+ * researcher scans. One pair of numbers, both sides, or the two disagree about
+ * when someone is late.
  */
 export const STUDY_WORK_MINUTES = 25;
-/** When the facilitator gives the verbal warning (design v2 §5). */
+/** Where the readout goes amber — inherited from the verbal warning that used
+ * to happen here (design v2 §5). */
 export const STUDY_WORK_WARNING_MINUTES = 20;
 
 
@@ -306,9 +328,67 @@ export const STUDY_DEMO_VIDEOS: Record<StudioView, string> & {
   simple_baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_SIMPLE_BASELINE ?? '',
 };
 
+/**
+ * Whatever YouTube hands you, reduced to the eleven characters the embed needs.
+ *
+ * Every one of these is something a person legitimately arrives with — the
+ * address bar, the Share button, a copied embed — and the old code took only
+ * the bare id. Pasting a link produced `…/embed/https://youtu.be/ID`, which is
+ * a valid URL, so the iframe mounted, asked YouTube for a video called
+ * "https:", and sat there blank. A dead player is the worst failure this can
+ * have: it looks like the film is broken rather than like the setting is.
+ *
+ * The Share button's `?si=` tracking parameter is the specific reason a
+ * hand-written "take the part after the last slash" is not enough.
+ */
+export function youtubeId(value: string | null | undefined): string {
+  const raw = (value ?? '').trim().replace(/^["']|["']$/g, '').trim();
+  if (!raw) return '';
+  if (/^[\w-]{11}$/.test(raw)) return raw;
+  const m = raw.match(
+    /(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|live\/|shorts\/|v\/)|youtu\.be\/)([\w-]{11})/
+  );
+  return m ? m[1] : '';
+}
+
+/**
+ * One film per block, cut by hand from the three layers.
+ *
+ * The segments below still work and still describe how the material is
+ * organised, but the films that exist now are four: concept, then (block 1
+ * only) the shared screens, then the walkthrough, already joined. Joining them
+ * outside the app is what lets the concept layer come FIRST — the segment list
+ * cannot put anything before the shared screens without a fifth slot and a
+ * fifth id — and it means one player per block instead of two.
+ *
+ * Set these and the block plays one film. Leave them unset and the segment
+ * behaviour below is unchanged, so the full version's existing ids keep
+ * working untouched.
+ */
+const COMBINED_FILMS: Record<1 | 2, Record<StudioView, string | undefined>> = {
+  1: {
+    score: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK1_SCORE,
+    baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK1_BASELINE,
+    simple_score: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK1_SIMPLE_SCORE,
+    simple_baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK1_SIMPLE_BASELINE,
+  },
+  2: {
+    score: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK2_SCORE,
+    baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK2_BASELINE,
+    simple_score: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK2_SIMPLE_SCORE,
+    simple_baseline: process.env.NEXT_PUBLIC_STUDY_DEMO_BLOCK2_SIMPLE_BASELINE,
+  },
+};
+
 export interface DemoSegment {
   key: 'common' | StudioView;
+  /** Parsed. Empty when the variable is unset AND when it holds something no
+   * video id can be read out of — `rawValue` tells those two apart. */
   youtubeId: string;
+  /** Exactly what the variable holds. The empty state shows it back, because
+   * "set, but I cannot read a video id in it" is a different problem from
+   * "not set" and the two need different fixes. */
+  rawValue: string;
   /** The variable that would fill this slot — named by the empty-state so a
    * missing film says which id to set, not which family of ids. */
   envVar: string;
@@ -318,9 +398,36 @@ export interface DemoSegment {
 }
 
 export function demoSegmentsFor(block: 1 | 2, condition: StudioView): DemoSegment[] {
+  const combinedVar = `NEXT_PUBLIC_STUDY_DEMO_BLOCK${block}_${condition.toUpperCase()}`;
+  const combinedRaw = (COMBINED_FILMS[block][condition] ?? '').trim();
+
+  const legacyVersionRaw = STUDY_DEMO_VIDEOS[condition];
+  const legacyCommonRaw = STUDY_DEMO_VIDEOS.common[condition];
+  const hasLegacy = Boolean(legacyVersionRaw || (block === 1 && legacyCommonRaw));
+
+  // The one-film shape, and also the shape of the EMPTY state: with nothing
+  // configured at all the slot should name the variable someone setting this
+  // up now is meant to set, not the pair it replaced.
+  if (combinedRaw || !hasLegacy) {
+    return [
+      {
+        key: condition,
+        youtubeId: youtubeId(combinedRaw),
+        rawValue: combinedRaw,
+        envVar: combinedVar,
+        label: conditionName(condition),
+        caption:
+          block === 1
+            ? 'How this version works, the screens you will use, and one worked example.'
+            : 'How this version works, and one worked example.',
+      },
+    ];
+  }
+
   const version: DemoSegment = {
     key: condition,
-    youtubeId: STUDY_DEMO_VIDEOS[condition],
+    youtubeId: youtubeId(legacyVersionRaw),
+    rawValue: legacyVersionRaw,
     envVar: `NEXT_PUBLIC_STUDY_DEMO_${condition.toUpperCase()}`,
     label: conditionName(condition),
     caption: 'The version you will use in this round.',
@@ -330,7 +437,8 @@ export function demoSegmentsFor(block: 1 | 2, condition: StudioView): DemoSegmen
     {
       key: 'common',
       // The take shot on this block's own board — see STUDY_DEMO_VIDEOS.
-      youtubeId: STUDY_DEMO_VIDEOS.common[condition],
+      youtubeId: youtubeId(legacyCommonRaw),
+      rawValue: legacyCommonRaw,
       envVar: `NEXT_PUBLIC_STUDY_DEMO_COMMON_${condition.toUpperCase()}`,
       label: 'Getting around',
       caption: 'The questions, the search, and the conversation view.',

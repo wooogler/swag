@@ -9,7 +9,7 @@
  * pass over the same questions costs nothing, not that 500 calls work.
  */
 import { getReRateStatus, reRateSubtypes } from '../../src/lib/study/curation';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { listStudyDatasets } from '../../src/lib/study/datasets';
 
 async function show(key: string, label: string) {
   const s = await getReRateStatus(key);
@@ -23,7 +23,8 @@ async function show(key: string, label: string) {
 
 async function main() {
   const runIdx = process.argv.indexOf('--run');
-  for (const ds of CURATION_DATASETS) await show(ds.key, ds.label);
+  const datasets = await listStudyDatasets();
+  for (const ds of datasets) await show(ds.key, ds.label);
 
   if (runIdx === -1) {
     console.log('\n(status only — pass --run <datasetKey> <n> to rate n questions)');
@@ -32,7 +33,7 @@ async function main() {
 
   const key = process.argv[runIdx + 1] ?? 'swag';
   const n = Number(process.argv[runIdx + 2] ?? 2);
-  const label = CURATION_DATASETS.find((d) => d.key === key)?.label ?? key;
+  const label = datasets.find((d) => d.key === key)?.label ?? key;
 
   console.log(`\n--- rating ${n} question(s) on ${label} ---`);
   const first = await reRateSubtypes(key, n);

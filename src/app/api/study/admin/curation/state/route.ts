@@ -1,7 +1,7 @@
 /** Everything the curation screen renders for one dataset, in one round trip. */
 import { NextResponse } from 'next/server';
-import { getCurationState, getSetTargets, validateCuration } from '@/lib/study/curation';
-import { CURATION_DATASETS } from '@/lib/study/config';
+import { getCurationState, validateCuration } from '@/lib/study/curation';
+import { listStudyDatasets } from '@/lib/study/datasets';
 import { requireAdmin } from '@/lib/study/admin-guard';
 
 export const dynamic = 'force-dynamic';
@@ -11,16 +11,16 @@ export async function GET(req: Request) {
   if (gate.response) return gate.response;
 
   const url = new URL(req.url);
-  const datasetKey = url.searchParams.get('ds') ?? CURATION_DATASETS[0]?.key;
-  if (!datasetKey) return NextResponse.json({ error: 'no_datasets' }, { status: 500 });
-
   try {
-    const [state, targets] = await Promise.all([getCurationState(datasetKey), getSetTargets()]);
+    const datasets = await listStudyDatasets();
+    const datasetKey = url.searchParams.get('ds') ?? datasets[0]?.key;
+    if (!datasetKey) return NextResponse.json({ error: 'no_datasets' }, { status: 500 });
+
+    const state = await getCurationState(datasetKey);
     return NextResponse.json({
       state,
-      violations: validateCuration(state, targets),
-      datasets: CURATION_DATASETS.map((d) => ({ key: d.key, label: d.label })),
-      targets,
+      violations: validateCuration(state),
+      datasets,
       actor: gate.actor.code,
     });
   } catch (err) {

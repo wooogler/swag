@@ -36,7 +36,8 @@ import {
   studyQuestionBank,
 } from '@/db/schema';
 import { isScoreQueryType, TYPE_CLASSIFIER_VERSION } from '@/lib/score/intents';
-import { CURATION_DATASETS, curationDataset, studyMasterToken } from './config';
+import { studyMasterToken } from './config';
+import { activeStudyKeys, listStudyDatasets, requireStudyDataset } from './datasets';
 import { getConfirmedSet, isLocked } from './curation';
 import { cloneStarterSet, type CloneRestriction } from './provision';
 import { ensureStudyTables } from './store';
@@ -63,17 +64,34 @@ export interface MasterBuildResult {
   warnings: string[];
 }
 
+/**
+ * Which datasets a build acts on.
+ *
+ * Named one → that one. Nothing named → the pair the study is currently made
+ * of, NOT every dataset that exists: with a registry a researcher can be
+ * holding half-assembled experiments, and "Build" must not mean "and also
+ * rebuild whatever else is lying around".
+ */
+async function buildScope(datasetKey?: string): Promise<string[]> {
+  if (datasetKey) {
+    await requireStudyDataset(datasetKey);
+    return [datasetKey];
+  }
+  return activeStudyKeys();
+}
+
 export async function buildStudyMasters(opts: {
   apply: boolean;
   datasetKey?: string;
 }): Promise<MasterBuildResult[]> {
   await ensureStudyTables();
 
-  const targets = CURATION_DATASETS.filter((d) => !opts.datasetKey || d.key === opts.datasetKey);
-  if (targets.length === 0) throw new Error(`unknown dataset ${opts.datasetKey}`);
-
+  const keys = await buildScope(opts.datasetKey);
+  const all = await listStudyDatasets();
   const results: MasterBuildResult[] = [];
-  for (const dataset of targets) {
+  for (const key of keys) {
+    const dataset = all.find((d) => d.key === key);
+    if (!dataset) throw new Error(`unknown dataset ${key}`);
     results.push(await buildOneMaster(dataset.key, dataset.label, opts.apply));
   }
   return results;
@@ -93,7 +111,7 @@ async function buildOneMaster(
     sourceMessages: 0,
     warnings: [],
   };
-  const source = curationDataset(datasetKey)!;
+  const source = await requireStudyDataset(datasetKey);
 
   if (!(await isLocked(datasetKey))) {
     return { ...base, reason: 'curation is not confirmed — lock the sets first' };
@@ -132,7 +150,7 @@ async function buildOneMaster(
     SELECT count(*)::int AS n FROM chat_messages m
     JOIN chat_conversations c ON c.id = m.conversation_id
     JOIN student_sessions s ON s.id = c.session_id
-    WHERE s.assignment_id = ${source.masterAssignmentId}
+    WHERE s.assignment_id = ${source.sourceAssignmentId}
   `);
 
   const partial: MasterBuildResult = {
@@ -166,7 +184,7 @@ async function buildOneMaster(
   // The study master belongs to whoever owns the source master — a research
   // dataset, not a participant.
   const sourceRow = await db.query.assignments.findFirst({
-    where: eq(assignments.id, source.masterAssignmentId),
+    where: eq(assignments.id, source.sourceAssignmentId),
   });
   const ownerId = sourceRow?.instructorId;
   if (!ownerId) throw new Error('source master has no owner to inherit');
@@ -175,7 +193,7 @@ async function buildOneMaster(
   await db.transaction(async (tx) => {
     if (existing) await deleteCloneAssignment(tx, existing.id);
     await cloneStarterSet(tx, {
-      sourceAssignmentId: source.masterAssignmentId,
+      sourceAssignmentId: source.sourceAssignmentId,
       newAssignmentId: newId,
       newInstructorId: ownerId,
       shareToken: token,
@@ -196,7 +214,7 @@ async function buildOneMaster(
       .where(eq(assignments.id, newId));
   });
 
-  const built = await inspectMaster(newId, source.masterAssignmentId);
+  const built = await inspectMaster(newId, source.sourceAssignmentId);
   const marked = built.counts['review-set'] ?? 0;
   if (marked !== review.length) {
     partial.warnings.push(
@@ -294,8 +312,13 @@ export interface BankBuildResult {
   warnings: string[];
 }
 
-export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankBuildResult> {
+export async function buildQuestionBank(opts: {
+  apply: boolean;
+  /** Which datasets' items to (re)freeze; default is the running study's pair. */
+  datasetKey?: string;
+}): Promise<BankBuildResult> {
   await ensureStudyTables();
+  const keys = await buildScope(opts.datasetKey);
 
   const base: BankBuildResult = {
     status: 'blocked',
@@ -305,15 +328,17 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
     warnings: [],
   };
 
-  // Both datasets, always: a participant's two blocks are one per dataset, so
-  // half a bank is a study that cannot run its second block.
+  // Every dataset IN SCOPE, and only those. The bank used to be built from the
+  // two datasets that existed, all of it at once — which with a registry would
+  // mean a half-curated experiment could block the running study's rebuild, and
+  // a rebuild of one dataset would delete the other's frozen questions.
   const test: Candidate[] = [];
-  for (const dataset of CURATION_DATASETS) {
-    if (!(await isLocked(dataset.key))) {
-      return { ...base, reason: `${dataset.key}: curation is not confirmed — lock the sets first` };
+  for (const key of keys) {
+    if (!(await isLocked(key))) {
+      return { ...base, reason: `${key}: curation is not confirmed — lock the sets first` };
     }
-    for (const row of await getConfirmedSet(dataset.key, 'test')) {
-      test.push({ ...row, datasetKey: dataset.key });
+    for (const row of await getConfirmedSet(key, 'test')) {
+      test.push({ ...row, datasetKey: key });
     }
   }
 
@@ -345,8 +370,12 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
 
   // Rebuilding is refused once answers exist against the current bank: a
   // participant was already asked those questions, and renumbering or
-  // replacing them would orphan what they said.
-  const existing = await db.select({ id: studyQuestionBank.id }).from(studyQuestionBank);
+  // replacing them would orphan what they said. Scoped to the datasets being
+  // built — another dataset's answered items are none of this build's business.
+  const existing = await db
+    .select({ id: studyQuestionBank.id })
+    .from(studyQuestionBank)
+    .where(inArray(studyQuestionBank.datasetKey, keys));
   if (existing.length > 0) {
     const used = await db
       .select({ id: studyGeneratedResponses.id })
@@ -365,7 +394,7 @@ export async function buildQuestionBank(opts: { apply: boolean }): Promise<BankB
         reason: 'answers already exist against the current bank — refusing to rebuild',
       };
     }
-    await db.delete(studyQuestionBank);
+    await db.delete(studyQuestionBank).where(inArray(studyQuestionBank.datasetKey, keys));
     partial.replaced = existing.length;
   }
 

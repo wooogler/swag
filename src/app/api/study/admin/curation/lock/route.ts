@@ -8,7 +8,7 @@
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getCurationState, getSetTargets, setLock, validateCuration } from '@/lib/study/curation';
+import { getCurationState, setLock, validateCuration } from '@/lib/study/curation';
 import { requireAdmin } from '@/lib/study/admin-guard';
 
 export const dynamic = 'force-dynamic';
@@ -31,11 +31,8 @@ export async function POST(req: Request) {
 
   try {
     if (parsed.locked) {
-      const [state, targets] = await Promise.all([
-        getCurationState(parsed.datasetKey),
-        getSetTargets(),
-      ]);
-      const blocking = validateCuration(state, targets).filter((v) => v.severity === 'error');
+      const state = await getCurationState(parsed.datasetKey);
+      const blocking = validateCuration(state).filter((v) => v.severity === 'error');
       if (blocking.length > 0) {
         return NextResponse.json(
           { error: 'validation_failed', violations: blocking },

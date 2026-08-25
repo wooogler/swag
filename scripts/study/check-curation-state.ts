@@ -8,10 +8,10 @@
  *   npx tsx --env-file=.env scripts/study/check-curation-state.ts
  */
 import { getCurationState } from '../../src/lib/study/curation';
-import { CURATION_DATASETS } from '../../src/lib/study/config';
+import { listStudyDatasets } from '../../src/lib/study/datasets';
 
 async function main() {
-  for (const ds of CURATION_DATASETS) {
+  for (const ds of await listStudyDatasets()) {
     const state = await getCurationState(ds.key);
     // Type-level starters are dropped when the state is read, so this counts
     // only real subtypes — the ones curation browses by.

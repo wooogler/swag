@@ -24,7 +24,6 @@ import {
   studentSessions,
   studyCurationMeta,
   studySetMembers,
-  studySetTargets,
 } from '@/db/schema';
 import { getQueryRecords } from '@/lib/score/queries';
 import {
@@ -51,15 +50,8 @@ import {
   buildJelsonSuggestions,
   jelsonToIntent,
 } from '@/lib/score/jelson-suggest';
-import {
-  CURATION_DATASETS,
-  CURATION_SET_KINDS,
-  DEFAULT_SET_TARGETS,
-  SET_TARGET_LIMITS,
-  curationDataset,
-  type CurationSetKind,
-  type SetTargets,
-} from './config';
+import { CURATION_SET_KINDS, type CurationSetKind } from './config';
+import { getStudyDataset, requireStudyDataset } from './datasets';
 import { ensureStudyTables } from './store';
 
 /** Judge grades curation exposes. Everything else is "not in this subtype". */
@@ -176,10 +168,9 @@ function isGrade(rating: string): rating is CurationGrade {
  * starter suggestion; reading only the current hash would show empty subtypes.
  */
 export async function getCurationState(datasetKey: string): Promise<CurationState> {
-  const dataset = curationDataset(datasetKey);
-  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  const dataset = await requireStudyDataset(datasetKey);
   await ensureStudyTables();
-  const assignmentId = dataset.masterAssignmentId;
+  const assignmentId = dataset.sourceAssignmentId;
 
   const [records, sessions, templates, typeRows, ratingRows, memberRows, metaRows] =
     await Promise.all([
@@ -521,7 +512,7 @@ async function classifyOne(
  * entire log for one boolean).
  */
 export async function isDemoIsolated(datasetKey: string, messageId: number): Promise<boolean> {
-  const dataset = curationDataset(datasetKey);
+  const dataset = await getStudyDataset(datasetKey);
   if (!dataset) return false;
 
   const [meta] = await db
@@ -554,7 +545,7 @@ export async function isDemoIsolated(datasetKey: string, messageId: number): Pro
     .from(scoreIntents)
     .where(
       and(
-        eq(scoreIntents.assignmentId, dataset.masterAssignmentId),
+        eq(scoreIntents.assignmentId, dataset.sourceAssignmentId),
         eq(scoreIntents.isTemplate, true),
         inArray(scoreIntents.title, demoSubtypes)
       )
@@ -593,8 +584,7 @@ export async function isDemoIsolated(datasetKey: string, messageId: number): Pro
 /** Assign a master question to a set (or clear it). Idempotent per question. */
 export async function setSetMember(input: AssignInput): Promise<void> {
   const { datasetKey, messageId, setKind, addedBy } = input;
-  const dataset = curationDataset(datasetKey);
-  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  const dataset = await requireStudyDataset(datasetKey);
   await ensureStudyTables();
 
   if (await isLocked(datasetKey)) throw new Error('curation_locked');
@@ -611,7 +601,7 @@ export async function setSetMember(input: AssignInput): Promise<void> {
     return;
   }
 
-  const snapshot = await classifyOne(dataset.masterAssignmentId, messageId);
+  const snapshot = await classifyOne(dataset.sourceAssignmentId, messageId);
 
   await db
     .insert(studySetMembers)
@@ -656,8 +646,7 @@ export async function clearSet(
   setKind: CurationSetKind,
   queryType: ScoreQueryType | null
 ): Promise<{ removed: { messageId: number; queryType: string | null; subtype: string | null }[] }> {
-  const dataset = curationDataset(datasetKey);
-  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
+  const dataset = await requireStudyDataset(datasetKey);
   await ensureStudyTables();
   if (await isLocked(datasetKey)) throw new Error('curation_locked');
 
@@ -678,7 +667,7 @@ export async function clearSet(
       .from(scoreQueryTypes)
       .where(
         and(
-          eq(scoreQueryTypes.assignmentId, dataset.masterAssignmentId),
+          eq(scoreQueryTypes.assignmentId, dataset.sourceAssignmentId),
           inArray(
             scoreQueryTypes.messageId,
             rows.map((r) => r.messageId)
@@ -779,7 +768,7 @@ export async function setDemoSubtypes(datasetKey: string, titles: string[]): Pro
  * exactly the way the study master treats its review set.
  */
 export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
-  const dataset = curationDataset(datasetKey);
+  const dataset = await getStudyDataset(datasetKey);
   if (!dataset) return [];
   const titles = await getDemoSubtypes(datasetKey);
   const tokens = await getDemoParticipants(datasetKey);
@@ -796,7 +785,7 @@ export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
       .innerJoin(studentSessions, eq(studentSessions.id, chatConversations.sessionId))
       .where(
         and(
-          eq(studentSessions.assignmentId, dataset.masterAssignmentId),
+          eq(studentSessions.assignmentId, dataset.sourceAssignmentId),
           eq(chatMessages.role, 'user'),
           inArray(studentSessions.participantToken, tokens)
         )
@@ -810,7 +799,7 @@ export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
     .from(scoreIntents)
     .where(
       and(
-        eq(scoreIntents.assignmentId, dataset.masterAssignmentId),
+        eq(scoreIntents.assignmentId, dataset.sourceAssignmentId),
         eq(scoreIntents.isTemplate, true),
         inArray(scoreIntents.title, titles)
       )
@@ -822,7 +811,7 @@ export async function demoQuestionIds(datasetKey: string): Promise<number[]> {
     .from(scoreIntentRatings)
     .where(
       and(
-        eq(scoreIntentRatings.assignmentId, dataset.masterAssignmentId),
+        eq(scoreIntentRatings.assignmentId, dataset.sourceAssignmentId),
         eq(scoreIntentRatings.rating, 'clearly_in'),
         inArray(
           scoreIntentRatings.intentId,
@@ -876,91 +865,34 @@ export async function setLock(datasetKey: string, by: string | null, locked: boo
 }
 
 /* ------------------------------------------------------------------ */
-/* Set sizes                                                           */
-/* ------------------------------------------------------------------ */
-
-/** The current per-type set sizes, seeded from the design's figures. */
-export async function getSetTargets(): Promise<SetTargets> {
-  await ensureStudyTables();
-  const [row] = await db.select().from(studySetTargets).where(eq(studySetTargets.id, 1));
-  if (!row) return { ...DEFAULT_SET_TARGETS };
-  return { review: row.review, test: row.test };
-}
-
-export function clampSetTargets(input: Partial<SetTargets>): SetTargets {
-  const out = { ...DEFAULT_SET_TARGETS } as SetTargets;
-  for (const kind of CURATION_SET_KINDS) {
-    const { min, max } = SET_TARGET_LIMITS[kind];
-    const raw = input[kind];
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      out[kind] = Math.min(max, Math.max(min, Math.round(raw)));
-    }
-  }
-  return out;
-}
-
-/**
- * Change the set sizes. Refused while any dataset is confirmed: the lock means
- * "these sets are the study material", and moving the target under it would
- * leave a locked set that no longer satisfies its own rule.
- */
-export async function saveSetTargets(
-  input: Partial<SetTargets>,
-  updatedBy: string
-): Promise<SetTargets> {
-  await ensureStudyTables();
-  for (const dataset of CURATION_DATASETS) {
-    if (await isLocked(dataset.key)) throw new Error('curation_locked');
-  }
-  const targets = clampSetTargets(input);
-  await db
-    .insert(studySetTargets)
-    .values({ id: 1, ...targets, updatedAt: new Date(), updatedBy })
-    .onConflictDoUpdate({
-      target: studySetTargets.id,
-      set: { ...targets, updatedAt: new Date(), updatedBy },
-    });
-  return targets;
-}
-
-/* ------------------------------------------------------------------ */
 /* Validation (shared by the confirm button and the build scripts)     */
 /* ------------------------------------------------------------------ */
 
 export interface CurationViolation {
-  code: 'count' | 'isolation' | 'missing_type' | 'boundary_ratio' | 'test_subtype_spread';
+  code: 'isolation' | 'missing_type' | 'boundary_ratio' | 'test_subtype_spread';
   severity: 'error' | 'warning';
   message: string;
   messageIds?: number[];
 }
 
 /**
- * Whether the sets are shippable. Counts / isolation / A-B balance are errors
- * (they break the design's arithmetic); the boundary-ratio drift is a warning —
- * design §4 asks the sets to FOLLOW the natural ratio, but with 2 items per
- * type per test set exact proportionality is not achievable.
+ * Whether the sets are shippable — which is no longer a question about SIZE.
+ *
+ * There used to be a per-type target here (15 review, 2 test) and a `count`
+ * error for every slot that missed it. It described one dataset built once, and
+ * blocked the confirm button on any set deliberately made smaller — so the
+ * first thing a researcher trying a lighter dataset met was a wall of red
+ * counts about a number they had already decided not to hit.
+ *
+ * What is left is what a set can be WRONG about rather than merely small: a
+ * question from a student reserved for the demo (design §4 isolates the whole
+ * student), and a question with no usable type verdict, which would be
+ * re-classified at generation time. The boundary-ratio drift stays a warning —
+ * design §4 asks the sets to FOLLOW the log's natural certain/boundary mix, and
+ * with a handful of items per type exact proportionality is not achievable.
  */
-export function validateCuration(
-  state: CurationState,
-  targets: SetTargets
-): CurationViolation[] {
+export function validateCuration(state: CurationState): CurationViolation[] {
   const out: CurationViolation[] = [];
-
-  for (const kind of CURATION_SET_KINDS) {
-    const target = targets[kind];
-    for (const type of SCORE_QUERY_TYPES) {
-      const have = state.members.filter(
-        (m) => m.setKind === kind && questionType(state, m.messageId) === type
-      ).length;
-      if (have !== target) {
-        out.push({
-          code: 'count',
-          severity: 'error',
-          message: `${kind} · ${type}: ${have}/${target}`,
-        });
-      }
-    }
-  }
 
   const excluded = new Set(state.excludedMessageIds);
   const violating = state.members.filter((m) => excluded.has(m.messageId)).map((m) => m.messageId);
@@ -1084,9 +1016,8 @@ export async function classifyMissingTypes(
   datasetKey: string,
   limit = 200
 ): Promise<{ pending: number; classified: number; failed: number }> {
-  const dataset = curationDataset(datasetKey);
-  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
-  const assignmentId = dataset.masterAssignmentId;
+  const dataset = await requireStudyDataset(datasetKey);
+  const assignmentId = dataset.sourceAssignmentId;
 
   const [records, typeRows] = await Promise.all([
     getQueryRecords(assignmentId),
@@ -1215,9 +1146,8 @@ export interface ReRateStatus {
 
 /** What a re-rate would cost right now, without spending anything. */
 export async function getReRateStatus(datasetKey: string): Promise<ReRateStatus> {
-  const dataset = curationDataset(datasetKey);
-  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
-  const assignmentId = dataset.masterAssignmentId;
+  const dataset = await requireStudyDataset(datasetKey);
+  const assignmentId = dataset.sourceAssignmentId;
 
   const [records, templates, chooser] = await Promise.all([
     getQueryRecords(assignmentId),
@@ -1332,9 +1262,8 @@ export async function reRateSubtypes(
   failed: number;
   remainingPairs: number;
 }> {
-  const dataset = curationDataset(datasetKey);
-  if (!dataset) throw new Error(`unknown curation dataset: ${datasetKey}`);
-  const assignmentId = dataset.masterAssignmentId;
+  const dataset = await requireStudyDataset(datasetKey);
+  const assignmentId = dataset.sourceAssignmentId;
 
   const [records, templateRows, chooser] = await Promise.all([
     getQueryRecords(assignmentId),

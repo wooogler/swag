@@ -2,11 +2,10 @@
  * Turn the confirmed sets into the study material, from the curation tool.
  *
  * Deliberately NOT folded into the lock route. Locking is a reversible
- * editorial decision that must always succeed; building replaces a master, can
- * refuse (clones still hold the old one, answers already exist against the
- * bank), and needs BOTH datasets confirmed before the bank's A/B interleave
- * makes sense. Tying the two together would mean a lock that fails because a
- * build did.
+ * editorial decision that must always succeed; building replaces a master and
+ * can refuse (clones still hold the old one, answers already exist against the
+ * bank). Tying the two together would mean a lock that fails because a build
+ * did.
  *
  * Long-running: the master build copies a dataset's whole message log.
  */
@@ -21,7 +20,12 @@ export const maxDuration = 800;
 const bodySchema = z.object({
   /** false → report what WOULD happen and write nothing. */
   apply: z.boolean().default(false),
-  /** Restrict the master build; the bank is always built from both datasets. */
+  /**
+   * Which dataset to build. Both halves take it: the bank used to be built from
+   * every dataset at once, which with a registry means one dataset's rebuild
+   * blocked on another's unfinished curation — and deleted its frozen
+   * questions. Omitted = the pair the study is currently made of.
+   */
   datasetKey: z.string().min(1).optional(),
 });
 
@@ -44,7 +48,10 @@ export async function POST(req: Request) {
     // The bank is built even when a master was blocked: they fail for separate
     // reasons, and a researcher fixing one wants to see the state of the other
     // rather than discovering it on the next click.
-    const bank = await buildQuestionBank({ apply: parsed.apply });
+    const bank = await buildQuestionBank({
+      apply: parsed.apply,
+      datasetKey: parsed.datasetKey,
+    });
 
     return NextResponse.json({
       success: true,

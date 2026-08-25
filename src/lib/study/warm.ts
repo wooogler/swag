@@ -22,7 +22,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { studyClones } from '@/db/schema';
-import { STUDY_DATASETS } from './config';
+import { activeStudyKeys } from './datasets';
 import { generateForClone, type BankKind } from './generate';
 
 /** Runs keyed by clone, so a second deploy can find the first still going. */
@@ -74,9 +74,9 @@ async function warm(assignmentId: string): Promise<void> {
     if (!clone) return; // an ordinary assignment — nothing to measure
 
     for (const kind of WARM_KINDS) {
-      // Block test = this clone's own dataset. A/B = both datasets, which is
-      // how one configuration comes to answer the other set's questions.
-      const datasetKeys = kind === 'test' ? [clone.datasetKey] : STUDY_DATASETS.map((d) => d.key);
+      // Block test = this clone's own dataset. A/B = both of the study's, which
+      // is how one configuration comes to answer the other set's questions.
+      const datasetKeys = kind === 'test' ? [clone.datasetKey] : await activeStudyKeys();
       for (const datasetKey of datasetKeys) {
         try {
           await generateForClone({ cloneAssignmentId: assignmentId, datasetKey, kind });

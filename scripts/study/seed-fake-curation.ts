@@ -17,12 +17,16 @@ const APPLY = process.argv.includes('--apply');
 const CLEAR = process.argv.includes('--clear');
 
 async function main() {
-  const { CURATION_DATASETS } = await import('../../src/lib/study/config');
-  const { getCurationState, getSetTargets, setSetMember, setLock, validateCuration } = await import(
+  const { listStudyDatasets } = await import('../../src/lib/study/datasets');
+  const { getCurationState, setSetMember, setLock, validateCuration } = await import(
     '../../src/lib/study/curation'
   );
   const { SCORE_QUERY_TYPES } = await import('../../src/lib/score/intents');
-  const SET_TARGETS_PER_TYPE = await getSetTargets();
+  const CURATION_DATASETS = await listStudyDatasets();
+  // The fixture's own sizes. Curation itself no longer has a per-type target —
+  // a set is whatever the researcher assembled — but a FIXTURE has to pick some
+  // number, and these are the figures the design was written against.
+  const SET_TARGETS_PER_TYPE = { review: 15, test: 2 } as const;
 
   if (CLEAR) {
     for (const d of CURATION_DATASETS) {
@@ -89,7 +93,7 @@ async function main() {
     }
 
     const after = await getCurationState(dataset.key);
-    const violations = validateCuration(after, SET_TARGETS_PER_TYPE).filter((v) => v.severity === 'error');
+    const violations = validateCuration(after).filter((v) => v.severity === 'error');
     if (violations.length > 0) {
       console.log(`  ✗ still blocking: ${violations.map((v) => v.message).join(' · ')}`);
       continue;

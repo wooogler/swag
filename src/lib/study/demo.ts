@@ -23,7 +23,8 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/db';
 import { assignments, chatMessages, studyClones, studyParticipants } from '@/db/schema';
-import { STUDY_DATASETS, curationDataset, familyOf, type StudioView } from './config';
+import { familyOf, type StudioView } from './config';
+import { getStudyDataset } from './datasets';
 import { demoQuestionIds } from './curation';
 import { logParticipantEvent } from './events';
 import { blockPlan } from './phases';
@@ -40,6 +41,25 @@ import type { StudyParticipant } from '@/db/schema';
  * re-checks the role rather than trusting the cookie.
  */
 export const ADMIN_RETURN_COOKIE = 'study_admin_return';
+
+/**
+ * Which admin page the demo was opened from, so leaving it lands back there.
+ *
+ * There are two doors into a demo now — the curation board, next to the
+ * pickers that reserve its material, and the session console, which is the
+ * page that is actually open on a session day. A fixed destination sends half
+ * of those round trips somewhere the researcher was not.
+ *
+ * Only ever a path under /study/admin, checked on the way out rather than
+ * trusted: it is a cookie, and a cookie that names a redirect target is an open
+ * redirect unless someone bounds it.
+ */
+export const ADMIN_RETURN_TO_COOKIE = 'study_admin_return_to';
+
+/** The admin pages a demo may return to. */
+export function isAdminReturnPath(value: string | undefined): value is string {
+  return value === '/study/admin/console' || value === '/study/admin/curation';
+}
 
 /**
  * Stable, and shaped like any other participant number (PARTICIPANT_NUMBER_RE).
@@ -105,9 +125,8 @@ export async function ensureDemoWorkspace(args: {
   const { datasetKey, condition } = args;
   await ensureStudyTables();
 
-  const dataset = STUDY_DATASETS.find((d) => d.key === datasetKey);
-  const source = curationDataset(datasetKey);
-  if (!dataset || !source) throw new Error(`unknown dataset ${datasetKey}`);
+  const dataset = await getStudyDataset(datasetKey);
+  if (!dataset) throw new Error(`unknown dataset ${datasetKey}`);
 
   const questionIds = await demoQuestionIds(datasetKey);
   if (questionIds.length === 0) throw new Error('no_demo_questions');
@@ -144,7 +163,7 @@ export async function ensureDemoWorkspace(args: {
       // The FULL master, not the reduced study master: the demo subtypes are
       // isolated, so by construction their conversations are not in the study
       // master at all.
-      sourceAssignmentId: source.masterAssignmentId,
+      sourceAssignmentId: dataset.sourceAssignmentId,
       newAssignmentId: assignmentId,
       newInstructorId: participant.instructorId,
       shareToken: `demo-${condition}-${datasetKey}-${assignmentId.slice(0, 8)}`,
@@ -162,7 +181,7 @@ export async function ensureDemoWorkspace(args: {
       participantId: participant.id,
       datasetKey,
       assignmentId,
-      sourceAssignmentId: source.masterAssignmentId,
+      sourceAssignmentId: dataset.sourceAssignmentId,
       // Forced: the demo exists to show a chosen arm, so BOTH its clones run
       // that arm — unlike a real participant, whose two blocks split across the
       // conditions according to the cell the researcher assigned them.

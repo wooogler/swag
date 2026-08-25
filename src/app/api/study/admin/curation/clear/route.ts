@@ -17,7 +17,7 @@ export const dynamic = 'force-dynamic';
 
 const bodySchema = z.object({
   datasetKey: z.string().min(1),
-  setKind: z.enum(CURATION_SET_KINDS as [string, ...string[]]),
+  setKind: z.enum(CURATION_SET_KINDS as unknown as [string, ...string[]]),
   queryType: z.enum(SCORE_QUERY_TYPES as unknown as [string, ...string[]]).nullable().optional(),
 });
 

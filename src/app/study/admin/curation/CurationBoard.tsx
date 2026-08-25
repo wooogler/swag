@@ -20,7 +20,6 @@ import {
   Lock,
   Unlock,
   RefreshCw,
-  Settings,
   ClipboardList,
   Plus,
   Scale,
@@ -54,7 +53,8 @@ const DEMO_LABEL: Record<StudioView, string> = {
 };
 import { QUERY_TYPE_LABELS, SCORE_QUERY_TYPES, type ScoreQueryType } from '@/lib/score/intents';
 import { TYPE_DEFINITIONS } from '@/lib/score/type-prompts';
-import { SET_TARGET_LIMITS, type CurationSetKind, type SetTargets } from '@/lib/study/config';
+import type { CurationSetKind } from '@/lib/study/config';
+import type { StudyDataset } from '@/lib/study/datasets';
 import {
   SURVEY_CONSTRUCTS,
   SURVEY_SCALE_CHOICES,
@@ -238,23 +238,24 @@ export default function CurationBoard({
   initialState,
   initialViolations,
   datasets,
-  targets: initialTargets,
+  sources,
   actor,
   isNirvana,
 }: {
   rows: ScoreQueryRow[];
   initialState: CurationState;
   initialViolations: CurationViolation[];
-  datasets: { key: string; label: string }[];
-  targets: SetTargets;
+  /** Every dataset there is — the picker lists them and can add one. */
+  datasets: StudyDataset[];
+  /** The raw logs a new dataset may be curated from. */
+  sources: { key: string; label: string }[];
   actor: string;
   isNirvana: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
   const [violations, setViolations] = useState(initialViolations);
-  const [targets, setTargets] = useState<SetTargets>(initialTargets);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newDatasetOpen, setNewDatasetOpen] = useState(false);
   const [surveyOpen, setSurveyOpen] = useState(false);
   const [reRateOpen, setReRateOpen] = useState(false);
   const [selection, setSelection] = useState<Selection>({ kind: 'type', type: 'planning' });
@@ -453,11 +454,16 @@ export default function CurationBoard({
     return { costOf, perTitle, costOfTokens, perToken };
   }, [allQuestions, allSubtypes, allMembers]);
 
-  /** How many of a set's questions SHOULD be boundary, at the natural ratio. */
+  /**
+   * How many of a set's questions SHOULD be boundary, at the log's natural
+   * ratio — a share of the set AS ASSEMBLED, since there is no longer a size it
+   * is supposed to reach. It moves as the set grows, which is the honest thing
+   * for a hint whose whole content is "this mix is off".
+   */
   const boundaryTargetFor = useCallback(
     (kind: CurationSetKind) =>
-      Math.round(state.naturalBoundaryRatio * targets[kind] * SCORE_QUERY_TYPES.length),
-    [state.naturalBoundaryRatio, targets]
+      Math.round(state.naturalBoundaryRatio * (setCounts.get(kind) ?? 0)),
+    [state.naturalBoundaryRatio, setCounts]
   );
 
   const refresh = useCallback(async () => {
@@ -466,7 +472,6 @@ export default function CurationBoard({
     const data = await res.json();
     setState(data.state);
     setViolations(data.violations);
-    if (data.targets) setTargets(data.targets);
   }, [state.dataset.key]);
 
   /** Assign / clear. Optimistic so the click feels instant; the refetch is what
@@ -565,7 +570,13 @@ export default function CurationBoard({
         const res = await fetch('/api/study/admin/curation/build', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apply }),
+          // THIS dataset, not everything confirmed. One click used to build
+          // both datasets because there were only ever two; with a registry
+          // that would mean a click on one board rebuilding someone else's
+          // material — and the bank of a dataset this build has nothing to do
+          // with. Each dataset is built from its own board, where its own
+          // confirm lock lives.
+          body: JSON.stringify({ apply, datasetKey: state.dataset.key }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -578,7 +589,7 @@ export default function CurationBoard({
         setBusy(null);
       }
     },
-    [refresh]
+    [state.dataset.key, refresh]
   );
 
   const toggleLock = useCallback(async () => {
@@ -657,7 +668,11 @@ export default function CurationBoard({
         const res = await fetch('/api/study/admin/curation/demo/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ datasetKey: state.dataset.key, condition }),
+          body: JSON.stringify({
+            datasetKey: state.dataset.key,
+            condition,
+            returnTo: '/study/admin/curation',
+          }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -741,29 +756,47 @@ export default function CurationBoard({
 
   // Counts and the per-set notes live in the cards; anything else (demo
   // isolation, unclassified questions) still needs saying out loud.
-  const otherViolations = violations.filter(
-    (v) => v.code !== 'count' && v.code !== 'boundary_ratio'
-  );
+  const otherViolations = violations.filter((v) => v.code !== 'boundary_ratio');
 
   const header = (
     <div className="flex items-center gap-3">
       <h1 className="text-sm font-semibold">Study Settings</h1>
       <AdminNav current="curation" />
       <div className="flex-1" />
-      <div className="flex border border-[hsl(var(--border))] rounded-lg overflow-hidden text-xs font-semibold">
-        {datasets.map((d) => (
-          <button
-            key={d.key}
-            onClick={() => router.push(`/study/admin/curation?ds=${d.key}`)}
-            className={`px-3 py-1.5 ${
-              d.key === state.dataset.key
-                ? 'bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
-                : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
-            }`}
-          >
-            {d.key === state.dataset.key ? `${d.label} · ${state.questions.length}` : d.label}
-          </button>
-        ))}
+      {/* A picker rather than a strip of tabs. Two datasets fitted across a
+          header; a registry does not, and the strip would have quietly become
+          the thing that made a third dataset unreadable. */}
+      <div className="flex items-center gap-1.5">
+        <select
+          value={state.dataset.key}
+          onChange={(e) => router.push(`/study/admin/curation?ds=${e.target.value}`)}
+          className="text-xs font-semibold border border-[hsl(var(--border))] rounded-lg px-2 py-1.5 bg-[hsl(var(--card))] max-w-[280px]"
+        >
+          {sources.map((src) => (
+            <optgroup key={src.key} label={src.label}>
+              {datasets
+                .filter((d) => d.sourceKey === src.key)
+                .map((d) => (
+                  <option key={d.key} value={d.key}>
+                    {d.label}
+                    {d.slot ? ` · block ${d.slot}` : ''}
+                    {d.ownerCode ? ` · ${d.ownerCode}` : ''}
+                  </option>
+                ))}
+            </optgroup>
+          ))}
+        </select>
+        <span className="text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]">
+          {state.questions.length} questions
+        </span>
+        <button
+          onClick={() => setNewDatasetOpen(true)}
+          title="Make another dataset from one of these logs"
+          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1.5 rounded-lg border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]"
+        >
+          <Plus className="w-3 h-3" />
+          Dataset
+        </button>
       </div>
       <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
         researcher <span className="font-semibold text-[hsl(var(--foreground))]">{actor}</span>
@@ -860,15 +893,6 @@ export default function CurationBoard({
           Survey
         </button>
         <button
-          onClick={() => setSettingsOpen(true)}
-          disabled={busy !== null}
-          title="Set sizes"
-          className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-        >
-          <Settings className="w-3 h-3" />
-          Set sizes
-        </button>
-        <button
           onClick={toggleLock}
           disabled={busy !== null}
           className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded border disabled:opacity-50 ${
@@ -888,17 +912,18 @@ export default function CurationBoard({
         </button>
       </div>
 
-      {/* Progress, one card per set. The per-type counts ARE the blocking
-          checks, so they are shown as the work rather than as a list of
-          errors — a count list of twelve had to be truncated, which hid the
-          one violation that was not a count. */}
+      {/* One card per set: what is in it, by type.
+          The counts used to be `n/15` against a per-type target, and the
+          shortfalls were themselves the blocking errors. The target is gone —
+          a set is whatever size the researcher decides it is — so these are
+          now a readout of the work rather than a score against a number, and
+          the only thing coloured is a mix the log does not have. */}
       <div className="mb-3 grid grid-cols-1 lg:grid-cols-2 gap-2">
         {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
           const have = setCounts.get(kind) ?? 0;
-          const want = targets[kind] * SCORE_QUERY_TYPES.length;
           const boundaryHave = setCounts.get(`${kind}:boundary`) ?? 0;
           const boundaryWant = boundaryTargetFor(kind);
-          const complete = have === want;
+          const started = have > 0;
           // Violations that belong to this set rather than to a type count.
           const setNotes = violations.filter(
             (v) => v.code === 'boundary_ratio' && v.message.startsWith(kind)
@@ -912,7 +937,7 @@ export default function CurationBoard({
                 setArmedClear((a) => (a?.startsWith(`${kind}:`) ? null : a));
               }}
               className={`rounded-lg border px-3 py-2 ${
-                complete
+                started
                   ? 'border-emerald-200 bg-emerald-50/40'
                   : 'border-[hsl(var(--border))] bg-[hsl(var(--card))]'
               }`}
@@ -923,10 +948,11 @@ export default function CurationBoard({
                 </span>
                 <span
                   className={`text-[11px] font-semibold tabular-nums ${
-                    complete ? 'text-emerald-700' : 'text-amber-700'
+                    started ? 'text-emerald-700' : 'text-[hsl(var(--muted-foreground))]'
                   }`}
+                  title={`${have} question(s) in this set`}
                 >
-                  {have}/{want}
+                  {have}
                 </span>
                 <span
                   className="text-[10.5px] tabular-nums text-[hsl(var(--muted-foreground))]"
@@ -965,7 +991,6 @@ export default function CurationBoard({
                 {SCORE_QUERY_TYPES.map((type) => {
                   const n = setCounts.get(`${kind}:${type}`) ?? 0;
                   const nBoundary = setCounts.get(`${kind}:${type}:boundary`) ?? 0;
-                  const target = targets[kind];
                   const mix = subtypeMixFor(kind, type);
                   // A div rather than a button: the clear control lives inside
                   // it and buttons cannot nest. That control stops propagation,
@@ -1004,10 +1029,10 @@ export default function CurationBoard({
                       </span>
                       <span
                         className={`ml-auto tabular-nums font-semibold ${
-                          n === target ? 'text-emerald-700' : 'text-[hsl(var(--muted-foreground))]'
+                          n > 0 ? 'text-emerald-700' : 'text-[hsl(var(--muted-foreground))]'
                         }`}
                       >
-                        {n}/{target}
+                        {n}
                       </span>
                       <span className="tabular-nums text-amber-600 w-6 text-right">
                         ◐{nBoundary}
@@ -1072,8 +1097,8 @@ export default function CurationBoard({
                 </button>
               </div>
               <p className="mt-1 text-[10.5px] text-violet-800">
-                Builds the reduced study masters and freezes the block-test question bank.
-                Both datasets must be confirmed for the bank.
+                Builds <strong>{state.dataset.label}</strong> into a reduced study master and
+                freezes its block-test questions. Each dataset is built from its own board.
               </p>
               {buildReport && <BuildReport report={buildReport} />}
             </div>
@@ -1110,7 +1135,6 @@ export default function CurationBoard({
           <div className="py-1 border-b border-[hsl(var(--border))]">
             {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
               const have = setCounts.get(kind) ?? 0;
-              const want = targets[kind] * SCORE_QUERY_TYPES.length;
               const on = selection.kind === 'set' && selection.setKind === kind;
               return (
                 <button
@@ -1121,8 +1145,8 @@ export default function CurationBoard({
                   }`}
                 >
                   <span className="flex-1">{SET_LABELS[kind]}</span>
-                  <span className={`text-[11px] tabular-nums ${have === want ? 'text-[hsl(var(--muted-foreground))]' : 'text-amber-600 font-bold'}`}>
-                    {have}/{want}
+                  <span className="text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]">
+                    {have}
                   </span>
                 </button>
               );
@@ -1386,137 +1410,19 @@ export default function CurationBoard({
         />
       )}
 
-      {settingsOpen && (
-        <SetTargetsModal
-          targets={targets}
-          locked={locked}
-          onClose={() => setSettingsOpen(false)}
-          onSaved={(next) => {
-            setTargets(next);
-            setSettingsOpen(false);
-            void refresh();
+      {newDatasetOpen && (
+        <DatasetsModal
+          datasets={datasets}
+          sources={sources}
+          currentKey={state.dataset.key}
+          onClose={() => setNewDatasetOpen(false)}
+          onGo={(key) => {
+            setNewDatasetOpen(false);
+            router.push(`/study/admin/curation?ds=${key}`);
           }}
         />
       )}
     </StudioShell>
-  );
-}
-
-/**
- * Set sizes. Per QUERY TYPE, because that is the unit the design specifies and
- * the unit the checks use — showing only a total would let a researcher set 60
- * and wonder why four counters still read 0/15.
- */
-function SetTargetsModal({
-  targets,
-  locked,
-  onClose,
-  onSaved,
-}: {
-  targets: SetTargets;
-  locked: boolean;
-  onClose: () => void;
-  onSaved: (next: SetTargets) => void;
-}) {
-  const [draft, setDraft] = useState<SetTargets>(targets);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/study/admin/curation/targets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(draft),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(data.message ?? 'Could not save.');
-        return;
-      }
-      onSaved(data.targets as SetTargets);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
-          <h2 className="text-sm font-bold">Set sizes</h2>
-          <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
-            How many questions each set holds <strong>per query type</strong>. It applies to
-            all four types, so the total is four times this — and to both datasets.
-          </p>
-        </div>
-
-        <div className="px-5 py-4 space-y-3">
-          {(Object.keys(SET_LABELS) as CurationSetKind[]).map((kind) => {
-            const { min, max } = SET_TARGET_LIMITS[kind];
-            return (
-              <div key={kind} className="flex items-center gap-3">
-                <label className="text-xs font-semibold flex-1">{SET_LABELS[kind]}</label>
-                <input
-                  type="number"
-                  min={min}
-                  max={max}
-                  disabled={locked || busy}
-                  value={draft[kind]}
-                  onChange={(e) =>
-                    setDraft((prev) => ({ ...prev, [kind]: Number(e.target.value) }))
-                  }
-                  className="w-20 border border-[hsl(var(--border))] rounded px-2 py-1 text-sm text-right tabular-nums bg-[hsl(var(--card))] disabled:opacity-50"
-                />
-                <span className="w-28 text-[11px] text-[hsl(var(--muted-foreground))] tabular-nums">
-                  × 4 types = {draft[kind] * 4}
-                </span>
-              </div>
-            );
-          })}
-
-          {locked && (
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
-              A dataset is confirmed, so the sizes are fixed. Unlock it and try again.
-            </p>
-          )}
-          {error && (
-            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">
-              {error}
-            </p>
-          )}
-        </div>
-
-        <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex items-center justify-between gap-2">
-          <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
-            Assigned questions are kept — only the targets move.
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={onClose}
-              className="text-xs font-semibold px-3 py-1.5 rounded border border-[hsl(var(--border))]"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={save}
-              disabled={locked || busy}
-              className="text-xs font-semibold px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-white disabled:opacity-40"
-            >
-              {busy ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1841,6 +1747,214 @@ function selectionLabel(selection: Selection, subtypes: Map<number, CurationSubt
     case 'subtype':
       return subtypes.get(selection.intentId)?.title ?? 'Subtype';
   }
+}
+
+/**
+ * Make a dataset, and see the ones that exist.
+ *
+ * A dataset is a NAME FOR A CURATION, not a corpus: it names a set of questions
+ * drawn from one of the two logs the study owns. That is the whole reason this
+ * screen exists — a log used to hold exactly one curation, so trying a smaller
+ * set meant clearing the set that was already there and having nothing to go
+ * back to.
+ *
+ * Datasets are shared. The owner column records who made one; it does not
+ * reserve it, because the person running the console has to be able to use what
+ * the person curating has just finished.
+ */
+function DatasetsModal({
+  datasets,
+  sources,
+  currentKey,
+  onClose,
+  onGo,
+}: {
+  datasets: StudyDataset[];
+  sources: { key: string; label: string }[];
+  currentKey: string;
+  onClose: () => void;
+  onGo: (key: string) => void;
+}) {
+  const [list, setList] = useState(datasets);
+  const [label, setLabel] = useState('');
+  const [sourceKey, setSourceKey] = useState(sources[0]?.key ?? '');
+  const [cloneTitle, setCloneTitle] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = async () => {
+    setBusy('create');
+    setError(null);
+    try {
+      const res = await fetch('/api/study/admin/datasets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, sourceKey, cloneTitle }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(
+          data.error === 'label_unusable'
+            ? 'That name has no letters or digits to make a key from.'
+            : (data.message ?? 'Could not create it.')
+        );
+        return;
+      }
+      onGo(data.dataset.key as string);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async (key: string) => {
+    setBusy(`del:${key}`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/study/admin/datasets?key=${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(
+          data.blockers
+            ? `Cannot remove it: ${(data.blockers as string[]).join('; ')}.`
+            : (data.message ?? 'Could not remove it.')
+        );
+        return;
+      }
+      setList(data.datasets as StudyDataset[]);
+      if (key === currentKey) onGo((data.datasets as StudyDataset[])[0]?.key ?? '');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-2xl rounded-lg bg-[hsl(var(--background))] border border-[hsl(var(--border))] shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
+          <h2 className="text-sm font-bold">Datasets</h2>
+          <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
+            A dataset is one curation of one log. Several can share a log — a full
+            one and a lighter one, each with its own sets, its own confirm and its
+            own build.
+          </p>
+        </div>
+
+        <div className="px-5 py-3 max-h-[40vh] overflow-y-auto">
+          <table className="w-full text-[11.5px]">
+            <tbody>
+              {list.map((d) => (
+                <tr key={d.key} className="border-b border-[hsl(var(--border))] last:border-0">
+                  <td className="py-1.5 pr-2">
+                    <button
+                      onClick={() => onGo(d.key)}
+                      className={`font-semibold hover:underline ${
+                        d.key === currentKey ? 'text-[hsl(var(--primary))]' : ''
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                    <span className="ml-1.5 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">
+                      {d.key}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2 text-[hsl(var(--muted-foreground))]">
+                    {sources.find((x) => x.key === d.sourceKey)?.label ?? d.sourceKey}
+                  </td>
+                  <td className="py-1.5 pr-2 text-[hsl(var(--muted-foreground))]">
+                    {d.ownerCode ?? 'built in'}
+                  </td>
+                  <td className="py-1.5 pr-2">
+                    {d.slot ? (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        block {d.slot}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="py-1.5 text-right">
+                    {/* The two seeded datasets have no remove control at all:
+                        every participant ever run is filed under them. */}
+                    {d.ownerCode && (
+                      <button
+                        onClick={() => void remove(d.key)}
+                        disabled={busy !== null}
+                        title="Remove this dataset and its curation"
+                        className="text-[hsl(var(--muted-foreground))] hover:text-rose-600 disabled:opacity-40"
+                      >
+                        {busy === `del:${d.key}` ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="px-5 py-4 border-t border-[hsl(var(--border))] space-y-2">
+          <div className="flex items-center gap-2">
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Name — e.g. NIRVANA light"
+              className="flex-1 border border-[hsl(var(--border))] rounded px-2 py-1.5 text-xs bg-[hsl(var(--card))]"
+            />
+            <select
+              value={sourceKey}
+              onChange={(e) => setSourceKey(e.target.value)}
+              className="border border-[hsl(var(--border))] rounded px-2 py-1.5 text-xs bg-[hsl(var(--card))]"
+            >
+              {sources.map((src) => (
+                <option key={src.key} value={src.key}>
+                  from {src.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <input
+            value={cloneTitle}
+            onChange={(e) => setCloneTitle(e.target.value)}
+            placeholder="Assignment title participants see — e.g. Intelligent Machines"
+            className="w-full border border-[hsl(var(--border))] rounded px-2 py-1.5 text-xs bg-[hsl(var(--card))]"
+          />
+          {error && (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-[hsl(var(--border))] flex items-center justify-between gap-2">
+          <span className="text-[10.5px] text-[hsl(var(--muted-foreground))]">
+            A new dataset starts empty — the log is the same, the sets are yours.
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="text-xs font-semibold px-3 py-1.5 rounded border border-[hsl(var(--border))]"
+            >
+              Close
+            </button>
+            <button
+              onClick={() => void create()}
+              disabled={busy !== null || !label.trim()}
+              className="text-xs font-semibold px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-white disabled:opacity-40"
+            >
+              {busy === 'create' ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
